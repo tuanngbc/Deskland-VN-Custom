@@ -1038,7 +1038,7 @@ class HostContext : ApplicationContext
 
     string RendererSettings(WallpaperForm instance)
     {
-        return Json.Stringify(Json.Obj("t", "settings", "v", Settings.ForMonitor(instance.MonitorId, instance.ThemeId),
+        return Json.Stringify(Json.Obj("t", "settings", "theme", instance.ThemeId, "v", Settings.ForMonitor(instance.MonitorId, instance.ThemeId),
             "contract", Json.Obj("version", 1, "mode", Settings.Mode.ToString().ToLowerInvariant(), "monitor", instance.MonitorId,
             "viewport", RectJson(instance.Monitor.Bounds), "world", WorldJson(), "epoch", (epoch - new DateTime(1970, 1, 1)).TotalMilliseconds)));
     }

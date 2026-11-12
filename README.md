@@ -4,7 +4,7 @@
 
 Deskland turns the space around your icons into a living landscape. Move, add or remove an icon and the beach, meadow, clouds and shadows quietly reshape around it — in real time, without AI, an account or an API key.
 
-This is the **free, open-source Preview**, not a time-limited trial. It includes the complete **Beach** and **Meadow** themes, the Windows host, settings and sharing tools.
+This is the **free, open-source Preview**, not a time-limited trial. It includes thirteen original themes, the Windows host, settings and sharing tools.
 
 **English** · [简体中文](#中文说明) · [Official website](https://deskland.app) · [Features](#features) · [Build from source](#build-from-source)
 
@@ -12,9 +12,9 @@ This is the **free, open-source Preview**, not a time-limited trial. It includes
 
 ![Beach — included in Deskland Preview](docs/images/beach.webp)
 
-![Maldives — locked-theme preview](docs/images/maldives.webp)
+![Maldives — included theme](docs/images/maldives.webp)
 
-Meadow and Beach are included in Preview. Maldives is shown as a locked-theme preview.
+Meadow, Beach and the eleven additional original themes are included in Preview.
 
 ## Included themes
 
@@ -23,12 +23,12 @@ Meadow and Beach are included in Preview. Maldives is shown as a locked-theme pr
 | ![Beach theme](prototype/thumbs/beach.webp) | ![Meadow theme](prototype/thumbs/meadow.webp) |
 | Turquoise waves, kayaks, seabirds and coconut palms. | Drifting clouds and shadows, a boy flying a kite and a little black cat. |
 
-The theme browser also shows 11 locked themes as a preview of the full Wallpaper edition. **Only names, descriptions and thumbnails are included for those themes — not their page code, parameters or implementation.**
+The theme browser includes Maldives, Lake, Sky, Ocean, Forest, Pink Forest, Hand-drawn City, Colorful City, Old Map, Nautical Chart and Lotus Pond. Each has its own renderer, palette, motion and settings while sharing the multi-monitor world contract.
 
 ## Features
 
 - **Adaptive scenery:** uses the real positions of desktop icons and transitions smoothly when they move.
-- **Two complete themes:** every setting for Beach and Meadow is included and saved between sessions.
+- **Thirteen complete themes:** each theme has its own settings and is saved between sessions.
 - **Made for the desktop:** tray controls, startup on sign-in and automatic pause when a window is maximized or full-screen.
 - **Private sharing:** image and animation exports use sample icons and color blocks, never a screenshot of your desktop or real file names.
 - **Independent installation:** Preview uses its own install directory, settings, startup entry and instance identity, so it can coexist with other Deskland builds.
@@ -93,7 +93,8 @@ The installer targets the current user's `Programs\Deskland Preview` directory a
 | `prototype/flat.html` | Beach theme |
 | `prototype/meadow.html` | Meadow theme |
 | `prototype/settings.html` | Settings interface |
-| `prototype/themes.json` | Full free-theme definitions and locked-theme display metadata |
+| `prototype/themes.json` | Theme definitions, defaults and settings metadata |
+| `prototype/theme-canvas.js` | Shared multi-monitor canvas engine for the original theme family |
 | `prototype/share.js` | Privacy-preserving image and animation sharing |
 | `prototype/assets/` | Images used by the included themes |
 | `tools/` | Installer build tooling |
@@ -102,7 +103,7 @@ The installer targets the current user's `Programs\Deskland Preview` directory a
 
 - Native multi-monitor modes require Windows display outputs that are active at launch.
 - Windows Spotlight or a wallpaper slideshow can briefly flash when Windows changes the background image.
-- Preview does not include account sign-in, entitlement restoration, automatic updates or the other themes' implementation.
+- Preview does not include account sign-in, entitlement restoration or automatic updates.
 
 ## Credits and license
 
@@ -122,7 +123,7 @@ Issues and suggestions are welcome through GitHub Issues. This is an independent
 
 Deskland 是一款 Windows 自适应动态壁纸。移动、添加或删除桌面图标时，海岸线、草地、云朵和阴影会实时围绕图标调整。全部在本地实时演算，不使用 AI，无需账号或 API Key。
 
-本仓库是**免费的开源体验版，不是限时试用版**，包含完整的沙滩和草地主题、Windows 宿主、设置界面与分享工具。
+本仓库是**免费的开源体验版，不是限时试用版**，包含十三套原创主题、Windows 宿主、设置界面与分享工具。
 
 [官方网站](https://deskland.app) · [从源码运行](#build-from-source) · [许可](#credits-and-license)
 
@@ -133,12 +134,12 @@ Deskland 是一款 Windows 自适应动态壁纸。移动、添加或删除桌�
 | ![沙滩主题](prototype/thumbs/beach.webp) | ![草地主题](prototype/thumbs/meadow.webp) |
 | 海浪、皮划艇、海鸟和椰子树。 | 漂浮的云与云影、放风筝的男孩和小黑猫。 |
 
-主题列表还展示另外 11 个锁定主题，帮助了解壁纸版内容。**这些锁定主题只有名称、简介和缩略图，不包含页面源码、参数或其他实现。**
+主题列表还包含马尔代夫、湖泊、天空、大海、森林、粉色森林、手绘城市、彩色城市、老地图、航海地图和荷塘；每套都有独立画面、配色、动态和参数。
 
 ### 功能
 
 - **图标自适应：**读取真实桌面图标的位置，在移动、添加或删除时平滑调整场景。
-- **两个完整主题：**沙滩和草地的全部参数均可调整并自动保存。
+- **十三套完整主题：**每套主题都有独立参数，并会自动保存。
 - **适合常驻桌面：**托盘控制、开机自动启动，前台窗口最大化或全屏时自动暂停。
 - **隐私分享：**图片和动画使用示例图标与名字色块，不截取桌面窗口或真实文件名。
 - **独立安装：**安装目录、用户数据、启动项和运行实例标识均独立，可与其他 Deskland 版本共存。
@@ -201,7 +202,8 @@ powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1
 | `prototype/flat.html` | 沙滩主题 |
 | `prototype/meadow.html` | 草地主题 |
 | `prototype/settings.html` | 设置界面 |
-| `prototype/themes.json` | 免费主题完整定义及锁定主题展示信息 |
+| `prototype/themes.json` | 主题定义、默认值与参数信息 |
+| `prototype/theme-canvas.js` | 原创主题共用的多屏 Canvas 渲染引擎 |
 | `prototype/share.js` | 隐私保护的图片和动画分享 |
 | `prototype/assets/` | 随附主题图片素材 |
 | `tools/` | 安装包构建工具 |
@@ -210,7 +212,7 @@ powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1
 
 - 更换显示器、DPI 和资源管理器重启等场景仍需进一步原生验收。
 - 使用 Windows 聚焦或壁纸幻灯片时，系统换图可能造成短暂闪烁。
-- 体验版不包含账号登录、购买恢复、自动更新或其他主题实现。
+- 体验版不包含账号登录、购买恢复或自动更新。
 
 ### 许可与反馈
 
