@@ -266,6 +266,22 @@
     .side { padding: 18px; }
     .bottom { padding: 14px 24px 18px; }
   }
+  .monitor-panel { margin: 0 0 18px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+  .monitor-panel h3 { margin: 0 0 10px; font-size: 13px; }
+  .mode-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .mode-row button { flex: 1 1 120px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-2); color: var(--text); cursor: pointer; }
+  .mode-row button.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 650; }
+  .monitor-map { position: relative; min-height: 84px; overflow: hidden; border-radius: 10px; background: var(--panel-2); }
+  .monitor-chip { position: absolute; min-width: 84px; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font-size: 10px; cursor: pointer; }
+  .monitor-chip.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+  .monitor-chip b, .monitor-chip span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .monitor-config[hidden] { display:none; }
+  .monitor-config { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .monitor-detail { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; margin: 8px 0; }
+  .monitor-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; font-size: 11px; }
+  .monitor-actions .ghost-btn { padding: 6px 9px; }
+  @media (max-width: 780px) { body { height:auto; min-height:100vh; overflow:auto; } .layout { display:flex; flex-direction:column; } .themes { min-height:460px; } .theme-list { max-height:400px; flex:none; } .side { padding:14px; } .bottom { flex-wrap:wrap; } }
+  .monitor-config select { min-width: 160px; padding: 7px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { transition: none !important; }
   }
@@ -300,6 +316,16 @@
       <button class="ghost-btn update-action" id="updateProgram" data-i18n="updateProgram">立即更新</button>
     </div>
     <div class="warn" id="autostartWarn" hidden role="alert"><p><b data-i18n="autostartBlocked">开机自动启动可能被拦截了</b><br><span id="autostartWarnText"></span></p><button id="autostartWarnOk" data-i18n="gotIt">知道了</button></div>
+    <section class="monitor-panel" aria-label="Multi-monitor">
+      <h3 id="monitorTitle">显示器与壁纸模式</h3>
+      <div class="mode-row" id="modeRow">
+        <button data-mode="mirror">同步</button><button data-mode="independent">独立</button><button data-mode="panorama">全景</button>
+      </div>
+      <div class="monitor-map" id="monitorMap"></div>
+      <p id="monitorDetail" class="monitor-detail" role="status"></p>
+      <div class="monitor-config" id="monitorConfig" hidden><label><span id="targetLabel">当前屏幕</span> <select id="monitorTheme"></select></label><button class="ghost-btn" id="monitorPause">暂停</button></div>
+      <div class="monitor-actions"><label><input type="checkbox" id="previewOnly"><span id="previewOnlyLabel">Preview before Apply</span></label><button class="ghost-btn" id="applyMulti">Apply</button><button class="ghost-btn" id="resetMulti">Reset</button><button class="ghost-btn" id="globalPause">Pause all</button><button class="ghost-btn" id="reloadMulti">Reload</button><button class="ghost-btn" id="restoreMulti">Restore last working</button></div>
+    </section>
     <div class="theme-list" id="themes"></div>
   </section>
 
@@ -382,9 +408,15 @@
 <script>
 'use strict';
 const host = window.chrome && window.chrome.webview;
-const send = m => { if (host) host.postMessage(JSON.stringify(m)); };
+let previewOnly = false, draftMessages = [];
+const send = m => {
+  if (state.mode === 'independent' && state.selectedMonitor && ['set','reset','theme','reload'].includes(m.t)) m.monitor = state.selectedMonitor;
+  if (previewOnly && ['set','reset','theme','mode','monitorTheme'].includes(m.t)) { draftMessages.push({...m}); return; }
+  if (host) host.postMessage(JSON.stringify(m));
+};
 
 const state = { registry0: null, registry: null, theme: 'beach', params: {}, screen: null, icons: null,
+  mode: 'mirror', monitors: [], selectedMonitor: null, world: null, allParams: {}, globalTheme: 'beach', globalPaused: false,
   langSetting: 'auto', langSys: 'zh-CN', autostartWarn: false, autostartSw: '',
   updateVersion: '', updateStatus: '', updateProgress: -1, updateError: '' };
 const $ = id => document.getElementById(id);
@@ -463,8 +495,56 @@ async function setLang(code) {
 // 换了语言：界面上的字都重新填一遍（预览不用重新加载）
 function rerenderTexts() {
   if (!state.screen) return;
-  renderHead(); renderThemes(); renderControls(); updateFoot(); shareBusy(shareState); showAutostartWarn(); showUpdate(); updatePurchaseText();
+  renderMonitors(); renderHead(); renderThemes(); renderControls(); updateFoot(); shareBusy(shareState); showAutostartWarn(); showUpdate(); updatePurchaseText();
 }
+
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function selectTarget() {
+  flush();
+  const monitor = state.monitors.find(m => m.id === state.selectedMonitor);
+  state.theme = state.mode === 'independent' && monitor ? monitor.theme : state.globalTheme;
+  state.params = {};
+  for (const th of state.registry.themes.filter(t => t.status === 'ready')) {
+    const key = state.mode === 'independent' ? state.selectedMonitor + '::' + th.id : th.id;
+    if (!state.allParams[key]) state.allParams[key] = {...(state.allParams[th.id] || {})};
+    state.params[th.id] = state.allParams[key];
+  }
+  const box = state.mode === 'panorama' ? state.world : monitor;
+  if (box) state.screen = {w:box.w, h:box.h};
+  send({t:'selectMonitor', id:state.selectedMonitor});
+  showTheme(); renderMonitors();
+}
+function renderMonitors() {
+  $('monitorTitle').textContent = t('monitorTitle');
+  document.querySelectorAll('#modeRow button').forEach(b => { b.textContent = t('mode_' + b.dataset.mode); b.classList.toggle('on', b.dataset.mode === state.mode); });
+  for (const id of ['applyMulti','resetMulti','reloadMulti','restoreMulti','previewOnlyLabel']) $(id).textContent = t(id);
+  $('globalPause').textContent = t(state.globalPaused ? 'resumeAll' : 'pauseAll');
+  $('targetLabel').textContent = t('targetLabel');
+  const map = $('monitorMap');
+  if (!state.monitors.length) { map.innerHTML = '<div class="empty">' + t('noMonitors') + '</div>'; return; }
+  const minX = Math.min(...state.monitors.map(m => m.x)), minY = Math.min(...state.monitors.map(m => m.y));
+  const width = Math.max(...state.monitors.map(m => m.x + m.w)) - minX, height = Math.max(...state.monitors.map(m => m.y + m.h)) - minY;
+  map.style.height = Math.max(100, Math.min(190, map.clientWidth * height / width)) + 'px';
+  map.innerHTML = state.monitors.map((m, i) => `<button class="monitor-chip${m.id === state.selectedMonitor ? ' on' : ''}" data-monitor="${esc(m.id)}" style="left:${5+(m.x-minX)/width*90}%;top:${5+(m.y-minY)/height*90}%;width:${m.w/width*90}%;height:${m.h/height*90}%"><b>${i+1}. ${m.primary ? t('primaryMonitor') : t('secondaryMonitor')}</b><span>${esc(m.name)}</span><span>${m.w}×${m.h} · ${Math.round(m.scale*100)}%</span></button>`).join('');
+  const m = state.monitors.find(x => x.id === state.selectedMonitor);
+  $('monitorDetail').textContent = m ? `${m.name} · ${m.w}×${m.h} · ${Math.round(m.dpi)} DPI · ${m.refresh || '—'} Hz · ${m.theme} · ${m.status || 'initializing'}` : '';
+  $('monitorConfig').hidden = state.mode !== 'independent' || !m;
+  if (m) {
+    $('monitorTheme').innerHTML = state.registry.themes.filter(x => x.status === 'ready').map(th => `<option value="${th.id}">${th.name}</option>`).join('');
+    $('monitorTheme').value = m.theme || state.theme;
+    $('monitorPause').textContent = t(m.paused ? 'resumeMonitor' : 'pauseMonitor');
+  }
+}
+$('modeRow').addEventListener('click', e => { const b=e.target.closest('[data-mode]'); if (!b || state.mode===b.dataset.mode) return; flush(); state.mode=b.dataset.mode; send({t:'mode',v:state.mode}); selectTarget(); });
+$('monitorMap').addEventListener('click', e => { const b=e.target.closest('[data-monitor]'); if (!b) return; flush(); state.selectedMonitor=b.dataset.monitor; selectTarget(); });
+$('monitorTheme').addEventListener('change', e => { const m=state.monitors.find(x=>x.id===state.selectedMonitor); if (!m) return; flush(); m.theme=e.target.value; send({t:'monitorTheme',id:m.id,theme:m.theme}); selectTarget(); });
+$('monitorPause').addEventListener('click', () => { const m=state.monitors.find(x=>x.id===state.selectedMonitor); if (!m) return; m.paused=!m.paused; send({t:'monitorPause',id:m.id,v:m.paused}); renderMonitors(); });
+$('previewOnly').addEventListener('change', e => { if (!e.target.checked && draftMessages.length) { e.target.checked=true; return; } previewOnly=e.target.checked; });
+$('applyMulti').addEventListener('click', () => { flush(); const draft=draftMessages; draftMessages=[]; previewOnly=false; $('previewOnly').checked=false; if (host) draft.forEach(m=>host.postMessage(JSON.stringify(m))); send({t:'apply'}); flashSaved(); });
+$('resetMulti').addEventListener('click', () => { flush(); state.params[state.theme]={}; const key=state.mode==='independent'?state.selectedMonitor+'::'+state.theme:state.theme; state.allParams[key]=state.params[state.theme]; send({t:'reset',theme:state.theme}); toPreview({t:'reset'}); renderControls(); });
+$('reloadMulti').addEventListener('click', () => send({t:'reload'}));
+$('restoreMulti').addEventListener('click', () => { draftMessages=[]; previewOnly=false; $('previewOnly').checked=false; send({t:'restore'}); });
+$('globalPause').addEventListener('click', () => { state.globalPaused=!state.globalPaused; send({t:'pause',v:state.globalPaused}); renderMonitors(); });
 $('lang').addEventListener('change', e => {
   state.langSetting = e.target.value;
   if (host) send({ t: 'lang', v: state.langSetting });     // 宿主存下来、换托盘菜单的文字，再回一条 lang（实际用哪种）
@@ -522,7 +602,10 @@ $('themes').addEventListener('click', e => {
   if (!b || b.disabled) return;
   if (b.dataset.locked === 'true') { showPurchase(b.dataset.id); return; }
   if (b.dataset.id === state.theme) return;
+  flush();
   state.theme = b.dataset.id;
+  if (state.mode === 'independent') { const m=state.monitors.find(x=>x.id===state.selectedMonitor); if (m) m.theme=state.theme; } else state.globalTheme=state.theme;
+  renderMonitors();
   send({ t: 'theme', id: state.theme });
   if (seedOf(state.theme) === undefined) setSeed(newSeed(), false);   // 还没有种子：给一个，桌面和预览从一开始就是同一张
   showTheme();
@@ -673,7 +756,7 @@ function layoutPreview() {
   frame.style.width = s.w + 'px'; frame.style.height = s.h + 'px';
   frame.style.transform = `scale(${k})`;
 }
-addEventListener('resize', layoutPreview);
+addEventListener('resize', () => { layoutPreview(); renderMonitors(); });
 addEventListener('message', e => {
   if (e.source !== frame.contentWindow) return;
   const m = JSON.parse(e.data);
@@ -788,14 +871,21 @@ function onHost(m) {
     state.langSys = m.langSys || 'zh-CN';
     setLang(m.langEff || state.langSys).then(() => {        // 先按界面语言把文字表读进来，再画界面
       state.theme = themeById(m.theme) && themeById(m.theme).status === 'ready' ? m.theme : 'beach';
-      state.params = m.params || {};
+      state.allParams = m.params || {};
+      state.params = state.allParams;
+      state.globalTheme = state.theme;
+      state.globalPaused = !!m.globalPaused;
       state.screen = m.screen;
+      state.mode = m.mode || 'mirror';
+      state.monitors = m.monitors || [];
+      state.world = m.world || null;
+      state.selectedMonitor = state.monitors[0] && state.monitors[0].id;
       $('autostart').checked = !!m.autostart;
       state.autostartWarn = !!m.autostartWarn;
       state.autostartSw = m.autostartSw || '';
       showAutostartWarn();
       showUpdate();
-      showTheme();
+      selectTarget();
       document.documentElement.classList.add('ready');
     });
   } else if (m.t === 'themeChanged') {
@@ -818,6 +908,16 @@ function onHost(m) {
     state.icons = m;
     toPreview(m);
     updateFoot();
+  } else if (m.t === 'modeChanged') {
+    state.mode = m.mode || state.mode; renderMonitors();
+  } else if (m.t === 'monitors') {
+    state.monitors = m.items || []; state.world = m.world || state.world;
+    if (m.theme) state.globalTheme = m.theme;
+    const target = state.monitors.find(x=>x.id===state.selectedMonitor);
+    const desired = state.mode==='independent' && target ? target.theme : state.globalTheme;
+    if (!previewOnly && desired && desired!==state.theme) { selectTarget(); }
+    if (!state.monitors.some(x=>x.id===state.selectedMonitor) && state.monitors[0]) state.selectedMonitor = state.monitors[0].id;
+    renderMonitors();
   } else if (m.t === 'autostart') {
     $('autostart').checked = !!m.v;
   } else if (m.t === 'recProgress') {
@@ -834,7 +934,7 @@ function mockHost() {
   for (let c = 0; c < 4; c++) for (let row = 0; row < 9; row++) cell(c, row);
   for (const [c, row] of [[6, 0], [6, 1], [7, 3], [8, 3], [8, 4], [12, 1], [13, 1], [14, 1], [13, 2], [14, 2], [20, 0], [21, 0], [19, 5], [20, 5]]) cell(c, row);
   const bl = browserLang();
-  onHost({ t: 'init', theme: 'beach', params: {}, screen: { w: W * k, h: H * k }, autostart: false, lang: 'auto', langEff: bl, langSys: bl });
+  onHost({ t: 'init', theme: 'beach', params: {}, screen: { w: W * k, h: H * k }, world:{x:0,y:0,w:W*k,h:H*k}, monitors:[{id:'browser-preview',name:'Browser preview (simulated)',x:0,y:0,w:W*k,h:H*k,dpi:96*k,scale:k,primary:true,theme:'beach',status:'preview'}], autostart: false, lang: 'auto', langEff: bl, langSys: bl });
   onHost({ t: 'icons', vis: true, r });
   if (new URLSearchParams(location.search).has('updateDemo')) onHost({ t: 'updateState', version: '0.2.0', status: 'available', progress: -1 });
 }

@@ -2,6 +2,7 @@
 /host/lib/
 /node_modules/
 /dist/
+/artifacts/
 /.vs/
 /.vscode/
 /.idea/

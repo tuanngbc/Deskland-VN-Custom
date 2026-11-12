@@ -7,12 +7,22 @@ using System.Text;
 // 未标 product 的 ready 主题默认拒绝，避免新增付费主题被意外免费开放。
 static class Themes
 {
+    static string cachedPath;
+    static DateTime cachedStamp;
+    static Dictionary<string, object> cachedRoot;
     static Dictionary<string, object> Find(string pageDir, string id)
     {
         if (id == null) return null;
         try
         {
-            var root = Json.Parse(File.ReadAllText(Path.Combine(pageDir, "themes.json"), Encoding.UTF8)) as Dictionary<string, object>;
+            string path = Path.Combine(pageDir, "themes.json");
+            DateTime stamp = File.GetLastWriteTimeUtc(path);
+            if (cachedRoot == null || cachedPath != path || stamp != cachedStamp)
+            {
+                cachedRoot = Json.Parse(File.ReadAllText(path, Encoding.UTF8)) as Dictionary<string, object>;
+                cachedPath = path; cachedStamp = stamp;
+            }
+            var root = cachedRoot;
             if (root == null) return null;
             foreach (object o in (System.Collections.IEnumerable)root["themes"])
             {
@@ -29,7 +39,36 @@ static class Themes
     public static string PageFor(string pageDir, string id)
     {
         var theme = Find(pageDir, id);
-        return theme == null ? null : theme["page"] as string;
+        string page = theme == null || !theme.ContainsKey("page") ? null : theme["page"] as string;
+        if (string.IsNullOrEmpty(page) || Path.IsPathRooted(page) || page.Contains("..") || !page.EndsWith(".html", StringComparison.OrdinalIgnoreCase)) return null;
+        return File.Exists(Path.Combine(pageDir, page)) ? page : null;
+    }
+
+    public static bool ValidParameter(string pageDir, string theme, string key, object value)
+    {
+        if (value == null || value is bool || value is string) return false;
+        double number;
+        try { number = Convert.ToDouble(value); } catch { return false; }
+        if (double.IsNaN(number) || double.IsInfinity(number)) return false;
+        if (key == "seed") return number >= 0 && number <= int.MaxValue && number == Math.Floor(number);
+        var t = Find(pageDir, theme);
+        if (t == null) return false;
+        if (key == "adaptive") return t.ContainsKey("adaptive") && (number == 0 || number == 1);
+        object groups;
+        if (!t.TryGetValue("groups", out groups)) return false;
+        foreach (object group in (System.Collections.IEnumerable)groups)
+        foreach (object parameter in (System.Collections.IEnumerable)((Dictionary<string, object>)group)["params"])
+        {
+            var p = (Dictionary<string, object>)parameter;
+            if ((p["key"] as string) != key) continue;
+            if (p.ContainsKey("options"))
+            {
+                var options = (object[])p["options"];
+                return number >= 0 && number < options.Length && number == Math.Floor(number);
+            }
+            return number >= Convert.ToDouble(p["min"]) && number <= Convert.ToDouble(p["max"]);
+        }
+        return false;
     }
 
     public static string ProductFor(string pageDir, string id)

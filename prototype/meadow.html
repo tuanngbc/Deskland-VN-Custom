@@ -143,6 +143,7 @@
 </aside>
 <div id="nogl">当前浏览器不支持 WebGL2，无法运行原型。</div>
 
+<script src="world-contract.js"></script>
 <script>
 'use strict';
 
@@ -237,7 +238,9 @@ function mineCells() {
 /* ======================================================================
    CPU 噪声 + 可平铺噪声纹理
    ====================================================================== */
-let seed = (Math.random() * 1e6) | 0;
+let seed = WALL || PREVIEW ? 104729 : (Math.random() * 1e6) | 0;
+DeskWorld.seed(seed);
+const sceneRandom = () => DeskWorld.random();
 function hash2(x, y, k = 0) {
   let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul(seed + k, 2246822519);
   h = Math.imul(h ^ (h >>> 13), 1274126177);
@@ -597,7 +600,7 @@ const rnd1 = (x, y, k) => hash2(x, y, k);                  // 固定的随机数
 const skyClouds = [];
 let flowT = 0;
 function makeSkyCloud(x) {
-  const rnd = Math.random, R = 95 * 1.2;                 // 轮廓大一些（云厚一些，才放得下大圆）；圆的大小还是按 95 算
+  const rnd = sceneRandom, R = 95 * 1.2;                 // 轮廓大一些（云厚一些，才放得下大圆）；圆的大小还是按 95 算
   // 1) 大致的轮廓：底下一排大圆（中间大、两边小），上面再堆几个 → 底宽上窄的一团
   const n = 3 + Math.floor(rnd() * 3), w = R * (1.0 + n * 0.5);
   const body = [];
@@ -654,7 +657,7 @@ function stepSkyClouds(dt) {
   for (let n = alive.length; n < want; n++) {
     let best = null, bestD = -1;
     for (let k = 0; k < 20; k++) {
-      const c = makeSkyCloud(Math.random() * W);
+      const c = makeSkyCloud(sceneRandom() * W);
       const dmin = Math.min(1e9, ...skyClouds.map(o => Math.hypot((o.x - c.x) / 1.6, o.y - c.y)));
       if (dmin > bestD) { bestD = dmin; best = c; }
     }
@@ -895,13 +898,15 @@ function resize() {
 }
 
 const T0 = performance.now();
+let nextFrameAt = 0;
 let lastT = 0, fpsEMA = 0, frameN = 0, frameMs = 0;
 const px = new Uint8Array(4);
 let paused = false;                              // 宿主通知：前台窗口最大化 / 全屏 → 暂停
 function frame(now) {
   requestAnimationFrame(frame);
-  if (paused) { lastT = 0; return; }
-  if (P.cap30 && now - lastT < 31) return;
+  if (paused) { lastT = 0; nextFrameAt = 0; return; }
+  if (P.cap30 && now < nextFrameAt) return;
+  nextFrameAt = !nextFrameAt || now - nextFrameAt > 100 ? now + 1000 / 30 : nextFrameAt + 1000 / 30;
   const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.03;
   if (lastT) fpsEMA = fpsEMA ? fpsEMA * 0.9 + (1 / dt) * 0.1 : 1 / dt;
   lastT = now;
@@ -920,7 +925,7 @@ function draw(now) {
   // 官网不加载人物脚本，沿用原来的草地着色器和开销。
   if(actor&&!actorPR)actorPR=program(FS.replace('#version 300 es','#version 300 es\n#define MEADOW_ACTOR'));
   // 两次绘制共享本帧云数据，不额外重算、上传云团。
-  uploadCircles((now - T0) / 1000);
+  uploadCircles(DeskWorld.seconds(now, T0));
   const render=(renderer,withCat)=>{
     const { p, U } = renderer;
     gl.useProgram(p);
@@ -935,7 +940,7 @@ function draw(now) {
     gl.uniform1f(U.uSeed, (seed % 997) * 0.37);
     gl.uniform1f(U.uStep, STEP);
     gl.uniform1f(U.uMix, curMix);
-    gl.uniform1f(U.uTime, (now - T0) / 1000);
+    gl.uniform1f(U.uTime, DeskWorld.seconds(now, T0));
     gl.uniform1f(U.uDebug, P.debug ? 1 : 0);
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, circTex); gl.uniform1i(U.uCirc, 3);
     gl.uniform2f(U.uCGrid, cgW, cgH); gl.uniform1f(U.uCellG, CELL_G);
@@ -1015,7 +1020,7 @@ document.getElementById('collapse').addEventListener('click', () => {
 // 壁纸 / 预览刚打开、还不知道图标在哪的时候只记下种子（等图标来了再按它画）
 let iconsSeen = !(WALL || PREVIEW);
 function reseed(v) {
-  seed = v; buildNoise();
+  seed = v; DeskWorld.seed(seed); buildNoise();
   if (!iconsSeen) return;
   commit(true);
 }
@@ -1113,11 +1118,11 @@ function startHostedMode() {
   let first = true;
   const handle = m => {
     if (m.t === 'pause') { paused = PREVIEW ? false : m.v; return; }
-    if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'settings') { DeskWorld.configure(m.contract); applySettings(m.v || {}); return; }
     if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
     if (m.t !== 'icons') return;
     const k = window.devicePixelRatio || 1;       // 物理像素 → CSS 像素
-    icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    icons = m.vis ? m.r.map(r => DeskWorld.cssRect(r, k)) : [];
     if (PREVIEW) drawGhosts();
     iconsSeen = true;
     commit(first);                                // 第一次：云慢慢长出来；之后：云跟着图标平滑移动

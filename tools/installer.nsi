@@ -6,6 +6,7 @@
 !include "FileFunc.nsh"
 !include "StrFunc.nsh"
 ${UnStrStr}
+Var IsolatedPackage
 Name "Deskland Preview"
 OutFile "${OUTPUT}"
 InstallDir "$LOCALAPPDATA\Programs\Deskland Preview"
@@ -50,6 +51,13 @@ LangString InstallingRuntime ${LANG_SIMPCHINESE} "正在安装 Microsoft Edge We
 LangString InstallingRuntime ${LANG_ENGLISH} "Installing Microsoft Edge WebView2 Runtime (internet required)..."
 
 Function .onInit
+  StrCpy $IsolatedPackage "0"
+  ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} $0 "/ISOLATED" $1
+  ${IfNot} ${Errors}
+    StrCpy $IsolatedPackage "1"
+  ${EndIf}
   ${IfNot} ${RunningX64}
     MessageBox MB_ICONSTOP "$(NeedX64)"
     SetErrorLevel 1
@@ -106,6 +114,11 @@ Section "$(AppFiles)" SecApp
   closed:
   !include "${FILE_LIST}"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
+  ${If} $IsolatedPackage == "1"
+    FileOpen $0 "$INSTDIR\.isolated-install" w
+    FileWrite $0 "Isolated installation test. No shared registration or shortcuts."
+    FileClose $0
+  ${Else}
   CreateDirectory "$SMPROGRAMS\Deskland Preview"
   CreateShortcut "$SMPROGRAMS\Deskland Preview\Deskland Preview.lnk" "$INSTDIR\host\bin\Deskland.exe"
   CreateShortcut "$SMPROGRAMS\Deskland Preview\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
@@ -121,9 +134,13 @@ Section "$(AppFiles)" SecApp
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DesklandPreview" "NoRepair" 1
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DesklandPreview" "EstimatedSize" $0
+  ${EndIf}
 SectionEnd
 
 Function un.onInit
+  StrCpy $IsolatedPackage "0"
+  IfFileExists "$INSTDIR\.isolated-install" 0 +2
+    StrCpy $IsolatedPackage "1"
   SetShellVarContext current
   SetRegView 64
 FunctionEnd
@@ -143,10 +160,15 @@ Section "Uninstall"
   ${EndIf}
   !include "${DELETE_LIST}"
   Delete "$INSTDIR\Uninstall.exe"
+  Delete "$INSTDIR\.isolated-install"
   RMDir "$INSTDIR"
+  ReadRegStr $0 HKCU "Software\DesklandPreview\Installer" "InstallDir"
+  ${If} $IsolatedPackage != "1"
+  ${AndIf} $0 == $INSTDIR
   Delete "$SMPROGRAMS\Deskland Preview\Deskland Preview.lnk"
   Delete "$SMPROGRAMS\Deskland Preview\Uninstall.lnk"
   RMDir "$SMPROGRAMS\Deskland Preview"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DesklandPreview"
   DeleteRegKey HKCU "Software\DesklandPreview\Installer"
+  ${EndIf}
 SectionEnd
