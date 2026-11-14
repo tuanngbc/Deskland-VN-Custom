@@ -108,7 +108,7 @@ static class RegressionTests
             File.WriteAllText(settings,"{\"version\":1,\"theme\":\"meadow\",\"lang\":\"en\",\"params\":{\"meadow\":{\"sigma\":99,\"seed\":7}},\"ownerExtension\":42}");
             Settings.Load();Settings.Save();var root=(Dictionary<string,object>)Json.Parse(File.ReadAllText(settings));
             Assert(Settings.Theme=="meadow"&&Settings.Mode==WallpaperMode.Mirror&&Convert.ToInt32(Settings.For("meadow")["sigma"])==99,"migration lost settings");
-            Assert(Convert.ToInt32(root["version"])==2&&Convert.ToInt32(root["ownerExtension"])==42,"schema/unknown fields");
+            Assert(Convert.ToInt32(root["version"])==3&&Convert.ToInt32(root["ownerExtension"])==42,"schema/unknown fields");
         });
         Test("settings-independent-params-isolated", delegate {
             Settings.Mode=WallpaperMode.Independent;

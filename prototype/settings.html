@@ -91,7 +91,7 @@
   .update-action:disabled { opacity: .65; cursor: default; }
 
   /* ---------- 左右两栏：左边主题，右边预览 + 参数 ---------- */
-  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 350px; gap: 28px; padding: 0 32px; min-height: 0; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 410px; gap: 28px; padding: 0 32px; min-height: 0; }
   .side { display: flex; flex-direction: column; gap: 18px; min-height: 0; padding: 22px; background: var(--panel); border-radius: 24px; }
 
   /* ---------- 主题 ---------- */
@@ -101,8 +101,8 @@
   .collection-head p { color: var(--muted); font-size: 12px; margin-top: 8px; }
   .section-title { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .04em; margin-bottom: 10px; }
   /* 按宽度自动排几列，主题多了就往下滚（以后会有很多辑、上百个主题） */
-  .theme-list { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
-    align-content: start; gap: 16px; padding: 4px 8px 18px 4px; margin-left: -4px; margin-right: -8px; }
+  .theme-list { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    align-content: start; gap: 18px; padding: 4px 8px 18px 4px; margin-left: -4px; margin-right: -8px; }
   .theme-list::-webkit-scrollbar { width: 8px; }
   .theme-list::-webkit-scrollbar-thumb { background: var(--track); border-radius: 4px; }
   .theme {
@@ -117,7 +117,7 @@
   .theme-copy { flex: 1; padding: 16px 16px 14px; }
   .theme-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .theme-arrow { flex: none; width: 17px; height: 17px; color: var(--muted); }
-  .theme .thumb { flex: none; width: 100%; height: 112px; border-radius: 20px; position: relative; overflow: hidden; }
+  .theme .thumb { flex: none; width: 100%; height: 148px; border-radius: 20px; position: relative; overflow: hidden; }
   .theme .thumb > img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
   .theme:disabled .thumb { filter: saturate(.55) brightness(1.02); opacity: .75; }
   .theme.locked .thumb { filter: none; opacity: 1; }
@@ -259,8 +259,9 @@
     .top { flex-wrap: wrap; }
     .top-left { gap: 20px; }
     .top-right { gap: 12px; }
-    .layout { grid-template-columns: minmax(0, 1fr) 330px; gap: 20px; padding: 0 24px; }
-    .theme-list { grid-template-columns: repeat(auto-fill, minmax(156px, 1fr)); gap: 12px; }
+    .layout { grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; padding: 0 24px; }
+    .theme-list { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; }
+    .theme .thumb { height: 128px; }
     .theme-copy { padding: 14px 13px 12px; }
     .theme .name { font-size: 20px; }
     .side { padding: 18px; }
@@ -280,6 +281,12 @@
   .monitor-detail { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; margin: 8px 0; }
   .monitor-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; font-size: 11px; }
   .monitor-actions .ghost-btn { padding: 6px 9px; }
+  .environment-panel { display: grid; gap: 8px; }
+  .environment-panel .monitor-detail { margin: 0; }
+  .environment-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; }
+  .environment-controls .switch-row { font-size: 12px; }
+  .environment-select { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+  .environment-select select { min-width: 150px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); font: inherit; }
   @media (max-width: 780px) { body { height:auto; min-height:100vh; overflow:auto; } .layout { display:flex; flex-direction:column; } .themes { min-height:460px; } .theme-list { max-height:400px; flex:none; } .side { padding:14px; } .bottom { flex-wrap:wrap; } }
   .monitor-config select { min-width: 160px; padding: 7px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); }
   @media (prefers-reduced-motion: reduce) {
@@ -325,6 +332,15 @@
       <p id="monitorDetail" class="monitor-detail" role="status"></p>
       <div class="monitor-config" id="monitorConfig" hidden><label><span id="targetLabel">当前屏幕</span> <select id="monitorTheme"></select></label><button class="ghost-btn" id="monitorPause">暂停</button></div>
       <div class="monitor-actions"><label><input type="checkbox" id="previewOnly"><span id="previewOnlyLabel">Preview before Apply</span></label><button class="ghost-btn" id="applyMulti">Apply</button><button class="ghost-btn" id="resetMulti">Reset</button><button class="ghost-btn" id="globalPause">Pause all</button><button class="ghost-btn" id="reloadMulti">Reload</button><button class="ghost-btn" id="restoreMulti">Restore last working</button></div>
+    </section>
+    <section class="monitor-panel environment-panel" aria-label="Dynamic environment">
+      <h3 data-i18n="environmentTitle">Môi trường động</h3>
+      <p class="monitor-detail" data-i18n="environmentDescription">Ánh sáng, hướng mặt trời, gió và thời tiết mô phỏng chạy nhẹ trên máy.</p>
+      <div class="environment-controls">
+        <label class="switch-row"><span data-i18n="environmentTime">Đổi theo thời gian</span><input type="checkbox" id="environmentTime"><i class="switch"></i></label>
+        <label class="switch-row"><span data-i18n="environmentWeather">Đổi theo thời tiết</span><input type="checkbox" id="environmentWeather"><i class="switch"></i></label>
+        <label class="environment-select"><span data-i18n="weatherPreset">Bộ thời tiết</span><select id="weatherPreset" aria-label="Bộ thời tiết"></select></label>
+      </div>
     </section>
     <details class="monitor-panel" id="awayPanel">
       <summary data-i18n="awayTitle">Màn hình chờ và tiết kiệm tài nguyên</summary>
@@ -429,8 +445,10 @@ const send = m => {
   if (host) host.postMessage(JSON.stringify(m));
 };
 
+const DEFAULT_ENVIRONMENT = { time: true, weather: true, preset: 'auto' };
 const state = { registry0: null, registry: null, theme: 'beach', params: {}, screen: null, icons: null,
   mode: 'mirror', monitors: [], selectedMonitor: null, world: null, allParams: {}, globalTheme: 'beach', globalPaused: false,
+  environment: {...DEFAULT_ENVIRONMENT},
   langSetting: 'auto', langSys: 'zh-CN', autostartWarn: false, autostartSw: '',
   updateVersion: '', updateStatus: '', updateProgress: -1, updateError: '' };
 const $ = id => document.getElementById(id);
@@ -509,7 +527,7 @@ async function setLang(code) {
 // 换了语言：界面上的字都重新填一遍（预览不用重新加载）
 function rerenderTexts() {
   if (!state.screen) return;
-  renderMonitors(); renderHead(); renderThemes(); renderControls(); updateFoot(); shareBusy(shareState); showAutostartWarn(); showUpdate(); updatePurchaseText();
+  renderMonitors(); renderEnvironment(); renderHead(); renderThemes(); renderControls(); updateFoot(); shareBusy(shareState); showAutostartWarn(); showUpdate(); updatePurchaseText();
 }
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -549,6 +567,26 @@ function renderMonitors() {
     $('monitorPause').textContent = t(m.paused ? 'resumeMonitor' : 'pauseMonitor');
   }
 }
+const WEATHER_OPTIONS = [['auto', 'weatherAuto'], ['clear', 'weatherClear'], ['cloudy', 'weatherCloudy'], ['rain', 'weatherRain'], ['storm', 'weatherStorm'], ['snow', 'weatherSnow']];
+function renderEnvironment() {
+  const e = Object.assign({}, DEFAULT_ENVIRONMENT, state.environment || {});
+  state.environment = e;
+  $('environmentTime').checked = e.time !== false;
+  $('environmentWeather').checked = e.weather !== false;
+  $('weatherPreset').innerHTML = WEATHER_OPTIONS.map(([value, key]) => `<option value="${value}">${t(key)}</option>`).join('');
+  $('weatherPreset').value = WEATHER_OPTIONS.some(x => x[0] === e.preset) ? e.preset : 'auto';
+}
+function setEnvironment(patch) {
+  state.environment = Object.assign({}, DEFAULT_ENVIRONMENT, state.environment, patch || {});
+  renderEnvironment();
+  const message = { t: 'environment', time: state.environment.time !== false, weather: state.environment.weather !== false, preset: state.environment.preset };
+  send(message);
+  toPreview({ ...message, environment: state.environment });
+  flashSaved();
+}
+$('environmentTime').addEventListener('change', e => setEnvironment({ time: e.target.checked }));
+$('environmentWeather').addEventListener('change', e => setEnvironment({ weather: e.target.checked }));
+$('weatherPreset').addEventListener('change', e => setEnvironment({ preset: e.target.value }));
 $('modeRow').addEventListener('click', e => { const b=e.target.closest('[data-mode]'); if (!b || state.mode===b.dataset.mode) return; flush(); state.mode=b.dataset.mode; send({t:'mode',v:state.mode}); selectTarget(); });
 $('monitorMap').addEventListener('click', e => { const b=e.target.closest('[data-monitor]'); if (!b) return; flush(); state.selectedMonitor=b.dataset.monitor; selectTarget(); });
 $('monitorTheme').addEventListener('change', e => { const m=state.monitors.find(x=>x.id===state.selectedMonitor); if (!m) return; flush(); m.theme=e.target.value; send({t:'monitorTheme',id:m.id,theme:m.theme}); selectTarget(); });
@@ -775,7 +813,7 @@ addEventListener('message', e => {
   if (e.source !== frame.contentWindow) return;
   const m = JSON.parse(e.data);
   if (m.t === 'ready') {                 // 预览页面加载好了：先给设置，再给图标
-    toPreview({ t: 'settings', v: valuesOf(themeById(state.theme)) });
+    toPreview({ t: 'settings', v: valuesOf(themeById(state.theme)), environment: state.environment });
     if (state.icons) toPreview(state.icons);
   }
 });
@@ -896,6 +934,7 @@ function onHost(m) {
       state.params = state.allParams;
       state.globalTheme = state.theme;
       state.globalPaused = !!m.globalPaused;
+      state.environment = Object.assign({}, DEFAULT_ENVIRONMENT, m.environment || {});
       state.screen = m.screen;
       state.mode = m.mode || 'mirror';
       state.monitors = m.monitors || [];
@@ -905,6 +944,7 @@ function onHost(m) {
       state.autostartWarn = !!m.autostartWarn;
       state.autostartSw = m.autostartSw || '';
       showAutostartWarn();
+      renderEnvironment();
       showUpdate();
       selectTarget();
       shareBusy(null);
@@ -963,7 +1003,7 @@ function mockHost() {
   for (let c = 0; c < 4; c++) for (let row = 0; row < 9; row++) cell(c, row);
   for (const [c, row] of [[6, 0], [6, 1], [7, 3], [8, 3], [8, 4], [12, 1], [13, 1], [14, 1], [13, 2], [14, 2], [20, 0], [21, 0], [19, 5], [20, 5]]) cell(c, row);
   const bl = browserLang();
-  onHost({ t: 'init', theme: 'beach', params: {}, screen: { w: W * k, h: H * k }, world:{x:0,y:0,w:W*k,h:H*k}, monitors:[{id:'browser-preview',name:'Xem trước trong trình duyệt (mô phỏng)',x:0,y:0,w:W*k,h:H*k,dpi:96*k,scale:k,primary:true,theme:'beach',status:'preview'}], autostart: false, lang: 'vi', langEff: 'vi', langSys: bl });
+  onHost({ t: 'init', theme: 'beach', params: {}, environment: DEFAULT_ENVIRONMENT, screen: { w: W * k, h: H * k }, world:{x:0,y:0,w:W*k,h:H*k}, monitors:[{id:'browser-preview',name:'Xem trước trong trình duyệt (mô phỏng)',x:0,y:0,w:W*k,h:H*k,dpi:96*k,scale:k,primary:true,theme:'beach',status:'preview'}], autostart: false, lang: 'vi', langEff: 'vi', langSys: bl });
   onHost({ t: 'icons', vis: true, r });
   if (new URLSearchParams(location.search).has('updateDemo')) onHost({ t: 'updateState', version: '0.2.0', status: 'available', progress: -1 });
 }

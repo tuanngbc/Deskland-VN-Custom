@@ -12,6 +12,8 @@
   // day/night rhythm without permissions, network requests, or per-frame work.
   const TAU = Math.PI * 2;
   let environmentCache = null, environmentStamp = 0;
+  let environmentOptions = { time: true, weather: true, preset: 'auto' };
+  const WEATHER_PRESETS = new Set(['auto', 'clear', 'cloudy', 'rain', 'storm', 'snow']);
   const clamp01 = v => Math.max(0, Math.min(1, v));
   const smooth = (a, b, x) => {
     const t = clamp01((x - a) / Math.max(1e-6, b - a));
@@ -22,9 +24,16 @@
     h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
     return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
   };
-  function environmentAt(value) {
+  const normalizeEnvironmentOptions = options => {
+    const o = options || {};
+    const preset = WEATHER_PRESETS.has(o.preset) ? o.preset : 'auto';
+    return { time: o.time !== false, weather: o.weather !== false, preset };
+  };
+  function environmentAt(value, options) {
+    const opts = normalizeEnvironmentOptions(options || environmentOptions);
     const date = value instanceof Date ? value : new Date(value == null ? Date.now() : value);
-    const h = date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600 + date.getMilliseconds() / 3600000;
+    const clockHour = date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600 + date.getMilliseconds() / 3600000;
+    const h = opts.time ? clockHour : 12;
     const dayProgress = h / 24;
     const day = Math.floor(new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime() / 86400000);
     const daylight = smooth(5.0, 7.0, h) * (1 - smooth(17.0, 19.5, h));
@@ -38,10 +47,31 @@
     const dayNoise = hashDay(day);
     const windWave = Math.sin(dayProgress * TAU * 2 + dayNoise * TAU) * 0.5 +
       Math.sin(dayProgress * TAU * 5.3 + dayNoise * 9.0) * 0.2;
-    const wind = clamp01(0.22 + dayNoise * 0.28 + (windWave + 0.7) * 0.22);
-    const gust = clamp01(0.18 + 0.16 * Math.sin(dayProgress * TAU * 3.1 + dayNoise * 15) + 0.08 * Math.sin(dayProgress * TAU * 8.7));
-    const windDirection = (dayNoise * 240 + dayProgress * 90 + 360) % 360;
-    const cloudiness = clamp01(0.22 + 0.46 * hashDay(day + 17) + 0.12 * Math.sin(dayProgress * TAU + dayNoise * 5));
+    let wind = clamp01(0.22 + dayNoise * 0.28 + (windWave + 0.7) * 0.22);
+    let gust = clamp01(0.18 + 0.16 * Math.sin(dayProgress * TAU * 3.1 + dayNoise * 15) + 0.08 * Math.sin(dayProgress * TAU * 8.7));
+    let windDirection = (dayNoise * 240 + dayProgress * 90 + 360) % 360;
+    let cloudiness = clamp01(0.22 + 0.46 * hashDay(day + 17) + 0.12 * Math.sin(dayProgress * TAU + dayNoise * 5));
+    let rain = 0, snow = 0, storm = 0, lightning = 0;
+    if (!opts.weather) {
+      wind = 0.32; gust = 0.04; windDirection = 110; cloudiness = 0.22;
+    } else if (opts.preset === 'clear') {
+      wind = 0.25; gust = 0.05; cloudiness = 0.08;
+    } else if (opts.preset === 'cloudy') {
+      wind = 0.42; gust = 0.12; cloudiness = 0.78;
+    } else if (opts.preset === 'rain') {
+      wind = 0.56; gust = 0.22; cloudiness = 0.94; rain = 0.72;
+    } else if (opts.preset === 'storm') {
+      wind = 0.84; gust = 0.82; cloudiness = 1.0; rain = 1.0; storm = 1.0;
+      lightning = 0.35 + 0.25 * Math.sin(Date.now() / 1000 * 2.4 + dayNoise * 20);
+    } else if (opts.preset === 'snow') {
+      wind = 0.34; gust = 0.16; cloudiness = 0.82; snow = 0.86;
+    } else {
+      // Auto weather is deterministic and quiet: only sufficiently cloudy
+      // days produce precipitation, with winter snow based on local month.
+      rain = clamp01((cloudiness - 0.78) * 3.6);
+      const month = date.getMonth();
+      snow = (month === 11 || month <= 1) ? rain * 0.78 : 0;
+    }
     const night = 1 - daylight;
     const warm = clamp01(golden * 0.9 + night * 0.08);
     const lightStrength = 0.24 + daylight * (0.55 + noon * 0.21) + golden * 0.08;
@@ -56,12 +86,13 @@
     else if (dusk > 0.18) phase = 'dusk';
     else if (daylight > 0.52) phase = golden > 0.18 ? 'golden-hour' : 'day';
     return Object.freeze({
-      now: date.getTime(), day, dayProgress, hour: h,
+      now: date.getTime(), day, dayProgress, hour: h, clockHour,
+      timeEnabled: opts.time, weatherEnabled: opts.weather, weatherPreset: opts.preset,
       phase, daylight, dawn, dusk, golden, night,
       sunElevation, sunAzimuth, noon,
       light: Object.freeze(light),
       temperatureTint: warm,
-      wind, gust, windDirection, cloudiness,
+      wind, gust, windDirection, cloudiness, rain, snow, storm, lightning,
       // convenient normalized values for shader uniforms and theme code
       skyLight: lightStrength,
       isDay: daylight > 0.35,
@@ -85,6 +116,7 @@
       if (!next || next.version !== 1) return;
       contract = next;
       epochOffset = Date.now() - performance.now() - next.epoch;
+      if (next.environment) api.setEnvironmentOptions(next.environment);
     },
     seconds(now, fallback) { return contract ? (now + epochOffset) / 1000 : (now - fallback) / 1000; },
     frameDue(now) {
@@ -95,6 +127,8 @@
     resetFrame() { nextFrameAt = 0; },
     noteDraw() { draws++; },
     received(message) {
+      if (message && message.environment) api.setEnvironmentOptions(message.environment);
+      if (message && message.t === 'environment') api.setEnvironmentOptions(message);
       if (message.t === 'icons') iconsSeen = true;
       // Run after the page's handler has applied the new geometry/parameters.
       if (['icons', 'settings', 'reset', 'pause'].includes(message.t))
@@ -104,6 +138,11 @@
     environmentAt,
     get environment() { return currentEnvironment(); },
     refreshEnvironment() { environmentCache = null; return currentEnvironment(); },
+    setEnvironmentOptions(options) {
+      environmentOptions = normalizeEnvironmentOptions(options);
+      environmentCache = null;
+      return currentEnvironment();
+    },
     seed(value) { randomState = value >>> 0; },
     makeRandom(value) {
       let state = value >>> 0;

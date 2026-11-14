@@ -41,6 +41,9 @@ chuyển dần qua bình minh, ban ngày, giờ vàng và ban đêm; mặt nư�
 đom đóm nhận gió nền, cơn gió và hướng gió biến thiên theo ngày. Mỗi renderer
 chỉ đọc một mẫu môi trường mỗi giây, nên mục tiêu 30fps và mức tiêu thụ thấp
 được giữ nguyên. Theme có lựa chọn thời điểm thủ công vẫn ưu tiên lựa chọn đó.
+Trong mục **Môi trường động**, có thể tắt riêng thay đổi theo thời gian hoặc
+thời tiết. Bộ thời tiết gồm tự nhiên theo ngày, trời quang, nhiều mây, mưa nhẹ,
+giông gió và tuyết rơi; mưa, tuyết và chớp được vẽ trên một lớp cục bộ nhẹ.
 Mục **Màn hình chờ và tiết kiệm tài nguyên** tạo một vòng cảnh đã nén ở 6fps,
 đăng ký `DesklandSaver.scr` với Windows và giải phóng WebView2 khi máy khóa,
 tắt màn hình hoặc vào màn hình chờ. Khi quay lại, Windows yêu cầu đăng nhập và

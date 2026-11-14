@@ -222,12 +222,15 @@ static class Settings
     static readonly string FilePath = Path.Combine(Log.DataDir, "settings.json");
     static bool futureSchema;
     static Dictionary<string, object> retainedRoot = new Dictionary<string, object>();
-    public const int SchemaVersion = 2;
+    public const int SchemaVersion = 3;
     public static string Theme = "beach";
     public static WallpaperMode Mode = WallpaperMode.Mirror;
     public static Dictionary<string, string> MonitorThemes = new Dictionary<string, string>();
     public static Dictionary<string, bool> MonitorPaused = new Dictionary<string, bool>();
     public static bool GlobalPaused;
+    public static bool DynamicTime = true;
+    public static bool DynamicWeather = true;
+    public static string WeatherPreset = "auto";
     public static string Lang = "vi";                  // Vietnamese by default for new profiles; preserve existing choices.
     public static Dictionary<string, Dictionary<string, object>> Params = new Dictionary<string, Dictionary<string, object>>();
 
@@ -248,6 +251,9 @@ static class Settings
             futureSchema = root.ContainsKey("version") && Convert.ToInt32(root["version"]) > SchemaVersion;
             object v;
             if (root.TryGetValue("globalPaused", out v) && v is bool) GlobalPaused = (bool)v;
+            if (root.TryGetValue("dynamicTime", out v) && v is bool) DynamicTime = (bool)v;
+            if (root.TryGetValue("dynamicWeather", out v) && v is bool) DynamicWeather = (bool)v;
+            if (root.TryGetValue("weatherPreset", out v) && v is string) WeatherPreset = (string)v;
             if (root.TryGetValue("mode", out v) && v is string)
             {
                 try { Mode = (WallpaperMode)Enum.Parse(typeof(WallpaperMode), (string)v, true); } catch { Mode = WallpaperMode.Mirror; }
@@ -279,7 +285,8 @@ static class Settings
             if (futureSchema) { Log.Write("Settings from a newer schema retained without overwrite"); return; }
             Directory.CreateDirectory(Log.DataDir);
             foreach (var field in Json.Obj("version", SchemaVersion, "mode", Mode.ToString(), "theme", Theme,
-                "lang", Lang, "params", Params, "monitorThemes", MonitorThemes, "monitorPaused", MonitorPaused, "globalPaused", GlobalPaused)) retainedRoot[field.Key] = field.Value;
+                "lang", Lang, "params", Params, "monitorThemes", MonitorThemes, "monitorPaused", MonitorPaused, "globalPaused", GlobalPaused,
+                "dynamicTime", DynamicTime, "dynamicWeather", DynamicWeather, "weatherPreset", WeatherPreset)) retainedRoot[field.Key] = field.Value;
             string json = Json.Stringify(retainedRoot);
             AtomicWrite(FilePath, json);
         }
@@ -338,6 +345,13 @@ static class Settings
     {
         bool v;
         return monitor != null && MonitorPaused.TryGetValue(monitor.Id, out v) && v;
+    }
+
+    public static Dictionary<string, object> EnvironmentJson()
+    {
+        string p = WeatherPreset;
+        if (p != "auto" && p != "clear" && p != "cloudy" && p != "rain" && p != "storm" && p != "snow") p = "auto";
+        return Json.Obj("time", DynamicTime, "weather", DynamicWeather, "preset", p);
     }
 }
 
@@ -608,7 +622,7 @@ partial class HostContext : ApplicationContext
             case "hello":
                 Rectangle scr = monitors.VirtualBounds;
                 settingsWin.Post(Json.Stringify(Json.Obj("t", "init", "theme", Settings.Theme, "params", Settings.Params,
-                    "mode", Settings.Mode.ToString().ToLowerInvariant(), "globalPaused", manualPause, "world", WorldJson(), "monitors", MonitorListJson(),
+                    "mode", Settings.Mode.ToString().ToLowerInvariant(), "globalPaused", manualPause, "environment", Settings.EnvironmentJson(), "world", WorldJson(), "monitors", MonitorListJson(),
                     "screen", Json.Obj("w", scr.Width, "h", scr.Height), "autostart", IsAutoStart(),
                     "autostartWarn", autoStartSw != null, "autostartSw", autoStartSw ?? "",
                     "lang", Settings.Lang, "langEff", I18n.Code, "langSys", I18n.Sys)));
@@ -693,6 +707,17 @@ partial class HostContext : ApplicationContext
                 manualPause = m.ContainsKey("v") && m["v"] is bool && (bool)m["v"];
                 Settings.GlobalPaused = manualPause; pauseItem.Checked = manualPause; SaveSoon();
                 ReconfigureForms(monitors.Current); PostMonitors(); break;
+            case "environment":
+            {
+                if (m.ContainsKey("time") && m["time"] is bool) Settings.DynamicTime = (bool)m["time"];
+                if (m.ContainsKey("weather") && m["weather"] is bool) Settings.DynamicWeather = (bool)m["weather"];
+                string preset = m.ContainsKey("preset") ? m["preset"] as string : null;
+                if (preset == "auto" || preset == "clear" || preset == "cloudy" || preset == "rain" || preset == "storm" || preset == "snow") Settings.WeatherPreset = preset;
+                SaveSoon();
+                string env = Json.Stringify(Json.Obj("t", "environment", "time", Settings.DynamicTime, "weather", Settings.DynamicWeather, "preset", Settings.WeatherPreset));
+                foreach (WallpaperForm f in forms.ToArray()) f.Post(env);
+                break;
+            }
             case "reload":
                 foreach (RestartBudget b in retry.Values) b.Reset();
                 string reloadId = m.ContainsKey("monitor") ? m["monitor"] as string : null;
@@ -1042,9 +1067,9 @@ partial class HostContext : ApplicationContext
 
     string RendererSettings(WallpaperForm instance)
     {
-        return Json.Stringify(Json.Obj("t", "settings", "v", Settings.ForMonitor(instance.MonitorId, instance.ThemeId),
+        return Json.Stringify(Json.Obj("t", "settings", "v", Settings.ForMonitor(instance.MonitorId, instance.ThemeId), "environment", Settings.EnvironmentJson(),
             "contract", Json.Obj("version", 1, "mode", Settings.Mode.ToString().ToLowerInvariant(), "monitor", instance.MonitorId,
-            "viewport", RectJson(instance.Monitor.Bounds), "world", WorldJson(), "epoch", (epoch - new DateTime(1970, 1, 1)).TotalMilliseconds)));
+            "viewport", RectJson(instance.Monitor.Bounds), "world", WorldJson(), "environment", Settings.EnvironmentJson(), "epoch", (epoch - new DateTime(1970, 1, 1)).TotalMilliseconds)));
     }
     static object RectJson(Rectangle r) { return Json.Obj("x", r.X, "y", r.Y, "w", r.Width, "h", r.Height); }
     void PostMonitors()

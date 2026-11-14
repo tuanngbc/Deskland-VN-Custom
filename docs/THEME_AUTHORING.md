@@ -44,6 +44,8 @@ const azimuth = e.sunAzimuth;      // hướng mặt trời, độ
 const wind = e.wind, gust = e.gust; // gió nền và cơn gió nhẹ, 0..1
 const windDir = e.windDirection;   // hướng gió, độ
 const clouds = e.cloudiness;       // mây ổn định theo ngày, 0..1
+const rain = e.rain, snow = e.snow; // lượng mưa / tuyết mô phỏng, 0..1
+const storm = e.storm;              // giông gió, 0..1
 ```
 
 Theme nên dùng các giá trị này để điều chỉnh màu, ánh sáng, tốc độ chuyển
