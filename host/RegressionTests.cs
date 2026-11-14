@@ -125,8 +125,8 @@ static class RegressionTests
         Test("settings-atomic-backup", delegate { Settings.Save();Assert(File.Exists(settings+".bak")&&!File.Exists(settings+".tmp"),"backup/temp"); });
         Test("settings-restore-last-working", delegate { Settings.MarkWorking();Settings.Theme="meadow";Settings.Save();Assert(Settings.RestoreWorking()&&Settings.Theme=="beach","working state lost"); });
         Test("settings-corrupt-file-recovers-backup", delegate { Settings.Save();Settings.Save();File.WriteAllText(settings,"{broken");Settings.Load();Assert(Settings.Theme=="beach","backup recovery"); });
-        Test("theme-original-renderers-loadable", delegate { Assert(Themes.Allowed(pageDir,"lake",null)&&Themes.Allowed(pageDir,"sky",null)&&Themes.Allowed(pageDir,"lotus",null),"original renderer rejected"); });
-        Test("theme-ready-has-real-page", delegate { foreach (string id in new[] { "beach", "meadow", "beach-turquoise", "lake", "sky", "ocean", "forest", "pinkforest", "map", "citymap", "worldmap", "nauticalmap", "lotus" }) Assert(Themes.Allowed(pageDir,id,null),"ready missing: " + id); });
+        Test("theme-locked-never-loadable", delegate { Assert(!Themes.Allowed(pageDir,"lake",delegate(string product){return true;}),"locked renderer accepted"); });
+        Test("theme-ready-has-real-page", delegate { Assert(Themes.Allowed(pageDir,"beach",null)&&Themes.Allowed(pageDir,"meadow",null),"ready missing"); });
         Test("theme-unknown-rejected", delegate {Assert(Themes.PageFor(pageDir,"../../anything")==null,"unknown page");});
         Test("parameter-range-validation", delegate {Assert(Themes.ValidParameter(pageDir,"beach","sigma",85)&&!Themes.ValidParameter(pageDir,"beach","sigma",-1)&&!Themes.ValidParameter(pageDir,"beach","sigma",10000),"range validation");});
         Test("parameter-invalid-message-rejected", delegate {Assert(!Themes.ValidParameter(pageDir,"beach","unknown",1)&&!Themes.ValidParameter(pageDir,"beach","sigma","oops")&&!Themes.ValidParameter(pageDir,"beach","seed",double.NaN),"unsafe message");});

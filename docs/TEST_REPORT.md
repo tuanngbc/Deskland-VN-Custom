@@ -10,11 +10,11 @@ Windows 11 Pro build 26200, WebView2 157.0.4341.46, NVIDIA GeForce GTX 1070. Hai
 
 ## Regression tự động
 
-`host/test.ps1`: **33 C# + 12 JavaScript = 45 test**, gồm property roundtrip 1000 hình chữ nhật, topology giả lập 1–4 màn hình, origin âm, khoảng trống và bố trí lệch hàng, icon cắt qua mép, DPI/primary/resolution thay đổi vẫn giữ ID, hot-plug events và bỏ qua thay đổi trùng, settings migration/backup/future schema, scoped params, message validation, bounded retry, deterministic RNG và cú pháp của toàn bộ 13 trang theme cùng renderer dùng chung.
+`host/test.ps1`: **33 C# + 10 JavaScript = 43 test**, gồm property roundtrip 1000 hình chữ nhật, topology giả lập 1–4 màn hình, origin âm, khoảng trống và bố trí lệch hàng, icon cắt qua mép, DPI/primary/resolution thay đổi vẫn giữ ID, hot-plug events và bỏ qua thay đổi trùng, settings migration/backup/future schema, scoped params, message validation, bounded retry, deterministic RNG và cú pháp renderer/settings. Chạy lại sau thay đổi source cuối; kết quả build và test được lưu trong artifacts, không commit binary/cache/profile.
 
 ## Native acceptance
 
-Lượt `acceptance-release` ghi **34 NATIVE PASS**, 3 mẫu hiệu năng; restart thêm 3 NATIVE PASS. Kiểm tra dùng WebView2 thật, không dùng preview browser mock làm bằng chứng native. Bộ theme mới được kiểm tra qua Settings browser preview và tất cả 11 renderer mới đều tải được, nhận settings/icon contract và vẽ canvas.
+Lượt `acceptance-release` ghi **34 NATIVE PASS**, 3 mẫu hiệu năng; restart thêm 3 NATIVE PASS. Kiểm tra dùng WebView2 thật, không dùng preview browser mock làm bằng chứng native.
 
 | Test | Trạng thái | Bằng chứng / giới hạn |
 |---|---|---|
@@ -29,7 +29,7 @@ Lượt `acceptance-release` ghi **34 NATIVE PASS**, 3 mẫu hiệu năng; resta
 | M09 hot-plug | AUTOMATED PASS; NATIVE NOT TESTED | Event/identity/routing giả lập, chưa rút cáp |
 | M10 đổi primary | AUTOMATED PASS; NATIVE NOT TESTED | Identity/topology giả lập |
 | M11 khôi phục settings | NATIVE PASS | Save/load và restart process cùng profile |
-| M12 chuyển mode | NATIVE PASS | Chuyển mode trong Settings thật, theme Beach và Meadow; 11 theme mới đã kiểm tra renderer preview |
+| M12 chuyển mode | NATIVE PASS | Chuyển mode trong Settings thật, theme cả Beach và Meadow |
 | M13 di chuyển icon | AUTOMATED PASS; NATIVE PARTIAL | Đọc 44 icon thật và adaptation; chưa di chuyển icon của owner |
 | M14 Explorer restart | NOT TESTED | Chưa restart Explorer của owner |
 | M15 per-monitor pause | NATIVE PASS | Manual pause giữ trạng thái màn hình còn lại; disposable fullscreen window chỉ pause output bị che |
@@ -57,4 +57,4 @@ Chưa đo trên integrated GPU hoặc 3–4 màn hình, không tuyên bố mục
 
 Đã sửa: per-window tranh slot sau DefView (một coordinator sắp thứ tự tất cả surfaces), settings restore không gửi lại params vào renderer đang giữ cùng theme, foreground Settings gây pause không cần thiết, kiểm thử params chưa chờ message async, snapshot restart ghi đè kết quả trước, khởi tạo script build mất BOM, thiếu `Themes.cs` trong corresponding source ZIP, main browser crash khiến Settings không tự phục hồi. Các test native có nhiễu foreground trước đó vẫn còn nguyên log trong artifacts; dùng kết quả mới sau retest.
 
-Chưa hoàn tất các gate nêu trên. Phase 8 theme expansion đã triển khai 11 renderer nguyên bản; native acceptance chuyên sâu cho từng theme vẫn chưa chạy trên mọi topology. Panorama pause riêng theo monitor và tối ưu vùng trống/world cực lớn là giới hạn hiện tại, cần owner xem xét khi nghiệm thu yêu cầu đầy đủ. Bước tiếp theo: native hot-plug/primary/DPI/rotate, Explorer restart, sleep/lock/Win+D, video đường nối, soak test và thử integrated GPU. Thực hiện trong session được owner cho phép đổi topology, giữ dữ liệu icon nguyên trạng.
+Chưa hoàn tất các gate nêu trên. Phase 8 chưa bắt đầu; 11 theme locked giữ nguyên. Panorama pause riêng theo monitor và tối ưu vùng trống/world cực lớn là giới hạn hiện tại, cần owner xem xét khi nghiệm thu yêu cầu đầy đủ. Bước tiếp theo: native hot-plug/primary/DPI/rotate, Explorer restart, sleep/lock/Win+D, video đường nối, soak test và thử integrated GPU. Thực hiện trong session được owner cho phép đổi topology, giữ dữ liệu icon nguyên trạng.

@@ -28,12 +28,8 @@ Native acceptance ghi PNG từ renderer thật và ảnh desktop thật, `enviro
 
 Build installer bằng `tools\build-installer.ps1`. NSIS từ mirror phải khớp SHA-256 upstream; tải HTML thay ZIP không được bỏ qua kiểm tra. Installer có `/ISOLATED /D=<thư mục tuyệt đối>` để cài thử mà không đổi shortcut hoặc đăng ký của bản có sẵn. Khi chạy EXE cài thử, vẫn phải đặt `DESKLAND_PROFILE_DIR` riêng. Uninstall bảo toàn dữ liệu người dùng.
 
-## Theme đã triển khai
-
-Ngoài Beach và Meadow, bản Preview hiện có thêm mười một theme nguyên bản: Maldives, Lake, Sky, Ocean, Forest, Pink Forest, Hand-drawn City, Colorful City, Old Map, Nautical Chart và Lotus Pond. Mỗi theme có trang renderer riêng, palette và chuyển động riêng, tham số riêng trong Settings, và dùng cùng world contract để chạy được ở Mirror, Independent và Panorama. Đây là mã mới của bản Preview, không trích xuất hay mở khóa nội dung thương mại.
-
 ## Giới hạn cần nghiệm thu tiếp
 
-Panorama dùng một surface lớn nên vùng trống trong bounding rectangle vẫn có chi phí render. Vượt giới hạn canvas/GPU trên topology rất lớn chưa được nghiệm thu. Để giữ cảnh liên tục, automatic pause của Panorama chỉ dừng cả world nếu foreground che toàn world; pause riêng theo màn hình chỉ áp dụng ở Independent. Hot-plug/DPI/rotate/Explorer restart, lock/unlock và sleep/resume cần native retest trước khi coi là hoàn tất toàn bộ yêu cầu.
+Panorama dùng một surface lớn nên vùng trống trong bounding rectangle vẫn có chi phí render. Vượt giới hạn canvas/GPU trên topology rất lớn chưa được nghiệm thu. Để giữ cảnh liên tục, automatic pause của Panorama chỉ dừng cả world nếu foreground che toàn world; pause riêng theo màn hình chỉ áp dụng ở Independent. Hot-plug/DPI/rotate/Explorer restart, lock/unlock và sleep/resume cần native retest trước khi coi là hoàn tất toàn bộ yêu cầu. Không thêm hoặc mở khóa 11 theme preview chưa có renderer.
 
 Tài liệu kỹ thuật tham chiếu: [WebView2 process failure](https://learn.microsoft.com/microsoft-edge/webview2/concepts/process-related-events), [Windows monitor device information](https://learn.microsoft.com/windows/win32/api/wingdi/ns-wingdi-displayconfig_target_device_name).
