@@ -6,7 +6,7 @@ $lib = Join-Path $PSScriptRoot 'lib'
 & $csc /nologo /target:exe /main:RegressionTests /platform:x64 /codepage:65001 /out:"$bin\RegressionTests.exe" `
   /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll `
   /r:"$lib\Microsoft.Web.WebView2.Core.dll" /r:"$lib\Microsoft.Web.WebView2.WinForms.dll" `
-  "$PSScriptRoot\DesktopHost.cs" "$PSScriptRoot\Themes.cs" "$PSScriptRoot\MultiMonitor.cs" "$PSScriptRoot\NativeAcceptance.cs" "$PSScriptRoot\RegressionTests.cs"
+  "$PSScriptRoot\DesktopHost.cs" "$PSScriptRoot\Themes.cs" "$PSScriptRoot\MultiMonitor.cs" "$PSScriptRoot\NativeAcceptance.cs" "$PSScriptRoot\AwayMode.cs" "$PSScriptRoot\ScreenSaver.cs" "$PSScriptRoot\RegressionTests.cs"
 if ($LASTEXITCODE -ne 0) { throw 'Test compilation failed' }
 $oldProfile = $env:DESKLAND_PROFILE_DIR
 try {

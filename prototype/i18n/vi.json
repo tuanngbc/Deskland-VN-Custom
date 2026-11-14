@@ -152,7 +152,29 @@
     "status_loading": "Đang tải",
     "status_initializing": "Đang khởi tạo",
     "status_failed": "Lỗi",
-    "status_preview": "Xem trước"
+    "status_preview": "Xem trước",
+    "awayTitle": "Màn hình chờ và tiết kiệm tài nguyên",
+    "awayDescription": "Phát vòng cảnh đã lưu ở 6 khung/giây, kèm đồng hồ trôi nhẹ. Giải phóng hình nền khi khóa máy hoặc tắt màn hình.",
+    "awayAfter": "Bắt đầu sau",
+    "awayMinutes": "phút",
+    "awayPreview": "Xem thử (không khóa)",
+    "awayEnable": "Bật màn hình chờ",
+    "awayUpdate": "Cập nhật màn hình chờ",
+    "awayDisable": "Tắt và khôi phục cài đặt cũ",
+    "awayRefresh": "Cập nhật cảnh đã lưu",
+    "awayLockImage": "Dùng ảnh cảnh cho màn khóa",
+    "awaySecurity": "Tự chạy qua trình bảo vệ màn hình Windows, yêu cầu đăng nhập khi quay lại. Win+L giữ khóa Windows thật; đăng xuất sẽ đóng ứng dụng.",
+    "awayNativeOnly": "Tùy chọn này chỉ dùng trong ứng dụng Windows.",
+    "awayOn": "Đã bật màn hình chờ",
+    "awayOff": "Chưa bật màn hình chờ",
+    "awayPreparing": "Đang tạo cảnh nhẹ cho màn hình chờ…",
+    "awayReady": "Cảnh màn hình chờ đã sẵn sàng",
+    "awayEnabled": "Đã bật màn hình chờ Windows",
+    "awayDisabled": "Đã tắt và khôi phục cài đặt màn hình chờ cũ",
+    "awayNoScene": "Chưa có cảnh để dùng",
+    "awayLockDone": "Đã đặt ảnh cảnh làm ảnh nền màn khóa Windows",
+    "awayLockBlocked": "Windows không cho phép đổi ảnh màn khóa",
+    "awayError": "Không thể cập nhật màn hình chờ: {msg}"
   },
   "host": {
     "traySettings": "Cài đặt…",
@@ -177,7 +199,15 @@
     "errSettings": "Không thể mở cửa sổ cài đặt: {msg}",
     "errNoPage": "Không tìm thấy trang chủ đề: {path}",
     "errNoDesktop": "Không tìm thấy cửa sổ màn hình nền của Windows nên không thể gắn hình nền động.",
-    "errStart": "Không thể khởi động: {msg}"
+    "errStart": "Không thể khởi động: {msg}",
+    "awayDisabled": "Đã tắt và khôi phục cài đặt màn hình chờ cũ",
+    "awayEnabled": "Đã bật màn hình chờ Windows",
+    "awayNoScene": "Chưa có cảnh để dùng",
+    "awayLockDone": "Đã đặt ảnh cảnh làm ảnh nền màn khóa Windows",
+    "awayLockBlocked": "Windows không cho phép đổi ảnh màn khóa",
+    "awayPreparing": "Đang tạo cảnh nhẹ cho màn hình chờ…",
+    "awayReady": "Cảnh màn hình chờ đã sẵn sàng",
+    "awayError": "Không thể cập nhật màn hình chờ: {msg}"
   },
   "themes": {
     "meadow": {

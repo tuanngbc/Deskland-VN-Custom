@@ -128,7 +128,29 @@
     "status_loading": "加载中",
     "status_initializing": "正在初始化",
     "status_failed": "失败",
-    "status_preview": "预览"
+    "status_preview": "预览",
+    "awayTitle": "屏幕保护与低功耗模式",
+    "awayDescription": "以每秒 6 帧播放已缓存场景和缓慢移动的时钟。锁定或关闭显示器时释放动态壁纸。",
+    "awayAfter": "开始于",
+    "awayMinutes": "分钟后",
+    "awayPreview": "预览（不会锁定）",
+    "awayEnable": "启用屏幕保护",
+    "awayUpdate": "更新屏幕保护",
+    "awayDisable": "关闭并恢复之前设置",
+    "awayRefresh": "更新缓存场景",
+    "awayLockImage": "将场景图片用于锁屏",
+    "awaySecurity": "使用 Windows 屏幕保护程序，返回时要求登录。Win+L 仍使用 Windows 真正的锁定；注销会关闭程序。",
+    "awayNativeOnly": "此选项只能在 Windows 应用中使用。",
+    "awayOn": "屏幕保护已启用",
+    "awayOff": "屏幕保护未启用",
+    "awayPreparing": "正在准备轻量屏幕保护场景…",
+    "awayReady": "屏幕保护场景已准备好",
+    "awayEnabled": "已启用 Windows 屏幕保护",
+    "awayDisabled": "已关闭屏幕保护并恢复之前设置",
+    "awayNoScene": "还没有可用场景",
+    "awayLockDone": "已将场景图片设置为 Windows 锁屏背景",
+    "awayLockBlocked": "Windows 不允许更改锁屏图片",
+    "awayError": "无法更新屏幕保护：{msg}"
   },
   "host": {
     "traySettings": "设置…",
@@ -152,6 +174,14 @@
     "errSettings": "设置窗口启动失败：{msg}",
     "errNoPage": "找不到页面：{path}",
     "errNoDesktop": "没有找到桌面窗口，无法挂载到壁纸层。",
-    "errStart": "启动失败：{msg}"
+    "errStart": "启动失败：{msg}",
+    "awayDisabled": "已关闭屏幕保护并恢复之前设置",
+    "awayEnabled": "已启用 Windows 屏幕保护",
+    "awayNoScene": "还没有可用场景",
+    "awayLockDone": "已将场景图片设置为 Windows 锁屏背景",
+    "awayLockBlocked": "Windows 不允许更改锁屏图片",
+    "awayPreparing": "正在准备轻量屏幕保护场景…",
+    "awayReady": "屏幕保护场景已准备好",
+    "awayError": "无法更新屏幕保护：{msg}"
   }
 }

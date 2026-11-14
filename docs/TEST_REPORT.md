@@ -1,11 +1,11 @@
-# Báo cáo kiểm thử Deskland Preview 0.3.0 — tiếng Việt
+# Báo cáo kiểm thử Deskland Preview 0.4.0 — tiếng Việt
 
 Ngày kiểm tra: 14-11-2026. Bản chuyển 16 theme và giao diện tiếng Việt đã qua
 kiểm tra tự động và chạy native trên hai màn hình thật. Không phát hành GitHub
 Release hoặc merge main. Các giới hạn nghiệm thu hệ thống ở cuối báo cáo vẫn
 được giữ rõ ràng.
 
-## Bản Việt hoá 0.3.0
+## Bản Việt hoá 0.4.0
 
 - `host/test.ps1`: **35 C# + 28 JavaScript = 63 PASS, 0 FAIL**. Bao gồm routing
   đa màn hình, lưu cấu hình, kiểm tra 16 trang theme, phụ thuộc cục bộ, bản dịch
@@ -25,15 +25,20 @@ Release hoặc merge main. Các giới hạn nghiệm thu hệ thống ở cuố
   trực tiếp từ renderer; lượt tự động không ghi đè clipboard của người dùng.
 - Kiểm tra Settings/khay tiếng Việt, lưu và đọc lại lựa chọn ngôn ngữ/theme.
   Có PNG native cho từng theme và màn hình trong thư mục evidence ở trên.
-- Gói Windows 0.3.0 cài thử với `/ISOLATED`: **28 NATIVE PASS, 0 FAIL** ở
-  `artifacts/vn-package-native/acceptance/results.json`. Bản ZIP giải nén chạy
-  cùng lượt kiểm tra: **28 NATIVE PASS, 0 FAIL** ở
-  `artifacts/vn-portable-native/acceptance/results.json`. Hai lượt này chạy Sân
+- Gói Windows 0.4.0 cài thử với `/ISOLATED`: **28 NATIVE PASS, 0 FAIL** ở
+  `artifacts/away-package-final/acceptance/results.json`. Bản ZIP giải nén
+  chạy cùng lượt kiểm tra: **28 NATIVE PASS, 0 FAIL**. Hai lượt này chạy Sân
   bóng/Bể cá vàng qua cả ba chế độ và xác nhận nhãn chia sẻ tiếng Việt.
-- Đối chiếu SHA-256 đủ **77 tệp** của bản cài và ZIP; gói nguồn có **91 tệp**,
-  gồm host, đủ 16 renderer, helper, shader và thông báo nguồn. Bản ZIP có thêm
-  `Mo-Deskland.cmd`. Gỡ bản cài thử thành công, giữ đăng ký của bản cài sẵn.
-  Khi đóng gói lại báo cáo này, tiếp tục đối chiếu tệp runtime với gói đã thử.
+- Đối chiếu SHA-256 đủ **81 tệp** của bản portable; gói nguồn có **95 tệp**,
+  gồm host, màn hình chờ, đủ 16 renderer, helper, shader, hướng dẫn tạo theme
+  và thông báo nguồn. Bản ZIP có thêm `Mo-Deskland.cmd`. Gỡ bản cài thử thành
+  công, giữ đăng ký của bản cài sẵn.
+- `DesklandSaver.scr` được build riêng, không tải WebView2. Smoke test 10 giây
+  với một cảnh PNG đã nén trên hai màn hình: 116 frame ở 6fps, khoảng 29.2 MiB
+  private RAM và 48.3 MiB working set; mẫu CPU khoảng 1.24% tổng máy khi đang
+  vẽ. Khi khóa/tắt màn hình,
+  host giải phóng wallpaper WebView2; màn hình chờ chỉ giữ ảnh PNG giảm kích
+  thước và đồng hồ native. Lượt smoke test cách ly không thay registry thật.
 
 Môi trường hiện tại: Windows 11 build 26200; WebView2 157.0.4341.46; GTX 1070;
 2560×1080 tại (0,0) và 1080×1920 tại (-1080,-685), cùng 96 DPI. Đọc được 45 icon

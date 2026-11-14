@@ -41,9 +41,9 @@ $WebView2Bootstrapper = [IO.Path]::GetFullPath($WebView2Bootstrapper)
 
 # A fixed source list prevents other editions or private working files entering this package.
 $sources = @('.gitattributes', '.gitignore', 'AGENTS.md', 'LICENSE', 'NOTICE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'TRADEMARKS.md',
-    'host\DesktopHost.cs', 'host\MultiMonitor.cs', 'host\Themes.cs', 'host\NativeAcceptance.cs', 'host\RegressionTests.cs', 'host\test.ps1', 'tests\renderer-contract.cjs', 'docs\MULTI_MONITOR.md', 'docs\TEST_REPORT.md', 'host\DesklandPreview.ico', 'host\README.md', 'host\app.manifest', 'host\build.ps1', 'host\inspect.ps1',
-    'tools\build-installer.ps1', 'tools\installer.nsi', 'tools\version.json', 'tools\adapt-vn-themes.cjs',
-    'docs\VIETNAMESE_EDITION.md', 'third_party\deskland-vn\NOTICE', 'third_party\deskland-vn\IMPORT.json')
+    'host\DesktopHost.cs', 'host\MultiMonitor.cs', 'host\Themes.cs', 'host\NativeAcceptance.cs', 'host\RegressionTests.cs', 'host\AwayMode.cs', 'host\ScreenSaver.cs', 'host\test.ps1', 'tests\renderer-contract.cjs', 'docs\MULTI_MONITOR.md', 'docs\TEST_REPORT.md', 'host\DesklandPreview.ico', 'host\README.md', 'host\app.manifest', 'host\build.ps1', 'host\inspect.ps1',
+    'tools\build-installer.ps1', 'tools\installer.nsi', 'tools\version.json', 'tools\adapt-vn-themes.cjs', 'tools\set-lock-image.ps1',
+    'docs\VIETNAMESE_EDITION.md', 'docs\THEME_AUTHORING.md', 'third_party\deskland-vn\NOTICE', 'third_party\deskland-vn\IMPORT.json')
 $themeFiles = @('world-contract.js', 'theme-runtime.js', 'flat.html', 'meadow.html', 'settings.html', 'thumbs-data.js', 'share.js', 'serve.mjs', 'themes.json', 'beach-palms.js', 'meadow-boy.js', 'meadow-cat.js',
     'maldives.html', 'lake.html', 'sky.html', 'ocean.html', 'rainforest.html', 'mocchau.html', 'tet-sakura.html', 'cat-hill.html', 'stadium.html',
     'aquarium.html', 'aquarium.frag', 'commute.html', 'commute.frag', 'summer-porch.html', 'summer-porch.frag', 'cats.html', 'boxing-ring.html', 'boxing-ring.frag',
@@ -84,8 +84,8 @@ foreach ($file in $sources) {
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Compression.ZipFile]::CreateFromDirectory($sourceStage, (Join-Path $payload 'Deskland-source.zip'))
 # Only program data is installed. The accompanying ZIP contains the exact corresponding source.
-$runtimeFiles = @('host\bin\Deskland.exe', 'host\bin\DesklandPreview.ico', 'host\bin\Microsoft.Web.WebView2.Core.dll', 'host\bin\Microsoft.Web.WebView2.WinForms.dll', 'host\bin\WebView2Loader.dll')
-$installFiles = @('LICENSE', 'NOTICE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'TRADEMARKS.md', 'docs\MULTI_MONITOR.md', 'docs\TEST_REPORT.md', 'docs\VIETNAMESE_EDITION.md', 'third_party\deskland-vn\NOTICE', 'third_party\deskland-vn\IMPORT.json') + @($themeFiles | Where-Object { $_ -ne 'serve.mjs' } | ForEach-Object { 'prototype\' + $_ }) + $runtimeFiles
+$runtimeFiles = @('host\bin\Deskland.exe', 'host\bin\DesklandSaver.scr', 'host\bin\DesklandPreview.ico', 'host\bin\Microsoft.Web.WebView2.Core.dll', 'host\bin\Microsoft.Web.WebView2.WinForms.dll', 'host\bin\WebView2Loader.dll', 'tools\set-lock-image.ps1')
+$installFiles = @('LICENSE', 'NOTICE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'TRADEMARKS.md', 'docs\MULTI_MONITOR.md', 'docs\TEST_REPORT.md', 'docs\VIETNAMESE_EDITION.md', 'docs\THEME_AUTHORING.md', 'third_party\deskland-vn\NOTICE', 'third_party\deskland-vn\IMPORT.json') + @($themeFiles | Where-Object { $_ -ne 'serve.mjs' } | ForEach-Object { 'prototype\' + $_ }) + $runtimeFiles
 foreach ($file in $installFiles) {
     $target = Join-Path $payload $file
     New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null

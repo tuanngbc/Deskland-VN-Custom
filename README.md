@@ -1,7 +1,7 @@
 # Deskland Preview — Tiếng Việt
 
 Hình nền động thích ứng với vị trí biểu tượng desktop, hỗ trợ nhiều màn hình.
-Bản 0.3.0 chuyển các trang theme từ gói cộng đồng **Deskland-VN 1.0.2** do
+Bản 0.4.0 chuyển các trang theme từ gói cộng đồng **Deskland-VN 1.0.2** do
 người dùng cung cấp vào host **C# + WebView2** của dự án này.
 
 ## Mở ứng dụng
@@ -36,7 +36,13 @@ quyền anh. Mỗi theme có renderer và tham số thực trong gói nguồn.
 
 Chọn **Xem trước trước khi áp dụng** để thử rồi bấm **Áp dụng**. Có nút tạm dừng,
 tải lại, đặt lại tham số và khôi phục cấu hình hoạt động.
+Mục **Màn hình chờ và tiết kiệm tài nguyên** tạo một vòng cảnh đã nén ở 6fps,
+đăng ký `DesklandSaver.scr` với Windows và giải phóng WebView2 khi máy khóa,
+tắt màn hình hoặc vào màn hình chờ. Khi quay lại, Windows yêu cầu đăng nhập và
+Deskland dựng lại hình nền. Có thể dùng một frame làm ảnh nền màn khóa Windows;
+đây là ảnh tĩnh theo giới hạn của Windows, không phải màn hình khóa giả.
 Xem [hướng dẫn bản tiếng Việt](docs/VIETNAMESE_EDITION.md),
+[hướng dẫn tạo theme](docs/THEME_AUTHORING.md),
 [hướng dẫn đa màn hình](docs/MULTI_MONITOR.md) và [báo cáo kiểm thử](docs/TEST_REPORT.md).
 
 ## Yêu cầu và đóng gói

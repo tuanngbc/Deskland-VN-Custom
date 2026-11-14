@@ -40,8 +40,8 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright 2026 Deskland authors"
 !insertmacro MUI_LANGUAGE "SimpChinese"
 LangString LaunchDeskland ${LANG_SIMPCHINESE} "启动 Deskland Preview"
 LangString LaunchDeskland ${LANG_ENGLISH} "Launch Deskland Preview"
-LangString AppFiles ${LANG_SIMPCHINESE} "Deskland Preview（16 个主题）"
-LangString AppFiles ${LANG_ENGLISH} "Deskland Preview (16 themes)"
+LangString AppFiles ${LANG_SIMPCHINESE} "Deskland Preview（16 个主题和屏幕保护程序）"
+LangString AppFiles ${LANG_ENGLISH} "Deskland Preview (16 themes and screen saver)"
 LangString DesktopShortcut ${LANG_SIMPCHINESE} "桌面快捷方式"
 LangString DesktopShortcut ${LANG_ENGLISH} "Desktop shortcut"
 LangString NeedX64 ${LANG_SIMPCHINESE} "需要 64 位 Windows 10 或更高版本。"
@@ -53,7 +53,7 @@ LangString RuntimeFailed ${LANG_ENGLISH} "WebView2 setup did not complete. Conne
 LangString InstallingRuntime ${LANG_SIMPCHINESE} "正在安装 Microsoft Edge WebView2 Runtime（需要联网）..."
 LangString InstallingRuntime ${LANG_ENGLISH} "Installing Microsoft Edge WebView2 Runtime (internet required)..."
 LangString LaunchDeskland ${LANG_VIETNAMESE} "Mở Deskland Preview"
-LangString AppFiles ${LANG_VIETNAMESE} "Deskland Preview (16 chủ đề)"
+LangString AppFiles ${LANG_VIETNAMESE} "Deskland Preview (16 chủ đề và màn hình chờ)"
 LangString DesktopShortcut ${LANG_VIETNAMESE} "Lối tắt trên màn hình nền"
 LangString NeedX64 ${LANG_VIETNAMESE} "Cần Windows 10 trở lên, phiên bản 64 bit."
 LangString CloseFailed ${LANG_VIETNAMESE} "Vui lòng thoát Deskland Preview rồi thử lại."
@@ -163,6 +163,9 @@ Section "Uninstall"
     SetErrorLevel 3
     Abort
   ${EndIf}
+  IfFileExists "$INSTDIR\host\bin\Deskland.exe" 0 +3
+  ExecWait '"$INSTDIR\host\bin\Deskland.exe" --uninstall-saver' $0
+  ; Best effort: a different Windows screen saver is preserved.
   unclosed:
   ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "DesklandPreview"
   ${UnStrStr} $1 $0 '$\"$INSTDIR\host\bin\Deskland.exe$\"'
@@ -182,4 +185,7 @@ Section "Uninstall"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DesklandPreview"
   DeleteRegKey HKCU "Software\DesklandPreview\Installer"
   ${EndIf}
+  IfFileExists "$INSTDIR\host\bin\Deskland.exe" 0 +3
+  ExecWait '"$INSTDIR\host\bin\Deskland.exe" --uninstall-saver' $0
+  ; The saver command is best effort: if the user selected another saver, it is preserved.
 SectionEnd

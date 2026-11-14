@@ -50,6 +50,7 @@ static class Program
         if (args.Length > 0 && args[0] == "--menu") { Signal(MenuEventName); return; }
         if (args.Length > 0 && args[0] == "--settings") { Signal(SettingsEventName); return; }
         if (args.Length > 0 && args[0] == "--exit-installed") { Environment.ExitCode = InstallProfile.StopInstalled(); return; }
+        if (args.Length > 0 && args[0] == "--uninstall-saver") { if(AwayRegistration.Enabled)AwayRegistration.Configure(false,5); return; }
         // Preview never migrates or shares the development edition's settings.                                 // 老名字（Habitat Wallpaper）下的数据目录、开机自启项搬过来
         bool fromAutostart = Array.IndexOf(args, "--autostart") >= 0;
         if (fromAutostart) AutoStartCheck.MarkLaunched();  // 开机自启跑起来了（不管后面是不是已经在运行）
@@ -393,7 +394,7 @@ static class I18n
 // 整个程序的生命周期：托盘图标常驻；壁纸窗口没了就重新建一个
 // 打开菜单的方式：托盘图标左键 / 右键、快捷键 Ctrl+Alt+H（或 --menu）
 // 打开设置的方式：双击程序（没运行就先启动再打开）、双击托盘图标、菜单 → 设置…（或 --settings）
-class HostContext : ApplicationContext
+partial class HostContext : ApplicationContext
 {
     internal WallpaperForm[] Instances { get { return forms.ToArray(); } }
     internal SettingsForm SettingsWindow { get { return settingsWin; } }
@@ -496,6 +497,7 @@ class HostContext : ApplicationContext
         watch.Start();
         SystemEvents.SessionSwitch += OnSessionSwitch;
         SystemEvents.PowerModeChanged += OnPowerChanged;
+        powerWindow.Changed += delegate(bool off) { displayOff=off;UpdateAwayState(); };
         StartForm();
         if (showSettings) OpenSettings();                // 用户双击程序启动：直接打开设置
     }
@@ -513,7 +515,7 @@ class HostContext : ApplicationContext
     // ---------------------------------------------------------------- 设置窗口
     public void OpenSettings()
     {
-        if (exiting) return;
+        if (exiting || awayReleased) return;
         if (settingsWin == null || settingsWin.IsDisposed)
         {
             SettingsForm opened = new SettingsForm(pageDir, this);
@@ -598,6 +600,7 @@ class HostContext : ApplicationContext
     {
         var m = Json.Parse(s) as Dictionary<string, object>;
         if (m == null || settingsWin == null) return;
+        if (HandleAwayMessage(m)) return;
         object t;
         m.TryGetValue("t", out t);
         switch (t as string)
@@ -609,6 +612,7 @@ class HostContext : ApplicationContext
                     "screen", Json.Obj("w", scr.Width, "h", scr.Height), "autostart", IsAutoStart(),
                     "autostartWarn", autoStartSw != null, "autostartSw", autoStartSw ?? "",
                     "lang", Settings.Lang, "langEff", I18n.Code, "langSys", I18n.Sys)));
+                PostAwayState(null);
                 if (updateVersion != null) PostUpdateState();
                 PostPreviewIcons(true);
                 break;
@@ -967,20 +971,19 @@ class HostContext : ApplicationContext
     void SetSessionPause(bool value)
     {
         if (exiting) return;
-        sessionPaused = value;
-        ReconfigureForms(monitors.Current);
-        if (!value) { monitors.Refresh(true); ZOrderCoordinator.Ensure(); }
+        sessionLocked=value;
+        UpdateAwayState();
     }
     void OnSessionSwitch(object sender, SessionSwitchEventArgs e)
     {
         bool locked = e.Reason == SessionSwitchReason.SessionLock || e.Reason == SessionSwitchReason.SessionLogoff;
-        if (e.Reason == SessionSwitchReason.SessionUnlock || locked)
+        if (e.Reason == SessionSwitchReason.SessionUnlock || e.Reason == SessionSwitchReason.SessionLogon || locked)
             hotkey.Dispatch(delegate { SetSessionPause(locked); });
     }
     void OnPowerChanged(object sender, PowerModeChangedEventArgs e)
     {
         if (e.Mode == PowerModes.Suspend || e.Mode == PowerModes.Resume)
-            hotkey.Dispatch(delegate { SetSessionPause(e.Mode == PowerModes.Suspend); });
+            hotkey.Dispatch(delegate { systemSleeping=e.Mode==PowerModes.Suspend;UpdateAwayState(); });
     }
 
     void StartForm()
@@ -1006,6 +1009,7 @@ class HostContext : ApplicationContext
 
     void StartForms(MonitorInfo[] ms)
     {
+        if (awayReleased) return;
         Rectangle world = MonitorGeometry.Union(ms);
         MonitorInfo[] plan = WallpaperLayout.Plan(ms, Settings.Mode);
         foreach (MonitorInfo monitor in plan)
@@ -1108,6 +1112,8 @@ class HostContext : ApplicationContext
         if (menuEvent.WaitOne(0)) ShowMenu();
         if (settingsEvent.WaitOne(0)) OpenSettings();
         if (DateTime.Now >= saveDue) { saveDue = DateTime.MaxValue; Settings.Save(); }
+        UpdateAwayState();
+        if (awayReleased) return;
         monitors.Refresh();
         if (reopenSettings && Budget("settings-window").CanStart(DateTime.UtcNow)) { reopenSettings = false; OpenSettings(); }
         if (!exiting) StartForms(monitors.Current);
@@ -1127,6 +1133,7 @@ class HostContext : ApplicationContext
         if (saveDue != DateTime.MaxValue) Settings.Save();
         if (settingsWin != null) { try { settingsWin.Close(); } catch { } }
         hotkey.Dispose();
+        powerWindow.Dispose();
         tray.Visible = false;
         foreach (WallpaperForm f in forms.ToArray()) { f.Shutdown(); f.Dispose(); }
         forms.Clear();
@@ -1312,6 +1319,20 @@ class SettingsForm : Form
 
 class WallpaperForm : Form
 {
+    internal async Task CaptureScaledScene(string path)
+    {
+        using(var memory=new MemoryStream()) {
+            await web.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,memory);
+            memory.Position=0;
+            using(var source=new Bitmap(memory)) {
+                double scale=Math.Min(1,960.0/Math.Max(source.Width,source.Height));
+                using(var reduced=new Bitmap(Math.Max(1,(int)(source.Width*scale)),Math.Max(1,(int)(source.Height*scale)))) {
+                    using(var graphics=Graphics.FromImage(reduced)) {graphics.InterpolationMode=InterpolationMode.HighQualityBilinear;graphics.DrawImage(source,0,0,reduced.Width,reduced.Height);}
+                    reduced.Save(path,System.Drawing.Imaging.ImageFormat.Png);
+                }
+            }
+        }
+    }
     internal void CrashBrowserForTest()
     {
         if (!InstallProfile.Isolated || web.CoreWebView2 == null) return;

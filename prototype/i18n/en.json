@@ -152,7 +152,29 @@
     "status_loading": "Loading",
     "status_initializing": "Initializing",
     "status_failed": "Failed",
-    "status_preview": "Preview"
+    "status_preview": "Preview",
+    "awayTitle": "Screen saver and low-power mode",
+    "awayDescription": "Play a cached scene loop at 6 frames per second with a gently moving clock. Release the wallpaper when Windows is locked or the display is off.",
+    "awayAfter": "Start after",
+    "awayMinutes": "minutes",
+    "awayPreview": "Preview (does not lock)",
+    "awayEnable": "Enable screen saver",
+    "awayUpdate": "Update screen saver",
+    "awayDisable": "Disable and restore previous setting",
+    "awayRefresh": "Refresh cached scenes",
+    "awayLockImage": "Use scene image for lock screen",
+    "awaySecurity": "Uses the Windows screen saver and asks for sign-in when you return. Win+L remains the real Windows lock; logging out closes the app.",
+    "awayNativeOnly": "This option is available in the Windows app.",
+    "awayOn": "Screen saver enabled",
+    "awayOff": "Screen saver is off",
+    "awayPreparing": "Preparing a lightweight screen saver scene…",
+    "awayReady": "Screen saver scene is ready",
+    "awayEnabled": "Windows screen saver enabled",
+    "awayDisabled": "Screen saver disabled and previous setting restored",
+    "awayNoScene": "No scene is available yet",
+    "awayLockDone": "Scene image set as the Windows lock-screen background",
+    "awayLockBlocked": "Windows did not allow changing the lock-screen image",
+    "awayError": "Could not update the screen saver: {msg}"
   },
   "host": {
     "traySettings": "Settings…",
@@ -177,7 +199,15 @@
     "errSettings": "Couldn't open the settings window: {msg}",
     "errNoPage": "Page not found: {path}",
     "errNoDesktop": "Couldn't find the desktop window, so the wallpaper can't be attached.",
-    "errStart": "Couldn't start: {msg}"
+    "errStart": "Couldn't start: {msg}",
+    "awayDisabled": "Screen saver disabled and previous setting restored",
+    "awayEnabled": "Windows screen saver enabled",
+    "awayNoScene": "No scene is available yet",
+    "awayLockDone": "Scene image set as the Windows lock-screen background",
+    "awayLockBlocked": "Windows did not allow changing the lock-screen image",
+    "awayPreparing": "Preparing a lightweight screen saver scene…",
+    "awayReady": "Screen saver scene is ready",
+    "awayError": "Could not update the screen saver: {msg}"
   },
   "themes": {
     "meadow": {

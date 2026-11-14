@@ -52,13 +52,17 @@ using System.Reflection;
 [assembly: AssemblyCopyright("Copyright 2026 Deskland authors")]
 "@
 [IO.File]::WriteAllText($versionSource, $versionText, (New-Object Text.UTF8Encoding($false)))
-& $csc /nologo /target:winexe /platform:x64 /optimize+ /codepage:65001 /win32manifest:"$root\app.manifest" `
+& $csc /nologo /target:winexe /main:Program /platform:x64 /optimize+ /codepage:65001 /win32manifest:"$root\app.manifest" `
     /win32icon:"$root\DesklandPreview.ico" `
     /out:"$bin\Deskland.exe" `
     /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll `
     /r:"$lib\Microsoft.Web.WebView2.Core.dll" /r:"$lib\Microsoft.Web.WebView2.WinForms.dll" `
-    "$root\DesktopHost.cs" "$root\Themes.cs" "$root\MultiMonitor.cs" "$root\NativeAcceptance.cs" "$versionSource"
+    "$root\DesktopHost.cs" "$root\Themes.cs" "$root\MultiMonitor.cs" "$root\NativeAcceptance.cs" "$root\AwayMode.cs" "$root\ScreenSaver.cs" "$versionSource"
 if ($LASTEXITCODE -ne 0) { throw '编译失败' }
+& $csc /nologo /target:winexe /main:DesklandSaverProgram /platform:x64 /optimize+ /codepage:65001 /win32manifest:"$root\app.manifest" `
+    /win32icon:"$root\DesklandPreview.ico" /out:"$bin\DesklandSaver.scr" `
+    /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "$root\ScreenSaver.cs" "$versionSource"
+if ($LASTEXITCODE -ne 0) { throw 'Screen saver compilation failed' }
 foreach ($assembly in $assemblies) { Copy-Item -LiteralPath (Join-Path $lib $assembly.Name) -Destination $bin -Force }
 Copy-Item -LiteralPath (Join-Path $root 'DesklandPreview.ico') -Destination (Join-Path $bin 'DesklandPreview.ico') -Force
 Write-Host "编译完成：$bin\Deskland.exe"

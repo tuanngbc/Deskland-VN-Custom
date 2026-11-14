@@ -1,4 +1,4 @@
-# Deskland Preview — bản tiếng Việt 0.3.0
+# Deskland Preview — bản tiếng Việt 0.4.0
 
 Bản này chuyển các trang theme từ gói Deskland-VN 1.0.2 do người dùng cung cấp
 vào host C# + WebView2 của Deskland Preview, giữ ba chế độ đa màn hình hiện có.
@@ -8,7 +8,7 @@ không sử dụng lại các cảnh thử nghiệm đó.
 ## Chạy bản đã đóng gói
 
 - Bản ZIP: giải nén toàn bộ rồi mở `Mo-Deskland.cmd`, hoặc `host/bin/Deskland.exe`.
-- Bản cài đặt: chạy bộ cài 0.3.0 và mở Deskland Preview.
+- Bản cài đặt: chạy bộ cài 0.4.0 và mở Deskland Preview.
 - Cấu hình mới dùng tiếng Việt. Cấu hình cũ giữ ngôn ngữ đã lưu; chọn
   **Tiếng Việt** trong danh sách **Language / Ngôn ngữ** nếu cần.
 - Chọn theme trong Cài đặt. **Đồng bộ** dùng chung theme; **Độc lập** cho phép
@@ -25,6 +25,21 @@ nhiệt đới, Hoa mận Mộc Châu, Hoa anh đào Tết, Đồi mèo nắng �
 Bể cá vàng, Chuyến xe chiều, Hiên nhà ngày hạ, Mèo con và Võ đài quyền anh.
 
 Các trang có hỗ trợ tương tác chuột sẽ nhận click trong khung xem trước.
+
+## Màn hình chờ và màn khóa
+
+Trong mục **Màn hình chờ và tiết kiệm tài nguyên**, chọn số phút rồi bấm **Cập
+nhật cảnh đã lưu** và **Bật màn hình chờ**. Deskland tạo ảnh cảnh nhỏ ở 6fps,
+đăng ký `DesklandSaver.scr` với Windows và giữ `ScreenSaverIsSecure=1`, nên khi
+di chuyển chuột hoặc nhấn phím để quay lại Windows sẽ yêu cầu đăng nhập. Khi
+khóa máy, đăng xuất, tắt màn hình hoặc sleep, host giải phóng các WebView2 để
+giảm RAM/CPU; khi trở lại, hình nền được dựng lại.
+
+Nút **Dùng ảnh cảnh cho màn khóa** chỉ đặt một ảnh tĩnh qua API màn khóa của
+Windows. Windows không cho ứng dụng desktop vẽ hoạt ảnh trực tiếp trên secure
+lock screen; phần chuyển động dùng màn hình chờ Windows. Nút **Xem thử** chạy
+màn hình chờ mà không khóa máy. Tắt tính năng sẽ khôi phục các giá trị trình
+bảo vệ màn hình trước đó nếu Windows vẫn đang trỏ tới Deskland.
 Host hiện giữ các icon Windows nhận thao tác chuột trên desktop; cơ chế Raw
 Input tương tác trực tiếp của bản Rust không thuộc bản chuyển giao này.
 Các tính năng khóa máy, đổi ảnh màn khóa và screensaver của gói tham khảo

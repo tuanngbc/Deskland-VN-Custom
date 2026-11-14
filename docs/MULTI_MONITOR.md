@@ -33,7 +33,7 @@ thẻ theme, ảnh thu nhỏ và giao diện tiếng Việt; chỉ lượt `them
 
 Build installer bằng `tools\build-installer.ps1`. NSIS từ mirror phải khớp SHA-256 upstream; tải HTML thay ZIP không được bỏ qua kiểm tra. Installer có `/ISOLATED /D=<thư mục tuyệt đối>` để cài thử mà không đổi shortcut hoặc đăng ký của bản có sẵn. Khi chạy EXE cài thử, vẫn phải đặt `DESKLAND_PROFILE_DIR` riêng. Uninstall bảo toàn dữ liệu người dùng.
 
-## Bản tiếng Việt 0.3.0
+## Bản tiếng Việt 0.4.0
 
 Chuyển 16 theme từ gói Deskland-VN 1.0.2 vào host hiện tại và Việt hoá Settings,
 khay hệ thống, tên theme và tham số. Chi tiết ở [VIETNAMESE_EDITION.md](VIETNAMESE_EDITION.md).
