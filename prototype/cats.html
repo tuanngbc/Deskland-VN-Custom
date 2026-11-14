@@ -106,19 +106,22 @@ function draw() {
   // Cửa sổ hình nền có thể tạm có kích thước 0 khi đang khởi tạo hoặc bị ẩn; bỏ qua khung hình đó.
   if (!cv.width || !cv.height) return;
   const s = cv._scale;
+  const env = DeskWorld.environment;
+  const sun = P.sun * (0.34 + 0.72 * env.daylight + 0.16 * env.golden);
   meadow.update({ W, H, pixelW: cv.width, pixelH: cv.height, scale: s, seed, icons, taskbar: TASKBAR,
-    mound: P.mound, sun: P.sun, flowers: P.flowers, version: sceneVersion });
+    mound: P.mound, sun, flowers: P.flowers, version: sceneVersion });
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.drawImage(meadow.canvas, 0, 0);
   ctx.setTransform(s, 0, 0, s, 0, 0);
   wind.drawLanded(ctx);
   // Vẽ cây/đá và mèo theo thứ tự chân từ trên xuống để mèo có thể đi khuất sau tán lá.
-  const gust = wind.windOf(P.wind);
+  const windStrength = P.wind * (0.62 + 0.72 * env.wind + 0.18 * env.gust);
+  const gust = wind.windOf(windStrength);
   const scene = nature.items.map(item => ({ y: item.y, draw: () => nature.drawItem(ctx, item, gust, wind.time) }))
     .concat(cats.map(cat => ({ y: cat.y, draw: () => drawCat(ctx, cat) })));
   if (interact.yarn) scene.push({ y: interact.yarn.y, draw: () => interact.drawYarn(ctx) });
   for (const entry of scene.sort((a, b) => a.y - b.y)) entry.draw();
-  wind.drawAir(ctx, P.wind);
+  wind.drawAir(ctx, windStrength, env.windDirection);
   interact.drawRings(ctx);
 }
 
@@ -128,7 +131,8 @@ function frame(now) {
   if (!DeskWorld.frameDue(now)) return;
   const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.03;
   lastT = now;
-  wind.step(dt, { W, H, taskbar: TASKBAR, strength: P.wind, canopies: nature.canopies });
+  const env = DeskWorld.environment;
+  wind.step(dt, { W, H, taskbar: TASKBAR, strength: P.wind * (0.62 + 0.72 * env.wind + 0.18 * env.gust), direction: env.windDirection, canopies: nature.canopies });
   nature.step(dt);
   interact.step(dt, interactScene());
   const w = world(), t = tune();

@@ -30,6 +30,29 @@ Mẫu nên bắt đầu từ `prototype/aquarium.html` nếu dùng WebGL hoặc
 - không đọc file riêng tư, không gọi mạng, không hook bàn phím và không tạo
   màn hình khóa giả.
 
+## Dùng môi trường theo giờ hệ thống
+
+`world-contract.js` cung cấp `DeskWorld.environment`. Renderer có thể đọc giá
+trị này trong lúc vẽ; dữ liệu được làm mới tối đa một lần mỗi giây nên không
+được gọi mạng và không làm tăng chi phí vòng lặp 30 fps.
+
+```js
+const e = DeskWorld.environment;
+const daylight = e.daylight;       // 0..1, bình minh đến ban ngày
+const sun = e.sunElevation;        // âm khi dưới đường chân trời
+const azimuth = e.sunAzimuth;      // hướng mặt trời, độ
+const wind = e.wind, gust = e.gust; // gió nền và cơn gió nhẹ, 0..1
+const windDir = e.windDirection;   // hướng gió, độ
+const clouds = e.cloudiness;       // mây ổn định theo ngày, 0..1
+```
+
+Theme nên dùng các giá trị này để điều chỉnh màu, ánh sáng, tốc độ chuyển
+động hoặc hướng hạt ngay trong `draw()`. Không nên dựng lại texture, bố cục
+icon hay toàn bộ shader mỗi giây. Nếu theme có lựa chọn thời điểm thủ công,
+giữ lựa chọn đó và chỉ dùng môi trường khi giá trị là “Tự động”. Môi trường
+hiện là mô phỏng offline; thời tiết ngoài đời thật chỉ nên bổ sung sau bằng
+tùy chọn rõ ràng và bộ nhớ đệm.
+
 ## Đăng ký tham số
 
 Thêm theme vào mảng `themes` trong `prototype/themes.json`. Mỗi tham số số có

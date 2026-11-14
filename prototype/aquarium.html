@@ -453,7 +453,8 @@ function draw(now) {
   gl.uniform1f(U.uMix, curMix);
   gl.uniform1f(U.uTime, DeskWorld.seconds(now, T0));
   gl.uniform1f(U.uDebug, 0);
-  gl.uniform1f(U.uLight, P.light); gl.uniform1f(U.uBubbles, P.bubbles); gl.uniform1f(U.uSurf, SURF);
+  const env = DeskWorld.environment;
+  gl.uniform1f(U.uLight, P.light * (0.55 + 0.62 * env.daylight + 0.18 * env.golden)); gl.uniform1f(U.uBubbles, P.bubbles); gl.uniform1f(U.uSurf, SURF);
   fishA.fill(0); fishB.fill(0);
   fish.forEach((f, i) => { fishA.set([f.x, f.y, f.ang, f.ph], i * 4); fishB.set([f.size, f.spots, f.bend || 0.6, f.alpha], i * 4); });
   gl.uniform1f(U.uFishN, fish.length); gl.uniform4fv(U.uFish, fishA); gl.uniform4fv(U.uFishB, fishB);

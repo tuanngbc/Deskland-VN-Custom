@@ -201,10 +201,10 @@ let melonBites = 0, melonRefill = 0.0, birdHop = 0.0;
 function resolveDayMode() {
   const mode = Math.round(P.timeOfDay);
   if (mode === 0 || mode === 1 || mode === 2) return mode;
-  const d = new Date(), mins = d.getHours() * 60 + d.getMinutes();
-  if (mins >= 360 && mins < 990) return 0;
-  if (mins >= 990 && mins < 1140) return 1;
-  return 2;
+  const e = DeskWorld.environment;
+  if (e.night > 0.72) return 2;
+  if (e.golden > 0.18) return 1;
+  return 0;
 }
 
 function initCorgis() {
@@ -428,7 +428,8 @@ function draw(now) {
   gl.uniform1f(U.uDebug, 0);
 
   gl.uniform1f(U.uDayMode, resolveDayMode());
-  gl.uniform1f(U.uSunbeams, P.sunbeams);
+  const env = DeskWorld.environment;
+  gl.uniform1f(U.uSunbeams, P.sunbeams * (0.42 + 0.72 * env.daylight + 0.18 * env.golden));
   gl.uniform1f(U.uFanSpeed, effFanSpeed());
   gl.uniform4f(U.uFanState, 0.704 * W, 0.518 * H, Math.sin(fanOscPh) * 0.85, fanBladePh);
   gl.uniform4f(U.uProps, chimeAng, -1, melonBites, birdHop);

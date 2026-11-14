@@ -1351,6 +1351,7 @@ function draw(now) {
   }
   const s = cv._scale || 1;
   const t = DeskWorld.seconds(now, T0);
+  const env = DeskWorld.environment;
 
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1378,6 +1379,17 @@ function draw(now) {
 
   // 7. Gió thổi lá bay & lá rụng trên đồi cỏ
   stepAndDrawLeaves(0.016, t);
+
+  // The cached landscape stays cheap to redraw, while this translucent layer
+  // gives it the same sunrise, warm-hour and moonlit rhythm as the sky theme.
+  ctx.globalCompositeOperation = 'source-atop';
+  ctx.fillStyle = env.night > 0.78
+    ? `rgba(28, 42, 96, ${0.30 + env.night * 0.16})`
+    : env.golden > 0.12
+      ? `rgba(244, 145, 54, ${0.09 + env.golden * 0.12})`
+      : `rgba(255, 255, 255, ${Math.max(0, 0.035 * (1 - env.cloudiness))})`;
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalCompositeOperation = 'source-over';
 
   ctx.restore();
 }

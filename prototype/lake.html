@@ -550,7 +550,7 @@ function draw(now) {
   gl.uniform1f(U.uTime, DeskWorld.seconds(now, T0));
   gl.uniform1f(U.uShoal, P.shoal);
   gl.uniform1f(U.uDepth, P.depth);
-  gl.uniform1f(U.uFlow, P.flow);
+  gl.uniform1f(U.uFlow, P.flow * (0.62 + 0.72 * DeskWorld.environment.wind + 0.18 * DeskWorld.environment.gust));
   gl.uniform1f(U.uDebug, P.debug ? 1 : 0);
   gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, circTex); gl.uniform1i(U.uCirc, 3);
   gl.uniform2f(U.uCGrid, cgW, cgH); gl.uniform1f(U.uCellG, CELL_G);

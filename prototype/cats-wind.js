@@ -26,16 +26,17 @@ function createCatWind() {
       gustIn -= dt;
       if (gustIn <= 0) { gustTarget = Math.random() * 1.2; gustIn = 3 + Math.random() * 5; }
       gust += (gustTarget - gust) * Math.min(1, dt * 0.8);
+      const direction = Math.cos((o.direction || 0) * Math.PI / 180) >= 0 ? 1 : -1;
       const w = windOf(o.strength);
       leafDebt += dt * LEAF_SPAWN_PER_SECOND * o.strength * (0.4 + gust);
       for (; leafDebt >= 1 && leaves.length < LEAF_MAX; leafDebt--) leaves.push(spawnLeaf(o));
       leafDebt = Math.min(leafDebt, 1);
       streakDebt += dt * STREAK_PER_SECOND * o.strength * (0.3 + gust);
       for (; streakDebt >= 1; streakDebt--) streaks.push(spawnStreak(o));
-      leaves = leaves.filter(l => stepLeaf(l, dt, w, o));
+      leaves = leaves.filter(l => stepLeaf(l, dt, w, o, direction));
       streaks = streaks.filter(s => (s.age += dt) < STREAK_LIFE);
       while (butterflies.length < BUTTERFLY_COUNT) butterflies.push(spawnButterfly(o));
-      for (const b of butterflies) stepButterfly(b, dt, w, o);
+      for (const b of butterflies) stepButterfly(b, dt, w, o, direction);
     },
     burst(c) { for (let i = 0; i < BURST_LEAVES; i++) leaves.push(canopyLeaf(c)); },
     scatter(x, y) {
@@ -46,9 +47,10 @@ function createCatWind() {
     },
     lure(x, y) { for (const b of butterflies) { b.target = { x: x + (Math.random() - 0.5) * 40, y: y + 30 }; b.retarget = 4; } },
     drawLanded(ctx) { for (const l of leaves) if (l.landed) drawLeaf(ctx, l); },
-    drawAir(ctx, strength) {
+    drawAir(ctx, strength, windDirection) {
       const w = windOf(strength);
-      for (const s of streaks) drawStreak(ctx, s, w);
+      const direction = Math.cos((windDirection || 0) * Math.PI / 180) >= 0 ? 1 : -1;
+      for (const s of streaks) drawStreak(ctx, s, w, direction);
       for (const l of leaves) if (!l.landed) drawLeaf(ctx, l);
       for (const b of butterflies) drawButterfly(ctx, b);
     },
@@ -84,10 +86,10 @@ function canopyLeaf(c) {
 }
 
 // Trả về false khi lá cần bị loại (bay khỏi màn hình hoặc đã mờ hẳn trên cỏ).
-function stepLeaf(l, dt, wind, o) {
+function stepLeaf(l, dt, wind, o, direction = 1) {
   if (l.landed) { l.age += dt; return l.age < LEAF_FADE_SECONDS; }
   l.flutter += dt * 3.2;
-  l.vx += (wind * 60 + 8 - l.vx) * Math.min(1, dt * 1.5);
+  l.vx += (direction * (wind * 60 + 8) - l.vx) * Math.min(1, dt * 1.5);
   l.x += l.vx * dt;
   l.y += (15 + Math.sin(l.flutter) * 22) * dt;
   l.rot += l.spin * dt * (1 + wind);
@@ -114,8 +116,8 @@ function spawnStreak(o) {
 }
 
 // Vệt gió trắng hình móc câu lướt sang phải rồi tan dần.
-function drawStreak(ctx, s, wind) {
-  const t = s.age / STREAK_LIFE, x = s.x + s.age * (120 + wind * 90), y = s.y;
+function drawStreak(ctx, s, wind, direction = 1) {
+  const t = s.age / STREAK_LIFE, x = s.x + s.age * direction * (120 + wind * 90), y = s.y;
   ctx.save();
   ctx.globalAlpha = Math.sin(t * Math.PI) * 0.75;
   ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.6; ctx.lineCap = 'round';
@@ -131,13 +133,13 @@ function spawnButterfly(o) {
   return { x: p.x, y: p.y - 30, target: meadowSpot(o), flap: Math.random() * 6, retarget: 3 + Math.random() * 4 };
 }
 
-function stepButterfly(b, dt, wind, o) {
+function stepButterfly(b, dt, wind, o, direction = 1) {
   b.flap += dt * 16;
   b.retarget -= dt;
   const dx = b.target.x - b.x, dy = b.target.y - 30 - b.y, dist = Math.hypot(dx, dy);
   if (b.retarget <= 0 || dist < 12) { b.target = meadowSpot(o); b.retarget = 3 + Math.random() * 4; }
   const speed = 34;
-  b.x += (dx / (dist || 1)) * speed * dt + wind * 6 * dt;
+  b.x += (dx / (dist || 1)) * speed * dt + direction * wind * 6 * dt;
   b.y += (dy / (dist || 1)) * speed * dt + Math.sin(b.flap * 0.25) * 18 * dt;
   b.dir = dx >= 0 ? 1 : -1;
 }

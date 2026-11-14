@@ -36,6 +36,11 @@ quyền anh. Mỗi theme có renderer và tham số thực trong gói nguồn.
 
 Chọn **Xem trước trước khi áp dụng** để thử rồi bấm **Áp dụng**. Có nút tạm dừng,
 tải lại, đặt lại tham số và khôi phục cấu hình hoạt động.
+Các theme ngoài trời dùng chung môi trường offline theo giờ hệ thống: ánh sáng
+chuyển dần qua bình minh, ban ngày, giờ vàng và ban đêm; mặt nước, cây, lá và
+đom đóm nhận gió nền, cơn gió và hướng gió biến thiên theo ngày. Mỗi renderer
+chỉ đọc một mẫu môi trường mỗi giây, nên mục tiêu 30fps và mức tiêu thụ thấp
+được giữ nguyên. Theme có lựa chọn thời điểm thủ công vẫn ưu tiên lựa chọn đó.
 Mục **Màn hình chờ và tiết kiệm tài nguyên** tạo một vòng cảnh đã nén ở 6fps,
 đăng ký `DesklandSaver.scr` với Windows và giải phóng WebView2 khi máy khóa,
 tắt màn hình hoặc vào màn hình chờ. Khi quay lại, Windows yêu cầu đăng nhập và

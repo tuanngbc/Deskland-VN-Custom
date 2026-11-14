@@ -1027,9 +1027,10 @@ function configureBeachPass(now, pass) {
   gl.uniform1f(U.uStep, STEP);
   gl.uniform1f(U.uMix, curMix);
   gl.uniform1f(U.uTime, DeskWorld.seconds(now, T0));
-  gl.uniform1f(U.uSpeed, P.speed); gl.uniform1f(U.uRunup, P.runup);
+  const env = DeskWorld.environment;
+  gl.uniform1f(U.uSpeed, P.speed * (0.82 + 0.35 * env.wind)); gl.uniform1f(U.uRunup, P.runup);
   gl.uniform1f(U.uShallow, P.shallow); gl.uniform1f(U.uShoal, P.shoal); gl.uniform1f(U.uGrain, P.grain);
-  gl.uniform1f(U.uWave, P.wave); gl.uniform1f(U.uSigma, P.sigma);
+  gl.uniform1f(U.uWave, P.wave * (0.72 + 0.52 * env.wind + 0.16 * env.gust)); gl.uniform1f(U.uSigma, P.sigma);
   gl.uniform1f(U.uSpacing, P.spacing); gl.uniform1f(U.uWaves, P.waves);
   gl.uniform1f(U.uDebug, P.debug ? 1 : 0);
   gl.uniform1f(U.uKayN, kayaks.length); gl.uniform4fv(U.uKay, kayBuf);

@@ -148,6 +148,7 @@ precision highp float;
 uniform sampler2D uNoise, uFA, uFB;
 uniform vec2 uRes, uGrid;
 uniform float uScale, uSeed, uStep, uMix, uTime, uDebug, uEdge;
+uniform float uEnvDaylight, uEnvWarmth, uSunAzimuth;
 uniform highp sampler2D uCirc;
 uniform vec2 uCGrid;
 uniform float uCellG;
@@ -163,7 +164,6 @@ const vec3 SEA_LIGHT = vec3(0.24, 0.56, 0.90), SEA_MID = vec3(0.16, 0.45, 0.83),
 const vec3 SHADOW = vec3(0.48, 0.58, 0.78);
 const vec3 CLOUD_HI = vec3(1.0, 1.0, 1.0);
 const vec3 CLOUD_BODY = vec3(0.89, 0.94, 0.98), CLOUD_SH = vec3(0.76, 0.84, 0.93);
-const vec2 LIGHT = vec2(-0.6, -0.8);
 const vec2 SHADOW_OFF = vec2(115.0, 156.0);
 const int CIRC_K = 36;
 
@@ -337,11 +337,14 @@ void main() {
   vec4 fc = vec4(0.0, -1e9, 0.0, 0.0);
   float d = cloudDist(p, true, fc);
   if (d < 1.5) {
-    float hi = d > -21.0 ? ss(-1.0, 1.0, cloudDist(p + LIGHT * 20.0)) : 0.0;
+    vec2 lightDir = normalize(vec2(cos(radians(uSunAzimuth)), -0.8));
+    float hi = d > -21.0 ? ss(-1.0, 1.0, cloudDist(p + lightDir * 20.0)) : 0.0;
     vec3 cc = fc.y > -1e8 ? mix(CLOUD_BODY, CLOUD_SH, fc.w * 0.6) : mix(CLOUD_BODY, CLOUD_SH, 0.45);
     cc = mix(cc, CLOUD_HI, hi);
     col = mix(col, cc, ss(1.0, -1.0, d));
   }
+  col *= mix(vec3(0.48, 0.60, 0.86), vec3(1.0), uEnvDaylight);
+  col = mix(col, col * vec3(1.0, 0.88, 0.70), uEnvWarmth * 0.16);
   if (uDebug > 0.5) col = mix(col, vec3(0.9, 0.15, 0.15), 1.0 - ss(0.0, 1.5, abs(d)));
   o = vec4(col, 1.0);
 }`;
@@ -726,6 +729,9 @@ function draw(now) {
   gl.uniform1f(U.uMix, curMix);
   gl.uniform1f(U.uTime, DeskWorld.seconds(now, T0));
   gl.uniform1f(U.uDebug, P.debug ? 1 : 0);
+  const env = DeskWorld.environment;
+  gl.uniform1f(U.uEnvDaylight, env.daylight); gl.uniform1f(U.uEnvWarmth, env.temperatureTint);
+  gl.uniform1f(U.uSunAzimuth, env.sunAzimuth);
   gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, circTex); gl.uniform1i(U.uCirc, 3);
   gl.uniform2f(U.uCGrid, cgW, cgH); gl.uniform1f(U.uCellG, CELL_G);
   gl.uniform1f(U.uEdge, P.edge);

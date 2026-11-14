@@ -584,7 +584,8 @@ function draw(now) {
   gl.uniform1f(U.uTime, DeskWorld.seconds(now, T0));
   gl.uniform1f(U.uRain, P.rain);
   gl.uniform1f(U.uMist, P.mist);
-  gl.uniform1f(U.uWind, P.wind);
+  const env = DeskWorld.environment;
+  gl.uniform1f(U.uWind, P.wind * (0.62 + 0.72 * env.wind + 0.18 * env.gust));
   gl.uniform1f(U.uDebug, P.debug ? 1 : 0);
   gl.uniform1f(U.uBirdN, birds.length);
   if (birds.length) gl.uniform4fv(U.uBird, birdUniform);

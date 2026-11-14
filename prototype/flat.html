@@ -346,6 +346,7 @@ precision highp float;
 uniform sampler2D uNoise, uFA, uFB;
 uniform vec2 uRes, uGrid;
 uniform float uScale, uSeed, uStep, uMix, uTime, uSpeed, uRunup, uShallow, uShoal, uGrain, uDebug, uWave, uSigma, uSpacing, uWaves;
+uniform float uEnvDaylight, uEnvWarmth;
 uniform float uKayN;
 uniform vec4 uKay[4];          // x, y, hướng, pha chèo
 uniform vec4 uRip[6];
@@ -631,6 +632,8 @@ void main() {
   }
 
   if (uDebug > 0.5) col = mix(col, vec3(0.9, 0.15, 0.15), 1.0 - ss(0.0, 1.5, abs(s0)));
+  col *= mix(vec3(0.48, 0.60, 0.86), vec3(1.0), uEnvDaylight);
+  col = mix(col, col * vec3(1.0, 0.88, 0.70), uEnvWarmth * 0.18);
   col *= 1.0 + (g2 - 0.5) * 0.035 * gAmt;
   o = vec4(col, 1.0);
 }`;
@@ -1034,9 +1037,11 @@ function configureBeachPass(now, pass) {
   gl.uniform1f(U.uStep, STEP);
   gl.uniform1f(U.uMix, curMix);
   gl.uniform1f(U.uTime, DeskWorld.seconds(now, T0));
-  gl.uniform1f(U.uSpeed, P.speed); gl.uniform1f(U.uRunup, P.runup);
+  const env = DeskWorld.environment;
+  gl.uniform1f(U.uEnvDaylight, env.daylight); gl.uniform1f(U.uEnvWarmth, env.temperatureTint);
+  gl.uniform1f(U.uSpeed, P.speed * (0.82 + 0.35 * env.wind)); gl.uniform1f(U.uRunup, P.runup);
   gl.uniform1f(U.uShallow, P.shallow); gl.uniform1f(U.uShoal, P.shoal); gl.uniform1f(U.uGrain, P.grain);
-  gl.uniform1f(U.uWave, P.wave); gl.uniform1f(U.uSigma, P.sigma);
+  gl.uniform1f(U.uWave, P.wave * (0.72 + 0.52 * env.wind + 0.16 * env.gust)); gl.uniform1f(U.uSigma, P.sigma);
   gl.uniform1f(U.uSpacing, P.spacing); gl.uniform1f(U.uWaves, P.waves);
   gl.uniform1f(U.uDebug, P.debug ? 1 : 0);
   gl.uniform1f(U.uKayN, kayaks.length);
