@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="vi">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -424,9 +424,9 @@ const frame = $('preview');
 
 /* ---------- 界面语言：文字表在 i18n/<语言>.json（ui：界面文字；themes：主题名和参数——简体中文的就是 themes.json 本身） ---------- */
 // 增加语言时同步宿主 I18n.Supported 与体验版导出的语言列表。
-const LANGS = { 'en': 'English', 'zh-CN': '简体中文' };
+const LANGS = { 'vi': 'Tiếng Việt', 'en': 'English', 'zh-CN': '简体中文' };
 const I18N = {};
-let lang = 'zh-CN';
+let lang = 'vi';
 const loadLang = code => I18N[code] ? Promise.resolve() :
   fetch('i18n/' + code + '.json').then(r => r.json()).then(j => { I18N[code] = j; }).catch(() => { I18N[code] = {}; });
 // 一句界面文字：当前语言 → 英文 → 简体中文；{名字} 换成 vars 里的值
@@ -455,7 +455,7 @@ function browserLang() {
 // 主题名、说明、分组、参数按界面语言换：当前语言 → 英文 → themes.json 原文（简体中文）
 function localizeRegistry() {
   const reg = JSON.parse(JSON.stringify(state.registry0));
-  const srcs = lang === 'zh-CN' ? [] : [lang, 'en'].map(c => (I18N[c] && I18N[c].themes) || {});
+  const srcs = [lang, 'en', 'vi'].map(c => (I18N[c] && I18N[c].themes) || {});
   for (const th of reg.themes) {
     const trs = srcs.map(x => x[th.id]).filter(Boolean);
     const get = f => { for (const x of trs) { const v = f(x); if (v != null) return v; } return null; };
@@ -527,7 +527,7 @@ function renderMonitors() {
   map.style.height = Math.max(100, Math.min(190, map.clientWidth * height / width)) + 'px';
   map.innerHTML = state.monitors.map((m, i) => `<button class="monitor-chip${m.id === state.selectedMonitor ? ' on' : ''}" data-monitor="${esc(m.id)}" style="left:${5+(m.x-minX)/width*90}%;top:${5+(m.y-minY)/height*90}%;width:${m.w/width*90}%;height:${m.h/height*90}%"><b>${i+1}. ${m.primary ? t('primaryMonitor') : t('secondaryMonitor')}</b><span>${esc(m.name)}</span><span>${m.w}×${m.h} · ${Math.round(m.scale*100)}%</span></button>`).join('');
   const m = state.monitors.find(x => x.id === state.selectedMonitor);
-  $('monitorDetail').textContent = m ? `${m.name} · ${m.w}×${m.h} · ${Math.round(m.dpi)} DPI · ${m.refresh || '—'} Hz · ${m.theme} · ${m.status || 'initializing'}` : '';
+  $('monitorDetail').textContent = m ? `${m.name} · ${m.w}×${m.h} · ${Math.round(m.dpi)} DPI · ${m.refresh || '—'} Hz · ${themeById(m.theme)?.name || m.theme} · ${t('status_' + (m.status || 'initializing'))}` : '';
   $('monitorConfig').hidden = state.mode !== 'independent' || !m;
   if (m) {
     $('monitorTheme').innerHTML = state.registry.themes.filter(x => x.status === 'ready').map(th => `<option value="${th.id}">${th.name}</option>`).join('');
@@ -886,6 +886,7 @@ function onHost(m) {
       showAutostartWarn();
       showUpdate();
       selectTarget();
+      shareBusy(null);
       document.documentElement.classList.add('ready');
     });
   } else if (m.t === 'themeChanged') {
@@ -934,7 +935,7 @@ function mockHost() {
   for (let c = 0; c < 4; c++) for (let row = 0; row < 9; row++) cell(c, row);
   for (const [c, row] of [[6, 0], [6, 1], [7, 3], [8, 3], [8, 4], [12, 1], [13, 1], [14, 1], [13, 2], [14, 2], [20, 0], [21, 0], [19, 5], [20, 5]]) cell(c, row);
   const bl = browserLang();
-  onHost({ t: 'init', theme: 'beach', params: {}, screen: { w: W * k, h: H * k }, world:{x:0,y:0,w:W*k,h:H*k}, monitors:[{id:'browser-preview',name:'Browser preview (simulated)',x:0,y:0,w:W*k,h:H*k,dpi:96*k,scale:k,primary:true,theme:'beach',status:'preview'}], autostart: false, lang: 'auto', langEff: bl, langSys: bl });
+  onHost({ t: 'init', theme: 'beach', params: {}, screen: { w: W * k, h: H * k }, world:{x:0,y:0,w:W*k,h:H*k}, monitors:[{id:'browser-preview',name:'Xem trước trong trình duyệt (mô phỏng)',x:0,y:0,w:W*k,h:H*k,dpi:96*k,scale:k,primary:true,theme:'beach',status:'preview'}], autostart: false, lang: 'vi', langEff: 'vi', langSys: bl });
   onHost({ t: 'icons', vis: true, r });
   if (new URLSearchParams(location.search).has('updateDemo')) onHost({ t: 'updateState', version: '0.2.0', status: 'available', progress: -1 });
 }

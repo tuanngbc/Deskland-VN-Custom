@@ -253,15 +253,15 @@
   // 先等画面稳定：壁纸暂停着（比如设置窗口最大化了）就先放开跑一会儿，开场的树、房子没长好就等它长好（最多 6 秒）
   function record(onProgress) {
     const mime = pickMime();
-    if (!mime) return Promise.reject(new Error('这台电脑不支持录视频'));
-    if (busy) return Promise.reject(new Error('上一段还在录'));
+    if (!mime) return Promise.reject(new Error('Máy này không hỗ trợ ghi video'));
+    if (busy) return Promise.reject(new Error('Đoạn video trước vẫn đang được ghi'));
     busy = true;
     const wasPaused = typeof paused !== 'undefined' && paused;
     if (wasPaused) paused = false;
     return new Promise(ok => {
-      const t0 = performance.now(), f0 = frameN;
+      const t0 = performance.now(), f0 = DeskWorld.diagnostics.draws;
       const tick = () => {
-        const dt = performance.now() - t0, ran = frameN - f0;
+        const dt = performance.now() - t0, ran = DeskWorld.diagnostics.draws - f0;
         if ((ran >= 10 && settled()) || dt > 6000 || (dt > 1000 && ran < 2)) ok(); else setTimeout(tick, 100);
       };
       if (!wasPaused && settled()) ok(); else tick();
@@ -346,6 +346,7 @@
       };
       // 主题每画好一帧（同一个任务里，画布还没被清掉）：拷过来，画上图标、指针，交给录像
       draw = function (now) {
+        if (!Number.isFinite(now)) now = performance.now();
         origDraw(now);
         if (finished) return;
         if (t0 === null) { t0 = now; mr.start(); }
@@ -415,7 +416,7 @@
         if (onProgress && prog - lastProg >= 0.05) { lastProg = prog; onProgress(prog); }
         if (t >= total) { poster = thumbOf(comp, 520); finish(null); }
       };
-      setTimeout(() => finish(new Error('画面没有动起来（壁纸可能被完全挡住了）')), (total + 8) * 1000);
+      setTimeout(() => finish(new Error('Hoạt ảnh chưa chạy; hình nền có thể đang bị che hoàn toàn')), (total + 8) * 1000);
     });
   }
   window.desklandRecord = record;
@@ -444,18 +445,18 @@
       record(p => host.postMessage('recprogress|' + p.toFixed(2))).then(r => {
         const fr = new FileReader();
         fr.onload = () => host.postMessage('record|' + r.mime + '|' + r.poster + '|' + fr.result);
-        fr.onerror = () => host.postMessage('record|error|读不出录好的视频');
+        fr.onerror = () => host.postMessage('record|error|Không đọc được video vừa ghi');
         fr.readAsDataURL(r.blob);
       }, e => host.postMessage('record|error|' + (e && e.message || e)));
       return;
     }
     if (m.t !== 'snapshot') return;
-    if (busy) { host.postMessage('snapshot|error|正在录动画，等录完再试'); return; }
+    if (busy) { host.postMessage('snapshot|error|Đang ghi hoạt ảnh, vui lòng đợi rồi thử lại'); return; }
     if (typeof paused === 'undefined' || !paused) { send(); return; }
     paused = false;
-    const t0 = performance.now(), f0 = frameN;
+    const t0 = performance.now(), f0 = DeskWorld.diagnostics.draws;
     const wait = () => {
-      const dt = performance.now() - t0, ran = frameN - f0;
+      const dt = performance.now() - t0, ran = DeskWorld.diagnostics.draws - f0;
       // 至少跑 10 帧；树、房子都长好了就画；最多等 6 秒；动画根本没在跑（窗口被挡得太死）就别等了
       if ((ran >= 10 && settled()) || dt > 6000 || (dt > 1000 && ran < 2)) {
         send();

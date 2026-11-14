@@ -9,20 +9,22 @@
     "langAuto": "System default",
     "langAutoWith": "System default ({name})",
     "autostart": "Start with Windows",
-    "autostartTitle": "Run Deskland automatically when you sign in",
+    "autostartTitle": "Run Deskland-VN automatically when you sign in",
+    "interactions": "Desktop click",
+    "interactionsTitle": "Left-click empty space on your desktop to interact with the scene",
     "autostartBlocked": "Start with Windows may have been blocked",
-    "autostartWarnSw": "Deskland didn't start automatically this time — {sw} may have blocked it. Open {sw}, find Deskland in its startup manager and set it to Allow.",
-    "autostartWarnGeneric": "Deskland didn't start automatically this time — your security software or the Windows Startup apps setting may have blocked it. Turn Deskland on in your security software's startup manager, or in Windows Settings → Apps → Startup.",
+    "autostartWarnSw": "Deskland-VN didn't start automatically this time — {sw} may have blocked it. Open {sw}, find Deskland-VN in its startup manager and set it to Allow.",
+    "autostartWarnGeneric": "Deskland-VN didn't start automatically this time — your security software or the Windows Startup apps setting may have blocked it. Turn Deskland-VN on in your security software's startup manager, or in Windows Settings → Apps → Startup.",
     "gotIt": "Got it",
     "updateAvailable": "Update available",
-    "updateVersion": "Deskland {version} is ready. Your current theme and settings will be kept.",
+    "updateVersion": "Deskland-VN {version} is ready. Your current theme and settings will be kept.",
     "updateProgram": "Update now",
     "updateRetry": "Retry update",
     "updateWorking": "Updating…",
     "updateDownloading": "Downloading and installing… {progress}",
     "updateInstalling": "Installing the update… {progress}",
     "updateCompletedTitle": "Update complete",
-    "updateCompleted": "The update has been downloaded and installed. If Deskland does not restart automatically, open it again.",
+    "updateCompleted": "The update has been downloaded and installed. If Deskland-VN does not restart automatically, open it again.",
     "updateDone": "Done",
     "updateCanceled": "The update was canceled. You can try again later.",
     "updateLowBattery": "The update could not finish on battery power. Plug in your device and try again.",
@@ -71,6 +73,7 @@
     "saveImage": "Save image",
     "saveVideo": "Save video",
     "ok": "OK",
+    "close": "Close",
     "sharePreviewAlt": "Preview of the shared image",
     "autosave": "Changes are saved automatically and applied to your desktop right away",
     "saved": "Saved ✓",
@@ -79,22 +82,14 @@
     "helpButtonTitle": "Common questions and troubleshooting",
     "helpTitle": "Help",
     "helpSubtitle": "Common questions and troubleshooting",
-    "helpWallpaperQ": "Deskland keeps flickering or restarting. How do I fix it?",
-    "helpWallpaperA": "If your regular Windows wallpaper changes automatically, each change can make Deskland flicker or restart. Use a fixed background that does not rotate.",
+    "helpWallpaperQ": "Deskland-VN keeps flickering or restarting. How do I fix it?",
+    "helpWallpaperA": "If your regular Windows wallpaper changes automatically, each change can make Deskland-VN flicker or restart. Use a fixed background that does not rotate.",
     "helpWallpaperStep1": "Open Windows Settings → Personalization → Background.",
     "helpWallpaperStep2": "Set ‘Personalize your background’ to ‘Picture’ or ‘Solid color’. Do not use ‘Slideshow’ or ‘Windows spotlight’.",
-    "helpWallpaperStep3": "Restart Deskland after changing this setting.",
+    "helpWallpaperStep3": "Restart Deskland-VN after changing this setting.",
     "badgeOn": "In use",
     "badgeReady": "Available",
     "badgeSoon": "Coming soon",
-    "badgeLocked": "Wallpaper",
-    "lockedTitle": "{name} · Wallpaper edition theme; click for purchase details",
-    "purchaseLocalTitle": "Unlock the Wallpaper edition",
-    "purchaseLocalTheme": "“{name}” is included in the Wallpaper edition.",
-    "purchaseLocalMessage": "After you buy from the current store, Deskland verifies your purchase and unlocks it automatically—no account sign-in needed. If you just bought it, check again.",
-    "purchaseRecheck": "Check purchases on this PC",
-    "purchaseChecking": "Checking…",
-    "purchaseCrossChannel": "Restore another channel",
     "ongoingTitle": "More on the way",
     "ongoingDesc": "New scenes and elements will be added over time.",
     "noParams": "This theme has no settings yet",
@@ -102,11 +97,40 @@
     "resetOneAria": "Reset {label} to default",
     "dblclickReset": "Double-click to reset ({v})",
     "comingSoon": "Coming soon:",
-    "purchaseTitle": "Get the Wallpaper edition",
-    "purchaseTheme": "“{name}” is included in the Wallpaper edition.",
-    "purchaseMessage": "The preview includes Beach and Meadow forever. Get the Wallpaper edition to unlock more themes in the same Deskland app.",
-    "purchaseLater": "Keep exploring",
-    "purchaseWebsite": "Visit website",
+    "lockGroupTitle": "Lock Screen",
+    "lockNow": "Lock screen",
+    "lockNowTitle": "Launch the Deskland-VN live lock screen now (Win+L / Ctrl+Alt+L)",
+    "lockWinLLabel": "Use Windows + L for live lock screen",
+    "lockWinLHint": "Pressing Win + L launches Deskland-VN's animated WebGL2 scene and widget instead of the static lock screen",
+    "lockWidgetLabel": "Clock widget on lock screen",
+    "lockWidgetHint": "Display a large clock and date while shaping the landscape around the widget",
+    "lockPinLabel": "Quick unlock PIN (optional)",
+    "lockPinHint": "Uses your Windows account password by default; optionally set a custom PIN here for quick unlock",
+    "lockPinPlaceholder": "Windows password",
+    "lockIdleLabel": "Auto-start when idle",
+    "lockIdleHint": "Automatically show the live lock screen when mouse and keyboard are inactive",
+    "lockIdleOff": "Off",
+    "lockIdle1m": "1 min",
+    "lockIdle3m": "3 min",
+    "lockIdle5m": "5 min",
+    "lockIdle10m": "10 min",
+    "lockIdle15m": "15 min",
+    "lockIdle30m": "30 min",
+    "lockAuthLabel": "Require password on live lock screen",
+    "lockAuthHint": "Show your Windows user profile and require password/PIN sign-in directly over the live WebGL2 wallpaper",
+    "lockSyncWinLabel": "Sync scene around Windows lock screen clock",
+    "lockSyncWinHint": "Automatically set a snapshot of your scene (shaped around the Windows 11 clock position) as the system lock screen background",
+    "lockRealTitle": "Lock screen (real Windows lock)",
+    "lockSaverNowLabel": "Lock with live scene",
+    "lockSaverNowHint": "Show the live scene full screen now; any mouse or key input makes Windows lock and show the sign-in screen",
+    "lockSaverNowHintKey": "Show the live scene full screen now; any mouse or key input makes Windows lock and show the sign-in screen (Ctrl+Alt+L)",
+    "lockSaverNowBtn": "Start now",
+    "lockSaverIdleLabel": "Live scene when idle",
+    "lockSaverIdleHint": "Use Deskland-VN as the Windows screen saver, with \"on resume, display logon screen\" turned on",
+    "lockSyncRealLabel": "Use scene as Windows lock screen picture",
+    "lockSyncRealHint": "Capture the current scene as the lock screen background (still image)",
+    "lockRealNote": "Win+L and the Windows Lock button still show the still-image lock screen: Windows does not let apps draw on the real lock screen. Unlock with your Windows password / PIN / Windows Hello.",
+    "lockNowRealTitle": "Lock Windows now (same as Win+L)",
     "monitorTitle": "Displays & wallpaper mode",
     "mode_mirror": "Synchronized",
     "mode_independent": "Independent",
@@ -123,15 +147,21 @@
     "pauseAll": "Pause all",
     "resumeAll": "Resume all",
     "pauseMonitor": "Pause display",
-    "resumeMonitor": "Resume display"
+    "resumeMonitor": "Resume display",
+    "status_ready": "Ready",
+    "status_loading": "Loading",
+    "status_initializing": "Initializing",
+    "status_failed": "Failed",
+    "status_preview": "Preview"
   },
   "host": {
     "traySettings": "Settings…",
+    "trayLock": "Lock screen (Win+L / Ctrl+Alt+L)",
     "trayPause": "Pause animation",
     "trayReload": "Reload",
     "trayAutostart": "Start with Windows",
     "trayExit": "Exit (restore wallpaper)",
-    "welcomeTitle": "Deskland is running",
+    "welcomeTitle": "Deskland-VN is running",
     "welcomeBody": "Click the beach icon in the system tray{hotkey} to open the menu.\nCan't see it? Click ^ on the right side of the taskbar.",
     "welcomeHotkey": " or press Ctrl+Alt+H",
     "errNotReady": "The wallpaper isn't ready yet",
@@ -142,7 +172,7 @@
     "errImageTimeout": "Generating took too long",
     "errVideoTimeout": "Recording took too long",
     "errBadData": "The page returned incomplete data",
-    "errRebuilt": "Windows kept rebuilding the wallpaper layer, so Deskland has stopped.",
+    "errRebuilt": "Windows kept rebuilding the wallpaper layer, so Deskland-VN has stopped.",
     "errSeeLog": "See the log for details: {path}",
     "errSettings": "Couldn't open the settings window: {msg}",
     "errNoPage": "Page not found: {path}",
@@ -150,65 +180,82 @@
     "errStart": "Couldn't start: {msg}"
   },
   "themes": {
-    "lotus": {
-      "name": "Lotus Pond",
-      "desc": "Lotus leaves and blossoms fill the pond, with koi swimming between the leaves and icons and leaving ripples",
+    "meadow": {
+      "name": "Meadow",
+      "desc": "A pen-and-wash meadow where your icons hide in white clouds that cast dark green shadows",
       "groups": [
         "Around icons",
-        "Details"
+        "Clouds",
+        "Characters"
       ],
       "params": {
-        "density": {
-          "label": "Lotus leaf density",
-          "hint": "How much of the water is covered by leaves; 100% is the original density, 0 hides leaves and their flowers"
-        },
         "sigma": {
-          "label": "Open water",
-          "hint": "How much open water surrounds your icons"
+          "label": "Cloud size",
+          "hint": "How far the clouds around your icons spread out"
         },
-        "fish": {
-          "label": "Koi",
-          "hint": "Koi swimming between lotus leaves and icons",
-          "unit": ""
+        "cover": {
+          "label": "Clouds over the meadow",
+          "hint": "How many clouds drift over the open meadow"
         },
-        "flowers": {
-          "label": "Lotus flowers",
-          "hint": "The amount of lotus blossoms, buds and water lilies"
+        "flow": {
+          "label": "Drift speed",
+          "hint": "How fast the clouds drift and their puffs change"
+        },
+        "showBoy": {
+          "label": "Show boy",
+          "hint": "Show or hide the boy together with his kite",
+          "options": [
+            "Hide",
+            "Show"
+          ]
+        },
+        "showCat": {
+          "label": "Show kitten",
+          "hint": "The little black kitten resting on the grass",
+          "options": [
+            "Hide",
+            "Show"
+          ]
         }
       }
     },
-    "lake": {
-      "name": "Lake",
-      "desc": "Watercolor grass surrounds a clear lake, with painted stones beneath the shallows and crisp reflections of puffy clouds",
+    "beach": {
+      "name": "Beach",
+      "desc": "The shoreline curves around your files as waves roll up the sand",
       "groups": [
-        "Shore",
+        "Shoreline",
         "Water",
-        "Clouds"
+        "Details"
       ],
       "params": {
+        "palms": {
+          "label": "Coconut palms",
+          "hint": "Number of coastal palms; 0 to hide. Fewer appear if there is not enough sand.",
+          "unit": ""
+        },
         "sigma": {
-          "label": "Grassy shore",
-          "hint": "How far the grassy banks extend from your icons"
+          "label": "Distance from icons",
+          "hint": "How far the shoreline sits from your icons"
         },
         "warp": {
-          "label": "Winding shore",
-          "hint": "How much the lakeshore curves"
+          "label": "Winding coast",
+          "hint": "How much the shoreline twists and turns"
         },
         "shoal": {
           "label": "Clear shallows",
-          "hint": "How far the underwater stones remain visible from the shore"
+          "hint": "How wide the see-through water over the sand is"
         },
-        "depth": {
-          "label": "Water depth",
-          "hint": "The distance from turquoise blue shallows to teal deeper water"
+        "shallow": {
+          "label": "Shallow sea",
+          "hint": "How far the water fades from turquoise to deep blue"
         },
-        "flow": {
-          "label": "Water movement",
-          "hint": "The speed of gentle ripples, shimmering light and cloud reflections"
+        "kayaks": {
+          "label": "Kayaks",
+          "unit": ""
         },
-        "clouds": {
-          "label": "Cloud count",
-          "hint": "The number of reflected clouds on the lake; set to 0 to hide",
+        "birds": {
+          "label": "Seabirds",
+          "hint": "Gulls gliding and circling overhead",
           "unit": ""
         }
       }
@@ -264,43 +311,38 @@
         }
       }
     },
-    "beach": {
-      "name": "Beach",
-      "desc": "The shoreline curves around your files as waves roll up the sand",
+    "lake": {
+      "name": "Lake",
+      "desc": "Watercolor grass surrounds a clear lake, with painted stones beneath the shallows and crisp reflections of puffy clouds",
       "groups": [
-        "Shoreline",
+        "Shore",
         "Water",
-        "Details"
+        "Clouds"
       ],
       "params": {
-        "palms": {
-          "label": "Coconut palms",
-          "hint": "Number of coastal palms; 0 to hide. Fewer appear if there is not enough sand.",
-          "unit": ""
-        },
         "sigma": {
-          "label": "Distance from icons",
-          "hint": "How far the shoreline sits from your icons"
+          "label": "Grassy shore",
+          "hint": "How far the grassy banks extend from your icons"
         },
         "warp": {
-          "label": "Winding coast",
-          "hint": "How much the shoreline twists and turns"
+          "label": "Winding shore",
+          "hint": "How much the lakeshore curves"
         },
         "shoal": {
           "label": "Clear shallows",
-          "hint": "How wide the see-through water over the sand is"
+          "hint": "How far the underwater stones remain visible from the shore"
         },
-        "shallow": {
-          "label": "Shallow sea",
-          "hint": "How far the water fades from turquoise to deep blue"
+        "depth": {
+          "label": "Water depth",
+          "hint": "The distance from turquoise blue shallows to teal deeper water"
         },
-        "kayaks": {
-          "label": "Kayaks",
-          "unit": ""
+        "flow": {
+          "label": "Water movement",
+          "hint": "The speed of gentle ripples, shimmering light and cloud reflections"
         },
-        "birds": {
-          "label": "Seabirds",
-          "hint": "Gulls gliding and circling overhead",
+        "clouds": {
+          "label": "Cloud count",
+          "hint": "The number of reflected clouds on the lake; set to 0 to hide",
           "unit": ""
         }
       }
@@ -403,165 +445,415 @@
         }
       }
     },
-    "meadow": {
-      "name": "Meadow",
-      "desc": "A pen-and-wash meadow where your icons hide in white clouds that cast dark green shadows",
+    "rainforest": {
+      "name": "Tropical Rainforest",
+      "desc": "Mossy clearings ringed by lush tropical rainforest canopy in the rain, with puddle ripples, drifting mist and glowing fireflies",
       "groups": [
         "Around icons",
-        "Clouds",
-        "Characters"
-      ],
-      "params": {
-        "sigma": {
-          "label": "Cloud size",
-          "hint": "How far the clouds around your icons spread out"
-        },
-        "cover": {
-          "label": "Clouds over the meadow",
-          "hint": "How many clouds drift over the open meadow"
-        },
-        "flow": {
-          "label": "Drift speed",
-          "hint": "How fast the clouds drift and their puffs change"
-        },
-        "showBoy": {
-          "label": "Show boy",
-          "hint": "Show or hide the boy together with his kite",
-          "options": [
-            "Hide",
-            "Show"
-          ]
-        },
-        "showCat": {
-          "label": "Show kitten",
-          "hint": "The little black kitten resting on the grass",
-          "options": [
-            "Hide",
-            "Show"
-          ]
-        }
-      }
-    },
-    "forest": {
-      "name": "Forest",
-      "desc": "Your icons sit in a clearing ringed by gouache cartoon trees swaying in the breeze",
-      "groups": [
-        "Around icons",
-        "Trees",
-        "Details"
+        "Rain & Canopy",
+        "Wildlife"
       ],
       "params": {
         "sigma": {
           "label": "Clearing size",
-          "hint": "How big the clearing around your icons is, and how far away the trees stand"
+          "hint": "How big the mossy clearing around your icons is"
+        },
+        "warp": {
+          "label": "Canopy winding",
+          "hint": "How much the tropical forest edge winds around your icons"
+        },
+        "rain": {
+          "label": "Rain & Ripples",
+          "hint": "Intensity of slanted rain streaks and concentric raindrop ripples"
+        },
+        "mist": {
+          "label": "Rainforest mist",
+          "hint": "Soft tropical mist drifting across the treetops"
         },
         "wind": {
-          "label": "Wind",
-          "hint": "How much the treetops sway; 0 means no wind"
+          "label": "Canopy breeze",
+          "hint": "How much the rainforest canopy sways in the wind"
         },
         "birds": {
-          "label": "Birds",
-          "hint": "Mostly perched on treetops, now and then flying to a nearby tree — they stay in the woods",
+          "label": "Tropical birds",
+          "hint": "Colorful parrots and kingfishers gliding over the canopy",
+          "unit": ""
+        },
+        "fireflies": {
+          "label": "Fireflies",
+          "hint": "Glowing fireflies pulsing gently in the rainforest shade",
           "unit": ""
         }
       }
     },
-    "pinkforest": {
-      "name": "Pink Forest",
-      "desc": "A watercolor forest: translucent pink treetops on fine ink trunks",
+    "mocchau": {
+      "name": "Plum Blossoms",
+      "desc": "Spring highland meadows ringed by pure white plum blossom hills, morning mist and drifting white petals",
       "groups": [
         "Around icons",
-        "Trees",
-        "Details"
+        "Plum Blossoms & Breeze",
+        "Atmosphere"
       ],
       "params": {
         "sigma": {
-          "label": "Clearing size",
-          "hint": "How big the clearing around your icons is, and how far away the trees stand"
+          "label": "Meadow clearing",
+          "hint": "How far the spring grass slope extends around your icons"
+        },
+        "warp": {
+          "label": "Hillside winding",
+          "hint": "How naturally the plum orchard boundary curves around your icons"
+        },
+        "bloom": {
+          "label": "Blossom density",
+          "hint": "How lush and full the white plum blossom canopies are"
+        },
+        "petals": {
+          "label": "Floating petals",
+          "hint": "White plum petals drifting across the highland breeze"
         },
         "wind": {
-          "label": "Wind",
-          "hint": "How much the treetops sway; 0 means no wind"
+          "label": "Highland breeze",
+          "hint": "How fast the plum branches sway and petals drift"
+        },
+        "mist": {
+          "label": "Morning mist",
+          "hint": "Soft highland mist rolling over the hills"
         },
         "birds": {
-          "label": "Birds",
-          "hint": "Little ink birds, mostly perched on treetops, now and then flying to a nearby tree",
+          "label": "Highland birds",
+          "hint": "Little birds gliding over the white blossom valley",
           "unit": ""
         }
       }
     },
-    "map": {
-      "name": "Hand-drawn City",
-      "desc": "A bird's-eye map of an old town: rows of ink-drawn houses line the streets, and your icons sit in the squares",
+    "tet-sakura": {
+      "name": "Tết Sakura Blossoms",
+      "desc": "Warm spring courtyard surrounded by blooming Tết peach and cherry blossoms, red lanterns, lucky envelopes and spring swallows",
       "groups": [
         "Around icons",
-        "Town"
+        "Blossoms & Breeze",
+        "Tết Spirit"
       ],
       "params": {
         "sigma": {
-          "label": "Square size",
-          "hint": "How big the open squares around your icons are"
+          "label": "Courtyard size",
+          "hint": "How far the warm spring clearing extends around your icons"
         },
-        "canals": {
-          "label": "Canals",
-          "hint": "How many canals cross the town, with little boats drifting along",
+        "warp": {
+          "label": "Branch winding",
+          "hint": "How naturally the blooming peach and sakura branches curve inward"
+        },
+        "petals": {
+          "label": "Falling petals",
+          "hint": "Pink peach and cherry blossom petals dancing in the spring breeze"
+        },
+        "wind": {
+          "label": "Spring breeze",
+          "hint": "How gently the branches, lanterns and petals sway"
+        },
+        "lanterns": {
+          "label": "Lanterns & Lì xì",
+          "hint": "Festive red lanterns and lucky golden-sealed red envelopes hanging on branches",
+          "unit": ""
+        },
+        "swallows": {
+          "label": "Spring swallows",
+          "hint": "Fork-tailed swallows gliding gracefully across the blossoms",
           "unit": ""
         }
       }
     },
-    "citymap": {
-      "name": "Colorful City",
-      "desc": "An illustrated city map with red roofs and yellow, pink and blue walls; your icons sit in the squares",
+    "cat-hill": {
+      "name": "Sunny Cat Hill",
+      "desc": "A sunlit green hillside with chubby cats strolling around, sitting to lick their paws, and breathing gently in their sleep beneath swaying trees and falling leaves",
       "groups": [
+        "Cats on the Hill",
+        "Trees & Falling Leaves"
+      ],
+      "params": {
+        "cats": {
+          "label": "Number of cats",
+          "hint": "How many chubby cats walk, groom their fur, and nap across the hillside",
+          "unit": ""
+        },
+        "butterflies": {
+          "label": "Butterflies",
+          "hint": "Yellow butterflies fluttering around the cats and wildflowers",
+          "unit": ""
+        },
+        "leaves": {
+          "label": "Falling leaves",
+          "hint": "Density of golden and green leaves drifting in the breeze and settling on the grass"
+        },
+        "wind": {
+          "label": "Hillside breeze",
+          "hint": "How strongly the trees, bushes, and falling leaves sway in the wind"
+        }
+      }
+    },
+    "stadium": {
+      "name": "Football Stadium",
+      "desc": "An aerial top-down football stadium with striped turf where two teams pass and move — click anywhere on the pitch to send the ball there as players sprint after it",
+      "groups": [
+        "Match & Players",
+        "Stadium & Turf"
+      ],
+      "params": {
+        "players": {
+          "label": "Players per team",
+          "hint": "Squad size per side including goalkeeper, from 3v3 mini-pitch up to full 11v11",
+          "unit": ""
+        },
+        "speed": {
+          "label": "Match tempo",
+          "hint": "Running speed of the players and pace of the ball across the turf"
+        },
+        "passFreq": {
+          "label": "Passing frequency",
+          "hint": "Lower for longer solo dribbles, higher for quick one-touch passing"
+        },
+        "lighting": {
+          "label": "Stadium lighting",
+          "hint": "Switch between bright daylight, warm golden sunset, or evening floodlights",
+          "options": [
+            "Daylight",
+            "Golden Sunset",
+            "Night Floodlights"
+          ]
+        },
+        "stripes": {
+          "label": "Turf stripe contrast",
+          "hint": "Contrast between alternating mowed grass bands across the pitch"
+        }
+      }
+    },
+    "aquarium": {
+      "name": "Goldfish Bowl",
+      "desc": "A sunlit goldfish bowl seen through the glass: your icons rest on golden sand reefs with swaying weeds and bubbles. Click the water to cast a line, wait for the float to jerk, then click to reel a goldfish in",
+      "groups": [
+        "Goldfish & fishing",
+        "Inside the bowl",
         "Around icons"
       ],
       "params": {
+        "fish": {
+          "label": "Goldfish",
+          "hint": "How many goldfish swim in the bowl; a new one swims in after each catch",
+          "unit": "fish"
+        },
+        "eager": {
+          "label": "Hungry fish",
+          "hint": "How quickly a fish comes to nibble and bite after you cast"
+        },
+        "plants": {
+          "label": "Water weeds",
+          "hint": "How many green weeds grow on the sand reefs and the bowl floor"
+        },
+        "bubbles": {
+          "label": "Bubbles",
+          "hint": "How many bubbles rise from the weeds"
+        },
+        "light": {
+          "label": "Sun rays",
+          "hint": "Strength of the slanted sun rays and caustic light on the sand"
+        },
         "sigma": {
-          "label": "Square size",
-          "hint": "How big the open squares around your icons are"
+          "label": "Reef width",
+          "hint": "How far the golden sand reef extends around your icons",
+          "unit": "px"
+        },
+        "warp": {
+          "label": "Reef curves",
+          "hint": "Straight, tidy reef edges or natural winding ones"
         }
       }
     },
-    "worldmap": {
-      "name": "Old Map",
-      "desc": "A parchment continent: icons become seas, dotted roads link towns, and horse-drawn wagons carry supplies between them",
+    "commute": {
+      "name": "Evening Bus",
+      "desc": "An animated riverside view: the sky follows your clock, the city lights up across the river and a yellow bus rolls past swaying reeds. Click the road to call the bus, the sky for birds or a shooting star, the grass for a gust of wind",
       "groups": [
-        "Around icons",
-        "Details"
+        "Time & bus",
+        "Wind & scenery",
+        "Around icons"
       ],
       "params": {
+        "time": {
+          "label": "Time of day",
+          "hint": "Sky, sunlight and city lights follow your computer's clock, or stay at a fixed time",
+          "options": [
+            "Follow clock",
+            "Day",
+            "Sunset",
+            "Night"
+          ]
+        },
+        "busFreq": {
+          "label": "Bus traffic",
+          "hint": "How often the bus passes; click the road to call it at any time"
+        },
+        "wind": {
+          "label": "Wind",
+          "hint": "How strongly reeds, clouds and dandelion seeds move"
+        },
+        "reeds": {
+          "label": "Reeds",
+          "hint": "How dense the foreground reeds are"
+        },
+        "lights": {
+          "label": "City lights",
+          "hint": "Brightness of street lamps, bridge lights and windows at night"
+        },
         "sigma": {
-          "label": "Sea size",
-          "hint": "How much sea surrounds your icons"
+          "label": "Hill / cloud width",
+          "hint": "Icons in the sky rest on clouds, icons below on grassy hills; how wide those areas are",
+          "unit": "px"
         },
-        "ships": {
-          "label": "Sailing ships",
-          "hint": "Three-masted ships bobbing on the sea",
-          "unit": ""
-        },
-        "wagons": {
-          "label": "Trade wagons",
-          "hint": "Wagons carry crates and grain sacks between towns; set to 0 to hide them",
-          "unit": ""
+        "warp": {
+          "label": "Edge curves",
+          "hint": "Straight, tidy edges or natural winding ones"
         }
       }
     },
-    "nauticalmap": {
-      "name": "Nautical Chart",
-      "desc": "A parchment sea chart with coastal ports and lighthouses, winding sea routes, sailing ships and hand-drawn sea monsters",
+    "summer-porch": {
+      "name": "Summer Porch",
+      "desc": "A Ghibli-inspired watercolor summer veranda: chubby Corgis nap and roll over in front of an oscillating vintage desk fan beside sliced watermelon, an open book and a brass wind chime, while flowering garden beds wrap around your icons. Click a Corgi for belly rubs, toggle the fan, ring the chime or take a bite of watermelon",
       "groups": [
-        "Around icons",
-        "Details"
+        "Veranda & Corgis",
+        "Light & atmosphere",
+        "Around icons"
       ],
       "params": {
-        "sigma": {
-          "label": "Land size",
-          "hint": "How far the land extends around your icons"
-        },
-        "ships": {
-          "label": "Sailing ships",
-          "hint": "Hand-drawn galleons, schooners and cutters gently bobbing between the islands",
+        "corgis": {
+          "label": "Corgis on porch",
+          "hint": "How many sleepy Corgis lounge on the wooden deck and roll between poses",
           "unit": ""
+        },
+        "fanSpeed": {
+          "label": "Desk fan breeze",
+          "hint": "Oscillation and airflow speed of the vintage fan fluttering the ribbon and book pages"
+        },
+        "timeOfDay": {
+          "label": "Time of day",
+          "hint": "Switch between bright summer noon, golden sunset, firefly night, or follow your PC clock",
+          "options": [
+            "Sunny Noon",
+            "Golden Sunset",
+            "Firefly Night",
+            "Real-time Auto"
+          ]
+        },
+        "sunbeams": {
+          "label": "Sunbeams & fireflies",
+          "hint": "Warmth of slanted sun rays by day and butterflies or glowing fireflies around the yard"
+        },
+        "sigma": {
+          "label": "Garden bed width",
+          "hint": "Icons in the yard rest on leafy vegetable beds with yellow blossoms, or woven mats on the deck",
+          "unit": "px"
+        },
+        "warp": {
+          "label": "Garden border curves",
+          "hint": "Neatly trimmed garden borders or organic hand-drawn curves"
+        }
+      }
+    },
+    "cats": {
+      "name": "Hillside Kittens",
+      "desc": "A bright green hilltop under a blue sky overlooking far mountains; trees sway in the wind, golden leaves drift, butterflies flutter and chubby cats stroll, groom and nap belly-up with gentle breathing. Click a cat to pet it, a tree to shake its leaves, or the grass to drop a yarn ball for the cats to chase",
+      "groups": [
+        "Mounds",
+        "Cats",
+        "Hills"
+      ],
+      "params": {
+        "mound": {
+          "label": "Mound size",
+          "hint": "How far the grassy mound spreads around your icons; nearby icons share one mound",
+          "unit": "px"
+        },
+        "cats": {
+          "label": "Cat count",
+          "hint": "How many chubby cats roam the hills: ginger, grey tabby, tuxedo, calico, black and Siamese",
+          "unit": ""
+        },
+        "speed": {
+          "label": "Walking speed",
+          "hint": "Whether the cats amble slowly or trot around"
+        },
+        "naps": {
+          "label": "Laziness",
+          "hint": "How likely a cat is to curl up for a nap instead of just sitting"
+        },
+        "sun": {
+          "label": "Warm sunlight",
+          "hint": "Brightness of the sunshine falling on the hills"
+        },
+        "flowers": {
+          "label": "Wildflowers",
+          "hint": "Density of daisies and pink and yellow flowers on the hills"
+        },
+        "bushes": {
+          "label": "Trees & bushes",
+          "hint": "How many big trees and bushes dot the hill; cats can walk behind them",
+          "unit": ""
+        },
+        "wind": {
+          "label": "Wind",
+          "hint": "Stronger wind sways the bushes and blows more drifting and falling leaves; 0 is calm"
+        }
+      }
+    },
+    "boxing-ring": {
+      "name": "Arcade Boxing Ring",
+      "desc": "A 3/4 retro arcade boxing gym & elevated blue ring where two fighters trade punches with mochi-like Squash & Stretch spring physics, multi-zone flying gloves, puff clouds, dizzy combo stars and dark EVA gym mats wrapping your desktop icons. Click either side to throw head/cheek/chin/body shots, or hit the heavy bags, tire & round clock",
+      "groups": [
+        "Physics & Punches",
+        "HUD & Icon Mats"
+      ],
+      "params": {
+        "bounciness": {
+          "label": "Squash & Stretch bounce",
+          "hint": "Elastic springiness of the fighters' head, cheeks and torso on impact"
+        },
+        "punchPower": {
+          "label": "Punch power & ring shake",
+          "hint": "Knockback toward the ropes, ring vibration and impact puff intensity"
+        },
+        "autoSpar": {
+          "label": "Sparring mode",
+          "hint": "Natural light sparring jabs, wait for mouse clicks only, or nonstop GIF-like flurry",
+          "options": [
+            "Natural Sparring",
+            "Click Only",
+            "Nonstop Combo"
+          ]
+        },
+        "gloveStyle": {
+          "label": "Glove style",
+          "hint": "Flying glove style on click: classic red leather, giant cartoon fist or pink cat paw",
+          "options": [
+            "Classic Red Glove",
+            "Cartoon Giant Fist",
+            "Pink Cat Paw"
+          ]
+        },
+        "hudMode": {
+          "label": "Health bars & round clock",
+          "hint": "Show full size, compact or hide the top arcade health bars and round timer",
+          "options": [
+            "Full HUD",
+            "Compact",
+            "Hidden"
+          ]
+        },
+        "sigma": {
+          "label": "Gym mat width",
+          "hint": "How far the dark EVA gym mat extends around your desktop icons",
+          "unit": "px"
+        },
+        "warp": {
+          "label": "Mat edge curve",
+          "hint": "Straight or organically rounded gym mat borders around icon clusters"
         }
       }
     }

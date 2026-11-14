@@ -21,6 +21,8 @@ VIAddVersionKey /LANG=1033 "FileVersion" "${VERSION}"
 VIAddVersionKey /LANG=1033 "ProductVersion" "${VERSION}"
 VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright 2026 Deskland authors"
 !define MUI_ABORTWARNING
+!define MUI_LANGDLL_WINDOWTITLE "Ngôn ngữ cài đặt"
+!define MUI_LANGDLL_INFO "Chọn ngôn ngữ sử dụng khi cài đặt."
 !define MUI_ICON "${PAYLOAD}\host\bin\DesklandPreview.ico"
 !define MUI_UNICON "${PAYLOAD}\host\bin\DesklandPreview.ico"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\host\bin\Deskland.exe"
@@ -33,12 +35,13 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright 2026 Deskland authors"
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_UNPAGE_FINISH
-!insertmacro MUI_LANGUAGE "SimpChinese"
+!insertmacro MUI_LANGUAGE "Vietnamese"
 !insertmacro MUI_LANGUAGE "English"
+!insertmacro MUI_LANGUAGE "SimpChinese"
 LangString LaunchDeskland ${LANG_SIMPCHINESE} "启动 Deskland Preview"
 LangString LaunchDeskland ${LANG_ENGLISH} "Launch Deskland Preview"
-LangString AppFiles ${LANG_SIMPCHINESE} "Deskland Preview 体验版（沙滩和草地）"
-LangString AppFiles ${LANG_ENGLISH} "Deskland Preview (Beach and Meadow)"
+LangString AppFiles ${LANG_SIMPCHINESE} "Deskland Preview（16 个主题）"
+LangString AppFiles ${LANG_ENGLISH} "Deskland Preview (16 themes)"
 LangString DesktopShortcut ${LANG_SIMPCHINESE} "桌面快捷方式"
 LangString DesktopShortcut ${LANG_ENGLISH} "Desktop shortcut"
 LangString NeedX64 ${LANG_SIMPCHINESE} "需要 64 位 Windows 10 或更高版本。"
@@ -49,6 +52,13 @@ LangString RuntimeFailed ${LANG_SIMPCHINESE} "WebView2 安装未完成。请连�
 LangString RuntimeFailed ${LANG_ENGLISH} "WebView2 setup did not complete. Connect to the internet, install Microsoft Edge WebView2 Runtime, and retry."
 LangString InstallingRuntime ${LANG_SIMPCHINESE} "正在安装 Microsoft Edge WebView2 Runtime（需要联网）..."
 LangString InstallingRuntime ${LANG_ENGLISH} "Installing Microsoft Edge WebView2 Runtime (internet required)..."
+LangString LaunchDeskland ${LANG_VIETNAMESE} "Mở Deskland Preview"
+LangString AppFiles ${LANG_VIETNAMESE} "Deskland Preview (16 chủ đề)"
+LangString DesktopShortcut ${LANG_VIETNAMESE} "Lối tắt trên màn hình nền"
+LangString NeedX64 ${LANG_VIETNAMESE} "Cần Windows 10 trở lên, phiên bản 64 bit."
+LangString CloseFailed ${LANG_VIETNAMESE} "Vui lòng thoát Deskland Preview rồi thử lại."
+LangString RuntimeFailed ${LANG_VIETNAMESE} "Chưa cài xong WebView2. Hãy kết nối mạng, cài Microsoft Edge WebView2 Runtime rồi thử lại."
+LangString InstallingRuntime ${LANG_VIETNAMESE} "Đang cài Microsoft Edge WebView2 Runtime (cần kết nối mạng)..."
 
 Function .onInit
   StrCpy $IsolatedPackage "0"
@@ -70,6 +80,7 @@ Function .onInit
   ${EndIf}
   SetShellVarContext current
   SetRegView 64
+  StrCpy $LANGUAGE ${LANG_VIETNAMESE}
   !insertmacro MUI_LANGDLL_DISPLAY
 FunctionEnd
 

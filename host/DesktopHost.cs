@@ -227,7 +227,7 @@ static class Settings
     public static Dictionary<string, string> MonitorThemes = new Dictionary<string, string>();
     public static Dictionary<string, bool> MonitorPaused = new Dictionary<string, bool>();
     public static bool GlobalPaused;
-    public static string Lang = "auto";                // 界面语言："auto"（跟随系统）或 I18n.Supported 里的一种
+    public static string Lang = "vi";                  // Vietnamese by default for new profiles; preserve existing choices.
     public static Dictionary<string, Dictionary<string, object>> Params = new Dictionary<string, Dictionary<string, object>>();
 
     public static void Load()
@@ -345,7 +345,7 @@ static class Settings
 static class I18n
 {
     // 增加语言时同步设置页 LANGS 与体验版导出的语言列表。
-    public static readonly string[] Supported = { "zh-CN", "en" };
+    public static readonly string[] Supported = { "vi", "en", "zh-CN" };
     public static string Code = "zh-CN", Sys = "en";     // 现在用的语言；"跟随系统"时会用的语言
     static Dictionary<string, object> cur, en, zh;
 

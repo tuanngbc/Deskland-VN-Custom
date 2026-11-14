@@ -1,6 +1,65 @@
-# Báo cáo kiểm thử và checkpoint
+# Báo cáo kiểm thử Deskland Preview 0.3.0 — tiếng Việt
 
-Trạng thái: **PARTIAL VERIFIED — NATIVE MULTI-MONITOR PENDING**. Ba mode đã chạy trên hai output thật; các tình huống thay đổi topology và lifecycle hệ thống bên dưới chưa đủ nghiệm thu. Không phát hành release hoặc merge main.
+Ngày kiểm tra: 14-11-2026. Bản chuyển 16 theme và giao diện tiếng Việt đã qua
+kiểm tra tự động và chạy native trên hai màn hình thật. Không phát hành GitHub
+Release hoặc merge main. Các giới hạn nghiệm thu hệ thống ở cuối báo cáo vẫn
+được giữ rõ ràng.
+
+## Bản Việt hoá 0.3.0
+
+- `host/test.ps1`: **35 C# + 28 JavaScript = 63 PASS, 0 FAIL**. Bao gồm routing
+  đa màn hình, lưu cấu hình, kiểm tra 16 trang theme, phụ thuộc cục bộ, bản dịch
+  tham số và nhịp 30fps ở màn hình 60/75Hz.
+- Lượt `artifacts/vn-theme-final2/acceptance/results.json`: **170 NATIVE PASS,
+  0 FAIL**. WebView2 thật; không dùng trang preview mô phỏng để thay bằng chứng.
+- Đủ 16 thẻ theme, 13 ảnh thu nhỏ giải mã được và 3 nền CSS từ gói tham khảo.
+  Không ghi đè những thumbnail thủ công đã có trong kho.
+- 16 theme × 3 chế độ Đồng bộ, Độc lập, Toàn cảnh. Đồng bộ/Độc lập có hai
+  native surface; Toàn cảnh có một world 3640×1920. Kiểm tra khung hình tăng,
+  không lỗi JavaScript, tham số mặc định khớp registry, nhận vị trí biểu tượng,
+  đúng số cửa sổ và lớp nền nằm dưới biểu tượng desktop.
+- Mỗi tổ hợp kiểm tra tạm dừng, gửi vị trí icon thử rồi khôi phục vị trí đã đọc
+  từ Windows và xuất PNG. Không di chuyển icon thật của người dùng. Kiểm tra
+  truyền giá trị tối đa của các điều khiển cho cả 16 theme.
+- Xuất video thành công với Sân bóng, Mèo con và Bể cá vàng. Nhận dữ liệu video
+  trực tiếp từ renderer; lượt tự động không ghi đè clipboard của người dùng.
+- Kiểm tra Settings/khay tiếng Việt, lưu và đọc lại lựa chọn ngôn ngữ/theme.
+  Có PNG native cho từng theme và màn hình trong thư mục evidence ở trên.
+- Gói Windows 0.3.0 cài thử với `/ISOLATED`: **28 NATIVE PASS, 0 FAIL** ở
+  `artifacts/vn-package-native/acceptance/results.json`. Bản ZIP giải nén chạy
+  cùng lượt kiểm tra: **28 NATIVE PASS, 0 FAIL** ở
+  `artifacts/vn-portable-native/acceptance/results.json`. Hai lượt này chạy Sân
+  bóng/Bể cá vàng qua cả ba chế độ và xác nhận nhãn chia sẻ tiếng Việt.
+- Đối chiếu SHA-256 đủ **77 tệp** của bản cài và ZIP; gói nguồn có **91 tệp**,
+  gồm host, đủ 16 renderer, helper, shader và thông báo nguồn. Bản ZIP có thêm
+  `Mo-Deskland.cmd`. Gỡ bản cài thử thành công, giữ đăng ký của bản cài sẵn.
+  Khi đóng gói lại báo cáo này, tiếp tục đối chiếu tệp runtime với gói đã thử.
+
+Môi trường hiện tại: Windows 11 build 26200; WebView2 157.0.4341.46; GTX 1070;
+2560×1080 tại (0,0) và 1080×1920 tại (-1080,-685), cùng 96 DPI. Đọc được 45 icon
+trên desktop chính. Canvas desktop dùng kích thước thực, tới DPR 2; khung xem
+trước được giảm độ phân giải để giảm chi phí.
+
+Mẫu khung hình cho mỗi theme chỉ dài khoảng một giây, có thể gồm khởi tạo cảnh.
+Đa số gần 30fps; Thảo nguyên độ phân giải cao có mẫu khoảng 15–18fps khi khởi
+tạo. Đây không phải kiểm thử hiệu năng dài hạn và không khẳng định mọi cảnh
+đạt 30fps trên mọi máy. Số đo RAM/FPS của EXE Rust tham khảo không áp dụng cho
+bản C# này.
+
+Đã sửa qua các lượt thử: thiếu RNG cho cây dừa Maldives, thiếu kênh host native
+ở Sân bóng, xuất ảnh dùng biến đếm khung hình không tồn tại ở một số trang,
+và video Sân bóng không nhận timestamp. Lượt thăm dò `vn-theme-acceptance` có
+lỗi trước khi sửa, chỉ dùng `vn-theme-final2` làm kết quả cuối cho 16 theme.
+
+Chưa chuyển cơ chế Raw Input tương tác desktop, khóa màn hình và screensaver
+của bản Rust. Tương tác chuột của theme dùng trong khung xem trước. Hot-plug,
+mixed DPI, xoay màn hình, Explorer restart, sleep/resume và chạy nhiều giờ chưa
+được nghiệm thu lại trong lượt Việt hoá này.
+
+## Lịch sử checkpoint đa màn hình 0.2.0
+
+Phần dưới ghi bằng chứng của bộ máy đa màn hình trước khi chuyển 16 theme.
+Các số đếm và hiệu năng ở đây thuộc checkpoint đó.
 
 ## Baseline và môi trường
 
@@ -57,4 +116,4 @@ Chưa đo trên integrated GPU hoặc 3–4 màn hình, không tuyên bố mục
 
 Đã sửa: per-window tranh slot sau DefView (một coordinator sắp thứ tự tất cả surfaces), settings restore không gửi lại params vào renderer đang giữ cùng theme, foreground Settings gây pause không cần thiết, kiểm thử params chưa chờ message async, snapshot restart ghi đè kết quả trước, khởi tạo script build mất BOM, thiếu `Themes.cs` trong corresponding source ZIP, main browser crash khiến Settings không tự phục hồi. Các test native có nhiễu foreground trước đó vẫn còn nguyên log trong artifacts; dùng kết quả mới sau retest.
 
-Chưa hoàn tất các gate nêu trên. Phase 8 chưa bắt đầu; 11 theme locked giữ nguyên. Panorama pause riêng theo monitor và tối ưu vùng trống/world cực lớn là giới hạn hiện tại, cần owner xem xét khi nghiệm thu yêu cầu đầy đủ. Bước tiếp theo: native hot-plug/primary/DPI/rotate, Explorer restart, sleep/lock/Win+D, video đường nối, soak test và thử integrated GPU. Thực hiện trong session được owner cho phép đổi topology, giữ dữ liệu icon nguyên trạng.
+Ở checkpoint 0.2.0, chưa hoàn tất các gate nêu trên và 11 theme còn khóa. Bản 0.3.0 đã thay hướng mở rộng cũ bằng việc chuyển 16 theme theo yêu cầu mới. Panorama pause riêng theo monitor và tối ưu vùng trống/world cực lớn vẫn là giới hạn. Các bước nghiệm thu hệ thống tiếp theo gồm hot-plug/primary/DPI/rotate, Explorer restart, sleep/lock/Win+D, video đường nối, soak test và thử integrated GPU; không tính các bước đó là đã hoàn thành trong bản Việt hoá.

@@ -125,7 +125,14 @@ static class RegressionTests
         Test("settings-atomic-backup", delegate { Settings.Save();Assert(File.Exists(settings+".bak")&&!File.Exists(settings+".tmp"),"backup/temp"); });
         Test("settings-restore-last-working", delegate { Settings.MarkWorking();Settings.Theme="meadow";Settings.Save();Assert(Settings.RestoreWorking()&&Settings.Theme=="beach","working state lost"); });
         Test("settings-corrupt-file-recovers-backup", delegate { Settings.Save();Settings.Save();File.WriteAllText(settings,"{broken");Settings.Load();Assert(Settings.Theme=="beach","backup recovery"); });
-        Test("theme-locked-never-loadable", delegate { Assert(!Themes.Allowed(pageDir,"lake",delegate(string product){return true;}),"locked renderer accepted"); });
+        Test("theme-locked-never-loadable", delegate {
+            string fixture = Path.Combine(Log.DataDir,"locked-theme"); Directory.CreateDirectory(fixture);
+            File.WriteAllText(Path.Combine(fixture,"locked.html"),"<!doctype html>");
+            File.WriteAllText(Path.Combine(fixture,"themes.json"),"{\"themes\":[{\"id\":\"locked\",\"status\":\"locked\",\"product\":\"free\",\"page\":\"locked.html\"}]}");
+            Assert(!Themes.Allowed(fixture,"locked",delegate(string product){return true;}),"locked renderer accepted");
+        });
+        Test("vietnamese-theme-pages-available", delegate { foreach(string id in new[] {"meadow","beach","beach-turquoise","lake","sky","ocean","rainforest","mocchau","tet-sakura","cat-hill","stadium","aquarium","commute","summer-porch","cats","boxing-ring"}) Assert(Themes.Allowed(pageDir,id,null),"theme unavailable: "+id); });
+        Test("vietnamese-language-and-tray", delegate { Assert(I18n.FromCulture(new System.Globalization.CultureInfo("vi-VN"))=="vi","culture mapping"); I18n.Load(pageDir,"vi"); Assert(I18n.Code=="vi"&&I18n.T("traySettings").Contains("Cài đặt"),"Vietnamese tray missing"); });
         Test("theme-ready-has-real-page", delegate { Assert(Themes.Allowed(pageDir,"beach",null)&&Themes.Allowed(pageDir,"meadow",null),"ready missing"); });
         Test("theme-unknown-rejected", delegate {Assert(Themes.PageFor(pageDir,"../../anything")==null,"unknown page");});
         Test("parameter-range-validation", delegate {Assert(Themes.ValidParameter(pageDir,"beach","sigma",85)&&!Themes.ValidParameter(pageDir,"beach","sigma",-1)&&!Themes.ValidParameter(pageDir,"beach","sigma",10000),"range validation");});

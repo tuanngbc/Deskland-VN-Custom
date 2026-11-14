@@ -123,7 +123,12 @@
     "pauseAll": "暂停全部",
     "resumeAll": "继续全部",
     "pauseMonitor": "暂停此屏",
-    "resumeMonitor": "继续此屏"
+    "resumeMonitor": "继续此屏",
+    "status_ready": "就绪",
+    "status_loading": "加载中",
+    "status_initializing": "正在初始化",
+    "status_failed": "失败",
+    "status_preview": "预览"
   },
   "host": {
     "traySettings": "设置…",

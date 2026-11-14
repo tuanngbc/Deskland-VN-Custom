@@ -2,3 +2,14 @@ Copyright (C) 2026 Deskland authors.
 
 Project source code and included theme assets are licensed under GNU GPL version 3.
 Third-party dependencies retain their own licenses. See LICENSE, THIRD_PARTY_NOTICES.md and TRADEMARKS.md.
+
+Modified on 2026-11-14: Vietnamese theme port for Deskland Preview.
+Browser themes, theme metadata, selected supporting scripts, new thumbnails
+and Vietnamese translations adapted from the user-supplied Deskland-VN 1.0.2
+community distribution (https://github.com/nhhoang188/Deskland-VN), itself a
+modified version of Deskland. Its original modification notice is retained at
+third_party/deskland-vn/NOTICE and imported source hashes at IMPORT.json there.
+This port keeps the Preview C# host and multi-monitor engine; it does not bundle
+the reference Rust executable or its Windows lock-screen implementation.
+Changes include the shared world clock, renderer pacing, native host bridge,
+paused-layout updates, Vietnamese multi-monitor controls and packaging.

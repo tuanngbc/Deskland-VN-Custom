@@ -76,6 +76,106 @@ static class NativeAcceptance
         await instance.CapturePng(Path.Combine(output, name + "-renderer.png"));
     }
 
+    // Port acceptance deliberately uses each page's actual canvas diagnostics,
+    // including the 2D themes; a WebView navigation alone is not a passing test.
+    static async Task ThemePort(HostContext host)
+    {
+        bool packageSmoke=Environment.GetEnvironmentVariable("DESKLAND_TEST_STAGE")=="package";
+        host.OnSettingsMessage("{\"t\":\"lang\",\"v\":\"vi\"}");
+        await UntilScript(host.SettingsWindow,"document.documentElement.lang==='vi' && document.querySelector('#monitorTitle').textContent.includes('Màn hình')","Vietnamese UI");
+        Check("Vietnamese Settings and tray",I18n.Code=="vi"&&I18n.T("traySettings").Contains("Cài đặt"),I18n.T("traySettings"));
+        await UntilScript(host.SettingsWindow,"document.querySelectorAll('#themes button').length===16 && [...document.querySelectorAll('#themes img')].length===13 && [...document.querySelectorAll('#themes img')].every(i=>i.complete&&i.naturalWidth>0)","theme thumbnails");
+        Check("16 theme cards; 13 decoded images and 3 supplied CSS thumbnails",true,true);
+        string pageDir=Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","..","prototype"));
+        var reg=(Dictionary<string,object>)Json.Parse(File.ReadAllText(Path.Combine(pageDir,"themes.json")));
+        foreach(string mode in new[] {"mirror","independent","panorama"})
+        {
+            host.OnSettingsMessage(Json.Stringify(Json.Obj("t","mode","v",mode)));
+            await Until(delegate { return Ready(host); },"port mode ready",30000);
+            foreach(object item in (object[])reg["themes"])
+            {
+                var th=(Dictionary<string,object>)item; string id=(string)th["id"];
+                if(packageSmoke && id!="stadium" && id!="aquarium") continue;
+                foreach(WallpaperForm f in host.Instances)
+                    host.OnSettingsMessage(Json.Stringify(Json.Obj("t","theme","id",id,"monitor",f.MonitorId)));
+                await Until(delegate { return Ready(host); },mode+" "+id,45000);
+                var expected=new Dictionary<string,object>();
+                foreach(object group in (object[])th["groups"])
+                    foreach(object param in (object[])((Dictionary<string,object>)group)["params"])
+                    { var p=(Dictionary<string,object>)param; expected[(string)p["key"]]=p["default"]; }
+                WallpaperForm[] instances=host.Instances;
+                var start=new double[instances.Length];
+                for(int i=0;i<instances.Length;i++)
+                {
+                    start[i]=Convert.ToDouble(await Evaluate(instances[i],"DeskWorld.diagnostics.draws"));
+                }
+                var sample=Stopwatch.StartNew(); await Task.Delay(1000);
+                double seconds=sample.Elapsed.TotalSeconds;
+                var details=new List<object>(); bool ok=true;
+                for(int i=0;i<instances.Length;i++)
+                {
+                    var metric=(Dictionary<string,object>)await Evaluate(instances[i],"desklandDiagnostics()");
+                    double rate=(Convert.ToDouble(metric["draws"])-start[i])/seconds;
+                    bool defaultsOk=Convert.ToBoolean(await Evaluate(instances[i],"Object.entries("+Json.Stringify(expected)+").every(([k,v])=>P[k]===v)"));
+                    bool valid=rate>0&&((object[])metric["errors"]).Length==0&&Convert.ToBoolean(metric["iconsSeen"])&&(string)metric["renderer"]!="failed"&&defaultsOk;
+                    ok &= valid;
+                    details.Add(Json.Obj("monitor",instances[i].MonitorId,"fpsSample",rate,"defaultsMatch",defaultsOk,"diagnostics",metric));
+                }
+                string name=mode+"-"+id;
+                Check(name+" native renderer",ok,details);
+                foreach(WallpaperForm f in instances) await f.CapturePng(Path.Combine(output,name+"-"+Array.IndexOf(instances,f)+".png"));
+                // Pause + synthetic icon update verifies layout repaint without
+                // moving any of the user's actual desktop icons.
+                host.OnSettingsMessage("{\"t\":\"pause\",\"v\":true}");
+                WallpaperForm first=instances[0]; await Task.Delay(150);
+                double frozen=Convert.ToDouble(await Evaluate(first,"DeskWorld.diagnostics.draws"));
+                await Task.Delay(200);
+                bool stopped=Convert.ToDouble(await Evaluate(first,"DeskWorld.diagnostics.draws"))==frozen;
+                string realIcons=first.LastIcons;
+                first.Post("{\"t\":\"icons\",\"vis\":true,\"r\":[[300,250,376,346]]}");
+                await Task.Delay(120);
+                bool updated=Convert.ToInt32(await Evaluate(first,"icons.length"))==1&&Convert.ToDouble(await Evaluate(first,"DeskWorld.diagnostics.draws"))>frozen;
+                if(realIcons.Length>0) first.Post(realIcons);
+                Check(name+" pause and icon update",stopped&&updated,true);
+                var imageDone=new TaskCompletionSource<bool>(); string imageError=null;
+                first.RequestSnapshot(delegate(string thumb,string png,string err) { imageError=err; imageDone.TrySetResult(err==null&&png!=null&&png.StartsWith("data:image/png;base64,")&&png.Length>500); });
+                Check(name+" image export",await imageDone.Task,imageError??"PNG received");
+                if(mode=="mirror")
+                {
+                    var maximum=new Dictionary<string,object>();
+                    foreach(object group in (object[])th["groups"])
+                        foreach(object param in (object[])((Dictionary<string,object>)group)["params"])
+                        {
+                            var p=(Dictionary<string,object>)param;
+                            maximum[(string)p["key"]]=p.ContainsKey("options") ? ((object[])p["options"]).Length-1 : p["max"];
+                        }
+                    foreach(var p in maximum) host.OnSettingsMessage(Json.Stringify(Json.Obj("t","set","monitor",first.MonitorId,"theme",id,"key",p.Key,"value",p.Value)));
+                    await Task.Delay(200);
+                    Check(id+" controls reach renderer",Convert.ToBoolean(await Evaluate(first,"Object.entries("+Json.Stringify(maximum)+").every(([k,v])=>P[k]===v)")),maximum);
+                    host.OnSettingsMessage(Json.Stringify(Json.Obj("t","reset","theme",id)));
+                }
+                host.OnSettingsMessage("{\"t\":\"pause\",\"v\":false}");
+            }
+            Check(mode+" native window count and layering",host.Instances.Length==(mode=="panorama"?1:host.Connected.Length)&&ZOrderCoordinator.Verify(),host.Instances.Length);
+        }
+        foreach(string id in packageSmoke ? new string[0] : new[] {"stadium","cats","aquarium"})
+        {
+            host.OnSettingsMessage(Json.Stringify(Json.Obj("t","theme","id",id)));
+            await Until(delegate { return Ready(host); },"video theme ready",30000);
+            var videoDone=new TaskCompletionSource<bool>(); string videoError=null;
+            host.Instances[0].RequestRecording(delegate(string mime,string poster,string data,string err) { videoError=err; videoDone.TrySetResult(err==null&&mime!=null&&data!=null&&data.Length>500); });
+            Check(id+" animation export",await videoDone.Task,videoError??"Video received");
+        }
+        host.OnSettingsMessage("{\"t\":\"apply\"}");
+        Settings.Load();
+        Check("Vietnamese language and theme persist",Settings.Lang=="vi"&&Settings.Theme=="aquarium",Settings.Theme);
+        // Direct export callbacks bypass the UI's shareResult handler. Clear
+        // progress for the screenshot without writing the system clipboard.
+        await host.SettingsWindow.Evaluate("shareBusy(null); renderMonitors()");
+        Check("Vietnamese share labels",Json.Parse(await host.SettingsWindow.Evaluate("document.querySelector('#shareText').textContent==='Chia sẻ ảnh' && document.querySelector('#shareVideoText').textContent==='Chia sẻ video'")).Equals(true),true);
+        await host.SettingsWindow.CapturePng(Path.Combine(output,"settings-vietnamese.png"));
+    }
+
     static async Task PerformanceSample(HostContext host, string name)
     {
         WallpaperForm[] instances = host.Instances;
@@ -153,6 +253,7 @@ static class NativeAcceptance
             foreach (MonitorInfo m in host.Connected) connected.Add(Json.Obj("id", m.Id, "bounds", m.Bounds.ToString(), "dpi", m.DpiX, "primary", m.Primary));
             File.WriteAllText(Path.Combine(output, "environment.json"), Json.Stringify(Json.Obj("windows", Environment.OSVersion.ToString(), "monitors", connected)), System.Text.Encoding.UTF8);
             Check("settings DOM", Json.Parse(await host.SettingsWindow.Evaluate("!!document.querySelector('#monitorMap button') && document.documentElement.classList.contains('ready')")).Equals(true), connected);
+            if(Environment.GetEnvironmentVariable("DESKLAND_TEST_STAGE")=="themes" || Environment.GetEnvironmentVariable("DESKLAND_TEST_STAGE")=="package") { await ThemePort(host); return; }
             if(Environment.GetEnvironmentVariable("DESKLAND_TEST_STAGE")=="restart")
             {
                 Check("settings persisted across process restart",Settings.Mode==WallpaperMode.Panorama&&Settings.Theme=="meadow",Settings.Mode.ToString());

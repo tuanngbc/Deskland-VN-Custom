@@ -1,0 +1,243 @@
+{
+  "files": [
+    {
+      "sha256": "e45cba0504a951537adb5e12451416422a36af78602d83ce5e94414acd4a9b2a",
+      "path": "prototype/aquarium.frag"
+    },
+    {
+      "sha256": "d1fac40a0350768d0bba913bdb99e2a20a76d82bc686f4f4b02c4b75f983dd09",
+      "path": "prototype/aquarium.html"
+    },
+    {
+      "sha256": "a2626682f112b0406a49c0dd7444ddd1f859705307a9f9b20792e4588400665f",
+      "path": "prototype/beach-palms.js"
+    },
+    {
+      "sha256": "d6bce66f6d616ce3111b80d4e1b2428034ac3ca269fb8a84ba2403873730a813",
+      "path": "prototype/boxing-ring.frag"
+    },
+    {
+      "sha256": "5bc9461b0372bb2d7e91d6d7f1b9adaf6560eae1cb6a3e2221e73be4875f5d73",
+      "path": "prototype/boxing-ring.html"
+    },
+    {
+      "sha256": "5c6b3bef4ea544ab2069fe23ba5876ba043142b97a80262025dbfe8a575134b9",
+      "path": "prototype/cat-hill.html"
+    },
+    {
+      "sha256": "b144f8133a62ebb82316cff0d00a02b0fd77236d498d34353b0e64055f8768a5",
+      "path": "prototype/cats-behavior.js"
+    },
+    {
+      "sha256": "cba6f7b658d2ca29b473382abe83e8eb5e3293098a9bced6ffd14246faf279dc",
+      "path": "prototype/cats-draw.js"
+    },
+    {
+      "sha256": "a585e792cbef26d27e33b2da0272141ac322381ea72bdfc9ca22168a14c13554",
+      "path": "prototype/cats-interact.js"
+    },
+    {
+      "sha256": "2815e9ad5124edc5bf99dd51772fbb42d5ad8656c8494889f61e7dcc24744de2",
+      "path": "prototype/cats-meadow.js"
+    },
+    {
+      "sha256": "aa5804ecaa6e2cb43e044623854a0bc375e53ca42572fcd7bc3f2da3fa69a5b9",
+      "path": "prototype/cats-nature.js"
+    },
+    {
+      "sha256": "1b01b3a5715a40b8b00d9fd5ef88f54d9e62fddb76223de9a1485f667d55d04f",
+      "path": "prototype/cats-poses.js"
+    },
+    {
+      "sha256": "c050450ff4fccf75a9aadf950efd3a5c3709fdd91118b5d9d318c1fefcfc65ed",
+      "path": "prototype/cats-scenery.js"
+    },
+    {
+      "sha256": "ca15bb6026e8654e5e4fc3656c67650b602daeb3724a29903e317555310580f6",
+      "path": "prototype/cats-wind.js"
+    },
+    {
+      "sha256": "b3fd55fe59e567d6648615d3fc6bed04e9d1f361faada10d10297461fd7fc778",
+      "path": "prototype/cats.html"
+    },
+    {
+      "sha256": "f36ed3df6037e56a956a3b4db2748f10768667360a10bf8f713e69ed41e07539",
+      "path": "prototype/commute.frag"
+    },
+    {
+      "sha256": "ba6c15da8675c84f654e9a2037f136f17fc571835cbd01c74b4d2b1af35052d5",
+      "path": "prototype/commute.html"
+    },
+    {
+      "sha256": "47b7449f79bd924c43ce5558ea61e19f0e8d0d2952bf5fb8c2c73e0cbb4035de",
+      "path": "prototype/flat.html"
+    },
+    {
+      "sha256": "2a24859535334ff93a1f9571a2d08ed778a01445248ded148f028dba63d9eee4",
+      "path": "prototype/lake.html"
+    },
+    {
+      "sha256": "a997c8121485bdddd5479e9db29934cb2e4c5f24d51a50e4b9dad6ee9c45723c",
+      "path": "prototype/maldives.html"
+    },
+    {
+      "sha256": "ea83902fc8ce1139d8a8f381a4675019cb76dea77506b0f9959c1ad44dfced35",
+      "path": "prototype/meadow-boy.js"
+    },
+    {
+      "sha256": "b3b77da0f15e308c0769caeb2d61e78038f588f24b642c30f8e7adacd9774b69",
+      "path": "prototype/meadow-cat.js"
+    },
+    {
+      "sha256": "2940265ad8df8e470ee0ab298909369aa6387df884b06848b88f79e6ecf0cfaf",
+      "path": "prototype/meadow.html"
+    },
+    {
+      "sha256": "48d1a64bb22dd6b6ad9552a1b11793c587ae1795876d2ac53d1319d2e8f28307",
+      "path": "prototype/mocchau.html"
+    },
+    {
+      "sha256": "c35a8cbb26174b79dd6b67829fd6eade79c4fe1a8ce074ab8e3a11cfc56e7a39",
+      "path": "prototype/ocean.html"
+    },
+    {
+      "sha256": "d0998a6ab81e22b323fc6e60fa78cbce1d3f350148e502103aebdcf16a964c82",
+      "path": "prototype/rainforest.html"
+    },
+    {
+      "sha256": "67b4f60a7ede93967f182f10b528d4e47f3039af0818e28bf328687e6018294d",
+      "path": "prototype/sky.html"
+    },
+    {
+      "sha256": "6c385705e5fe76c95339fa9a65e9aa743df6da3d4fc234c78ddea7eeeca9bddc",
+      "path": "prototype/stadium.html"
+    },
+    {
+      "sha256": "7f4928586f333615eea014aec99a55dd814e73d132e4c6535fcdb293161713a0",
+      "path": "prototype/summer-porch.frag"
+    },
+    {
+      "sha256": "e01066c873084390dbda3d67839cd98ea99cff9e17eb2dcf33be8c2f36b65909",
+      "path": "prototype/summer-porch.html"
+    },
+    {
+      "sha256": "c07f554ceb0ddb369f585435a16962846a9188a800712d0e7b2930a97919b65f",
+      "path": "prototype/tet-sakura.html"
+    },
+    {
+      "sha256": "f31ed427164169006b16b2b2bea568645f906e9ee4ffd94a4eb596e4246ce1b2",
+      "path": "prototype/themes.json"
+    },
+    {
+      "sha256": "a8d3b49cac9a1acecbc0e723977589fa129f7e2269d40685fc8a3d55465b4b61",
+      "path": "prototype/thumbs-data.js"
+    },
+    {
+      "sha256": "527cf4d2a9c21359b4340b6c70a8a9d25b6c708bb9bdf4556c5392325b31a12e",
+      "path": "prototype/assets/beach-coconut-palm-airy.png"
+    },
+    {
+      "sha256": "7172059c8458feba4f9b9084d521e9d84154091df2ab536d2e16c4a654ecb627",
+      "path": "prototype/assets/beach-coconut-palm-arch.png"
+    },
+    {
+      "sha256": "f15fccb574e7e1e1026f8a08216f56eda00489cf824ceb0960c66fbe6ac0e076",
+      "path": "prototype/assets/beach-coconut-palm-curved.png"
+    },
+    {
+      "sha256": "9c103d3b3fe5beb85ebb4c0c17fd0c6d3330bf56a3eb0c45db9f6534b754a5bf",
+      "path": "prototype/assets/beach-coconut-palm-v2.png"
+    },
+    {
+      "sha256": "6cbebd49e7204800827a2ea798e89f9a203e7ee09281978c07ffe88943024c96",
+      "path": "prototype/assets/beach-coconut-palm-windswept.png"
+    },
+    {
+      "sha256": "e554b2583c1c29f88737362fd748132e48ce518654a49284cd66d499de3b152b",
+      "path": "prototype/assets/meadow-black-kitten.png"
+    },
+    {
+      "sha256": "ac7c4290ebcdf465768d79ab66d98f1fa7c8e0ddaf83c5787d6830ee34d8d73e",
+      "path": "prototype/assets/meadow-kite-boy-diagonal-run.png"
+    },
+    {
+      "sha256": "bb6194fcdf3320ea4836a841ca37a8327ccd26a4eb94e071e8f4c811bbeff12c",
+      "path": "prototype/assets/meadow-kite-boy-level-face.png"
+    },
+    {
+      "sha256": "74bf41dae2143fb1e1a37c70f7777c8902dfa9c179260f70497bf72fed3a59ee",
+      "path": "prototype/i18n/en.json"
+    },
+    {
+      "sha256": "5bca1c8755a1664dd07b3fe8e8c6c8b4b23387a334b032368f0743f7c09eeea4",
+      "path": "prototype/i18n/vi.json"
+    },
+    {
+      "sha256": "11e829347a69529df73c2b21ef8a2d6a34c2ca9284851cf9e55883d7ef52b8a9",
+      "path": "prototype/thumbs/aquarium.jpg"
+    },
+    {
+      "sha256": "017578bc5c8701fe25258b29130534c3d6c826bf0bdac407d627b6a83459058e",
+      "path": "prototype/thumbs/beach.webp"
+    },
+    {
+      "sha256": "ad83b744173723367025345bc630269fdff3ca14739a5ecbac646377a5d9cb0c",
+      "path": "prototype/thumbs/boxing-ring.jpg"
+    },
+    {
+      "sha256": "636efd495f558f72fe6dfc4257fe375595b924c74b62bec6ca70bb38b173ec4c",
+      "path": "prototype/thumbs/cat-hill.jpg"
+    },
+    {
+      "sha256": "fc8ca3e3da67c02eb573f36af7ec5c2e421780b7d7915b891d66ef9a0d0ea569",
+      "path": "prototype/thumbs/cats.jpg"
+    },
+    {
+      "sha256": "0c4d10546d01347775659b8ca71d58b267ae3e1f244d88dd08379888eb5dc257",
+      "path": "prototype/thumbs/commute.jpg"
+    },
+    {
+      "sha256": "e22cfe9d6aa709c4605759d3d64a230806dad468d0c30d0ec55e3b60d7651637",
+      "path": "prototype/thumbs/lake.webp"
+    },
+    {
+      "sha256": "4ebfbc8e82c91376b9d52103961a466bde38ad2faeb19deff8baeb88e9b2f476",
+      "path": "prototype/thumbs/maldives.webp"
+    },
+    {
+      "sha256": "5d36b1f2d4d59f6215298477d915a3b2e01a92c4f963be8ca7a4bbfa6bfea84d",
+      "path": "prototype/thumbs/meadow.webp"
+    },
+    {
+      "sha256": "a503d4f275ab1bf3ad9d34d1ef84deefd95aff16e9ace0cfdf50125f208b3ffb",
+      "path": "prototype/thumbs/ocean.webp"
+    },
+    {
+      "sha256": "d706a0326d80230ec1bca68b86fa0129493eaaf73d7823acdb9075fce86654cc",
+      "path": "prototype/thumbs/sky.webp"
+    },
+    {
+      "sha256": "ec35cee68a96f2599afa7b6fabcebf7a2971653cfad699048d7bc549674bcefa",
+      "path": "prototype/thumbs/stadium.jpg"
+    },
+    {
+      "sha256": "a99f668b85c07d5260a105860a017ed40e106b1e944dabcaea5e42ad070882c5",
+      "path": "prototype/thumbs/summer-porch.jpg"
+    }
+  ],
+  "source": "Deskland-VN v1.0.2 (user-supplied archive)",
+  "fileHashMeaning": "SHA-256 of original archive files before the adaptations listed below",
+  "archiveSha256": "8c0ac3a21421196dc2537b7d463dd46323d40ea3ae615c719adff9bb59602d7d",
+  "upstream": "https://github.com/BLEZZ0102/Deskland",
+  "archive": "Deskland-VN-v1.0.2-win-x64.zip",
+  "repository": "https://github.com/nhhoang188/Deskland-VN",
+  "importedOn": "2026-11-14",
+  "modifications": [
+    "Preserve C# host, monitor modes and Preview identity",
+    "Shared animation clock and 30 fps pacing",
+    "Vietnamese UI and tray integration",
+    "Paused geometry invalidation and native acceptance",
+    "Retain original Preview sharing implementation; do not import lock-screen controls"
+  ],
+  "license": "GPL-3.0"
+}

@@ -42,25 +42,35 @@ $WebView2Bootstrapper = [IO.Path]::GetFullPath($WebView2Bootstrapper)
 # A fixed source list prevents other editions or private working files entering this package.
 $sources = @('.gitattributes', '.gitignore', 'AGENTS.md', 'LICENSE', 'NOTICE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'TRADEMARKS.md',
     'host\DesktopHost.cs', 'host\MultiMonitor.cs', 'host\Themes.cs', 'host\NativeAcceptance.cs', 'host\RegressionTests.cs', 'host\test.ps1', 'tests\renderer-contract.cjs', 'docs\MULTI_MONITOR.md', 'docs\TEST_REPORT.md', 'host\DesklandPreview.ico', 'host\README.md', 'host\app.manifest', 'host\build.ps1', 'host\inspect.ps1',
-    'tools\build-installer.ps1', 'tools\installer.nsi', 'tools\version.json')
-$themeFiles = @('world-contract.js', 'flat.html', 'meadow.html', 'settings.html', 'thumbs-data.js', 'share.js', 'serve.mjs', 'themes.json', 'beach-palms.js', 'meadow-boy.js', 'meadow-cat.js',
-    'i18n\en.json', 'i18n\zh-CN.json', 'thumbs\beach.webp', 'thumbs\meadow.webp',
+    'tools\build-installer.ps1', 'tools\installer.nsi', 'tools\version.json', 'tools\adapt-vn-themes.cjs',
+    'docs\VIETNAMESE_EDITION.md', 'third_party\deskland-vn\NOTICE', 'third_party\deskland-vn\IMPORT.json')
+$themeFiles = @('world-contract.js', 'theme-runtime.js', 'flat.html', 'meadow.html', 'settings.html', 'thumbs-data.js', 'share.js', 'serve.mjs', 'themes.json', 'beach-palms.js', 'meadow-boy.js', 'meadow-cat.js',
+    'maldives.html', 'lake.html', 'sky.html', 'ocean.html', 'rainforest.html', 'mocchau.html', 'tet-sakura.html', 'cat-hill.html', 'stadium.html',
+    'aquarium.html', 'aquarium.frag', 'commute.html', 'commute.frag', 'summer-porch.html', 'summer-porch.frag', 'cats.html', 'boxing-ring.html', 'boxing-ring.frag',
+    'cats-scenery.js', 'cats-meadow.js', 'cats-nature.js', 'cats-wind.js', 'cats-draw.js', 'cats-poses.js', 'cats-behavior.js', 'cats-interact.js',
+    'i18n\en.json', 'i18n\vi.json', 'i18n\zh-CN.json', 'thumbs\beach.webp', 'thumbs\meadow.webp',
     'assets\beach-coconut-palm-v2.png', 'assets\beach-coconut-palm-curved.png', 'assets\beach-coconut-palm-airy.png', 'assets\beach-coconut-palm-windswept.png', 'assets\beach-coconut-palm-arch.png',
     'assets\meadow-black-kitten.png', 'assets\meadow-kite-boy-level-face.png', 'assets\meadow-kite-boy-diagonal-run.png')
 $themes = (Get-Content -LiteralPath (Join-Path $root 'prototype\themes.json') -Raw -Encoding UTF8 | ConvertFrom-Json).themes
 $ready = @($themes | Where-Object { $_.status -eq 'ready' })
 $locked = @($themes | Where-Object { $_.locked -eq $true })
-if ($themes.Count -ne 13 -or $ready.Count -ne 2 -or $locked.Count -ne 11 -or (($ready.id | Sort-Object) -join ',' -ne 'beach,meadow')) {
-    throw 'Expected two usable themes and eleven locked preview cards'
+if ($themes.Count -ne 16 -or $ready.Count -ne 16 -or $locked.Count -ne 0) {
+    throw 'Expected sixteen ready themes for the Vietnamese edition'
+}
+foreach ($theme in $ready) {
+    if ($themeFiles -notcontains $theme.page -or -not (Test-Path -LiteralPath (Join-Path $root ('prototype\' + $theme.page)))) { throw 'Unpackaged theme: ' + $theme.id }
 }
 foreach ($theme in $locked) {
     if ($theme.page -or $theme.groups) { throw 'Locked themes must not contain page source or settings' }
 }
 foreach ($theme in $themes) {
     $match = [regex]::Match([string]$theme.thumb, 'url\(thumbs/([^\)?]+)')
-    if (-not $match.Success) { throw 'Missing thumbnail URL: ' + $theme.id }
+    if (-not $match.Success) {
+        if ($theme.id -in @('rainforest','mocchau','tet-sakura') -and $theme.thumb -match 'gradient\(') { continue }
+        throw 'Missing thumbnail URL: ' + $theme.id
+    }
     $thumbName = [uri]::UnescapeDataString($match.Groups[1].Value)
-    if ($thumbName -notmatch '^[^\\/]+\.webp$') { throw 'Unexpected thumbnail path: ' + $thumbName }
+    if ($thumbName -notmatch '^[^\\/]+\.(webp|jpg)$') { throw 'Unexpected thumbnail path: ' + $thumbName }
     $thumbFile = 'thumbs\' + $thumbName
     if ($themeFiles -notcontains $thumbFile) { $themeFiles += $thumbFile }
 }
@@ -75,7 +85,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Compression.ZipFile]::CreateFromDirectory($sourceStage, (Join-Path $payload 'Deskland-source.zip'))
 # Only program data is installed. The accompanying ZIP contains the exact corresponding source.
 $runtimeFiles = @('host\bin\Deskland.exe', 'host\bin\DesklandPreview.ico', 'host\bin\Microsoft.Web.WebView2.Core.dll', 'host\bin\Microsoft.Web.WebView2.WinForms.dll', 'host\bin\WebView2Loader.dll')
-$installFiles = @('LICENSE', 'NOTICE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'TRADEMARKS.md', 'docs\MULTI_MONITOR.md', 'docs\TEST_REPORT.md') + @($themeFiles | Where-Object { $_ -ne 'serve.mjs' } | ForEach-Object { 'prototype\' + $_ }) + $runtimeFiles
+$installFiles = @('LICENSE', 'NOTICE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'TRADEMARKS.md', 'docs\MULTI_MONITOR.md', 'docs\TEST_REPORT.md', 'docs\VIETNAMESE_EDITION.md', 'third_party\deskland-vn\NOTICE', 'third_party\deskland-vn\IMPORT.json') + @($themeFiles | Where-Object { $_ -ne 'serve.mjs' } | ForEach-Object { 'prototype\' + $_ }) + $runtimeFiles
 foreach ($file in $installFiles) {
     $target = Join-Path $payload $file
     New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
@@ -108,3 +118,19 @@ $manifest = @($installFiles | ForEach-Object { @{ path = $_.Replace('\', '/'); s
 [IO.File]::WriteAllText(($output + '.manifest.json'), ($manifest | ConvertTo-Json -Depth 4), $utf8)
 Write-Host "Installer: $output"
 Write-Host "SHA256: $hash"
+
+# Portable handoff uses the identical runtime and corresponding source archive.
+$portableStage = Join-Path $payload 'portable-stage'
+foreach ($file in $installFiles) {
+    $target = Join-Path $portableStage $file
+    New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $payload $file) -Destination $target
+}
+[IO.File]::WriteAllText((Join-Path $portableStage 'Mo-Deskland.cmd'), "@echo off`r`nstart `"`" `"%~dp0host\bin\Deskland.exe`"`r`n", [Text.Encoding]::ASCII)
+$portable = Join-Path $dist "Deskland-Preview-$version-vi-win-x64.zip"
+if (Test-Path -LiteralPath $portable) { Remove-Item -LiteralPath $portable }
+[IO.Compression.ZipFile]::CreateFromDirectory($portableStage, $portable)
+$portableHash = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash
+[IO.File]::WriteAllText(($portable + '.sha256'), "$portableHash  $([IO.Path]::GetFileName($portable))`r`n", $utf8)
+Write-Host "Portable: $portable"
+Write-Host "SHA256: $portableHash"
