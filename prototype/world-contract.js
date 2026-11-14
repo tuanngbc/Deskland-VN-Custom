@@ -62,7 +62,14 @@
       wind = 0.56; gust = 0.22; cloudiness = 0.94; rain = 0.72;
     } else if (opts.preset === 'storm') {
       wind = 0.84; gust = 0.82; cloudiness = 1.0; rain = 1.0; storm = 1.0;
-      lightning = 0.35 + 0.25 * Math.sin(Date.now() / 1000 * 2.4 + dayNoise * 20);
+      // Short, irregular flashes instead of a continuous sine-wave glow.
+      // The cycle is deterministic for a given day, while the 100 ms storm
+      // refresh below keeps the pulse visible to the 20–30 fps overlay.
+      const stormSeconds = date.getTime() / 1000 + dayNoise * 37.0;
+      const cycle = ((stormSeconds % 11.5) + 11.5) % 11.5;
+      const firstFlash = Math.exp(-Math.pow((cycle - 1.15) / 0.095, 2));
+      const secondFlash = dayNoise > 0.34 ? 0.72 * Math.exp(-Math.pow((cycle - 1.36) / 0.065, 2)) : 0;
+      lightning = clamp01(Math.max(firstFlash, secondFlash));
     } else if (opts.preset === 'snow') {
       wind = 0.34; gust = 0.16; cloudiness = 0.82; snow = 0.86;
     } else {
@@ -100,9 +107,10 @@
   }
   function currentEnvironment() {
     const now = Date.now();
-    // Refresh at most once per second. Rendering remains free to ask every
-    // frame while all date and noise work stays off the hot path.
-    if (!environmentCache || now < environmentStamp || now - environmentStamp >= 1000) {
+    // Normal scenes refresh once per second. Storms refresh at 100 ms so a
+    // short lightning pulse is not quantized into a slow, artificial blink.
+    const refreshMs = environmentCache?.weatherPreset === 'storm' ? 100 : 1000;
+    if (!environmentCache || now < environmentStamp || now - environmentStamp >= refreshMs) {
       environmentCache = environmentAt(now);
       environmentStamp = now;
       if (root.dispatchEvent && typeof root.CustomEvent === 'function') {

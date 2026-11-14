@@ -20,6 +20,7 @@
     weatherCtx.setTransform(weatherDpr, 0, 0, weatherDpr, 0, 0);
   };
   const noise = n => { const x = Math.sin(n * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x); };
+  const wrap = (v, size) => ((v % size) + size) % size;
   const paintWeather = now => {
     requestAnimationFrame(paintWeather);
     if (now - weatherLast < 50) return; // cap the overlay around 20fps
@@ -29,15 +30,33 @@
     g.clearRect(0, 0, weatherW, weatherH);
     if (!e.weatherEnabled) return;
     const time = now * 0.001;
+    const windRad = (Number(e.windDirection || 110) * Math.PI) / 180;
+    // Keep the storm tint subtle: it should make the scene feel overcast,
+    // while the theme artwork and desktop icons remain readable underneath.
+    if (e.storm > 0.5) {
+      g.fillStyle = `rgba(26,42,64,${0.035 + e.cloudiness * 0.045})`;
+      g.fillRect(0, 0, weatherW, weatherH);
+    }
     if (e.rain > 0.01) {
-      const count = Math.min(150, Math.round(42 + 110 * e.rain + 35 * e.storm));
-      g.save(); g.lineCap = 'round'; g.lineWidth = e.storm > 0.5 ? 1.4 : 1;
-      g.strokeStyle = e.storm > 0.5 ? 'rgba(190,215,245,.45)' : 'rgba(205,230,250,.30)';
+      const count = Math.min(170, Math.round(46 + 96 * e.rain + 28 * e.storm));
+      const drift = Math.sin(windRad) * (20 + 125 * e.wind);
+      const fall = 170 + 150 * e.rain + 115 * e.storm;
+      const rainSpan = Math.max(weatherW, weatherH) + 120;
+      g.save(); g.lineCap = 'round';
       for (let i = 0; i < count; i++) {
-        const x = (noise(i + 7.1) * weatherW + time * (55 + 75 * e.wind) + i * 13) % (weatherW + 40) - 20;
-        const y = (noise(i + 19.7) * weatherH + time * (240 + 180 * e.wind) + i * 17) % (weatherH + 80) - 40;
-        const len = 7 + 8 * e.rain + 7 * e.storm;
-        g.beginPath(); g.moveTo(x, y); g.lineTo(x - 3 - e.wind * 4, y + len); g.stroke();
+        // A stable depth value gives near drops more length, brightness and
+        // width, which removes the flat “same brush” appearance.
+        const depth = noise(i * 3.17 + 203.5);
+        const x = wrap(noise(i + 7.1) * rainSpan + time * drift + i * 13, rainSpan) - 60;
+        const y = wrap(noise(i + 19.7) * rainSpan + time * fall + i * 17, rainSpan) - 60;
+        const len = (6 + 10 * e.rain + 14 * e.storm) * (0.55 + depth * 0.95);
+        const dx = (drift / fall) * len * (0.55 + depth * 0.45);
+        const alpha = (0.08 + depth * 0.24) * (0.72 + e.storm * 0.35);
+        g.lineWidth = 0.45 + depth * (e.storm > 0.5 ? 1.15 : 0.8);
+        g.strokeStyle = e.storm > 0.5
+          ? `rgba(190,215,245,${alpha.toFixed(3)})`
+          : `rgba(205,230,250,${(alpha * 0.78).toFixed(3)})`;
+        g.beginPath(); g.moveTo(x, y); g.lineTo(x + dx, y + len); g.stroke();
       }
       g.restore();
     }
@@ -52,9 +71,33 @@
       }
       g.restore();
     }
-    if (e.storm > 0.5 && e.lightning > 0.56) {
-      g.fillStyle = `rgba(220,235,255,${Math.min(.18, (e.lightning - .56) * .8)})`;
+    if (e.storm > 0.5 && e.lightning > 0.01) {
+      const pulse = e.lightning;
+      // A small local bolt sells the flash better than whitening the whole
+      // screen. The scene-wide lift stays restrained so it reads as light
+      // reflected through clouds rather than a white overlay.
+      g.save();
+      g.fillStyle = `rgba(220,235,255,${(0.018 + pulse * 0.085).toFixed(3)})`;
       g.fillRect(0, 0, weatherW, weatherH);
+      if (pulse > 0.18) {
+        const bx = weatherW * (0.18 + noise((e.day || 0) * 0.31 + 34.7) * 0.64);
+        const top = weatherH * (0.05 + noise((e.day || 0) * 0.17 + 16.2) * 0.12);
+        const bottom = weatherH * (0.46 + noise((e.day || 0) * 0.21 + 91.4) * 0.2);
+        const segments = 5;
+        g.beginPath(); g.moveTo(bx, top);
+        for (let j = 1; j <= segments; j++) {
+          const y = top + (bottom - top) * j / segments;
+          const x = bx + (noise((e.day || 0) * 0.73 + j * 9.1) - 0.5) * weatherW * 0.16;
+          g.lineTo(x, y);
+        }
+        g.lineJoin = 'round'; g.lineCap = 'round';
+        g.shadowColor = `rgba(210,230,255,${(0.42 * pulse).toFixed(3)})`;
+        g.shadowBlur = 12;
+        g.strokeStyle = `rgba(235,245,255,${(0.65 * pulse).toFixed(3)})`;
+        g.lineWidth = 1.1 + pulse * 1.3;
+        g.stroke();
+      }
+      g.restore();
     }
   };
   resizeWeather();

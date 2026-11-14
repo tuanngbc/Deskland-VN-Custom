@@ -95,13 +95,19 @@
   .side { display: flex; flex-direction: column; gap: 18px; min-height: 0; padding: 22px; background: var(--panel); border-radius: 24px; }
 
   /* ---------- 主题 ---------- */
-  .themes { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  /* The left column contains the monitor/weather controls as well as the
+     collection.  Keep the column itself scrollable so the theme grid never
+     collapses to a tiny strip when those controls are expanded. */
+  .themes { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden;
+    padding-right: 8px; scrollbar-gutter: stable; }
+  .themes::-webkit-scrollbar { width: 8px; }
+  .themes::-webkit-scrollbar-thumb { background: var(--track); border-radius: 4px; }
   .collection-head { flex: none; padding: 2px 4px 22px; }
   .collection-head h1 { font-size: clamp(26px, 2.8vw, 36px); font-weight: 650; letter-spacing: -.05em; line-height: 1.25; }
   .collection-head p { color: var(--muted); font-size: 12px; margin-top: 8px; }
   .section-title { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .04em; margin-bottom: 10px; }
   /* 按宽度自动排几列，主题多了就往下滚（以后会有很多辑、上百个主题） */
-  .theme-list { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  .theme-list { flex: none; min-height: 0; overflow: visible; display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
     align-content: start; gap: 18px; padding: 4px 8px 18px 4px; margin-left: -4px; margin-right: -8px; }
   .theme-list::-webkit-scrollbar { width: 8px; }
   .theme-list::-webkit-scrollbar-thumb { background: var(--track); border-radius: 4px; }
@@ -287,7 +293,7 @@
   .environment-controls .switch-row { font-size: 12px; }
   .environment-select { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
   .environment-select select { min-width: 150px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); font: inherit; }
-  @media (max-width: 780px) { body { height:auto; min-height:100vh; overflow:auto; } .layout { display:flex; flex-direction:column; } .themes { min-height:460px; } .theme-list { max-height:400px; flex:none; } .side { padding:14px; } .bottom { flex-wrap:wrap; } }
+  @media (max-width: 780px) { body { height:auto; min-height:100vh; overflow:auto; } .layout { display:flex; flex-direction:column; } .themes { min-height:460px; overflow:visible; padding-right:0; } .theme-list { max-height:none; flex:none; } .side { padding:14px; } .bottom { flex-wrap:wrap; } }
   .monitor-config select { min-width: 160px; padding: 7px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { transition: none !important; }
