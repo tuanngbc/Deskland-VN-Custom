@@ -326,6 +326,20 @@
       <div class="monitor-config" id="monitorConfig" hidden><label><span id="targetLabel">当前屏幕</span> <select id="monitorTheme"></select></label><button class="ghost-btn" id="monitorPause">暂停</button></div>
       <div class="monitor-actions"><label><input type="checkbox" id="previewOnly"><span id="previewOnlyLabel">Preview before Apply</span></label><button class="ghost-btn" id="applyMulti">Apply</button><button class="ghost-btn" id="resetMulti">Reset</button><button class="ghost-btn" id="globalPause">Pause all</button><button class="ghost-btn" id="reloadMulti">Reload</button><button class="ghost-btn" id="restoreMulti">Restore last working</button></div>
     </section>
+    <details class="monitor-panel" id="awayPanel">
+      <summary data-i18n="awayTitle">Màn hình chờ và tiết kiệm tài nguyên</summary>
+      <p class="monitor-detail" data-i18n="awayDescription">Phát vòng cảnh đã lưu ở 6 khung/giây, kèm đồng hồ trôi nhẹ. Giải phóng hình nền khi khóa máy hoặc tắt màn hình.</p>
+      <div class="monitor-config"><label><span data-i18n="awayAfter">Bắt đầu sau</span> <select id="awayMinutes"><option value="1">1</option><option value="3">3</option><option value="5" selected>5</option><option value="10">10</option><option value="15">15</option><option value="30">30</option><option value="60">60</option><option value="120">120</option></select> <span data-i18n="awayMinutes">phút</span></label></div>
+      <div class="monitor-actions">
+        <button class="ghost-btn" id="awayPreview" data-i18n="awayPreview">Xem thử (không khóa)</button>
+        <button class="ghost-btn" id="awayEnable" data-i18n="awayEnable">Bật màn hình chờ</button>
+        <button class="ghost-btn" id="awayDisable" data-i18n="awayDisable" hidden>Tắt và khôi phục cài đặt cũ</button>
+        <button class="ghost-btn" id="awayRefresh" data-i18n="awayRefresh">Cập nhật cảnh đã lưu</button>
+        <button class="ghost-btn" id="awayLockImage" data-i18n="awayLockImage">Dùng ảnh cảnh cho màn khóa</button>
+      </div>
+      <p class="monitor-detail" data-i18n="awaySecurity">Tự chạy qua trình bảo vệ màn hình Windows, yêu cầu đăng nhập khi quay lại. Win+L giữ khóa Windows thật; đăng xuất sẽ đóng ứng dụng.</p>
+      <p class="monitor-detail" id="awayStatus" role="status" aria-live="polite"></p>
+    </details>
     <div class="theme-list" id="themes"></div>
   </section>
 
@@ -866,7 +880,14 @@ $('shareReveal').addEventListener('click', () => send({ t: 'revealShare' }));
 
 /* ---------- 和宿主通信 ---------- */
 function onHost(m) {
-  if (m.t === 'init') {
+  if (m.t === 'awayState') {
+    state.away = m;
+    $('awayMinutes').value = String(m.minutes || 5);
+    $('awayDisable').hidden = !m.enabled;
+    $('awayEnable').textContent = t(m.enabled ? 'awayUpdate' : 'awayEnable');
+    for (const id of ['awayPreview','awayEnable','awayDisable','awayRefresh','awayLockImage']) $(id).disabled = !!m.busy;
+    $('awayStatus').textContent = m.status || t(m.enabled ? 'awayOn' : 'awayOff');
+  } else if (m.t === 'init') {
     state.langSetting = m.lang || 'auto';
     state.langSys = m.langSys || 'zh-CN';
     setLang(m.langEff || state.langSys).then(() => {        // 先按界面语言把文字表读进来，再画界面
@@ -926,6 +947,13 @@ function onHost(m) {
   } else if (m.t === 'shareResult') {
     showShare(m);
   }
+}
+
+for (const action of ['awayPreview','awayEnable','awayDisable','awayRefresh','awayLockImage']) {
+  $(action).addEventListener('click', () => {
+    if (!host) { $('awayStatus').textContent = t('awayNativeOnly'); return; }
+    send({ t: action, minutes: Number($('awayMinutes').value) });
+  });
 }
 
 // 单独在浏览器里打开时（没有宿主）：用模拟的桌面数据，方便调界面
