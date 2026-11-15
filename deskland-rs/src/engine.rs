@@ -625,11 +625,22 @@ uniform vec2 uRes;
 uniform vec4 uPalm;
 uniform float uPalmMirror;
 uniform float uTime;
+uniform float uPalmShadow;
+uniform float uShadowShear;
+uniform float uShadowFlatten;
+uniform float uShadowOffset;
 out vec2 vUv;
 void main() {
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
   vec2 local = corner * vec2(224.0, 256.0) - vec2(112.0, 162.0);
   local.x *= uPalmMirror;
+  if (uPalmShadow > 0.5) {
+    // Ép silhouette xuống mặt cát và kéo theo hướng ngược mặt trời.
+    // uShadowOffset đổi dấu từ đông sang tây; uShadowFlatten ngắn nhất vào
+    // giữa trưa và dài hơn khi mặt trời thấp.
+    local = vec2(local.x * .84 + local.y * uShadowShear + uShadowOffset,
+                 -local.y * uShadowFlatten + 4.0);
+  }
   float a = sin(uTime * .65 + uPalm.w * 2.0) * .008;
   local = mat2(cos(a), sin(a), -sin(a), cos(a)) * local;
   vec2 p = uPalm.xy + local * uPalm.z;
@@ -640,12 +651,14 @@ void main() {
 pub const PALM_FRAG: &str = r#"#version 330 core
 uniform sampler2D uPalmAtlas;
 uniform float uPalmOpacity;
+uniform float uPalmShadow;
 in vec2 vUv;
 out vec4 o;
 void main() {
   vec4 tree = texture(uPalmAtlas, vUv);
   if (tree.a < .002) discard;
-  o = vec4(tree.rgb, tree.a * uPalmOpacity);
+  vec3 color = uPalmShadow > .5 ? vec3(.16, .23, .19) : tree.rgb;
+  o = vec4(color, tree.a * uPalmOpacity);
 }"#;
 
 pub fn build_palm_atlas(gl: &glow::Context) -> Result<glow::Texture, String> {
@@ -681,6 +694,15 @@ pub fn build_palm_atlas(gl: &glow::Context) -> Result<glow::Texture, String> {
 
 pub fn draw_palm(gl: &glow::Context, shared: &mut Shared, w: f32, h: f32, x: f32, y: f32, scale: f32, variant: f32, mirror: f32, opacity: f32, now: f64) {
     if opacity <= 0.001 { return; }
+    // Mặt trời đi từ đông (buổi sáng) lên cao rồi sang tây (buổi chiều).
+    // Bóng chỉ hiện ban ngày, ngắn nhất vào giữa trưa và đổi hướng theo giờ.
+    let phase = shared.day_phase.clamp(0.0, 1.0);
+    let sun_height = (((phase - 0.25) * std::f32::consts::PI).sin()).max(0.0);
+    let sun_x = -((phase - 0.5) * std::f32::consts::PI).sin();
+    let shadow_opacity = (sun_height * (0.13 + sun_height * 0.09)).clamp(0.0, 0.24);
+    let shadow_offset = -sun_x * (18.0 + (1.0 - sun_height) * 64.0);
+    let shadow_shear = -sun_x * 0.16;
+    let shadow_flatten = 0.14 + sun_height * 0.20;
     unsafe {
         gl.enable(glow::BLEND);
         gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
@@ -692,7 +714,20 @@ pub fn draw_palm(gl: &glow::Context, shared: &mut Shared, w: f32, h: f32, x: f32
     shared.palm.f2(gl, "uRes", w, h);
     shared.palm.f4v(gl, "uPalm", &[x, y, scale, variant]);
     shared.palm.f1(gl, "uPalmMirror", mirror);
-    shared.palm.f1(gl, "uPalmOpacity", opacity);
     shared.palm.f1(gl, "uTime", (now / 1000.0) as f32);
+    // Vẽ bóng trước thân cây để bóng nằm dưới tán và thân.
+    if shadow_opacity > 0.001 {
+        shared.palm.f1(gl, "uPalmShadow", 1.0);
+        shared.palm.f1(gl, "uPalmOpacity", opacity * shadow_opacity);
+        shared.palm.f1(gl, "uShadowShear", shadow_shear);
+        shared.palm.f1(gl, "uShadowFlatten", shadow_flatten);
+        shared.palm.f1(gl, "uShadowOffset", shadow_offset);
+        unsafe { gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4); }
+    }
+    shared.palm.f1(gl, "uPalmShadow", 0.0);
+    shared.palm.f1(gl, "uPalmOpacity", opacity);
+    shared.palm.f1(gl, "uShadowShear", 0.0);
+    shared.palm.f1(gl, "uShadowFlatten", 1.0);
+    shared.palm.f1(gl, "uShadowOffset", 0.0);
     unsafe { gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4); gl.use_program(None); gl.disable(glow::BLEND); }
 }

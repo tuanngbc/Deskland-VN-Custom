@@ -144,6 +144,7 @@ impl Beach {
             }
             if self.palms.len() >= want { break; }
         }
+        crate::log!("Bãi biển: bố trí {}/{} cây dừa trên canvas {:.0}x{:.0}", self.palms.len(), want, self.b.w, self.b.h);
     }
 
     fn commit(&mut self, gl: &glow::Context, from_empty: bool, now: f64) {
