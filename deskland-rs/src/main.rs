@@ -162,6 +162,7 @@ thread_local! {
     static PENDING_THEME_SYNC: Cell<bool> = const { Cell::new(false) };
     static SAVER_START: Cell<Option<Instant>> = const { Cell::new(None) };
     static SAVER_MOUSE: Cell<Option<(i32, i32)>> = const { Cell::new(None) };
+    static GAP_BACKDROP_HWND: Cell<HWND> = const { Cell::new(std::ptr::null_mut()) };
     static CURRENT_THEME: Cell<usize> = const { Cell::new(102) };
     /// Phiên Windows đang khóa (WM_WTSSESSION_CHANGE): không ai thấy desktop -> ngừng vẽ.
     static SESSION_LOCKED: Cell<bool> = const { Cell::new(false) };
@@ -271,6 +272,15 @@ unsafe extern "system" fn wall_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LR
     match m {
         WM_ERASEBKGND => 1,
         WM_PAINT => {
+            if GAP_BACKDROP_HWND.with(|c| c.get() == h) {
+                let mut ps: PAINTSTRUCT = std::mem::zeroed();
+                let dc = BeginPaint(h, &mut ps);
+                let brush = CreateSolidBrush(RGB(18, 157, 190));
+                FillRect(dc, &ps.rcPaint, brush);
+                DeleteObject(brush as _);
+                EndPaint(h, &ps);
+                return 0;
+            }
             ValidateRect(h, std::ptr::null());
             REPAINT.with(|c| c.set(true));
             0
@@ -662,6 +672,11 @@ struct Wallpaper {
     last_frame: f64,
 }
 
+struct GapBackdrop {
+    hwnd: HWND,
+    attach: desktop::Attach,
+}
+
 /// Canvas ảo dùng cho chế độ toàn cảnh. Một theme duy nhất được vẽ vào
 /// texture này rồi cắt ra từng màn hình; nhờ vậy cảnh, sóng và vật thể không
 /// bị khởi tạo lại thành các đảo độc lập ở mỗi monitor.
@@ -679,6 +694,7 @@ struct App {
     shared: Option<Shared>,
     vao: Option<glow::VertexArray>,
     walls: Vec<Wallpaper>,
+    backdrop: Option<GapBackdrop>,
     panorama: Option<PanoramaSurface>,
     reader: desktop::IconReader,
     cfg: Config,
@@ -864,6 +880,31 @@ impl App {
         let panorama_scale = mons.iter().map(|m| m.dpr).fold(0.72f32, f32::min).clamp(0.5, 0.72);
         let cls = wide(if self.saver { SAVER_CLASS } else { WALL_CLASS });
         let title = wide("DesklandWindow");
+        // Phần desktop ảo không có panel thật (khi màn hình lệch cao độ) sẽ
+        // lộ màu nền Windows. Tạo một lớp nền dưới các cửa sổ GL để vùng đó
+        // tiếp tục cùng tông cảnh, giống bản local trước đây.
+        if !self.headless && !self.saver && mons.len() > 1 && self.backdrop.is_none() {
+            if let Some(world) = panorama_world {
+                let hwnd = unsafe {
+                    CreateWindowExW(
+                        WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                        cls.as_ptr(), title.as_ptr(), WS_POPUP,
+                        world.left, world.top, world.right - world.left, world.bottom - world.top,
+                        std::ptr::null_mut(), std::ptr::null_mut(), GetModuleHandleW(std::ptr::null()), std::ptr::null(),
+                    )
+                };
+                if !hwnd.is_null() {
+                    if let Some(attach) = desktop::attach(hwnd, world) {
+                        GAP_BACKDROP_HWND.with(|c| c.set(hwnd));
+                        self.backdrop = Some(GapBackdrop { hwnd, attach });
+                        unsafe { InvalidateRect(hwnd, std::ptr::null(), 1); }
+                        log!("Nền desktop ảo: [{},{} {}x{}]", world.left, world.top, world.right - world.left, world.bottom - world.top);
+                    } else {
+                        unsafe { DestroyWindow(hwnd); }
+                    }
+                }
+            }
+        }
         let ex_style = if self.saver { WS_EX_TOPMOST | WS_EX_TOOLWINDOW } else { WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE };
         for (idx, m) in mons.iter().enumerate() {
             let (pw, ph) = (m.rect.right - m.rect.left, m.rect.bottom - m.rect.top);
@@ -1048,6 +1089,11 @@ impl App {
                 ReleaseDC(wp.hwnd, wp.hdc);
                 DestroyWindow(wp.hwnd);
             }
+        }
+        if let Some(bg) = self.backdrop.take() {
+            GAP_BACKDROP_HWND.with(|c| c.set(std::ptr::null_mut()));
+            desktop::detach(bg.hwnd, &bg.attach);
+            unsafe { DestroyWindow(bg.hwnd); }
         }
     }
 
@@ -1680,6 +1726,7 @@ fn main() {
         shared: None,
         vao: None,
         walls: Vec::new(),
+        backdrop: None,
         panorama: None,
         reader: desktop::IconReader::new(),
         cfg,
