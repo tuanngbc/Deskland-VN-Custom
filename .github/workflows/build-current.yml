@@ -27,7 +27,9 @@ jobs:
           $name = "Deskland-VN-current-$version-win-x64"
           $dir = "dist\$name"
           New-Item -ItemType Directory -Force $dir | Out-Null
-          Copy-Item -Recurse host\bin $dir\bin
+          # The host resolves prototype relative to its own executable directory.
+          # Keep the executable and prototype as siblings in the package root.
+          Copy-Item -Recurse host\bin\* $dir
           Copy-Item -Recurse prototype $dir\prototype
           Remove-Item "$dir\prototype\serve.mjs" -ErrorAction SilentlyContinue
           foreach ($file in 'README.md','LICENSE','NOTICE','THIRD_PARTY_NOTICES.md','TRADEMARKS.md') {
@@ -36,8 +38,8 @@ jobs:
           @"
           Deskland Preview $version (current Git build)
 
-          Giải nén toàn bộ thư mục này và chạy bin\Deskland.exe.
-          Giữ thư mục prototype cạnh thư mục bin để mở giao diện Cài đặt đầy đủ.
+          Giải nén toàn bộ thư mục này và chạy Deskland.exe.
+          Giữ thư mục prototype cạnh Deskland.exe để mở giao diện Cài đặt đầy đủ.
           Bản build này chứa các cập nhật mới nhất trên nhánh main.
           "@ | Set-Content "$dir\DOC-TRUOC.txt" -Encoding utf8
           Compress-Archive -Path $dir -DestinationPath "dist\$name.zip"
