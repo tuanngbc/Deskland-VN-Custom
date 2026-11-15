@@ -514,4 +514,57 @@ pub struct Shared {
     pub noise_tex: glow::Texture,
     pub seed: i32,
     pub prog: Prog,
+    /// Hậu kỳ dùng chung cho toàn bộ màn hình: ánh sáng theo giờ và thời tiết.
+    pub post: Prog,
+    pub day_phase: f32,
+    pub weather: f32,
 }
+
+/// Hậu kỳ nhẹ chạy sau shader chủ đề. `uDayPhase` là giờ địa phương chuẩn hóa
+/// 0..1, còn `uWeather` lần lượt tăng từ trời quang tới tuyết/bão.
+pub const POST_FRAG: &str = r#"#version 300 es
+precision highp float;
+uniform sampler2D uScene;
+uniform vec2 uRes;
+uniform float uTime, uDayPhase, uWeather;
+out vec4 o;
+
+float hash(vec2 p) {
+  p = fract(p * vec2(127.1, 311.7));
+  p += dot(p, p + 27.19);
+  return fract(p.x * p.y);
+}
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+             mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec4 src = texture(uScene, uv);
+  float daylight = smoothstep(0.18, 0.38, uDayPhase) * (1.0 - smoothstep(0.62, 0.86, uDayPhase));
+  float night = 1.0 - daylight;
+  float dusk = 1.0 - abs(daylight * 2.0 - 1.0);
+  vec3 tint = mix(vec3(0.34, 0.42, 0.72), vec3(1.0), daylight);
+  tint = mix(tint, vec3(1.0, 0.56, 0.30), dusk * 0.28);
+  vec3 color = src.rgb * mix(vec3(0.76, 0.82, 1.0), tint, 0.42);
+
+  float cloud = smoothstep(0.42, 0.80, noise(uv * vec2(3.2, 2.1) + vec2(uTime * 0.004, 0.0)));
+  float wet = clamp(uWeather, 0.0, 1.0);
+  color = mix(color, color * vec3(0.70, 0.76, 0.84), cloud * wet * 0.28);
+
+  float rainBand = smoothstep(0.92, 1.0, fract((uv.x + uv.y * 0.22 + uTime * 0.055) * 145.0));
+  float rain = step(0.42, wet) * rainBand * (0.35 + 0.65 * noise(uv * 18.0 + uTime * 0.1));
+  color = mix(color, vec3(0.72, 0.84, 0.96), rain * 0.22);
+
+  float snow = step(0.86, wet);
+  float flakes = step(0.965, noise(uv * 42.0 + vec2(0.0, uTime * 0.04)));
+  color = mix(color, vec3(0.98), flakes * snow * 0.75);
+
+  float lightning = step(0.985, sin(uTime * 0.21 + noise(uv * 4.0) * 5.0) * 0.5 + 0.5);
+  color += vec3(0.28, 0.34, 0.48) * lightning * step(0.72, wet) * 0.25;
+  o = vec4(color, src.a);
+}
+"#;

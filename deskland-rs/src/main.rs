@@ -366,9 +366,56 @@ fn monitors() -> Vec<Monitor> {
 
 // ---------------------------------------------------------------- Cài đặt (đọc chung với bản C#)
 #[derive(Clone)]
+struct Environment {
+    time_enabled: bool,
+    weather_enabled: bool,
+    preset: String,
+    source: String,
+    location: Option<serde_json::Value>,
+}
+
+#[repr(C)]
+struct LocalSystemTime {
+    year: u16, month: u16, _dow: u16, day: u16,
+    hour: u16, minute: u16, second: u16, millis: u16,
+}
+
+unsafe extern "system" {
+    fn GetLocalTime(lp_system_time: *mut LocalSystemTime);
+}
+
+fn local_day_phase() -> f32 {
+    let mut st = LocalSystemTime { year: 0, month: 0, _dow: 0, day: 0, hour: 12, minute: 0, second: 0, millis: 0 };
+    unsafe { GetLocalTime(&mut st) };
+    ((st.hour as f32 * 3600.0 + st.minute as f32 * 60.0 + st.second as f32 + st.millis as f32 / 1000.0) / 86400.0).fract()
+}
+
+impl Environment {
+    fn day_phase(&self) -> f32 {
+        if self.time_enabled { local_day_phase() } else { 0.5 }
+    }
+
+    fn weather_amount(&self, now: f64) -> f32 {
+        if !self.weather_enabled { return 0.0; }
+        match self.preset.as_str() {
+            "clear" => 0.0,
+            "cloudy" => 0.28,
+            "rain" => 0.58,
+            "storm" => 0.86,
+            "snow" => 1.0,
+            // Mô phỏng cục bộ, không gọi mạng khi chạy native. Chu kỳ dài để
+            // màu trời và cường độ mưa thay đổi chậm, không gây tải CPU.
+            _ => (0.18 + ((now / 1000.0) * 0.0021).sin().abs() * 0.54) as f32,
+        }
+    }
+}
+
+#[derive(Clone)]
 struct Config {
     theme: String,
     params: serde_json::Value,
+    mode: String,
+    environment: Environment,
     /// Đặt ảnh cảnh hiện tại làm ảnh màn khóa Windows (`lockSyncWin`, mặc định bật như bản C#)
     lock_sync: bool,
     /// Số phút rảnh trước khi trình bảo vệ màn hình chạy (`lockIdleMins`)
@@ -394,6 +441,14 @@ fn load_config(cli_theme: Option<String>) -> Config {
     let lang = root.get("lang").or_else(|| csv.as_ref().and_then(|c| c.get("lang"))).and_then(|v| v.as_str()).unwrap_or("auto").to_string();
     let saved = root.get("theme").and_then(|v| v.as_str()).unwrap_or("beach").to_string();
     let interactions_enabled = root.get("interactionsEnabled").and_then(|v| v.as_bool()).unwrap_or(true);
+    let env = root.get("environment");
+    let environment = Environment {
+        time_enabled: env.and_then(|v| v.get("time")).and_then(|v| v.as_bool()).unwrap_or(true),
+        weather_enabled: env.and_then(|v| v.get("weather")).and_then(|v| v.as_bool()).unwrap_or(true),
+        preset: env.and_then(|v| v.get("preset")).and_then(|v| v.as_str()).unwrap_or("auto").to_string(),
+        source: env.and_then(|v| v.get("source")).and_then(|v| v.as_str()).unwrap_or("local").to_string(),
+        location: env.and_then(|v| v.get("location")).cloned(),
+    };
     let raw_theme = cli_theme.unwrap_or(saved);
     let theme = match canonical_theme(&raw_theme) {
         Some(t) => t.to_string(),
@@ -405,6 +460,8 @@ fn load_config(cli_theme: Option<String>) -> Config {
     Config {
         theme,
         params: root.get("params").cloned().unwrap_or(serde_json::Value::Null),
+        mode: root.get("mode").and_then(|v| v.as_str()).filter(|v| matches!(*v, "mirror" | "independent" | "panorama")).unwrap_or("mirror").to_string(),
+        environment,
         lock_sync: root.get("lockSyncWin").and_then(|v| v.as_bool()).unwrap_or(true),
         lang,
         interactions_enabled,
@@ -417,6 +474,14 @@ fn save_config(cfg: &Config) {
     let v = serde_json::json!({
         "version": 1,
         "theme": cfg.theme,
+        "mode": cfg.mode,
+        "environment": {
+            "time": cfg.environment.time_enabled,
+            "weather": cfg.environment.weather_enabled,
+            "preset": cfg.environment.preset,
+            "source": cfg.environment.source,
+            "location": cfg.environment.location,
+        },
         "lockSyncWin": LOCK_SYNC.with(|c| c.get()),
         "lockIdleMins": cfg.lock_idle_mins,
         "lang": cfg.lang,
@@ -446,10 +511,37 @@ fn primary_wall(app: &App) -> Option<&Wallpaper> {
 fn web_init(app: &App) -> serde_json::Value {
     let (w, h) = primary_wall(app).map(|p| (p.screen.right - p.screen.left, p.screen.bottom - p.screen.top)).unwrap_or((1920, 1080));
     let (eff, sys) = lang_eff(&app.cfg.lang);
+    let mut monitors = Vec::new();
+    let mut world = serde_json::json!({ "x": 0, "y": 0, "w": w, "h": h });
+    if let (Some(first), Some(last)) = (app.walls.iter().map(|p| p.screen.left).min(), app.walls.iter().map(|p| p.screen.top).min()) {
+        let right = app.walls.iter().map(|p| p.screen.right).max().unwrap_or(w);
+        let bottom = app.walls.iter().map(|p| p.screen.bottom).max().unwrap_or(h);
+        world = serde_json::json!({ "x": first, "y": last, "w": right - first, "h": bottom - last });
+    }
+    for (i, p) in app.walls.iter().enumerate() {
+        monitors.push(serde_json::json!({
+            "id": format!("screen-{i}"), "name": format!("Màn hình {}", i + 1),
+            "x": p.screen.left, "y": p.screen.top,
+            "w": p.screen.right - p.screen.left, "h": p.screen.bottom - p.screen.top,
+            "dpi": (p.dpr * 96.0).round(), "scale": p.dpr,
+            "primary": p.screen.left == 0 && p.screen.top == 0,
+            "theme": app.cfg.theme, "status": if p.paused { "paused" } else { "running" },
+        }));
+    }
     serde_json::json!({
         "t": "init",
         "theme": app.cfg.theme,
         "params": app.cfg.params,
+        "mode": app.cfg.mode,
+        "monitors": monitors,
+        "world": world,
+        "environment": {
+            "time": app.cfg.environment.time_enabled,
+            "weather": app.cfg.environment.weather_enabled,
+            "preset": app.cfg.environment.preset,
+            "source": app.cfg.environment.source,
+            "location": app.cfg.environment.location,
+        },
         "screen": { "w": w, "h": h },
         "autostart": settings::autostart_enabled(),
         "autostartWarn": false,
@@ -532,6 +624,7 @@ struct App {
     walls: Vec<Wallpaper>,
     reader: desktop::IconReader,
     cfg: Config,
+    environment: Environment,
     start: Instant,
     frames: u64,
     frame_cpu_ms: f64,
@@ -670,7 +763,8 @@ impl App {
         let prog = Prog::new(gl, frag)?;
         log!("Biên dịch shader '{}' mất {:.0} ms", self.cfg.theme, t0.elapsed().as_secs_f64() * 1000.0);
         let noise_tex = engine::build_noise_tex(gl, &noise);
-        self.shared = Some(Shared { noise_tex, seed, prog });
+        let post = engine::Prog::new(gl, engine::POST_FRAG)?;
+        self.shared = Some(Shared { noise_tex, seed, prog, post, day_phase: self.environment.day_phase(), weather: self.environment.weather_amount(self.now()) });
         Ok(())
     }
 
@@ -678,6 +772,7 @@ impl App {
         if let (Some(ctx), Some(s)) = (self.ctx.as_ref(), self.shared.take()) {
             unsafe {
                 ctx.gl.delete_program(s.prog.prog);
+                ctx.gl.delete_program(s.post.prog);
                 ctx.gl.delete_texture(s.noise_tex);
             }
         }
@@ -955,11 +1050,35 @@ impl App {
         }
     }
 
+    fn post_process(gl: &glow::Context, shared: &mut Shared, wp: &Wallpaper, target: Option<glow::Framebuffer>, width: i32, height: i32, now: f64) {
+        unsafe {
+            gl.bind_framebuffer(glow::FRAMEBUFFER, target);
+            gl.viewport(0, 0, width, height);
+            gl.disable(glow::BLEND);
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(wp.fbo_tex));
+            gl.use_program(Some(shared.post.prog));
+        }
+        shared.post.i1(gl, "uScene", 0);
+        shared.post.f2(gl, "uRes", width as f32, height as f32);
+        shared.post.f1(gl, "uTime", (now / 1000.0) as f32);
+        shared.post.f1(gl, "uDayPhase", shared.day_phase);
+        shared.post.f1(gl, "uWeather", shared.weather);
+        unsafe {
+            gl.draw_arrays(glow::TRIANGLES, 0, 3);
+            gl.use_program(None);
+        }
+    }
+
     fn render(&mut self) {
         let now = self.now();
         let t0 = Instant::now();
+        let day_phase = self.environment.day_phase();
+        let weather = self.environment.weather_amount(now);
         let ctx = self.ctx.as_ref().unwrap();
         let shared = self.shared.as_mut().unwrap();
+        shared.day_phase = day_phase;
+        shared.weather = weather;
         let gl = &ctx.gl;
         let mut drew = false;
         for wp in &mut self.walls {
@@ -985,10 +1104,11 @@ impl App {
             }
             if let Some((out_fbo, _, pbo)) = wp.out {
                 unsafe {
-                    // GPU phóng to (LINEAR, như trình duyệt phóng canvas) rồi đọc về PBO không chặn
-                    gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(wp.fbo));
-                    gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(out_fbo));
-                    gl.blit_framebuffer(0, 0, wp.buf_w, wp.buf_h, 0, 0, wp.phys_w, wp.phys_h, glow::COLOR_BUFFER_BIT, glow::LINEAR);
+                    // Hậu kỳ đồng thời phóng hình lên độ phân giải vật lý.
+                    gl.bind_framebuffer(glow::FRAMEBUFFER, Some(out_fbo));
+                }
+                Self::post_process(gl, shared, wp, Some(out_fbo), wp.phys_w, wp.phys_h, now);
+                unsafe {
                     gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(out_fbo));
                     gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(pbo));
                     gl.pixel_store_i32(glow::PACK_ALIGNMENT, 4);
@@ -999,12 +1119,8 @@ impl App {
                 }
                 wp.pbo_ready = true;
             } else {
-                unsafe {
-                    gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(wp.fbo));
-                    gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
-                    gl.blit_framebuffer(0, 0, wp.buf_w, wp.buf_h, 0, 0, wp.phys_w, wp.phys_h, glow::COLOR_BUFFER_BIT, glow::LINEAR);
-                    SwapBuffers(wp.hdc);
-                }
+                Self::post_process(gl, shared, wp, None, wp.phys_w, wp.phys_h, now);
+                unsafe { SwapBuffers(wp.hdc); }
             }
             drew = true;
         }
@@ -1304,6 +1420,7 @@ fn main() {
 
     let t_start = Instant::now();
     let interactions_enabled = cfg.interactions_enabled;
+    let environment = cfg.environment.clone();
     let mut app = App {
         ctx: None,
         shared: None,
@@ -1311,6 +1428,7 @@ fn main() {
         walls: Vec::new(),
         reader: desktop::IconReader::new(),
         cfg,
+        environment,
         start: Instant::now(),
         frames: 0,
         frame_cpu_ms: 0.0,
@@ -1545,6 +1663,35 @@ fn main() {
                         web::post(&serde_json::json!({ "t": "themeChanged", "id": app.cfg.theme }).to_string());
                     }
                     web_changed = true;
+                }
+                "mode" => {
+                    let mode = s_("v");
+                    if matches!(mode.as_str(), "mirror" | "independent" | "panorama") {
+                        app.cfg.mode = mode.clone();
+                        log!("Chế độ đa màn hình: {mode}");
+                        web::post(&serde_json::json!({ "t": "modeChanged", "mode": mode }).to_string());
+                        web_changed = true;
+                    }
+                }
+                "environment" => {
+                    if let Some(v) = m.get("time").and_then(|v| v.as_bool()) { app.cfg.environment.time_enabled = v; }
+                    if let Some(v) = m.get("weather").and_then(|v| v.as_bool()) { app.cfg.environment.weather_enabled = v; }
+                    if let Some(v) = m.get("preset").and_then(|v| v.as_str()) { app.cfg.environment.preset = v.to_string(); }
+                    if let Some(v) = m.get("source").and_then(|v| v.as_str()) { app.cfg.environment.source = v.to_string(); }
+                    if m.get("location").is_some() { app.cfg.environment.location = m.get("location").cloned().filter(|v| !v.is_null()); }
+                    app.environment = app.cfg.environment.clone();
+                    log!("Môi trường: time={}, weather={}, preset={}, source={}", app.environment.time_enabled, app.environment.weather_enabled, app.environment.preset, app.environment.source);
+                    web::post(&web_init(&app).to_string());
+                    web_changed = true;
+                }
+                "monitorTheme" => {
+                    // Engine native dùng cùng cảnh trên toàn bộ màn hình; vẫn
+                    // phản hồi để Settings giữ được trạng thái đa màn hình.
+                    if let Some(id) = m.get("theme").and_then(|v| v.as_str()).and_then(canonical_theme) {
+                        app.switch_theme(id);
+                        web::post(&web_init(&app).to_string());
+                        web_changed = true;
+                    }
                 }
                 "lockNow" => lock::lock_now(),
                 "saverNow" => PENDING_CMD.with(|c| c.set(CMD_SAVER_NOW)),
