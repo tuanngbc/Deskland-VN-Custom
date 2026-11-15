@@ -74,11 +74,21 @@
       wind = 0.34; gust = 0.16; cloudiness = 0.82; snow = 0.86;
     } else {
       // Auto weather is deterministic and quiet: only sufficiently cloudy
-      // days produce precipitation, with winter snow based on local month.
-      rain = clamp01((cloudiness - 0.78) * 3.6);
+      // periods produce precipitation, with winter snow based on local month.
+      // A slow “front” moves through the day so the status can change while
+      // the app is running instead of staying fixed until midnight.
+      const front = 0.5 + 0.5 * Math.sin(dayProgress * TAU * 1.15 + dayNoise * 8.0);
+      cloudiness = clamp01(cloudiness * 0.68 + front * 0.32);
+      rain = clamp01((cloudiness - 0.68) * 3.1);
       const month = date.getMonth();
       snow = (month === 11 || month <= 1) ? rain * 0.78 : 0;
     }
+    let weatherState = 'clear';
+    if (!opts.weather) weatherState = 'disabled';
+    else if (storm > 0.5) weatherState = 'storm';
+    else if (snow > 0.18) weatherState = 'snow';
+    else if (rain > 0.18) weatherState = 'rain';
+    else if (cloudiness > 0.6) weatherState = 'cloudy';
     const night = 1 - daylight;
     const warm = clamp01(golden * 0.9 + night * 0.08);
     const lightStrength = 0.24 + daylight * (0.55 + noon * 0.21) + golden * 0.08;
@@ -99,7 +109,7 @@
       sunElevation, sunAzimuth, noon,
       light: Object.freeze(light),
       temperatureTint: warm,
-      wind, gust, windDirection, cloudiness, rain, snow, storm, lightning,
+      wind, gust, windDirection, cloudiness, rain, snow, storm, lightning, weatherState,
       // convenient normalized values for shader uniforms and theme code
       skyLight: lightStrength,
       isDay: daylight > 0.35,

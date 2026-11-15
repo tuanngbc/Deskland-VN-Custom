@@ -291,6 +291,7 @@
   .environment-panel .monitor-detail { margin: 0; }
   .environment-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; }
   .environment-controls .switch-row { font-size: 12px; }
+  .environment-status { margin: 0; padding-top: 2px; font-variant-numeric: tabular-nums; }
   .environment-select { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
   .environment-select select { min-width: 150px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); font: inherit; }
   @media (max-width: 780px) { body { height:auto; min-height:100vh; overflow:auto; } .layout { display:flex; flex-direction:column; } .themes { min-height:460px; overflow:visible; padding-right:0; } .theme-list { max-height:none; flex:none; } .side { padding:14px; } .bottom { flex-wrap:wrap; } }
@@ -347,6 +348,7 @@
         <label class="switch-row"><span data-i18n="environmentWeather">Đổi theo thời tiết</span><input type="checkbox" id="environmentWeather"><i class="switch"></i></label>
         <label class="environment-select"><span data-i18n="weatherPreset">Bộ thời tiết</span><select id="weatherPreset" aria-label="Bộ thời tiết"></select></label>
       </div>
+      <p class="monitor-detail environment-status" id="environmentStatus" role="status" aria-live="polite"></p>
     </section>
     <details class="monitor-panel" id="awayPanel">
       <summary data-i18n="awayTitle">Màn hình chờ và tiết kiệm tài nguyên</summary>
@@ -441,6 +443,7 @@
 </footer>
 
 <script src="thumbs-data.js"></script>
+<script src="world-contract.js"></script>
 <script>
 'use strict';
 const host = window.chrome && window.chrome.webview;
@@ -574,6 +577,14 @@ function renderMonitors() {
   }
 }
 const WEATHER_OPTIONS = [['auto', 'weatherAuto'], ['clear', 'weatherClear'], ['cloudy', 'weatherCloudy'], ['rain', 'weatherRain'], ['storm', 'weatherStorm'], ['snow', 'weatherSnow']];
+const WEATHER_STATUS_KEYS = { disabled: 'weatherStatusDisabled', clear: 'weatherStatusClear', cloudy: 'weatherStatusCloudy', rain: 'weatherStatusRain', storm: 'weatherStatusStorm', snow: 'weatherStatusSnow' };
+const weatherStatus = () => {
+  const e = Object.assign({}, DEFAULT_ENVIRONMENT, state.environment || {});
+  const sample = window.DeskWorld && DeskWorld.environmentAt ? DeskWorld.environmentAt(Date.now(), e) : null;
+  const key = sample && WEATHER_STATUS_KEYS[sample.weatherState] ? WEATHER_STATUS_KEYS[sample.weatherState] : 'weatherStatusClear';
+  const wind = sample ? Math.round(sample.wind * 100) : 0;
+  $('environmentStatus').textContent = t('weatherStatusNow') + ': ' + t(key) + ' · ' + t('weatherStatusWind', { value: wind });
+};
 function renderEnvironment() {
   const e = Object.assign({}, DEFAULT_ENVIRONMENT, state.environment || {});
   state.environment = e;
@@ -581,6 +592,7 @@ function renderEnvironment() {
   $('environmentWeather').checked = e.weather !== false;
   $('weatherPreset').innerHTML = WEATHER_OPTIONS.map(([value, key]) => `<option value="${value}">${t(key)}</option>`).join('');
   $('weatherPreset').value = WEATHER_OPTIONS.some(x => x[0] === e.preset) ? e.preset : 'auto';
+  weatherStatus();
 }
 function setEnvironment(patch) {
   state.environment = Object.assign({}, DEFAULT_ENVIRONMENT, state.environment, patch || {});
@@ -593,6 +605,7 @@ function setEnvironment(patch) {
 $('environmentTime').addEventListener('change', e => setEnvironment({ time: e.target.checked }));
 $('environmentWeather').addEventListener('change', e => setEnvironment({ weather: e.target.checked }));
 $('weatherPreset').addEventListener('change', e => setEnvironment({ preset: e.target.value }));
+setInterval(weatherStatus, 10000);
 $('modeRow').addEventListener('click', e => { const b=e.target.closest('[data-mode]'); if (!b || state.mode===b.dataset.mode) return; flush(); state.mode=b.dataset.mode; send({t:'mode',v:state.mode}); selectTarget(); });
 $('monitorMap').addEventListener('click', e => { const b=e.target.closest('[data-monitor]'); if (!b) return; flush(); state.selectedMonitor=b.dataset.monitor; selectTarget(); });
 $('monitorTheme').addEventListener('change', e => { const m=state.monitors.find(x=>x.id===state.selectedMonitor); if (!m) return; flush(); m.theme=e.target.value; send({t:'monitorTheme',id:m.id,theme:m.theme}); selectTarget(); });
