@@ -310,6 +310,13 @@ impl Base {
         self.field.sample(&self.fa, x, y) * (1.0 - self.cur_mix) + self.field.sample(&self.fb, x, y) * self.cur_mix
     }
 
+    /// Khoảng cách có dấu của trường đích. Dùng khi bố trí vật thể tĩnh ngay
+    /// sau khi commit, trước khi morph bắt đầu; nếu lấy cur_s lúc đó thì cảnh
+    /// đầu tiên còn đang ở trường rỗng và mọi cây dừa đều bị lọc mất.
+    pub fn target_s(&self, x: f32, y: f32) -> f32 {
+        if self.fb.is_empty() { 999.0 } else { self.field.sample(&self.fb, x, y) }
+    }
+
     /// Các uniform chung của mọi shader chủ đề
     pub fn bind_common(&self, gl: &glow::Context, p: &mut Prog, noise_tex: glow::Texture, seed: i32, t: f32) {
         unsafe {
@@ -650,11 +657,18 @@ pub fn build_palm_atlas(gl: &glow::Context) -> Result<glow::Texture, String> {
         include_bytes!("../../prototype/assets/beach-coconut-palm-arch.png"),
     ];
     let mut atlas = RgbaImage::new(224 * 5, 256);
+    // Các ảnh nguồn đều có khoảng trong suốt khác nhau. Bản gốc neo từng ảnh
+    // theo điểm chân (foot), không căn giữa theo bounding box; căn giữa sẽ làm
+    // cây arch và windswept lệch gốc, nhìn như một hình khác.
+    let feet = [(0.454f32, 0.98f32), (0.470, 0.98), (0.415, 0.98), (0.25, 0.98), (0.84, 0.98)];
     for (i, bytes) in files.iter().enumerate() {
         let img = image::load_from_memory(bytes).map_err(|e| format!("đọc texture cây dừa: {e}"))?.to_rgba8();
         let (w, h) = match i { 3 => (148, 138), 4 => (128, 119), _ => (168, 156) };
         let resized = imageops::resize(&img, w, h, imageops::FilterType::Triangle);
-        imageops::overlay(&mut atlas, &resized, i as i64 * 224 + ((224 - w) / 2) as i64, (162 - h) as i64);
+        let (fx, fy) = feet[i];
+        let ox = i as i64 * 224 + (112.0 - fx * w as f32).round() as i64;
+        let oy = (162.0 - fy * h as f32).round() as i64;
+        imageops::overlay(&mut atlas, &resized, ox, oy);
     }
     unsafe {
         let t = gl.create_texture()?;

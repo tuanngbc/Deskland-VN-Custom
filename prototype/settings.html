@@ -626,7 +626,10 @@ function setEnvironment(patch) {
   state.environment = Object.assign({}, DEFAULT_ENVIRONMENT, state.environment, patch || {});
   renderEnvironment();
   const message = { t: 'environment', time: state.environment.time !== false, weather: state.environment.weather !== false, preset: state.environment.preset,
-    source: state.environment.source === 'live' && state.environment.location ? 'live' : 'local', location: state.environment.location || null };
+    // Giữ lựa chọn live ngay cả khi chưa chọn địa điểm để hiện ô tìm kiếm.
+    // Trước đây điều kiện location khiến UI tự rơi về local và không bao giờ
+    // cho người dùng nhập vị trí lần đầu.
+    source: state.environment.source === 'live' ? 'live' : 'local', location: state.environment.location || null };
   send(message);
   toPreview({ ...message, environment: state.environment });
   flashSaved();

@@ -1581,7 +1581,9 @@ fn main() {
         timeBeginPeriod(1);
     }
 
-    let fps: f64 = arg_value(&args, "--fps").and_then(|s| s.parse().ok()).unwrap_or(20.0);
+    // 30 FPS là nhịp mục tiêu của bản native. Cảnh vẫn giảm tải khi bị che,
+    // còn lúc mở Settings/đang tương tác có thể tăng tạm thời để không giật.
+    let fps: f64 = arg_value(&args, "--fps").and_then(|s| s.parse().ok()).unwrap_or(30.0);
     let interval = 1000.0 / fps.max(1.0);
     let mut cfg = load_config(arg_value(&args, "--theme"));
     if let Some(mode) = arg_value(&args, "--mode") {

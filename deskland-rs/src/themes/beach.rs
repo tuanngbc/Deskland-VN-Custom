@@ -112,19 +112,37 @@ impl Beach {
         self.palms.clear();
         let want = self.p.palms.round().clamp(0.0, 10.0) as usize;
         if want == 0 { return; }
+        let mut candidates = Vec::new();
+        // Bản gốc chọn dải cát -25..-58. Hai dải nới rộng bên dưới chỉ dùng
+        // khi màn hình/biểu tượng quá thưa, để số lượng đã chọn (ví dụ 8) vẫn
+        // hiện đủ thay vì bị lưới thưa 62 px lọc còn một cây.
+        for &(lo, hi) in &[(-58.0, -25.0), (-90.0, -8.0), (-180.0, 2.0)] {
+            for y in (92..(self.b.h.max(120.0) as i32 - 78)).step_by(18) {
+                let row = y as f32;
+                let offset = if (y / 18) % 2 == 0 { 0.0 } else { 9.0 };
+                for x in (78..(self.b.w.max(110.0) as i32 - 72)).step_by(18) {
+                    let px = x as f32 + offset;
+                    let s = self.b.target_s(px, row);
+                    if s > lo && s < hi && !candidates.iter().any(|&(cx, cy)| (cx - px).hypot(cy - row) < 14.0) {
+                        candidates.push((px, row));
+                    }
+                }
+            }
+            if candidates.len() >= want * 8 { break; }
+        }
         let mut variant = 0.0;
-        let mut y = 90.0;
-        while y < self.b.h - 120.0 && self.palms.len() < want {
-            let mut x = 80.0 + ((y as i32 / 13) % 2) as f32 * 38.0;
-            while x < self.b.w - 80.0 && self.palms.len() < want {
-                let s = self.b.cur_s(x, y);
-                if s < 2.0 && s > -180.0 && self.palms.iter().all(|p| (p.x - x).hypot(p.y - y) > 105.0) {
-                    self.palms.push(PalmPlacement { x, y, scale: 0.58, variant, mirror: if x > self.b.w * 0.5 { -1.0 } else { 1.0 } });
+        // Ưu tiên khoảng cách đẹp; nếu vùng cát hẹp thì nới dần để đúng số
+        // lượng người dùng chọn. Mọi ứng viên vẫn phải nằm trong vùng âm của
+        // trường (trên cát), không rơi xuống mặt nước.
+        for min_dist in [58.0f32, 40.0, 28.0, 18.0] {
+            for &(x, y) in &candidates {
+                if self.palms.len() >= want { break; }
+                if self.palms.iter().all(|p| (p.x - x).hypot(p.y - y) > min_dist) {
+                    self.palms.push(PalmPlacement { x, y, scale: 0.62, variant, mirror: if x > self.b.w * 0.5 { -1.0 } else { 1.0 } });
                     variant = (variant + 1.0) % 5.0;
                 }
-                x += 62.0;
             }
-            y += 62.0;
+            if self.palms.len() >= want { break; }
         }
     }
 
