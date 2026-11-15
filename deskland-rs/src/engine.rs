@@ -3,6 +3,7 @@
 //! Port 1:1 từ prototype/meadow.html + prototype/flat.html.
 
 use glow::HasContext;
+use image::{imageops, RgbaImage};
 use std::collections::HashMap;
 
 pub const STEP: f32 = 5.0;
@@ -466,6 +467,27 @@ impl Prog {
         Ok(Prog { prog, locs: HashMap::new() })
     }
 
+    pub fn from_parts(gl: &glow::Context, vert: &str, frag: &str) -> Result<Prog, String> {
+        let compile = |ty: u32, src: &str| -> Result<glow::Shader, String> {
+            unsafe {
+                let sh = gl.create_shader(ty)?;
+                gl.shader_source(sh, src);
+                gl.compile_shader(sh);
+                if !gl.get_shader_compile_status(sh) { let e = gl.get_shader_info_log(sh); gl.delete_shader(sh); return Err(e); }
+                Ok(sh)
+            }
+        };
+        let vs = compile(glow::VERTEX_SHADER, vert)?;
+        let fs = compile(glow::FRAGMENT_SHADER, frag)?;
+        unsafe {
+            let p = gl.create_program()?;
+            gl.attach_shader(p, vs); gl.attach_shader(p, fs); gl.link_program(p);
+            gl.delete_shader(vs); gl.delete_shader(fs);
+            if !gl.get_program_link_status(p) { return Err(gl.get_program_info_log(p)); }
+            Ok(Prog { prog: p, locs: HashMap::new() })
+        }
+    }
+
     fn loc(&mut self, gl: &glow::Context, name: &'static str) -> Option<glow::UniformLocation> {
         let prog = self.prog;
         self.locs
@@ -497,6 +519,8 @@ pub trait Theme {
     fn set_icons(&mut self, gl: &glow::Context, icons: Vec<IconBox>, first: bool, now: f64);
     /// Cập nhật mô phỏng (dt giây) rồi vẽ vào framebuffer đang bind (kích thước buf_w x buf_h).
     fn frame(&mut self, gl: &glow::Context, shared: &mut Shared, dt: f32, now: f64);
+    /// Vẽ các lớp ảnh phụ sau cảnh chính (ví dụ atlas cây dừa của bãi biển).
+    fn draw_overlay(&mut self, _gl: &glow::Context, _shared: &mut Shared, _now: f64) {}
     /// Vẽ lại một khung đứng yên (khi đang tạm dừng nhưng biểu tượng vừa đổi).
     fn settle(&mut self, gl: &glow::Context, shared: &mut Shared, now: f64);
     /// Xử lý click chuột vào vùng trống.
@@ -518,6 +542,8 @@ pub struct Shared {
     pub post: Prog,
     /// Chương trình cắt một vùng từ canvas panorama dùng chung về từng màn hình.
     pub crop: Prog,
+    pub palm: Prog,
+    pub palm_atlas: glow::Texture,
     pub day_phase: f32,
     pub weather: f32,
 }
@@ -586,3 +612,73 @@ void main() {
   o = texture(uScene, uv);
 }
 "#;
+
+pub const PALM_VERT: &str = r#"#version 330 core
+uniform vec2 uRes;
+uniform vec4 uPalm;
+uniform float uPalmMirror;
+uniform float uTime;
+out vec2 vUv;
+void main() {
+  vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
+  vec2 local = corner * vec2(224.0, 256.0) - vec2(112.0, 162.0);
+  local.x *= uPalmMirror;
+  float a = sin(uTime * .65 + uPalm.w * 2.0) * .008;
+  local = mat2(cos(a), sin(a), -sin(a), cos(a)) * local;
+  vec2 p = uPalm.xy + local * uPalm.z;
+  gl_Position = vec4(p.x / uRes.x * 2.0 - 1.0, 1.0 - p.y / uRes.y * 2.0, 0.0, 1.0);
+  vUv = vec2((corner.x + uPalm.w) / 5.0, corner.y);
+}"#;
+
+pub const PALM_FRAG: &str = r#"#version 330 core
+uniform sampler2D uPalmAtlas;
+uniform float uPalmOpacity;
+in vec2 vUv;
+out vec4 o;
+void main() {
+  vec4 tree = texture(uPalmAtlas, vUv);
+  if (tree.a < .002) discard;
+  o = vec4(tree.rgb, tree.a * uPalmOpacity);
+}"#;
+
+pub fn build_palm_atlas(gl: &glow::Context) -> Result<glow::Texture, String> {
+    let files: [&[u8]; 5] = [
+        include_bytes!("../../prototype/assets/beach-coconut-palm-v2.png"),
+        include_bytes!("../../prototype/assets/beach-coconut-palm-curved.png"),
+        include_bytes!("../../prototype/assets/beach-coconut-palm-airy.png"),
+        include_bytes!("../../prototype/assets/beach-coconut-palm-windswept.png"),
+        include_bytes!("../../prototype/assets/beach-coconut-palm-arch.png"),
+    ];
+    let mut atlas = RgbaImage::new(224 * 5, 256);
+    for (i, bytes) in files.iter().enumerate() {
+        let img = image::load_from_memory(bytes).map_err(|e| format!("đọc texture cây dừa: {e}"))?.to_rgba8();
+        let (w, h) = match i { 3 => (148, 138), 4 => (128, 119), _ => (168, 156) };
+        let resized = imageops::resize(&img, w, h, imageops::FilterType::Triangle);
+        imageops::overlay(&mut atlas, &resized, (i as i64 * 224 + (224 - w) / 2), (162 - h) as i64);
+    }
+    unsafe {
+        let t = gl.create_texture()?;
+        gl.bind_texture(glow::TEXTURE_2D, Some(t));
+        gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::RGBA8 as i32, atlas.width() as i32, atlas.height() as i32, 0, glow::RGBA, glow::UNSIGNED_BYTE, Some(atlas.as_raw()));
+        set_tex_params(gl, glow::LINEAR, glow::CLAMP_TO_EDGE);
+        Ok(t)
+    }
+}
+
+pub fn draw_palm(gl: &glow::Context, shared: &mut Shared, w: f32, h: f32, x: f32, y: f32, scale: f32, variant: f32, mirror: f32, opacity: f32, now: f64) {
+    if opacity <= 0.001 { return; }
+    unsafe {
+        gl.enable(glow::BLEND);
+        gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+        gl.active_texture(glow::TEXTURE0);
+        gl.bind_texture(glow::TEXTURE_2D, Some(shared.palm_atlas));
+        gl.use_program(Some(shared.palm.prog));
+    }
+    shared.palm.i1(gl, "uPalmAtlas", 0);
+    shared.palm.f2(gl, "uRes", w, h);
+    shared.palm.f4v(gl, "uPalm", &[x, y, scale, variant]);
+    shared.palm.f1(gl, "uPalmMirror", mirror);
+    shared.palm.f1(gl, "uPalmOpacity", opacity);
+    shared.palm.f1(gl, "uTime", (now / 1000.0) as f32);
+    unsafe { gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4); gl.use_program(None); gl.disable(glow::BLEND); }
+}

@@ -1,5 +1,5 @@
 //! Chủ đề Bãi biển (flat.html): bờ biển uốn quanh biểu tượng, sóng vỗ, thuyền kayak và hải âu.
-//! Chưa port: cây dừa (beach-palms.js).
+//! Cây dừa dùng atlas PNG gốc và được vẽ ở lớp overlay sau cảnh chính.
 
 use crate::engine::*;
 use glow::HasContext;
@@ -20,6 +20,7 @@ pub struct Params {
     pub grain: f32,
     pub kayaks: f32,
     pub birds: f32,
+    pub palms: f32,
 }
 
 impl Params {
@@ -38,6 +39,7 @@ impl Params {
             grain: 1.0,
             kayaks: g("kayaks", 2.0),
             birds: g("birds", 3.0),
+            palms: g("palms", 4.0).clamp(0.0, 10.0),
         }
     }
 }
@@ -64,6 +66,9 @@ struct Bird {
     wander: f32,
 }
 
+#[derive(Clone, Copy)]
+struct PalmPlacement { x: f32, y: f32, scale: f32, variant: f32, mirror: f32 }
+
 pub struct Beach {
     b: Base,
     p: Params,
@@ -74,6 +79,7 @@ pub struct Beach {
     sand_marks: Vec<[f32; 4]>,
     kayak_target: Option<(f32, f32, f32)>,
     t0: f64,
+    palms: Vec<PalmPlacement>,
 }
 
 fn turn_toward(h: f32, target: f32, rate: f32) -> f32 {
@@ -94,11 +100,32 @@ impl Beach {
             sand_marks: Vec::new(),
             kayak_target: None,
             t0: now,
+            palms: Vec::new(),
         };
         // startHostedMode(): icons = []; commit(true); syncBirds(false)
         s.commit(gl, true, now);
         s.sync_birds(false);
         s
+    }
+
+    fn sync_palms(&mut self) {
+        self.palms.clear();
+        let want = self.p.palms.round().clamp(0.0, 10.0) as usize;
+        if want == 0 { return; }
+        let candidates = [
+            (0.12, 0.74, 0.62, 0.0), (0.25, 0.66, 0.58, 1.0), (0.42, 0.82, 0.60, 2.0),
+            (0.58, 0.69, 0.58, 3.0), (0.76, 0.78, 0.62, 4.0), (0.90, 0.62, 0.56, 1.0),
+            (0.18, 0.52, 0.52, 2.0), (0.68, 0.53, 0.54, 0.0), (0.84, 0.46, 0.50, 3.0),
+            (0.48, 0.58, 0.52, 4.0),
+        ];
+        for &(nx, ny, scale, variant) in &candidates {
+            if self.palms.len() >= want { break; }
+            let x = self.b.w * nx; let y = self.b.h * ny;
+            let s = self.b.cur_s(x, y);
+            if s < -22.0 && s > -95.0 && self.palms.iter().all(|p| (p.x - x).hypot(p.y - y) > 110.0) {
+                self.palms.push(PalmPlacement { x, y, scale, variant, mirror: if nx > 0.5 { -1.0 } else { 1.0 } });
+            }
+        }
     }
 
     fn commit(&mut self, gl: &glow::Context, from_empty: bool, now: f64) {
@@ -381,6 +408,11 @@ impl Theme for Beach {
             self.sync_kayaks();
             self.b.cur_mix = 0.0;
         }
+        self.sync_palms();
+    }
+
+    fn draw_overlay(&mut self, gl: &glow::Context, sh: &mut Shared, now: f64) {
+        for p in &self.palms { draw_palm(gl, sh, self.b.w, self.b.h, p.x, p.y, p.scale, p.variant, p.mirror, 1.0, now); }
     }
 
     fn frame(&mut self, gl: &glow::Context, sh: &mut Shared, dt: f32, now: f64) {

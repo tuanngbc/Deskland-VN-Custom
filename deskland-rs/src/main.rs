@@ -613,9 +613,9 @@ fn web_init(app: &App) -> serde_json::Value {
                 "cats",
                 "boxing-ring"
             ],
-            // Ảnh cây dừa gốc cần texture atlas; chưa bật renderer giả trong native.
-            "hide": ["palms", "showBoy", "showCat"],
-            "force": { "palms": 0, "showBoy": 0, "showCat": 0 },
+            // Cây dừa dùng atlas PNG gốc được nhúng trong binary Rust.
+            "hide": ["showBoy", "showCat"],
+            "force": { "showBoy": 0, "showCat": 0 },
         },
     })
 }
@@ -824,7 +824,9 @@ impl App {
         let noise_tex = engine::build_noise_tex(gl, &noise);
         let post = engine::Prog::new(gl, engine::POST_FRAG)?;
         let crop = engine::Prog::new(gl, engine::CROP_FRAG)?;
-        self.shared = Some(Shared { noise_tex, seed, prog, post, crop, day_phase: self.environment.day_phase(), weather: self.environment.weather_amount(self.now()) });
+        let palm = engine::Prog::from_parts(gl, engine::PALM_VERT, engine::PALM_FRAG)?;
+        let palm_atlas = engine::build_palm_atlas(gl)?;
+        self.shared = Some(Shared { noise_tex, seed, prog, post, crop, palm, palm_atlas, day_phase: self.environment.day_phase(), weather: self.environment.weather_amount(self.now()) });
         Ok(())
     }
 
@@ -834,7 +836,9 @@ impl App {
                 ctx.gl.delete_program(s.prog.prog);
                 ctx.gl.delete_program(s.post.prog);
                 ctx.gl.delete_program(s.crop.prog);
+                ctx.gl.delete_program(s.palm.prog);
                 ctx.gl.delete_texture(s.noise_tex);
+                ctx.gl.delete_texture(s.palm_atlas);
             }
         }
     }
@@ -1267,6 +1271,7 @@ impl App {
                 let dt = if wp0.last_frame > 0.0 { ((now - wp0.last_frame) / 1000.0).min(0.1) as f32 } else { 0.03 };
                 wp0.last_frame = now;
                 wp0.theme.frame(gl, shared, dt, now);
+                wp0.theme.draw_overlay(gl, shared, now);
             }
             let (world, total_w, total_h, ptex) = (pan.world, (pan.world.right - pan.world.left) as f32 * pan.scale, (pan.world.bottom - pan.world.top) as f32 * pan.scale, pan.tex);
             for wp in &mut self.walls {
@@ -1316,6 +1321,7 @@ impl App {
                 wp.last_frame = now;
                 wp.theme.frame(gl, shared, dt, now);
             }
+            wp.theme.draw_overlay(gl, shared, now);
             if let Some((out_fbo, _, pbo)) = wp.out {
                 unsafe {
                     // Hậu kỳ đồng thời phóng hình lên độ phân giải vật lý.
