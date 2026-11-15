@@ -659,7 +659,7 @@ out vec4 o;
 void main() {
   vec4 tree = texture(uPalmAtlas, vUv);
   if (tree.a < .002) discard;
-  vec3 color = uPalmShadow > .5 ? vec3(.08, .12, .10) : tree.rgb;
+  vec3 color = uPalmShadow > .5 ? vec3(.035, .065, .050) : tree.rgb;
   o = vec4(color, tree.a * uPalmOpacity);
 }"#;
 
@@ -701,7 +701,7 @@ pub fn draw_palm(gl: &glow::Context, shared: &mut Shared, w: f32, h: f32, x: f32
     let phase = shared.day_phase.clamp(0.0, 1.0);
     let sun_height = (((phase - 0.25) * std::f32::consts::PI).sin()).max(0.0);
     let sun_x = -((phase - 0.5) * std::f32::consts::PI).sin();
-    let shadow_opacity = (sun_height * (0.16 + sun_height * 0.12)).clamp(0.0, 0.30);
+    let shadow_opacity = (sun_height * (0.20 + sun_height * 0.16)).clamp(0.0, 0.38);
     let shadow_offset = -sun_x * (18.0 + (1.0 - sun_height) * 64.0);
     let shadow_shear = -sun_x * 0.16;
     let shadow_flatten = 0.14 + sun_height * 0.20;
