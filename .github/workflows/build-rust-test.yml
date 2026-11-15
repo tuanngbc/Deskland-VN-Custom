@@ -23,11 +23,13 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
+          cargo test --locked
           cargo build --release
 
       - name: Package Rust native build
         run: |
-          $name = 'Deskland-VN-Rust-test-1.0.2-win-x64'
+          $short = '${{ github.sha }}'.Substring(0, 7)
+          $name = "Deskland-VN-Rust-panorama-$short-win-x64"
           $dir = "dist\$name"
           New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item deskland-rs\target\release\deskland-rs.exe "$dir\Deskland-VN.exe"
@@ -38,6 +40,7 @@ jobs:
             if (Test-Path $file) { Copy-Item $file $dir }
           }
           Copy-Item deskland-rs\README.md "$dir\README-deskland-rs.md"
+          '${{ github.sha }}' | Set-Content "$dir\BUILD-COMMIT.txt" -Encoding ascii
           @"
           Deskland Rust Native test build
 

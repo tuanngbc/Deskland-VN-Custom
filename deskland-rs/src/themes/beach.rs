@@ -66,8 +66,7 @@ struct Bird {
     wander: f32,
 }
 
-#[derive(Clone, Copy)]
-struct PalmPlacement { x: f32, y: f32, scale: f32, variant: f32, mirror: f32 }
+use crate::palm_layout::{self, PalmPlacement};
 
 pub struct Beach {
     b: Base,
@@ -109,42 +108,13 @@ impl Beach {
     }
 
     fn sync_palms(&mut self) {
-        self.palms.clear();
         let want = self.p.palms.round().clamp(0.0, 10.0) as usize;
-        if want == 0 { return; }
-        let mut candidates: Vec<(f32, f32)> = Vec::new();
-        // Bản gốc chọn dải cát -25..-58. Hai dải nới rộng bên dưới chỉ dùng
-        // khi màn hình/biểu tượng quá thưa, để số lượng đã chọn (ví dụ 8) vẫn
-        // hiện đủ thay vì bị lưới thưa 62 px lọc còn một cây.
-        for &(lo, hi) in &[(-58.0, -25.0), (-90.0, -8.0), (-180.0, 2.0)] {
-            for y in (92..(self.b.h.max(120.0) as i32 - 78)).step_by(18) {
-                let row = y as f32;
-                let offset = if (y / 18) % 2 == 0 { 0.0 } else { 9.0 };
-                for x in (78..(self.b.w.max(110.0) as i32 - 72)).step_by(18) {
-                    let px = x as f32 + offset;
-                    let s = self.b.target_s(px, row);
-                    if s > lo && s < hi && !candidates.iter().any(|&(cx, cy)| (cx - px).hypot(cy - row) < 14.0) {
-                        candidates.push((px, row));
-                    }
-                }
-            }
-            if candidates.len() >= want * 8 { break; }
+        self.palms = palm_layout::choose(self.b.w, self.b.h, self.b.noise.seed, want,
+            &self.b.viewports, &self.b.icons, |x, y| self.b.target_s(x, y));
+        crate::log!("Bãi biển: bố trí {}/{} cây dừa trên vùng màn hình thật", self.palms.len(), want);
+        for p in &self.palms {
+            crate::log!("Dừa: x={:.1} y={:.1} scale={:.3} variant={}", p.x, p.y, p.scale, p.variant);
         }
-        let mut variant = 0.0;
-        // Ưu tiên khoảng cách đẹp; nếu vùng cát hẹp thì nới dần để đúng số
-        // lượng người dùng chọn. Mọi ứng viên vẫn phải nằm trong vùng âm của
-        // trường (trên cát), không rơi xuống mặt nước.
-        for min_dist in [58.0f32, 40.0, 28.0, 18.0] {
-            for &(x, y) in &candidates {
-                if self.palms.len() >= want { break; }
-                if self.palms.iter().all(|p| (p.x - x).hypot(p.y - y) > min_dist) {
-                    self.palms.push(PalmPlacement { x, y, scale: 0.62, variant, mirror: if x > self.b.w * 0.5 { -1.0 } else { 1.0 } });
-                    variant = (variant + 1.0) % 5.0;
-                }
-            }
-            if self.palms.len() >= want { break; }
-        }
-        crate::log!("Bãi biển: bố trí {}/{} cây dừa trên canvas {:.0}x{:.0}", self.palms.len(), want, self.b.w, self.b.h);
     }
 
     fn commit(&mut self, gl: &glow::Context, from_empty: bool, now: f64) {
@@ -418,6 +388,10 @@ impl Beach {
 }
 
 impl Theme for Beach {
+    fn set_viewports(&mut self, viewports: Vec<palm_layout::Viewport>) {
+        self.b.viewports = viewports;
+    }
+
     fn set_icons(&mut self, gl: &glow::Context, icons: Vec<IconBox>, first: bool, now: f64) {
         self.b.icons = icons;
         self.commit(gl, first, now);

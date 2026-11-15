@@ -239,6 +239,7 @@ pub struct Base {
     pub fb: Vec<f32>,
     pub cur_mix: f32,
     pub icons: Vec<IconBox>,
+    pub viewports: Vec<crate::palm_layout::Viewport>,
     pub field_ms: f64,
 }
 
@@ -264,6 +265,7 @@ impl Base {
             fb: Vec::new(),
             cur_mix: 1.0,
             icons: Vec::new(),
+            viewports: vec![[0.0, 0.0, w, h]],
             field_ms: 0.0,
         }
     }
@@ -522,6 +524,8 @@ impl Prog {
 
 // ---------------------------------------------------------------- Giao diện chủ đề
 pub trait Theme {
+    /// Physical outputs in scene coordinates; panorama gaps are not visible land.
+    fn set_viewports(&mut self, _viewports: Vec<crate::palm_layout::Viewport>) {}
     /// Biểu tượng thay đổi (toạ độ CSS của màn hình này). `first` = lần đầu nhận biểu tượng.
     fn set_icons(&mut self, gl: &glow::Context, icons: Vec<IconBox>, first: bool, now: f64);
     /// Cập nhật mô phỏng (dt giây) rồi vẽ vào framebuffer đang bind (kích thước buf_w x buf_h).
@@ -552,6 +556,7 @@ pub struct Shared {
     pub palm: Prog,
     pub palm_atlas: glow::Texture,
     pub day_phase: f32,
+    pub sun: crate::solar::Sun,
     pub weather: f32,
 }
 
@@ -628,21 +633,16 @@ uniform float uTime;
 uniform float uPalmShadow;
 uniform float uShadowShear;
 uniform float uShadowFlatten;
-uniform float uShadowOffset;
-uniform float uShadowBase;
 out vec2 vUv;
 void main() {
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
   vec2 local = corner * vec2(224.0, 256.0) - vec2(112.0, 162.0);
   local.x *= uPalmMirror;
   if (uPalmShadow > 0.5) {
-    // Ép silhouette xuống mặt cát và kéo theo hướng ngược mặt trời.
-    // uShadowOffset đổi dấu từ đông sang tây; uShadowFlatten ngắn nhất vào
-    // giữa trưa và dài hơn khi mặt trời thấp.
-    // uShadowBase và uShadowFlatten thay đổi theo độ cao mặt trời: giữa trưa
-    // bóng co sát chân, sáng/chiều thì kéo dài trên mặt cát.
-    local = vec2(local.x * .84 + local.y * uShadowShear + uShadowOffset,
-                 uShadowBase - local.y * uShadowFlatten);
+    // Project from the anchored foot (local=0), without translating the shadow
+    // away from the trunk. Image y is negative above the foot.
+    float height = max(-local.y, 0.0);
+    local = vec2(local.x + height * uShadowShear, height * uShadowFlatten);
   }
   float a = sin(uTime * .65 + uPalm.w * 2.0) * .008;
   local = mat2(cos(a), sin(a), -sin(a), cos(a)) * local;
@@ -661,7 +661,8 @@ void main() {
   vec4 tree = texture(uPalmAtlas, vUv);
   if (tree.a < .002) discard;
   vec3 color = uPalmShadow > .5 ? vec3(.035, .065, .050) : tree.rgb;
-  o = vec4(color, tree.a * uPalmOpacity);
+  float alpha = tree.a * uPalmOpacity;
+  o = vec4(color * alpha, alpha);
 }"#;
 
 pub fn build_palm_atlas(gl: &glow::Context) -> Result<glow::Texture, String> {
@@ -699,14 +700,8 @@ pub fn draw_palm(gl: &glow::Context, shared: &mut Shared, w: f32, h: f32, x: f32
     if opacity <= 0.001 { return; }
     // Mặt trời đi từ đông (buổi sáng) lên cao rồi sang tây (buổi chiều).
     // Bóng chỉ hiện ban ngày, ngắn nhất vào giữa trưa và đổi hướng theo giờ.
-    let phase = shared.day_phase.clamp(0.0, 1.0);
-    let sun_height = (((phase - 0.25) * std::f32::consts::PI).sin()).max(0.0);
-    let sun_x = -((phase - 0.5) * std::f32::consts::PI).sin();
-    let shadow_opacity = (sun_height * (0.20 + sun_height * 0.16)).clamp(0.0, 0.38);
-    let shadow_offset = -sun_x * (18.0 + (1.0 - sun_height) * 64.0);
-    let shadow_shear = -sun_x * 0.16;
-    let shadow_flatten = 0.10 + (1.0 - sun_height) * 0.30;
-    let shadow_base = 24.0 + (1.0 - sun_height) * 70.0;
+    let (shadow_shear, shadow_flatten, sunlight) = crate::solar::shadow(shared.sun);
+    let shadow_opacity = sunlight * (1.0 - shared.weather * 0.85);
     unsafe {
         gl.enable(glow::BLEND);
         gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
@@ -725,15 +720,11 @@ pub fn draw_palm(gl: &glow::Context, shared: &mut Shared, w: f32, h: f32, x: f32
         shared.palm.f1(gl, "uPalmOpacity", opacity * shadow_opacity);
         shared.palm.f1(gl, "uShadowShear", shadow_shear);
         shared.palm.f1(gl, "uShadowFlatten", shadow_flatten);
-        shared.palm.f1(gl, "uShadowOffset", shadow_offset);
-        shared.palm.f1(gl, "uShadowBase", shadow_base);
         unsafe { gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4); }
     }
     shared.palm.f1(gl, "uPalmShadow", 0.0);
     shared.palm.f1(gl, "uPalmOpacity", opacity);
     shared.palm.f1(gl, "uShadowShear", 0.0);
     shared.palm.f1(gl, "uShadowFlatten", 1.0);
-    shared.palm.f1(gl, "uShadowOffset", 0.0);
-    shared.palm.f1(gl, "uShadowBase", 0.0);
     unsafe { gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4); gl.use_program(None); gl.disable(glow::BLEND); }
 }

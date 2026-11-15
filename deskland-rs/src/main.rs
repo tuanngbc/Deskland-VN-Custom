@@ -6,6 +6,8 @@
 
 mod desktop;
 mod engine;
+mod palm_layout;
+mod solar;
 mod lock;
 mod settings;
 mod web;
@@ -429,6 +431,22 @@ fn local_day_phase() -> f32 {
 }
 
 impl Environment {
+    fn sun(&self) -> solar::Sun {
+        if !self.time_enabled { return solar::clock(0.42); }
+        if let Some(loc) = self.location.as_ref() {
+            if let (Some(lat), Some(lon)) = (
+                loc.get("latitude").and_then(|v| v.as_f64()),
+                loc.get("longitude").and_then(|v| v.as_f64())) {
+                if lat.is_finite() && lon.is_finite() && lat.abs() <= 90.0 && lon.abs() <= 180.0 {
+                    let utc = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default().as_secs_f64();
+                    return solar::position(utc, lat, lon);
+                }
+            }
+        }
+        solar::clock(local_day_phase())
+    }
+
     fn day_phase(&self) -> f32 {
         if self.time_enabled { local_day_phase() } else { 0.5 }
     }
@@ -833,7 +851,7 @@ impl App {
         let crop = engine::Prog::new(gl, engine::CROP_FRAG)?;
         let palm = engine::Prog::from_parts(gl, engine::PALM_VERT, engine::PALM_FRAG)?;
         let palm_atlas = engine::build_palm_atlas(gl)?;
-        self.shared = Some(Shared { noise_tex, seed, prog, post, crop, palm, palm_atlas, day_phase: self.environment.day_phase(), weather: self.environment.weather_amount(self.now()) });
+        self.shared = Some(Shared { noise_tex, seed, prog, post, crop, palm, palm_atlas, sun: self.environment.sun(), day_phase: self.environment.day_phase(), weather: self.environment.weather_amount(self.now()) });
         Ok(())
     }
 
@@ -967,7 +985,13 @@ impl App {
             } else {
                 (w, h, buf_w, buf_h, scale)
             };
-            let theme = self.make_theme(gl, theme_w, theme_h, theme_bw, theme_bh, theme_scale, idx);
+            let mut theme = self.make_theme(gl, theme_w, theme_h, theme_bw, theme_bh, theme_scale, idx);
+            if let Some(world) = panorama_world {
+                theme.set_viewports(mons.iter().map(|m| [
+                    (m.rect.left-world.left) as f32, (m.rect.top-world.top) as f32,
+                    (m.rect.right-m.rect.left) as f32, (m.rect.bottom-m.rect.top) as f32,
+                ]).collect());
+            }
             log!("Màn hình {idx}: {pw}x{ph}, dpr {:.2}, bộ đệm vẽ {buf_w}x{buf_h}", m.dpr);
             self.walls.push(Wallpaper {
                 hwnd,
@@ -1130,6 +1154,10 @@ impl App {
         }
         let ctx = self.ctx.take().unwrap();
         let mut walls = std::mem::take(&mut self.walls);
+        let viewports = self.panorama.as_ref().map(|pan| walls.iter().map(|wp| [
+            (wp.screen.left-pan.world.left) as f32, (wp.screen.top-pan.world.top) as f32,
+            wp.phys_w as f32, wp.phys_h as f32,
+        ]).collect::<Vec<_>>());
         for (i, wp) in walls.iter_mut().enumerate() {
             ctx.make_current(wp.gl_dc);
             wp.theme.destroy(&ctx.gl);
@@ -1141,6 +1169,7 @@ impl App {
                 (wp.phys_w as f32 / wp.dpr, wp.phys_h as f32 / wp.dpr, wp.buf_w, wp.buf_h, wp.dpr.min(0.72))
             };
             wp.theme = self.make_theme(&ctx.gl, w, h, bw, bh, scale, i);
+            if let Some(ref v) = viewports { wp.theme.set_viewports(v.clone()); }
             wp.last_icons = None;
             wp.last_frame = now;
         }
@@ -1267,11 +1296,13 @@ impl App {
         self.maybe_fetch_live_weather(now);
         let t0 = Instant::now();
         let day_phase = self.environment.day_phase();
+        let sun = self.environment.sun();
         let live = self.live_weather.lock().ok().and_then(|g| *g);
         let weather = live_weather_amount(&self.environment, live).unwrap_or_else(|| self.environment.weather_amount(now));
         let ctx = self.ctx.as_ref().unwrap();
         let shared = self.shared.as_mut().unwrap();
         shared.day_phase = day_phase;
+        shared.sun = sun;
         shared.weather = weather;
         let gl = &ctx.gl;
         let mut drew = false;
@@ -1369,6 +1400,15 @@ impl App {
 
     /// Đọc lại bộ đệm vẽ của từng màn hình từ GPU và lưu BMP (kiểm tra shader không cần chụp màn hình).
     fn snapshot(&self, dir: &str) {
+        let outputs: Vec<_> = self.walls.iter().map(|w| serde_json::json!({
+            "screen": [w.screen.left, w.screen.top, w.screen.right, w.screen.bottom],
+            "dpiScale": w.dpr,
+            "icons": w.last_icons.as_ref().map(|rs| rs.iter().map(|r|
+                [r.left, r.top, r.right, r.bottom]).collect::<Vec<_>>()),
+        })).collect();
+        let _ = std::fs::write(format!("{dir}\\layout.json"), serde_json::json!({
+            "mode": self.cfg.mode, "theme": self.cfg.theme, "outputs": outputs,
+        }).to_string());
         for i in 0..self.walls.len() {
             let path = format!("{dir}\\{}-screen{i}.bmp", self.cfg.theme);
             match std::fs::write(&path, self.read_bmp(i)) {
@@ -1705,7 +1745,7 @@ fn main() {
         unsafe { Shell_NotifyIconW(NIM_DELETE, &nid) };
         return;
     }
-    if headless {
+    if headless && !args.iter().any(|a| a == "--real-icons") {
         let now = app.now();
         if let Some(ctx) = app.ctx.as_ref() {
             for wp in &mut app.walls {
