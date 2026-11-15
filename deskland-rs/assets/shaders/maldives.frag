@@ -14,6 +14,7 @@ uniform vec4 uSand[4];         // x, y, age, rot+1
 uniform vec4 uBait;            // x, y, age, alpha
 uniform float uBirdN;
 uniform vec4 uBird[8];
+uniform float uPalms;
 out vec4 o;
 
 // Bảng màu Maldives: xanh bạc hà trong vắt -> xanh ngọc bích; bãi cát trắng kem
@@ -106,6 +107,16 @@ vec3 gullSD(vec2 q, float span) {
   float chord = mix(4.4, 1.3, u);
   float wing = max(max(q.x - lead, lead - chord - q.x), y - reach - 1.0);
   return vec3(min(body, tail), wing, u);
+}
+float palmSD(vec2 q) {
+  float trunk = segSD(q, vec2(0.0, 0.0), vec2(8.0, 96.0)) - 4.5;
+  float crown = 999.0;
+  crown = min(crown, segSD(q, vec2(7.0, 92.0), vec2(-55.0, 123.0)) - 6.0);
+  crown = min(crown, segSD(q, vec2(8.0, 95.0), vec2(66.0, 126.0)) - 6.0);
+  crown = min(crown, segSD(q, vec2(8.0, 96.0), vec2(-18.0, 150.0)) - 6.0);
+  crown = min(crown, segSD(q, vec2(8.0, 96.0), vec2(38.0, 153.0)) - 6.0);
+  crown = min(crown, length(q - vec2(8.0, 99.0)) - 14.0);
+  return min(trunk, crown);
 }
 
 void main() {
@@ -393,6 +404,18 @@ void main() {
       col = mix(col, vec3(0.99, 0.99, 0.98), ss(0.6, -0.6, g.x));
       col = mix(col, vec3(0.98, 0.78, 0.22), ss(0.5, -0.5, length(rot(-b.z) * d0 - vec2(7.2, 0.0)) - 0.9));
     }
+  }
+
+  // Cây dừa native: chi phí thấp, dùng cùng canvas nên không bị đứt giữa 2 màn hình.
+  for (int i = 0; i < 4; i++) {
+    if (float(i) >= uPalms) break;
+    float fi = float(i);
+    vec2 c = vec2(uRes.x * (0.12 + fi * 0.25), uRes.y * (0.10 + 0.015 * hash(vec2(fi, 9.0))));
+    vec2 q = (p - c) / (0.72 + 0.12 * hash(vec2(fi, 3.0)));
+    float sd = palmSD(q);
+    float ink = ss(3.0, -2.0, sd);
+    col = mix(col, vec3(0.16, 0.30, 0.20), ink * 0.82);
+    col = mix(col, vec3(0.07, 0.16, 0.12), ss(1.0, -1.0, sd) * 0.72);
   }
 
   if (uDebug > 0.5) col = mix(col, vec3(0.9, 0.15, 0.15), 1.0 - ss(0.0, 1.5, abs(s0)));

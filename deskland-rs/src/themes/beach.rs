@@ -20,6 +20,7 @@ pub struct Params {
     pub grain: f32,
     pub kayaks: f32,
     pub birds: f32,
+    pub palms: f32,
 }
 
 impl Params {
@@ -38,6 +39,7 @@ impl Params {
             grain: 1.0,
             kayaks: g("kayaks", 2.0),
             birds: g("birds", 3.0),
+            palms: g("palms", 4.0).clamp(0.0, 4.0),
         }
     }
 }
@@ -366,6 +368,7 @@ impl Beach {
         p.f4v(gl, "uRip", &rip);
         p.f4v(gl, "uSand", &sand);
         p.f1(gl, "uBirdN", self.birds.len() as f32);
+        p.f1(gl, "uPalms", q.palms);
         p.f4v(gl, "uBird", &bird);
         unsafe { gl.draw_arrays(glow::TRIANGLES, 0, 3) };
     }

@@ -575,9 +575,10 @@ fn web_init(app: &App) -> serde_json::Value {
                 "cats",
                 "boxing-ring"
             ],
-            // Chưa port: cây dừa, cậu bé, mèo -> ẩn thanh trượt, xem trước cũng tắt cho giống desktop
-            "hide": ["palms", "showBoy", "showCat"],
-            "force": { "palms": 0, "showBoy": 0, "showCat": 0 },
+            // Cây dừa đã được vẽ trong shader native cho hai theme biển; các
+            // tuỳ chọn nhân vật chưa port vẫn giữ mặc định tắt.
+            "hide": ["showBoy", "showCat"],
+            "force": { "showBoy": 0, "showCat": 0 },
         },
     })
 }
@@ -617,11 +618,24 @@ struct Wallpaper {
     last_frame: f64,
 }
 
+/// Canvas ảo dùng cho chế độ toàn cảnh. Một theme duy nhất được vẽ vào
+/// texture này rồi cắt ra từng màn hình; nhờ vậy cảnh, sóng và vật thể không
+/// bị khởi tạo lại thành các đảo độc lập ở mỗi monitor.
+struct PanoramaSurface {
+    fbo: glow::Framebuffer,
+    tex: glow::Texture,
+    buf_w: i32,
+    buf_h: i32,
+    scale: f32,
+    world: RECT,
+}
+
 struct App {
     ctx: Option<wgl::GlContext>,
     shared: Option<Shared>,
     vao: Option<glow::VertexArray>,
     walls: Vec<Wallpaper>,
+    panorama: Option<PanoramaSurface>,
     reader: desktop::IconReader,
     cfg: Config,
     environment: Environment,
@@ -764,7 +778,8 @@ impl App {
         log!("Biên dịch shader '{}' mất {:.0} ms", self.cfg.theme, t0.elapsed().as_secs_f64() * 1000.0);
         let noise_tex = engine::build_noise_tex(gl, &noise);
         let post = engine::Prog::new(gl, engine::POST_FRAG)?;
-        self.shared = Some(Shared { noise_tex, seed, prog, post, day_phase: self.environment.day_phase(), weather: self.environment.weather_amount(self.now()) });
+        let crop = engine::Prog::new(gl, engine::CROP_FRAG)?;
+        self.shared = Some(Shared { noise_tex, seed, prog, post, crop, day_phase: self.environment.day_phase(), weather: self.environment.weather_amount(self.now()) });
         Ok(())
     }
 
@@ -773,6 +788,7 @@ impl App {
             unsafe {
                 ctx.gl.delete_program(s.prog.prog);
                 ctx.gl.delete_program(s.post.prog);
+                ctx.gl.delete_program(s.crop.prog);
                 ctx.gl.delete_texture(s.noise_tex);
             }
         }
@@ -782,6 +798,14 @@ impl App {
         self.ensure_seed();
         let mons = monitors();
         log!("Phát hiện {} màn hình", mons.len());
+        let panorama_world = if self.cfg.mode == "panorama" && !mons.is_empty() {
+            let left = mons.iter().map(|m| m.rect.left).min().unwrap_or(0);
+            let top = mons.iter().map(|m| m.rect.top).min().unwrap_or(0);
+            let right = mons.iter().map(|m| m.rect.right).max().unwrap_or(1920);
+            let bottom = mons.iter().map(|m| m.rect.bottom).max().unwrap_or(1080);
+            Some(RECT { left, top, right, bottom })
+        } else { None };
+        let panorama_scale = mons.iter().map(|m| m.dpr).fold(0.72f32, f32::min).clamp(0.5, 0.72);
         let cls = wide(if self.saver { SAVER_CLASS } else { WALL_CLASS });
         let title = wide("DesklandWindow");
         let ex_style = if self.saver { WS_EX_TOPMOST | WS_EX_TOOLWINDOW } else { WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE };
@@ -877,7 +901,17 @@ impl App {
             } else {
                 None
             };
-            let theme = self.make_theme(gl, w, h, buf_w, buf_h, scale, idx);
+            // Ở panorama, mọi theme nhận cùng kích thước canvas ảo. Chỉ theme
+            // của màn hình đầu tiên được vẽ; các cửa sổ còn lại nhận viewport
+            // cắt từ canvas đó ở render().
+            let (theme_w, theme_h, theme_bw, theme_bh, theme_scale) = if let Some(world) = panorama_world {
+                let ww = (world.right - world.left).max(1) as f32;
+                let wh = (world.bottom - world.top).max(1) as f32;
+                (ww, wh, (ww * panorama_scale).round() as i32, (wh * panorama_scale).round() as i32, panorama_scale)
+            } else {
+                (w, h, buf_w, buf_h, scale)
+            };
+            let theme = self.make_theme(gl, theme_w, theme_h, theme_bw, theme_bh, theme_scale, idx);
             log!("Màn hình {idx}: {pw}x{ph}, dpr {:.2}, bộ đệm vẽ {buf_w}x{buf_h}", m.dpr);
             self.walls.push(Wallpaper {
                 hwnd,
@@ -901,10 +935,41 @@ impl App {
                 last_frame: 0.0,
             });
         }
+        if let Some(world) = panorama_world {
+            let ww = (world.right - world.left).max(1);
+            let wh = (world.bottom - world.top).max(1);
+            let bw = (ww as f32 * panorama_scale).round() as i32;
+            let bh = (wh as f32 * panorama_scale).round() as i32;
+            let ctx = self.ctx.as_ref().unwrap();
+            ctx.make_current(self.walls[0].gl_dc);
+            let gl = &ctx.gl;
+            let tex = unsafe {
+                let t = gl.create_texture()?;
+                gl.bind_texture(glow::TEXTURE_2D, Some(t));
+                gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::RGBA8 as i32, bw, bh, 0, glow::RGBA, glow::UNSIGNED_BYTE, None);
+                engine::set_tex_params(gl, glow::LINEAR, glow::CLAMP_TO_EDGE);
+                t
+            };
+            let fbo = unsafe {
+                let f = gl.create_framebuffer()?;
+                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(f));
+                gl.framebuffer_texture_2d(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(tex), 0);
+                gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+                f
+            };
+            self.panorama = Some(PanoramaSurface { fbo, tex, buf_w: bw, buf_h: bh, scale: panorama_scale, world });
+            log!("Panorama canvas: {}x{} -> bộ đệm {}x{}", ww, wh, bw, bh);
+        }
         Ok(())
     }
 
     fn destroy_walls(&mut self) {
+        if let Some(p) = self.panorama.take() {
+            if let Some(ctx) = self.ctx.as_ref() {
+                ctx.make_current(self.walls.first().map(|w| w.gl_dc).unwrap_or(std::ptr::null_mut()));
+                unsafe { ctx.gl.delete_framebuffer(p.fbo); ctx.gl.delete_texture(p.tex); }
+            }
+        }
         let walls = std::mem::take(&mut self.walls);
         for mut wp in walls {
             if let Some(ctx) = self.ctx.as_ref() {
@@ -937,6 +1002,28 @@ impl App {
         log!("Đổi chủ đề -> {theme}");
         self.cfg.theme = theme.into();
         self.rebuild_theme();
+    }
+
+    /// Đổi layout đa màn hình bằng một chu kỳ tháo/gắn hoàn chỉnh. Trước đây
+    /// chỉ đổi chuỗi `mode`, khiến renderer cũ vẫn giữ viewport cũ và treo khi
+    /// chuyển sang panorama.
+    fn switch_mode(&mut self, mode: &str) -> Result<(), String> {
+        if self.cfg.mode == mode { return Ok(()); }
+        let old = self.cfg.mode.clone();
+        self.cfg.mode = mode.to_string();
+        self.destroy_walls();
+        match self.create_walls() {
+            Ok(()) => {
+                self.fix_z_order();
+                Ok(())
+            }
+            Err(e) => {
+                log!("Dựng layout {mode} thất bại: {e}; khôi phục {old}");
+                self.destroy_walls();
+                self.cfg.mode = old;
+                self.create_walls().map_err(|restore| format!("{e}; khôi phục cũng lỗi: {restore}"))
+            }
+        }
     }
 
     /// Thông số của chủ đề hiện tại (tạo object nếu chưa có).
@@ -990,8 +1077,14 @@ impl App {
         for (i, wp) in walls.iter_mut().enumerate() {
             ctx.make_current(wp.gl_dc);
             wp.theme.destroy(&ctx.gl);
-            let (w, h) = (wp.phys_w as f32 / wp.dpr, wp.phys_h as f32 / wp.dpr);
-            wp.theme = self.make_theme(&ctx.gl, w, h, wp.buf_w, wp.buf_h, wp.dpr.min(0.72), i);
+            let (w, h, bw, bh, scale) = if let Some(pan) = self.panorama.as_ref() {
+                ( (pan.world.right - pan.world.left) as f32,
+                  (pan.world.bottom - pan.world.top) as f32,
+                  pan.buf_w, pan.buf_h, pan.scale )
+            } else {
+                (wp.phys_w as f32 / wp.dpr, wp.phys_h as f32 / wp.dpr, wp.buf_w, wp.buf_h, wp.dpr.min(0.72))
+            };
+            wp.theme = self.make_theme(&ctx.gl, w, h, bw, bh, scale, i);
             wp.last_icons = None;
             wp.last_frame = now;
         }
@@ -1004,6 +1097,23 @@ impl App {
         let Some((rects, visible)) = self.reader.read() else { return };
         let now = self.now();
         let ctx = self.ctx.as_ref().unwrap();
+        if let Some(pan) = self.panorama.as_ref() {
+            let world = pan.world;
+            let boxes: Vec<IconBox> = if visible { rects.iter().map(|r| IconBox {
+                x: (r.left - world.left) as f32,
+                y: (r.top - world.top) as f32,
+                w: (r.right - r.left) as f32,
+                h: (r.bottom - r.top) as f32,
+            }).collect() } else { Vec::new() };
+            let first = self.walls.first().and_then(|w| w.last_icons.as_ref()).is_none();
+            if let Some(wp0) = self.walls.first_mut() {
+                ctx.make_current(wp0.gl_dc);
+                wp0.theme.set_icons(&ctx.gl, boxes, first, now);
+                wp0.last_icons = Some(rects.clone());
+                if wp0.paused { wp0.needs_settle = true; }
+            }
+            return;
+        }
         for wp in &mut self.walls {
             let s = wp.screen;
             let mine: Vec<RECT> = rects
@@ -1050,13 +1160,13 @@ impl App {
         }
     }
 
-    fn post_process(gl: &glow::Context, shared: &mut Shared, wp: &Wallpaper, target: Option<glow::Framebuffer>, width: i32, height: i32, now: f64) {
+    fn post_process_texture(gl: &glow::Context, shared: &mut Shared, scene: glow::Texture, target: Option<glow::Framebuffer>, width: i32, height: i32, now: f64) {
         unsafe {
             gl.bind_framebuffer(glow::FRAMEBUFFER, target);
             gl.viewport(0, 0, width, height);
             gl.disable(glow::BLEND);
             gl.active_texture(glow::TEXTURE0);
-            gl.bind_texture(glow::TEXTURE_2D, Some(wp.fbo_tex));
+            gl.bind_texture(glow::TEXTURE_2D, Some(scene));
             gl.use_program(Some(shared.post.prog));
         }
         shared.post.i1(gl, "uScene", 0);
@@ -1070,6 +1180,26 @@ impl App {
         }
     }
 
+    fn post_process(gl: &glow::Context, shared: &mut Shared, wp: &Wallpaper, target: Option<glow::Framebuffer>, width: i32, height: i32, now: f64) {
+        Self::post_process_texture(gl, shared, wp.fbo_tex, target, width, height, now);
+    }
+
+    fn crop_panorama(gl: &glow::Context, shared: &mut Shared, scene: glow::Texture, target: glow::Framebuffer, dst_w: i32, dst_h: i32, src_x: f32, src_y: f32, src_w: f32, src_h: f32, src_total_w: f32, src_total_h: f32) {
+        unsafe {
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(target));
+            gl.viewport(0, 0, dst_w, dst_h);
+            gl.disable(glow::BLEND);
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(scene));
+            gl.use_program(Some(shared.crop.prog));
+        }
+        shared.crop.i1(gl, "uScene", 0);
+        shared.crop.f4v(gl, "uSrcRect", &[src_x, src_y, src_w, src_h]);
+        shared.crop.f2(gl, "uSrcSize", src_total_w, src_total_h);
+        shared.crop.f2(gl, "uDstSize", dst_w as f32, dst_h as f32);
+        unsafe { gl.draw_arrays(glow::TRIANGLES, 0, 3); gl.use_program(None); }
+    }
+
     fn render(&mut self) {
         let now = self.now();
         let t0 = Instant::now();
@@ -1081,6 +1211,43 @@ impl App {
         shared.weather = weather;
         let gl = &ctx.gl;
         let mut drew = false;
+        if let Some(pan) = self.panorama.as_ref() {
+            // Vẽ một lần vào canvas ảo, sau đó cắt viewport cho từng màn hình.
+            ctx.make_current(self.walls[0].gl_dc);
+            unsafe { gl.bind_framebuffer(glow::FRAMEBUFFER, Some(pan.fbo)); gl.viewport(0, 0, pan.buf_w, pan.buf_h); }
+            {
+                let wp0 = &mut self.walls[0];
+                let dt = if wp0.last_frame > 0.0 { ((now - wp0.last_frame) / 1000.0).min(0.1) as f32 } else { 0.03 };
+                wp0.last_frame = now;
+                wp0.theme.frame(gl, shared, dt, now);
+            }
+            let (world, total_w, total_h, ptex) = (pan.world, (pan.world.right - pan.world.left) as f32 * pan.scale, (pan.world.bottom - pan.world.top) as f32 * pan.scale, pan.tex);
+            for wp in &mut self.walls {
+                ctx.make_current(wp.gl_dc);
+                let ox = (wp.screen.left - world.left) as f32 * pan.scale;
+                let oy = (world.bottom - wp.screen.bottom) as f32 * pan.scale;
+                let sw = (wp.screen.right - wp.screen.left) as f32 * pan.scale;
+                let sh = (wp.screen.bottom - wp.screen.top) as f32 * pan.scale;
+                Self::crop_panorama(gl, shared, ptex, wp.fbo, wp.buf_w, wp.buf_h, ox, oy, sw, sh, total_w, total_h);
+                if let Some((out_fbo, _, pbo)) = wp.out {
+                    Self::post_process(gl, shared, wp, Some(out_fbo), wp.phys_w, wp.phys_h, now);
+                    unsafe {
+                        gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(out_fbo));
+                        gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(pbo));
+                        gl.pixel_store_i32(glow::PACK_ALIGNMENT, 4);
+                        gl.read_pixels(0, 0, wp.phys_w, wp.phys_h, glow::BGRA, glow::UNSIGNED_BYTE, glow::PixelPackData::BufferOffset(0));
+                        gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None); gl.bind_framebuffer(glow::FRAMEBUFFER, None); gl.flush();
+                    }
+                    wp.pbo_ready = true;
+                } else {
+                    Self::post_process(gl, shared, wp, None, wp.phys_w, wp.phys_h, now);
+                    unsafe { SwapBuffers(wp.hdc); }
+                }
+                drew = true;
+            }
+            if drew { self.frames += 1; self.frame_cpu_ms += t0.elapsed().as_secs_f64() * 1000.0; }
+            return;
+        }
         for wp in &mut self.walls {
             let settle = wp.paused && wp.needs_settle;
             if wp.paused && !settle {
@@ -1235,6 +1402,16 @@ impl App {
 
         let now = self.now();
         let Some(ctx) = self.ctx.as_ref() else { return false };
+        if let Some(pan) = self.panorama.as_ref() {
+            if !self.walls.iter().any(|w| pt.x >= w.screen.left && pt.x < w.screen.right && pt.y >= w.screen.top && pt.y < w.screen.bottom) {
+                return false;
+            }
+            let Some(wp0) = self.walls.first_mut() else { return false };
+            ctx.make_current(wp0.gl_dc);
+            wp0.theme.handle_click(&ctx.gl, (pt.x - pan.world.left) as f32, (pt.y - pan.world.top) as f32, now);
+            self.boost_until = now + 3_500.0;
+            return true;
+        }
         for wp in &mut self.walls {
             if pt.x >= wp.screen.left && pt.x < wp.screen.right && pt.y >= wp.screen.top && pt.y < wp.screen.bottom {
                 // Không phản hồi khi người dùng nhấn trực tiếp vào biểu tượng trên màn hình
@@ -1431,6 +1608,7 @@ fn main() {
         shared: None,
         vao: None,
         walls: Vec::new(),
+        panorama: None,
         reader: desktop::IconReader::new(),
         cfg,
         environment,
@@ -1672,10 +1850,18 @@ fn main() {
                 "mode" => {
                     let mode = s_("v");
                     if matches!(mode.as_str(), "mirror" | "independent" | "panorama") {
-                        app.cfg.mode = mode.clone();
-                        log!("Chế độ đa màn hình: {mode}");
-                        web::post(&serde_json::json!({ "t": "modeChanged", "mode": mode }).to_string());
-                        web_changed = true;
+                        match app.switch_mode(&mode) {
+                            Ok(()) => {
+                                log!("Chế độ đa màn hình: {mode}");
+                                web::post(&serde_json::json!({ "t": "modeChanged", "mode": mode }).to_string());
+                                web::post(&web_init(&app).to_string());
+                                web_changed = true;
+                            }
+                            Err(e) => {
+                                log!("Không đổi được chế độ đa màn hình: {e}");
+                                web::post(&serde_json::json!({ "t": "modeError", "mode": app.cfg.mode, "error": e }).to_string());
+                            }
+                        }
                     }
                 }
                 "environment" => {

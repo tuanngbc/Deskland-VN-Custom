@@ -516,6 +516,8 @@ pub struct Shared {
     pub prog: Prog,
     /// Hậu kỳ dùng chung cho toàn bộ màn hình: ánh sáng theo giờ và thời tiết.
     pub post: Prog,
+    /// Chương trình cắt một vùng từ canvas panorama dùng chung về từng màn hình.
+    pub crop: Prog,
     pub day_phase: f32,
     pub weather: f32,
 }
@@ -566,5 +568,20 @@ void main() {
   float lightning = step(0.985, sin(uTime * 0.21 + noise(uv * 4.0) * 5.0) * 0.5 + 0.5);
   color += vec3(0.28, 0.34, 0.48) * lightning * step(0.72, wet) * 0.25;
   o = vec4(color, src.a);
+}
+"#;
+
+/// Lấy một viewport từ texture panorama. Tọa độ nguồn dùng gốc dưới-trái của
+/// texture OpenGL, nên các màn hình liền nhau không bị lật hoặc lệch trục Y.
+pub const CROP_FRAG: &str = r#"#version 300 es
+precision highp float;
+uniform sampler2D uScene;
+uniform vec4 uSrcRect;
+uniform vec2 uSrcSize;
+uniform vec2 uDstSize;
+out vec4 o;
+void main() {
+  vec2 uv = (uSrcRect.xy + gl_FragCoord.xy / uDstSize * uSrcRect.zw) / uSrcSize;
+  o = texture(uScene, uv);
 }
 "#;
