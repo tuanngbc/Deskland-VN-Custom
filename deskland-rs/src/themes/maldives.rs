@@ -124,7 +124,7 @@ impl Maldives {
             let mut x = 80.0 + ((y as i32 / 13) % 2) as f32 * 38.0;
             while x < self.b.w - 80.0 && self.palms.len() < want {
                 let s = self.b.cur_s(x, y);
-                if s < -10.0 && s > -130.0 && self.palms.iter().all(|p| (p.x - x).hypot(p.y - y) > 105.0) {
+                if s < 2.0 && s > -180.0 && self.palms.iter().all(|p| (p.x - x).hypot(p.y - y) > 105.0) {
                     self.palms.push(PalmPlacement { x, y, scale: 0.58, variant, mirror: if x > self.b.w * 0.5 { -1.0 } else { 1.0 } });
                     variant = (variant + 1.0) % 5.0;
                 }
@@ -132,6 +132,7 @@ impl Maldives {
             }
             y += 62.0;
         }
+        crate::log!("Maldives: đặt {} cây dừa trên canvas {:.0}x{:.0}", self.palms.len(), self.b.w, self.b.h);
     }
 
     fn commit(&mut self, gl: &glow::Context, from_empty: bool, now: f64) {

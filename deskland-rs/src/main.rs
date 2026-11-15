@@ -1276,6 +1276,10 @@ impl App {
             let (world, total_w, total_h, ptex) = (pan.world, (pan.world.right - pan.world.left) as f32 * pan.scale, (pan.world.bottom - pan.world.top) as f32 * pan.scale, pan.tex);
             for wp in &mut self.walls {
                 ctx.make_current(wp.gl_dc);
+                // GDI presentation is pipelined: display the previous PBO
+                // before rendering the next viewport. The panorama branch
+                // previously skipped this step, leaving every monitor black.
+                Self::present_gdi(gl, wp);
                 let ox = (wp.screen.left - world.left) as f32 * pan.scale;
                 let oy = (world.bottom - wp.screen.bottom) as f32 * pan.scale;
                 let sw = (wp.screen.right - wp.screen.left) as f32 * pan.scale;
