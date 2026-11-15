@@ -19,8 +19,17 @@ static LOAD_FONTS: Once = Once::new();
 
 struct State {
     locked: bool,
-    lang_vi: bool,
     scale: f32,
+    time: Line,
+    weekday: Line,
+    date: Line,
+}
+
+#[derive(Clone, Copy)]
+pub struct Line {
+    pub x: i32,
+    pub y: i32,
+    pub opacity: f32,
 }
 
 pub struct Widget {
@@ -53,7 +62,7 @@ unsafe fn font(face: &str, height: i32, italic: bool, weight: i32) -> HFONT {
     let f = wide(face);
     CreateFontW(
         height, 0, 0, 0, weight, italic as u32, 0, 0, DEFAULT_CHARSET as u32,
-        OUT_DEFAULT_PRECIS as u32, CLIP_DEFAULT_PRECIS as u32, CLEARTYPE_QUALITY as u32, (DEFAULT_PITCH | FF_DONTCARE) as u32,
+        OUT_DEFAULT_PRECIS as u32, CLIP_DEFAULT_PRECIS as u32, ANTIALIASED_QUALITY as u32, (DEFAULT_PITCH | FF_DONTCARE) as u32,
         f.as_ptr(),
     )
 }
@@ -71,11 +80,12 @@ fn ensure_fonts() {
     });
 }
 
-unsafe fn text(dc: HDC, rect: RECT, value: &str, face: &str, size: i32, color: COLORREF, italic: bool, weight: i32) {
+unsafe fn text(dc: HDC, rect: RECT, value: &str, face: &str, size: i32, color: COLORREF, opacity: f32, italic: bool, weight: i32) {
     let h = font(face, size, italic, weight);
     let old = SelectObject(dc, h as _);
     SetBkMode(dc, TRANSPARENT as i32);
-    SetTextColor(dc, color);
+    let q = opacity.clamp(0.0, 1.0);
+    SetTextColor(dc, rgb(((color & 0xff) as f32 * q) as u8, (((color >> 8) & 0xff) as f32 * q) as u8, (((color >> 16) & 0xff) as f32 * q) as u8));
     let mut s = wide(value);
     DrawTextW(dc, s.as_mut_ptr(), -1, &rect as *const RECT as *mut RECT, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
     SelectObject(dc, old);
@@ -86,21 +96,17 @@ unsafe fn paint(dc: HDC, r: RECT, state: &State) {
     let scale = state.scale.max(0.7).min(1.6);
     let hour = local_time();
     let time = format!("{:02}:{:02}", hour.0, hour.1);
-    let (weekday, date) = if state.lang_vi {
-        (weekday_vi(hour.6), format!("{:02} THÁNG {} {}", hour.3, hour.2, hour.5))
-    } else {
-        (weekday_en(hour.6), format!("{} {} {}", ordinal(hour.3), month_en(hour.2), hour.5))
-    };
+    let weekday = weekday_en(hour.6);
+    let date = format!("{} {} {}", ordinal(hour.3), month_en(hour.2), hour.5);
     let alpha = rgb(185, 231, 245);
     let bright = rgb(220, 247, 255);
     let h1 = (100.0 * scale) as i32;
     let h2 = (85.0 * scale) as i32;
     let h3 = (35.0 * scale) as i32;
-    let center = (r.left + r.right) / 2;
-    let box_rect = |top: i32, height: i32| RECT { left: 0, top, right: r.right, bottom: top + height };
-    text(dc, box_rect(0, h1 + 8), &time, "Steelfish Rg", h1, alpha, false, 400);
-    text(dc, box_rect((105.0 * scale) as i32, h2 + 8), &weekday, "la Compagnie des Ombres", h2, bright, false, 400);
-    text(dc, box_rect((165.0 * scale) as i32, h3 + 8), &date.to_uppercase(), "Steelfish Rg", h3, alpha, false, 400);
+    let box_rect = |line: Line, base_y: i32, height: i32| RECT { left: line.x - r.right / 2, top: ((base_y as f32) * scale) as i32 + line.y, right: line.x + r.right / 2, bottom: ((base_y as f32) * scale) as i32 + line.y + height };
+    text(dc, box_rect(state.time, 0, h1 + 8), &time, "Steelfish Rg", h1, alpha, state.time.opacity, false, 400);
+    text(dc, box_rect(state.weekday, 105, h2 + 8), &weekday, "la Compagnie des Ombres", h2, bright, state.weekday.opacity, false, 400);
+    text(dc, box_rect(state.date, 165, h3 + 8), &date.to_uppercase(), "Steelfish Rg", h3, alpha, state.date.opacity, false, 400);
 }
 
 const fn rgb(r: u8, g: u8, b: u8) -> COLORREF { r as u32 | ((g as u32) << 8) | ((b as u32) << 16) }
@@ -133,10 +139,10 @@ fn register() {
 }
 
 impl Widget {
-    pub fn new(screen: RECT, x: i32, y: i32, locked: bool, lang_vi: bool, scale: f32, opacity: f32) -> Result<Self, String> {
+    pub fn new(screen: RECT, x: i32, y: i32, locked: bool, scale: f32, lines: [Line; 3], opacity: f32) -> Result<Self, String> {
         ensure_fonts();
         register();
-        let mut state = Box::new(State { locked, lang_vi, scale });
+        let mut state = Box::new(State { locked, scale, time: lines[0], weekday: lines[1], date: lines[2] });
         let ptr = (&mut *state) as *mut State;
         let w = (WIDTH as f32 * scale.max(0.7).min(1.6)) as i32;
         let h = (HEIGHT as f32 * scale.max(0.7).min(1.6)) as i32;
@@ -165,6 +171,7 @@ impl Widget {
     pub fn set_locked(&mut self, locked: bool) { self.state.locked = locked; unsafe { let mut ex = GetWindowLongW(self.hwnd, GWL_EXSTYLE); if locked { ex |= WS_EX_TRANSPARENT as i32; } else { ex &= !(WS_EX_TRANSPARENT as i32); } SetWindowLongW(self.hwnd, GWL_EXSTYLE, ex); } }
     pub fn set_scale(&mut self, scale: f32) { let scale = scale.clamp(0.5, 2.0); self.state.scale = scale; let w = (WIDTH as f32 * scale) as i32; let h = (HEIGHT as f32 * scale) as i32; unsafe { SetWindowPos(self.hwnd, HWND_TOP, self.rect.left, self.rect.top, w, h, SWP_NOACTIVATE | SWP_NOZORDER); GetWindowRect(self.hwnd, &mut self.rect); } self.redraw(true); }
     pub fn set_opacity(&mut self, opacity: f32) { self.opacity = (opacity.clamp(0.05, 1.0) * 255.0) as u8; self.redraw(true); }
+    pub fn set_lines(&mut self, lines: [Line; 3]) { self.state.time = lines[0]; self.state.weekday = lines[1]; self.state.date = lines[2]; self.redraw(true); }
     pub fn locked(&self) -> bool { self.state.locked }
     pub fn rect(&self) -> RECT { self.rect }
     pub fn reset(&mut self, screen: RECT) { let w = self.rect.right - self.rect.left; let x = screen.left + ((screen.right - screen.left) - w) / 2; let y = screen.top + 70; unsafe { SetWindowPos(self.hwnd, HWND_TOP, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW); GetWindowRect(self.hwnd, &mut self.rect); } }

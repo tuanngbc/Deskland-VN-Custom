@@ -359,6 +359,15 @@
         <label class="environment-select"><span data-i18n="weatherPreset">Bộ thời tiết</span><select id="weatherPreset" aria-label="Bộ thời tiết"></select></label>
         <label class="environment-select"><span data-i18n="weatherSource">Nguồn thời tiết</span><select id="weatherSource" aria-label="Nguồn thời tiết"></select></label>
       </div>
+      <div class="environment-controls widget-line-controls">
+        <label>Giờ X <input id="widgetTimeX" type="number" step="1"></label><label>Y <input id="widgetTimeY" type="number" step="1"></label><label>Mờ <input id="widgetTimeOpacity" type="range" min="0" max="1" step="0.05"></label>
+      </div>
+      <div class="environment-controls widget-line-controls">
+        <label>Thứ X <input id="widgetWeekdayX" type="number" step="1"></label><label>Y <input id="widgetWeekdayY" type="number" step="1"></label><label>Mờ <input id="widgetWeekdayOpacity" type="range" min="0" max="1" step="0.05"></label>
+      </div>
+      <div class="environment-controls widget-line-controls">
+        <label>Ngày X <input id="widgetDateX" type="number" step="1"></label><label>Y <input id="widgetDateY" type="number" step="1"></label><label>Mờ <input id="widgetDateOpacity" type="range" min="0" max="1" step="0.05"></label>
+      </div>
       <div class="weather-location" id="weatherLocationBox" hidden>
         <p class="monitor-detail" data-i18n="weatherLocationHint">Chỉ gửi địa điểm đã nhập khi anh bấm tìm; không tự lấy vị trí thiết bị.</p>
         <div class="location-search"><input id="locationQuery" type="search" data-i18n-placeholder="weatherLocationPlaceholder" placeholder="ZIP, mã bưu chính hoặc thành phố"><button class="ghost-btn" id="locationSearch" data-i18n="weatherLocationSearch">Tìm địa điểm</button></div>
@@ -663,6 +672,7 @@ function renderWidget() {
   $('widgetOpacityValue').value = Math.round(Number($('widgetOpacity').value) * 100) + '%';
   $('widgetX').value = Number.isFinite(Number(w.x)) && Number(w.x) >= 0 ? String(w.x) : '';
   $('widgetY').value = Number.isFinite(Number(w.y)) && Number(w.y) >= 0 ? String(w.y) : '';
+  for (const [key, prefix] of [['time','widgetTime'], ['weekday','widgetWeekday'], ['date','widgetDate']]) { const l = Object.assign({x:0,y:0,opacity:1}, w[key] || {}); $(prefix+'X').value=l.x; $(prefix+'Y').value=l.y; $(prefix+'Opacity').value=l.opacity; }
 }
 $('environmentTime').addEventListener('change', e => setEnvironment({ time: e.target.checked }));
 $('environmentWeather').addEventListener('change', e => setEnvironment({ weather: e.target.checked }));
@@ -676,6 +686,7 @@ $('widgetOpacity').addEventListener('input', e => { state.widget.opacity = Numbe
 function sendWidgetPosition() { const x = $('widgetX').value.trim(), y = $('widgetY').value.trim(); send({ t: 'widget', x: x === '' ? -1 : Number(x), y: y === '' ? -1 : Number(y), scale: state.widget.scale, opacity: state.widget.opacity, enabled: state.widget.enabled, locked: state.widget.locked }); }
 $('widgetX').addEventListener('change', sendWidgetPosition);
 $('widgetY').addEventListener('change', sendWidgetPosition);
+for (const [key, prefix] of [['time','widgetTime'], ['weekday','widgetWeekday'], ['date','widgetDate']]) for (const suffix of ['X','Y','Opacity']) $(prefix+suffix).addEventListener('input', () => { state.widget[key] = { x:Number($(prefix+'X').value)||0, y:Number($(prefix+'Y').value)||0, opacity:Number($(prefix+'Opacity').value) }; send({ t:'widget', [key]:state.widget[key] }); });
 async function searchWeatherLocations() {
   const query = $('locationQuery').value.trim();
   if (query.length < 2) { $('locationResults').innerHTML = `<div class="empty">${t('weatherLocationShort')}</div>`; return; }

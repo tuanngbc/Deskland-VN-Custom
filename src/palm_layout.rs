@@ -54,6 +54,22 @@ fn clear(icons: &[IconBox], x: f32, y: f32, radius: f32) -> bool {
     })
 }
 
+fn island_envelope(sample: &impl Fn(f32, f32) -> f32, p: &PalmPlacement) -> bool {
+    // Verify trunk, crown and both sides of the silhouette are on the sand.
+    // The old single-point test allowed a trunk on the shore with the crown
+    // projected far into the sea.
+    let points = [
+        (p.x, p.y),
+        (p.x - 24.0 * p.scale, p.y - 55.0 * p.scale),
+        (p.x + 24.0 * p.scale, p.y - 55.0 * p.scale),
+        (p.x - 55.0 * p.scale, p.y - 105.0 * p.scale),
+        (p.x + 55.0 * p.scale, p.y - 105.0 * p.scale),
+        (p.x - 70.0 * p.scale, p.y - 18.0 * p.scale),
+        (p.x + 70.0 * p.scale, p.y - 18.0 * p.scale),
+    ];
+    points.into_iter().all(|(x, y)| sample(x, y) < 8.0)
+}
+
 pub fn choose(w: f32, h: f32, seed: i32, want: usize, outputs: &[Viewport],
               icons: &[IconBox], sample: impl Fn(f32, f32) -> f32) -> Vec<PalmPlacement> {
     let mut chosen: Vec<PalmPlacement> = Vec::new();
@@ -87,6 +103,7 @@ pub fn choose(w: f32, h: f32, seed: i32, want: usize, outputs: &[Viewport],
                     let mirror = if (variant == 1 || variant == 4) && sea_x * cx < 0.0 { -1.0 } else { 1.0 };
                     let p = PalmPlacement { x, y, scale, variant: variant as f32, mirror };
                     if !covered(tree_bounds(&p), outputs) { continue; }
+                    if !island_envelope(&sample, &p) { continue; }
                     if !clear(icons, x, y-16.0*scale, 10.0*scale)
                         || !clear(icons, x+cx*scale*mirror, y+cy*scale, radius*scale) { continue; }
                     count += 1;

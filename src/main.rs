@@ -497,6 +497,7 @@ struct Config {
     widget_y: i32,
     widget_scale: f32,
     widget_opacity: f32,
+    widget_lines: [widget::Line; 3],
 }
 
 fn rust_settings_path() -> std::path::PathBuf {
@@ -552,6 +553,11 @@ fn load_config(cli_theme: Option<String>) -> Config {
         widget_y: widget.and_then(|v| v.get("y")).and_then(|v| v.as_i64()).map(|v| v as i32).unwrap_or(-1),
         widget_scale: widget.and_then(|v| v.get("scale")).and_then(|v| v.as_f64()).map(|v| v as f32).filter(|v| v.is_finite()).unwrap_or(1.0).clamp(0.7, 1.6),
         widget_opacity: widget.and_then(|v| v.get("opacity")).and_then(|v| v.as_f64()).map(|v| v as f32).filter(|v| v.is_finite()).unwrap_or(0.72).clamp(0.05, 1.0),
+        widget_lines: ["time", "weekday", "date"].map(|k| widget::Line {
+            x: widget.and_then(|v| v.get(k)).and_then(|v| v.get("x")).and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            y: widget.and_then(|v| v.get(k)).and_then(|v| v.get("y")).and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            opacity: widget.and_then(|v| v.get(k)).and_then(|v| v.get("opacity")).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(1.0).clamp(0.0, 1.0),
+        }),
         lock_idle_mins: root.get("lockIdleMins").and_then(|v| v.as_u64()).map(|v| v as u32).filter(|&v| v > 0).unwrap_or(5),
     }
 }
@@ -580,6 +586,9 @@ fn save_config(cfg: &Config) {
             "y": cfg.widget_y,
             "scale": cfg.widget_scale,
             "opacity": cfg.widget_opacity,
+            "time": { "x": cfg.widget_lines[0].x, "y": cfg.widget_lines[0].y, "opacity": cfg.widget_lines[0].opacity },
+            "weekday": { "x": cfg.widget_lines[1].x, "y": cfg.widget_lines[1].y, "opacity": cfg.widget_lines[1].opacity },
+            "date": { "x": cfg.widget_lines[2].x, "y": cfg.widget_lines[2].y, "opacity": cfg.widget_lines[2].opacity },
         },
         "params": cfg.params,
     });
@@ -648,6 +657,9 @@ fn web_init(app: &App) -> serde_json::Value {
             "y": app.cfg.widget_y,
             "scale": app.cfg.widget_scale,
             "opacity": app.cfg.widget_opacity,
+            "time": { "x": app.cfg.widget_lines[0].x, "y": app.cfg.widget_lines[0].y, "opacity": app.cfg.widget_lines[0].opacity },
+            "weekday": { "x": app.cfg.widget_lines[1].x, "y": app.cfg.widget_lines[1].y, "opacity": app.cfg.widget_lines[1].opacity },
+            "date": { "x": app.cfg.widget_lines[2].x, "y": app.cfg.widget_lines[2].y, "opacity": app.cfg.widget_lines[2].opacity },
         },
         "lang": app.cfg.lang, "langEff": eff, "langSys": sys,
         "lockCfg": {
@@ -765,7 +777,7 @@ impl App {
         if self.saver || self.headless || !self.cfg.widget_enabled || self.walls.is_empty() { return; }
         let Some(screen) = primary_wall(self).map(|w| w.screen) else { return };
         let lang_vi = self.cfg.lang == "vi" || (self.cfg.lang == "auto" && lang_eff("auto").0 == "vi");
-        match widget::Widget::new(screen, self.cfg.widget_x, self.cfg.widget_y, self.cfg.widget_locked, lang_vi, self.cfg.widget_scale, self.cfg.widget_opacity) {
+        match widget::Widget::new(screen, self.cfg.widget_x, self.cfg.widget_y, self.cfg.widget_locked, self.cfg.widget_scale, self.cfg.widget_lines, self.cfg.widget_opacity) {
             Ok(w) => { self.widget = Some(w); }
             Err(e) => log!("Không tạo được đồng hồ native: {e}"),
         }
@@ -2148,6 +2160,14 @@ fn main() {
                     }
                     if let Some(v) = m.get("x").and_then(|v| v.as_i64()) { app.cfg.widget_x = v as i32; }
                     if let Some(v) = m.get("y").and_then(|v| v.as_i64()) { app.cfg.widget_y = v as i32; }
+                    for (i, key) in ["time", "weekday", "date"].iter().enumerate() {
+                        if let Some(line) = m.get(key) {
+                            if let Some(v) = line.get("x").and_then(|v| v.as_i64()) { app.cfg.widget_lines[i].x = v as i32; }
+                            if let Some(v) = line.get("y").and_then(|v| v.as_i64()) { app.cfg.widget_lines[i].y = v as i32; }
+                            if let Some(v) = line.get("opacity").and_then(|v| v.as_f64()) { app.cfg.widget_lines[i].opacity = (v as f32).clamp(0.0, 1.0); }
+                        }
+                    }
+                    if let Some(w) = app.widget.as_mut() { w.set_lines(app.cfg.widget_lines); }
                     if m.get("reset").and_then(|v| v.as_bool()).unwrap_or(false) {
                         app.cfg.widget_x = -1;
                         app.cfg.widget_y = -1;
