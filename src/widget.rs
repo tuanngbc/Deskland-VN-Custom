@@ -6,6 +6,7 @@
 use crate::desktop::wide;
 use std::mem::size_of;
 use std::sync::Once;
+use std::ffi::c_void;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -27,6 +28,8 @@ pub struct Widget {
     state: Box<State>,
     rect: RECT,
     visible: bool,
+    opacity: u8,
+    last_clock: String,
 }
 
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -36,18 +39,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         WM_NCHITTEST => HTCAPTION as LRESULT,
         WM_MOUSEACTIVATE => MA_NOACTIVATE as LRESULT,
         WM_ERASEBKGND => 1,
-        WM_PAINT => {
-            let mut ps: PAINTSTRUCT = std::mem::zeroed();
-            let dc = BeginPaint(hwnd, &mut ps);
-            let mut r: RECT = std::mem::zeroed();
-            GetClientRect(hwnd, &mut r);
-            FillRect(dc, &r, GetStockObject(BLACK_BRUSH as i32));
-            if !state.is_null() {
-                paint(dc, r, &*state);
-            }
-            EndPaint(hwnd, &ps);
-            0
-        }
+        WM_PAINT => { ValidateRect(hwnd, std::ptr::null()); 0 }
         WM_LBUTTONDOWN if !state.is_null() && !(*state).locked => {
             SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION as WPARAM, 0);
             0
@@ -105,7 +97,7 @@ unsafe fn paint(dc: HDC, r: RECT, state: &State) {
     let h2 = (85.0 * scale) as i32;
     let h3 = (35.0 * scale) as i32;
     let center = (r.left + r.right) / 2;
-    let box_rect = |top: i32, height: i32| RECT { left: center - r.right / 2, top, right: center + r.right / 2, bottom: top + height };
+    let box_rect = |top: i32, height: i32| RECT { left: 0, top, right: r.right, bottom: top + height };
     text(dc, box_rect(0, h1 + 8), &time, "Steelfish Rg", h1, alpha, false, 400);
     text(dc, box_rect((105.0 * scale) as i32, h2 + 8), &weekday, "la Compagnie des Ombres", h2, bright, false, 400);
     text(dc, box_rect((165.0 * scale) as i32, h3 + 8), &date.to_uppercase(), "Steelfish Rg", h3, alpha, false, 400);
@@ -141,7 +133,7 @@ fn register() {
 }
 
 impl Widget {
-    pub fn new(screen: RECT, x: i32, y: i32, locked: bool, lang_vi: bool, scale: f32) -> Result<Self, String> {
+    pub fn new(screen: RECT, x: i32, y: i32, locked: bool, lang_vi: bool, scale: f32, opacity: f32) -> Result<Self, String> {
         ensure_fonts();
         register();
         let mut state = Box::new(State { locked, lang_vi, scale });
@@ -150,26 +142,70 @@ impl Widget {
         let h = (HEIGHT as f32 * scale.max(0.7).min(1.6)) as i32;
         let left = if x < 0 { screen.left + ((screen.right - screen.left) - w) / 2 } else { x };
         let top = if y < 0 { screen.top + 70 } else { y };
-        let ex = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT;
+        let ex = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | if locked { WS_EX_TRANSPARENT } else { 0 };
         let cls = wide(CLASS);
         let hwnd = unsafe { CreateWindowExW(ex, cls.as_ptr(), cls.as_ptr(), WS_POPUP, left, top, w, h, std::ptr::null_mut(), std::ptr::null_mut(), GetModuleHandleW(std::ptr::null()), std::ptr::null_mut()) };
         if hwnd.is_null() { return Err("Không tạo được widget đồng hồ".into()); }
         unsafe {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, ptr as isize);
-            SetLayeredWindowAttributes(hwnd, rgb(0, 0, 0), 0, LWA_COLORKEY);
             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-            UpdateWindow(hwnd);
         }
-        Ok(Self { hwnd, state, rect: RECT { left, top, right: left + w, bottom: top + h }, visible: true })
+        let mut out = Self { hwnd, state, rect: RECT { left, top, right: left + w, bottom: top + h }, visible: true, opacity: (opacity.clamp(0.05, 1.0) * 255.0) as u8, last_clock: String::new() };
+        out.redraw(true);
+        Ok(out)
     }
 
     pub fn tick(&mut self) {
-        unsafe { InvalidateRect(self.hwnd, std::ptr::null(), 0); UpdateWindow(self.hwnd); GetWindowRect(self.hwnd, &mut self.rect); }
+        unsafe { GetWindowRect(self.hwnd, &mut self.rect); }
+        let t = local_time();
+        let key = format!("{:02}:{:02}", t.0, t.1);
+        if key != self.last_clock { self.redraw(false); }
     }
     pub fn set_visible(&mut self, on: bool) { if self.visible != on { self.visible = on; unsafe { ShowWindow(self.hwnd, if on { SW_SHOWNOACTIVATE } else { SW_HIDE }); } } }
-    pub fn set_locked(&mut self, locked: bool) { self.state.locked = locked; unsafe { let mut ex = GetWindowLongW(self.hwnd, GWL_EXSTYLE); if locked { ex |= WS_EX_TRANSPARENT as i32; } else { ex &= !(WS_EX_TRANSPARENT as i32); } SetWindowLongW(self.hwnd, GWL_EXSTYLE, ex); InvalidateRect(self.hwnd, std::ptr::null(), 1); } }
+    pub fn set_locked(&mut self, locked: bool) { self.state.locked = locked; unsafe { let mut ex = GetWindowLongW(self.hwnd, GWL_EXSTYLE); if locked { ex |= WS_EX_TRANSPARENT as i32; } else { ex &= !(WS_EX_TRANSPARENT as i32); } SetWindowLongW(self.hwnd, GWL_EXSTYLE, ex); } }
+    pub fn set_scale(&mut self, scale: f32) { let scale = scale.clamp(0.5, 2.0); self.state.scale = scale; let w = (WIDTH as f32 * scale) as i32; let h = (HEIGHT as f32 * scale) as i32; unsafe { SetWindowPos(self.hwnd, HWND_TOP, self.rect.left, self.rect.top, w, h, SWP_NOACTIVATE | SWP_NOZORDER); GetWindowRect(self.hwnd, &mut self.rect); } self.redraw(true); }
+    pub fn set_opacity(&mut self, opacity: f32) { self.opacity = (opacity.clamp(0.05, 1.0) * 255.0) as u8; self.redraw(true); }
     pub fn locked(&self) -> bool { self.state.locked }
     pub fn rect(&self) -> RECT { self.rect }
-    pub fn reset(&mut self, screen: RECT) { let w = self.rect.right - self.rect.left; let x = screen.left + ((screen.right - screen.left) - w) / 2; let y = screen.top + 70; unsafe { SetWindowPos(self.hwnd, HWND_TOP, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW); } }
+    pub fn reset(&mut self, screen: RECT) { let w = self.rect.right - self.rect.left; let x = screen.left + ((screen.right - screen.left) - w) / 2; let y = screen.top + 70; unsafe { SetWindowPos(self.hwnd, HWND_TOP, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW); GetWindowRect(self.hwnd, &mut self.rect); } }
     pub fn destroy(&mut self) { unsafe { DestroyWindow(self.hwnd); } }
+
+    fn redraw(&mut self, force: bool) {
+        let t = local_time();
+        let key = format!("{:02}:{:02}", t.0, t.1);
+        if !force && key == self.last_clock { return; }
+        self.last_clock = key;
+        let w = (self.rect.right - self.rect.left).max(1);
+        let h = (self.rect.bottom - self.rect.top).max(1);
+        unsafe {
+            let screen = GetDC(std::ptr::null_mut());
+            let mem = CreateCompatibleDC(screen);
+            let mut bi: BITMAPINFO = std::mem::zeroed();
+            bi.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+            bi.bmiHeader.biWidth = w;
+            bi.bmiHeader.biHeight = -h;
+            bi.bmiHeader.biPlanes = 1;
+            bi.bmiHeader.biBitCount = 32;
+            bi.bmiHeader.biCompression = BI_RGB;
+            let mut bits: *mut c_void = std::ptr::null_mut();
+            let bmp = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0);
+            let old = SelectObject(mem, bmp as _);
+            std::ptr::write_bytes(bits, 0, (w * h * 4) as usize);
+            paint(mem, RECT { left: 0, top: 0, right: w, bottom: h }, &self.state);
+            let px = std::slice::from_raw_parts_mut(bits as *mut u8, (w * h * 4) as usize);
+            for p in px.chunks_exact_mut(4) {
+                let a = p[0].max(p[1]).max(p[2]);
+                p[3] = a;
+            }
+            let dst = POINT { x: self.rect.left, y: self.rect.top };
+            let size = SIZE { cx: w, cy: h };
+            let src = POINT { x: 0, y: 0 };
+            let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: self.opacity, AlphaFormat: AC_SRC_ALPHA as u8 };
+            UpdateLayeredWindow(self.hwnd, screen, &dst, &size, mem, &src, 0, &blend, ULW_ALPHA);
+            SelectObject(mem, old);
+            DeleteObject(bmp as _);
+            DeleteDC(mem);
+            ReleaseDC(std::ptr::null_mut(), screen);
+        }
+    }
 }

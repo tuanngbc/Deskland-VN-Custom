@@ -496,6 +496,7 @@ struct Config {
     widget_x: i32,
     widget_y: i32,
     widget_scale: f32,
+    widget_opacity: f32,
 }
 
 fn rust_settings_path() -> std::path::PathBuf {
@@ -550,6 +551,7 @@ fn load_config(cli_theme: Option<String>) -> Config {
         widget_x: widget.and_then(|v| v.get("x")).and_then(|v| v.as_i64()).map(|v| v as i32).unwrap_or(-1),
         widget_y: widget.and_then(|v| v.get("y")).and_then(|v| v.as_i64()).map(|v| v as i32).unwrap_or(-1),
         widget_scale: widget.and_then(|v| v.get("scale")).and_then(|v| v.as_f64()).map(|v| v as f32).filter(|v| v.is_finite()).unwrap_or(1.0).clamp(0.7, 1.6),
+        widget_opacity: widget.and_then(|v| v.get("opacity")).and_then(|v| v.as_f64()).map(|v| v as f32).filter(|v| v.is_finite()).unwrap_or(0.72).clamp(0.05, 1.0),
         lock_idle_mins: root.get("lockIdleMins").and_then(|v| v.as_u64()).map(|v| v as u32).filter(|&v| v > 0).unwrap_or(5),
     }
 }
@@ -577,6 +579,7 @@ fn save_config(cfg: &Config) {
             "x": cfg.widget_x,
             "y": cfg.widget_y,
             "scale": cfg.widget_scale,
+            "opacity": cfg.widget_opacity,
         },
         "params": cfg.params,
     });
@@ -644,6 +647,7 @@ fn web_init(app: &App) -> serde_json::Value {
             "x": app.cfg.widget_x,
             "y": app.cfg.widget_y,
             "scale": app.cfg.widget_scale,
+            "opacity": app.cfg.widget_opacity,
         },
         "lang": app.cfg.lang, "langEff": eff, "langSys": sys,
         "lockCfg": {
@@ -761,7 +765,7 @@ impl App {
         if self.saver || self.headless || !self.cfg.widget_enabled || self.walls.is_empty() { return; }
         let Some(screen) = primary_wall(self).map(|w| w.screen) else { return };
         let lang_vi = self.cfg.lang == "vi" || (self.cfg.lang == "auto" && lang_eff("auto").0 == "vi");
-        match widget::Widget::new(screen, self.cfg.widget_x, self.cfg.widget_y, self.cfg.widget_locked, lang_vi, self.cfg.widget_scale) {
+        match widget::Widget::new(screen, self.cfg.widget_x, self.cfg.widget_y, self.cfg.widget_locked, lang_vi, self.cfg.widget_scale, self.cfg.widget_opacity) {
             Ok(w) => { self.widget = Some(w); }
             Err(e) => log!("Không tạo được đồng hồ native: {e}"),
         }
@@ -2134,6 +2138,16 @@ fn main() {
                         app.cfg.widget_locked = v;
                         if let Some(w) = app.widget.as_mut() { w.set_locked(v); }
                     }
+                    if let Some(v) = m.get("scale").and_then(|v| v.as_f64()).map(|v| v as f32).filter(|v| v.is_finite()) {
+                        app.cfg.widget_scale = v.clamp(0.5, 2.0);
+                        if let Some(w) = app.widget.as_mut() { w.set_scale(app.cfg.widget_scale); }
+                    }
+                    if let Some(v) = m.get("opacity").and_then(|v| v.as_f64()).map(|v| v as f32).filter(|v| v.is_finite()) {
+                        app.cfg.widget_opacity = v.clamp(0.05, 1.0);
+                        if let Some(w) = app.widget.as_mut() { w.set_opacity(app.cfg.widget_opacity); }
+                    }
+                    if let Some(v) = m.get("x").and_then(|v| v.as_i64()) { app.cfg.widget_x = v as i32; }
+                    if let Some(v) = m.get("y").and_then(|v| v.as_i64()) { app.cfg.widget_y = v as i32; }
                     if m.get("reset").and_then(|v| v.as_bool()).unwrap_or(false) {
                         app.cfg.widget_x = -1;
                         app.cfg.widget_y = -1;

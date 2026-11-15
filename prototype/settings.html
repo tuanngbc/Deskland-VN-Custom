@@ -375,6 +375,14 @@
         <label class="switch-row"><span>Khóa vị trí</span><input type="checkbox" id="widgetLocked"><i class="switch"></i></label>
         <button class="ghost-btn" id="widgetReset">Đặt lại vị trí</button>
       </div>
+      <div class="environment-controls">
+        <label class="environment-select"><span>Kích cỡ</span><input id="widgetScale" type="range" min="0.5" max="2" step="0.05" value="1"><output id="widgetScaleValue">100%</output></label>
+        <label class="environment-select"><span>Độ trong mờ</span><input id="widgetOpacity" type="range" min="0.1" max="1" step="0.05" value="0.72"><output id="widgetOpacityValue">72%</output></label>
+      </div>
+      <div class="environment-controls">
+        <label class="environment-select"><span>X</span><input id="widgetX" type="number" step="1" placeholder="Tự động"></label>
+        <label class="environment-select"><span>Y</span><input id="widgetY" type="number" step="1" placeholder="Tự động"></label>
+      </div>
       <p class="monitor-detail">Khi mở khóa, kéo đồng hồ bằng chuột. Khi khóa, đồng hồ tự xuyên qua chuột để anh vẫn thao tác desktop.</p>
     </section>
     <details class="monitor-panel" id="awayPanel">
@@ -649,6 +657,12 @@ function renderWidget() {
   state.widget = w;
   $('widgetEnabled').checked = w.enabled !== false;
   $('widgetLocked').checked = w.locked !== false;
+  $('widgetScale').value = String(w.scale || 1);
+  $('widgetScaleValue').value = Math.round(Number($('widgetScale').value) * 100) + '%';
+  $('widgetOpacity').value = String(w.opacity || 0.72);
+  $('widgetOpacityValue').value = Math.round(Number($('widgetOpacity').value) * 100) + '%';
+  $('widgetX').value = Number.isFinite(Number(w.x)) && Number(w.x) >= 0 ? String(w.x) : '';
+  $('widgetY').value = Number.isFinite(Number(w.y)) && Number(w.y) >= 0 ? String(w.y) : '';
 }
 $('environmentTime').addEventListener('change', e => setEnvironment({ time: e.target.checked }));
 $('environmentWeather').addEventListener('change', e => setEnvironment({ weather: e.target.checked }));
@@ -657,6 +671,11 @@ $('weatherSource').addEventListener('change', e => setEnvironment({ source: e.ta
 $('widgetEnabled').addEventListener('change', e => { state.widget.enabled = e.target.checked; send({ t: 'widget', enabled: state.widget.enabled, locked: state.widget.locked }); flashSaved(); });
 $('widgetLocked').addEventListener('change', e => { state.widget.locked = e.target.checked; send({ t: 'widget', enabled: state.widget.enabled, locked: state.widget.locked }); flashSaved(); });
 $('widgetReset').addEventListener('click', () => { send({ t: 'widget', enabled: state.widget.enabled, locked: state.widget.locked, reset: true }); flashSaved(); });
+$('widgetScale').addEventListener('input', e => { state.widget.scale = Number(e.target.value); $('widgetScaleValue').value = Math.round(state.widget.scale * 100) + '%'; send({ t: 'widget', scale: state.widget.scale, opacity: state.widget.opacity, enabled: state.widget.enabled, locked: state.widget.locked }); });
+$('widgetOpacity').addEventListener('input', e => { state.widget.opacity = Number(e.target.value); $('widgetOpacityValue').value = Math.round(state.widget.opacity * 100) + '%'; send({ t: 'widget', opacity: state.widget.opacity, scale: state.widget.scale, enabled: state.widget.enabled, locked: state.widget.locked }); });
+function sendWidgetPosition() { const x = $('widgetX').value.trim(), y = $('widgetY').value.trim(); send({ t: 'widget', x: x === '' ? -1 : Number(x), y: y === '' ? -1 : Number(y), scale: state.widget.scale, opacity: state.widget.opacity, enabled: state.widget.enabled, locked: state.widget.locked }); }
+$('widgetX').addEventListener('change', sendWidgetPosition);
+$('widgetY').addEventListener('change', sendWidgetPosition);
 async function searchWeatherLocations() {
   const query = $('locationQuery').value.trim();
   if (query.length < 2) { $('locationResults').innerHTML = `<div class="empty">${t('weatherLocationShort')}</div>`; return; }
