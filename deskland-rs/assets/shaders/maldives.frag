@@ -108,15 +108,17 @@ vec3 gullSD(vec2 q, float span) {
   float wing = max(max(q.x - lead, lead - chord - q.x), y - reach - 1.0);
   return vec3(min(body, tail), wing, u);
 }
-float palmSD(vec2 q) {
-  float trunk = segSD(q, vec2(0.0, 0.0), vec2(8.0, 96.0)) - 4.5;
+float palmTrunkSD(vec2 q) { return segSD(q, vec2(0.0, 0.0), vec2(8.0, 96.0)) - 4.5; }
+float palmLeafSD(vec2 q) {
   float crown = 999.0;
   crown = min(crown, segSD(q, vec2(7.0, 92.0), vec2(-55.0, 123.0)) - 6.0);
   crown = min(crown, segSD(q, vec2(8.0, 95.0), vec2(66.0, 126.0)) - 6.0);
   crown = min(crown, segSD(q, vec2(8.0, 96.0), vec2(-18.0, 150.0)) - 6.0);
   crown = min(crown, segSD(q, vec2(8.0, 96.0), vec2(38.0, 153.0)) - 6.0);
+  crown = min(crown, segSD(q, vec2(8.0, 96.0), vec2(-72.0, 104.0)) - 5.0);
+  crown = min(crown, segSD(q, vec2(8.0, 96.0), vec2(82.0, 106.0)) - 5.0);
   crown = min(crown, length(q - vec2(8.0, 99.0)) - 14.0);
-  return min(trunk, crown);
+  return crown;
 }
 
 void main() {
@@ -412,10 +414,11 @@ void main() {
     float fi = float(i);
     vec2 c = vec2(uRes.x * (0.12 + fi * 0.25), uRes.y * (0.10 + 0.015 * hash(vec2(fi, 9.0))));
     vec2 q = (p - c) / (0.72 + 0.12 * hash(vec2(fi, 3.0)));
-    float sd = palmSD(q);
-    float ink = ss(3.0, -2.0, sd);
-    col = mix(col, vec3(0.16, 0.30, 0.20), ink * 0.82);
-    col = mix(col, vec3(0.07, 0.16, 0.12), ss(1.0, -1.0, sd) * 0.72);
+    float trunk = ss(3.0, -2.0, palmTrunkSD(q));
+    float leaf = ss(3.0, -2.0, palmLeafSD(q));
+    col = mix(col, vec3(0.34, 0.22, 0.11), trunk * 0.88);
+    col = mix(col, vec3(0.10, 0.34, 0.18), leaf * 0.90);
+    col = mix(col, vec3(0.05, 0.17, 0.10), max(trunk, leaf) * 0.35);
   }
 
   if (uDebug > 0.5) col = mix(col, vec3(0.9, 0.15, 0.15), 1.0 - ss(0.0, 1.5, abs(s0)));
