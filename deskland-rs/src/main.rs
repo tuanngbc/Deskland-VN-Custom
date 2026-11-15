@@ -1314,7 +1314,9 @@ fn main() {
         start: Instant::now(),
         frames: 0,
         frame_cpu_ms: 0.0,
-        gdi: arg_value(&args, "--present").as_deref() != Some("gl"),
+        // OpenGL trực tiếp là đường mặc định cho nhiều màn hình. GDI vẫn có
+        // thể dùng bằng `--present gdi` trên máy có driver cũ hoặc gặp lỗi DWM.
+        gdi: arg_value(&args, "--present").as_deref() == Some("gdi"),
         dummy: None,
         saver,
         headless,

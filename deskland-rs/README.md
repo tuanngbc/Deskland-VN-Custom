@@ -104,7 +104,7 @@ cargo build --release
 | `--exit-after-snapshot` | Tự động thoát ngay sau khi chụp xong `--snapshot` (dùng cho kiểm thử tự động). |
 | `--test-click` | Tự động mô phỏng thao tác click trên cảnh để kiểm thử hiệu ứng tương tác. |
 | `--headless` | Dựng cảnh ẩn ngoài màn hình (không gắn vào `Progman`/`WorkerW`, không tạo icon khay). |
-| `--present gdi\|gl` | Chọn phương thức đẩy hình lên cửa sổ nền (`gdi` mặc định tương thích Windows 11 24H2+; `gl` dùng `SwapBuffers`). |
+| `--present gdi\|gl` | Chọn phương thức đẩy hình lên cửa sổ nền (`gl` mặc định; dùng `gdi` nếu driver/DWM cũ cần dự phòng). |
 | `--webview-debug` | Mở cổng Remote Debugging `9222` cho cửa sổ cài đặt WebView2. |
 
 - **Tệp cấu hình:** Lưu độc lập tại `~/.deskland-rs/settings.json` (lần chạy đầu tiên nếu chưa có sẽ tự kế thừa cấu hình từ `%LOCALAPPDATA%\DesklandPreview\settings.json` của bản C# mà không ghi đè dữ liệu cũ).
@@ -115,7 +115,7 @@ cargo build --release
 ## Kiến trúc Hiển thị & Tương thích Windows 11 24H2+
 
 - **Tự động nhận diện mô hình Desktop:** Hỗ trợ cả kiến trúc **Raised Desktop (`Progman` + cửa sổ con phân lớp `WS_EX_LAYERED`)** trên Windows 11 24H2+ lẫn kiến trúc **`WorkerW` cổ điển** trên Windows 10 / 11 23H2, hỗ trợ đa màn hình khác DPI (`Per-Monitor DPI Aware V2`) và tự dựng lại khi cắm/rút màn hình (`WM_DISPLAYCHANGE`).
-- **Đường ống kết xuất (`--present gdi` mặc định):**
+- **Đường ống kết xuất (`--present gl` mặc định):**
   1. OpenGL 3.3 vẽ shader vào FBO ở độ phân giải tối ưu **72%** (giống bản gốc để giảm tải fill-rate GPU tích hợp).
   2. `glBlitFramebuffer(..., GL_LINEAR)` phóng mượt trên GPU lên kích thước thật của từng màn hình.
   3. Đọc bất đồng bộ qua **PBO (Pixel Buffer Object)** không gây nghẽn pipeline GPU → đẩy thẳng lên cửa sổ hình nền bằng `SetDIBitsToDevice`.
