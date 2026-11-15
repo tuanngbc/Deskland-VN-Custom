@@ -132,7 +132,6 @@ impl Maldives {
             }
             y += 62.0;
         }
-        crate::log!("Maldives: đặt {} cây dừa trên canvas {:.0}x{:.0}", self.palms.len(), self.b.w, self.b.h);
     }
 
     fn commit(&mut self, gl: &glow::Context, from_empty: bool, now: f64) {
