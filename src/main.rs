@@ -554,9 +554,10 @@ fn load_config(cli_theme: Option<String>) -> Config {
         widget_scale: widget.and_then(|v| v.get("scale")).and_then(|v| v.as_f64()).map(|v| v as f32).filter(|v| v.is_finite()).unwrap_or(1.0).clamp(0.7, 1.6),
         widget_opacity: widget.and_then(|v| v.get("opacity")).and_then(|v| v.as_f64()).map(|v| v as f32).filter(|v| v.is_finite()).unwrap_or(0.72).clamp(0.05, 1.0),
         widget_lines: ["time", "weekday", "date"].map(|k| widget::Line {
-            x: widget.and_then(|v| v.get(k)).and_then(|v| v.get("x")).and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            x: widget.and_then(|v| v.get(k)).and_then(|v| v.get("x")).and_then(|v| v.as_i64()).unwrap_or(120) as i32,
             y: widget.and_then(|v| v.get(k)).and_then(|v| v.get("y")).and_then(|v| v.as_i64()).unwrap_or(0) as i32,
             opacity: widget.and_then(|v| v.get(k)).and_then(|v| v.get("opacity")).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(1.0).clamp(0.0, 1.0),
+            size: widget.and_then(|v| v.get(k)).and_then(|v| v.get("size")).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(1.0).clamp(0.5, 2.0),
         }),
         lock_idle_mins: root.get("lockIdleMins").and_then(|v| v.as_u64()).map(|v| v as u32).filter(|&v| v > 0).unwrap_or(5),
     }
@@ -586,9 +587,9 @@ fn save_config(cfg: &Config) {
             "y": cfg.widget_y,
             "scale": cfg.widget_scale,
             "opacity": cfg.widget_opacity,
-            "time": { "x": cfg.widget_lines[0].x, "y": cfg.widget_lines[0].y, "opacity": cfg.widget_lines[0].opacity },
-            "weekday": { "x": cfg.widget_lines[1].x, "y": cfg.widget_lines[1].y, "opacity": cfg.widget_lines[1].opacity },
-            "date": { "x": cfg.widget_lines[2].x, "y": cfg.widget_lines[2].y, "opacity": cfg.widget_lines[2].opacity },
+            "time": { "x": cfg.widget_lines[0].x, "y": cfg.widget_lines[0].y, "opacity": cfg.widget_lines[0].opacity, "size": cfg.widget_lines[0].size },
+            "weekday": { "x": cfg.widget_lines[1].x, "y": cfg.widget_lines[1].y, "opacity": cfg.widget_lines[1].opacity, "size": cfg.widget_lines[1].size },
+            "date": { "x": cfg.widget_lines[2].x, "y": cfg.widget_lines[2].y, "opacity": cfg.widget_lines[2].opacity, "size": cfg.widget_lines[2].size },
         },
         "params": cfg.params,
     });
@@ -657,9 +658,9 @@ fn web_init(app: &App) -> serde_json::Value {
             "y": app.cfg.widget_y,
             "scale": app.cfg.widget_scale,
             "opacity": app.cfg.widget_opacity,
-            "time": { "x": app.cfg.widget_lines[0].x, "y": app.cfg.widget_lines[0].y, "opacity": app.cfg.widget_lines[0].opacity },
-            "weekday": { "x": app.cfg.widget_lines[1].x, "y": app.cfg.widget_lines[1].y, "opacity": app.cfg.widget_lines[1].opacity },
-            "date": { "x": app.cfg.widget_lines[2].x, "y": app.cfg.widget_lines[2].y, "opacity": app.cfg.widget_lines[2].opacity },
+            "time": { "x": app.cfg.widget_lines[0].x, "y": app.cfg.widget_lines[0].y, "opacity": app.cfg.widget_lines[0].opacity, "size": app.cfg.widget_lines[0].size },
+            "weekday": { "x": app.cfg.widget_lines[1].x, "y": app.cfg.widget_lines[1].y, "opacity": app.cfg.widget_lines[1].opacity, "size": app.cfg.widget_lines[1].size },
+            "date": { "x": app.cfg.widget_lines[2].x, "y": app.cfg.widget_lines[2].y, "opacity": app.cfg.widget_lines[2].opacity, "size": app.cfg.widget_lines[2].size },
         },
         "lang": app.cfg.lang, "langEff": eff, "langSys": sys,
         "lockCfg": {
@@ -2165,6 +2166,7 @@ fn main() {
                             if let Some(v) = line.get("x").and_then(|v| v.as_i64()) { app.cfg.widget_lines[i].x = v as i32; }
                             if let Some(v) = line.get("y").and_then(|v| v.as_i64()) { app.cfg.widget_lines[i].y = v as i32; }
                             if let Some(v) = line.get("opacity").and_then(|v| v.as_f64()) { app.cfg.widget_lines[i].opacity = (v as f32).clamp(0.0, 1.0); }
+                            if let Some(v) = line.get("size").and_then(|v| v.as_f64()) { app.cfg.widget_lines[i].size = (v as f32).clamp(0.5, 2.0); }
                         }
                     }
                     if let Some(w) = app.widget.as_mut() { w.set_lines(app.cfg.widget_lines); }

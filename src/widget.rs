@@ -30,6 +30,7 @@ pub struct Line {
     pub x: i32,
     pub y: i32,
     pub opacity: f32,
+    pub size: f32,
 }
 
 pub struct Widget {
@@ -100,13 +101,14 @@ unsafe fn paint(dc: HDC, r: RECT, state: &State) {
     let date = format!("{} {} {}", ordinal(hour.3), month_en(hour.2), hour.5);
     let alpha = rgb(185, 231, 245);
     let bright = rgb(220, 247, 255);
-    let h1 = (100.0 * scale) as i32;
-    let h2 = (85.0 * scale) as i32;
-    let h3 = (35.0 * scale) as i32;
+    let h1 = (100.0 * scale * state.time.size.clamp(0.5, 2.0)) as i32;
+    let h2 = (85.0 * scale * state.weekday.size.clamp(0.5, 2.0)) as i32;
+    let h3 = (35.0 * scale * state.date.size.clamp(0.5, 2.0)) as i32;
     let box_rect = |line: Line, base_y: i32, height: i32| RECT { left: line.x - r.right / 2, top: ((base_y as f32) * scale) as i32 + line.y, right: line.x + r.right / 2, bottom: ((base_y as f32) * scale) as i32 + line.y + height };
     text(dc, box_rect(state.time, 0, h1 + 8), &time, "Steelfish Rg", h1, alpha, state.time.opacity, false, 400);
-    text(dc, box_rect(state.weekday, 105, h2 + 8), &weekday, "la Compagnie des Ombres", h2, bright, state.weekday.opacity, false, 400);
-    text(dc, box_rect(state.date, 165, h3 + 8), &date.to_uppercase(), "Steelfish Rg", h3, alpha, state.date.opacity, false, 400);
+    // Mốc 70 làm dòng thứ chồng lên giờ và ngày theo skin gốc.
+    text(dc, box_rect(state.weekday, 70, h2 + 8), &weekday, "la Compagnie des Ombres", h2, bright, state.weekday.opacity, false, 400);
+    text(dc, box_rect(state.date, 150, h3 + 8), &date.to_uppercase(), "Steelfish Rg", h3, alpha, state.date.opacity, false, 400);
 }
 
 const fn rgb(r: u8, g: u8, b: u8) -> COLORREF { r as u32 | ((g as u32) << 8) | ((b as u32) << 16) }
