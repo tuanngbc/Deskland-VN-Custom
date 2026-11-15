@@ -92,3 +92,5 @@ trên profile cách ly trước khi đưa theme vào bản phát hành.
 Thumbnail trong `prototype/thumbs/` là tài sản thiết kế thủ công; không tự động
 ghi đè thumbnail hiện có. Tác phẩm mới phải là tài sản nguyên bản hoặc có giấy
 phép tương thích GPL-3.0 và ghi nguồn trong `THIRD_PARTY_NOTICES.md`.
+
+

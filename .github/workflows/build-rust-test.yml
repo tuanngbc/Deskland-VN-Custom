@@ -1,8 +1,8 @@
-name: Build Rust native test
+name: Build Deskland Rust
 
 on:
   push:
-    branches: [rust-test, codex/rust-test]
+    branches: [main, codex/rust-test]
   workflow_dispatch:
 
 permissions:
@@ -18,8 +18,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Build deskland-rs
-        working-directory: deskland-rs
+      - name: Build Rust native app
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           rustup toolchain install stable --profile minimal
@@ -32,20 +31,20 @@ jobs:
       - name: Package Rust native build
         run: |
           $short = '${{ github.sha }}'.Substring(0, 7)
-          $name = "Deskland-VN-Rust-panorama-$short-win-x64"
+          $name = "Deskland-VN-Rust-$short-win-x64"
           $dir = "dist\$name"
           New-Item -ItemType Directory -Force $dir | Out-Null
-          Copy-Item deskland-rs\target\release\deskland-rs.exe "$dir\Deskland-VN.exe"
+          Copy-Item target\release\deskland-rs.exe "$dir\Deskland-VN.exe"
           # Dùng giao diện prototype hiện tại để có panorama, công tắc thời
           # gian/thời tiết và tìm vị trí; engine Rust nhận các message tương ứng.
           Copy-Item -Recurse prototype "$dir\prototype"
           foreach ($file in 'README.md','LICENSE','NOTICE','THIRD_PARTY_NOTICES.md','TRADEMARKS.md') {
             if (Test-Path $file) { Copy-Item $file $dir }
           }
-          Copy-Item deskland-rs\README.md "$dir\README-deskland-rs.md"
+          Copy-Item README-rust.md "$dir\README-rust.md"
           '${{ github.sha }}' | Set-Content "$dir\BUILD-COMMIT.txt" -Encoding ascii
           @"
-          Deskland Rust Native test build
+          Deskland Rust Native build
 
           Giải nén toàn bộ thư mục này và chạy Deskland-VN.exe.
           Giữ thư mục prototype cạnh file exe để mở Cài đặt.
@@ -58,7 +57,7 @@ jobs:
       - name: Upload Rust artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Deskland-VN-Rust-test-win-x64
+          name: Deskland-VN-Rust-win-x64
           path: |
             dist/*.zip
             dist/*.sha256

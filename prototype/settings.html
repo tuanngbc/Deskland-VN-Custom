@@ -6,7 +6,7 @@
 <title>Deskland Preview</title>
 <!--
   Deskland 设置窗口
-  - 由桌面宿主（host/Deskland.exe）在 WebView2 里打开；单独用浏览器打开时使用模拟数据，方便调界面
+  - 由桌面宿主（Deskland-VN.exe）在 WebView2 里打开；单独用浏览器打开时使用模拟数据，方便调界面
   - 主题与参数来自 themes.json，控件按清单自动生成
   - 实时预览：iframe 加载主题页面的 ?preview=1 模式，用你桌面上真实的图标位置
   - 和宿主的消息（JSON 字符串）：
@@ -1107,3 +1107,4 @@ fetch('themes.json').then(r => r.json()).then(reg => {
 </script>
 </body>
 </html>
+
