@@ -638,8 +638,10 @@ void main() {
     // Ép silhouette xuống mặt cát và kéo theo hướng ngược mặt trời.
     // uShadowOffset đổi dấu từ đông sang tây; uShadowFlatten ngắn nhất vào
     // giữa trưa và dài hơn khi mặt trời thấp.
+    // 96 px đặt mặt bóng ngay dưới chân (y=0); nếu không có khoảng này,
+    // silhouette nằm chồng dưới tán và bị thân cây vẽ sau che mất.
     local = vec2(local.x * .84 + local.y * uShadowShear + uShadowOffset,
-                 -local.y * uShadowFlatten + 4.0);
+                 96.0 - local.y * uShadowFlatten);
   }
   float a = sin(uTime * .65 + uPalm.w * 2.0) * .008;
   local = mat2(cos(a), sin(a), -sin(a), cos(a)) * local;
@@ -657,7 +659,7 @@ out vec4 o;
 void main() {
   vec4 tree = texture(uPalmAtlas, vUv);
   if (tree.a < .002) discard;
-  vec3 color = uPalmShadow > .5 ? vec3(.16, .23, .19) : tree.rgb;
+  vec3 color = uPalmShadow > .5 ? vec3(.08, .12, .10) : tree.rgb;
   o = vec4(color, tree.a * uPalmOpacity);
 }"#;
 
@@ -699,7 +701,7 @@ pub fn draw_palm(gl: &glow::Context, shared: &mut Shared, w: f32, h: f32, x: f32
     let phase = shared.day_phase.clamp(0.0, 1.0);
     let sun_height = (((phase - 0.25) * std::f32::consts::PI).sin()).max(0.0);
     let sun_x = -((phase - 0.5) * std::f32::consts::PI).sin();
-    let shadow_opacity = (sun_height * (0.13 + sun_height * 0.09)).clamp(0.0, 0.24);
+    let shadow_opacity = (sun_height * (0.16 + sun_height * 0.12)).clamp(0.0, 0.30);
     let shadow_offset = -sun_x * (18.0 + (1.0 - sun_height) * 64.0);
     let shadow_shear = -sun_x * 0.16;
     let shadow_flatten = 0.14 + sun_height * 0.20;
