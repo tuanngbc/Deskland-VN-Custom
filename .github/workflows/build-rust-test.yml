@@ -2,7 +2,7 @@ name: Build Rust native test
 
 on:
   push:
-    branches: [rust-test]
+    branches: [rust-test, codex/rust-test]
   workflow_dispatch:
 
 permissions:
