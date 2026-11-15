@@ -215,6 +215,13 @@ static class Json
     }
 }
 
+static class WebViewTuning
+{
+    // These pages are a self-contained desktop surface. Avoid browser-only
+    // background services that add startup work and idle memory.
+    public const string Arguments = "--disable-background-networking --disable-component-update --disable-domain-reliability --disable-extensions --disable-sync --no-first-run";
+}
+
 // 用户设置：当前主题 + 每个主题的参数（只存用户改过的，没改过的用主题默认值）
 // 保存在 %LOCALAPPDATA%\Deskland\settings.json
 static class Settings
@@ -1101,7 +1108,8 @@ partial class HostContext : ApplicationContext
     {
         return Json.Stringify(Json.Obj("t", "settings", "v", Settings.ForMonitor(instance.MonitorId, instance.ThemeId), "environment", Settings.EnvironmentJson(),
             "contract", Json.Obj("version", 1, "mode", Settings.Mode.ToString().ToLowerInvariant(), "monitor", instance.MonitorId,
-            "viewport", RectJson(instance.Monitor.Bounds), "world", WorldJson(), "environment", Settings.EnvironmentJson(), "epoch", (epoch - new DateTime(1970, 1, 1)).TotalMilliseconds)));
+            "viewport", RectJson(instance.Monitor.Bounds), "world", WorldJson(), "environment", Settings.EnvironmentJson(), "fps", 20,
+            "epoch", (epoch - new DateTime(1970, 1, 1)).TotalMilliseconds)));
     }
     static object RectJson(Rectangle r) { return Json.Obj("x", r.X, "y", r.Y, "w", r.Width, "h", r.Height); }
     void PostMonitors()
@@ -1297,6 +1305,7 @@ class SettingsForm : Form
         web.DefaultBackgroundColor = BackColor;
         web.CreationProperties = new CoreWebView2CreationProperties();
         web.CreationProperties.UserDataFolder = Path.Combine(Log.DataDir, "WebView2");
+        web.CreationProperties.AdditionalBrowserArguments = WebViewTuning.Arguments;
         Controls.Add(web);
     }
 
@@ -1467,6 +1476,7 @@ class WallpaperForm : Form
         web.DefaultBackgroundColor = BackColor;
         web.CreationProperties = new CoreWebView2CreationProperties();
         web.CreationProperties.UserDataFolder = Path.Combine(Log.DataDir, "WebView2");
+        web.CreationProperties.AdditionalBrowserArguments = WebViewTuning.Arguments;
         Controls.Add(web);
 
         fgTimer = new System.Windows.Forms.Timer();
@@ -1622,7 +1632,7 @@ class WallpaperForm : Form
             var core = web.CoreWebView2;
             core.SetVirtualHostNameToFolderMapping("app.local", pageDir, CoreWebView2HostResourceAccessKind.Allow);
             core.Settings.AreDefaultContextMenusEnabled = false;
-            core.Settings.AreDevToolsEnabled = true;
+            core.Settings.AreDevToolsEnabled = InstallProfile.Isolated;
             core.Settings.IsStatusBarEnabled = false;
             core.ProcessFailed += delegate(object sender, CoreWebView2ProcessFailedEventArgs failure)
             {

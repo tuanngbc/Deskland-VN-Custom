@@ -3,7 +3,7 @@
    Mirror surfaces share epoch and seed, while keeping their own aspect ratio. */
 (function (root) {
   'use strict';
-  let contract = null, epochOffset = 0, randomState = 104729, nextFrameAt = 0;
+  let contract = null, epochOffset = 0, randomState = 104729, nextFrameAt = 0, targetFps = 30;
   let draws = 0, iconsSeen = false;
   const errors = [];
 
@@ -186,13 +186,15 @@
     configure(next) {
       if (!next || next.version !== 1) return;
       contract = next;
+      targetFps = Number.isFinite(Number(next.fps)) ? Math.max(10, Math.min(60, Number(next.fps))) : 30;
       epochOffset = Date.now() - performance.now() - next.epoch;
       if (next.environment) api.setEnvironmentOptions(next.environment);
     },
     seconds(now, fallback) { return contract ? (now + epochOffset) / 1000 : (now - fallback) / 1000; },
     frameDue(now) {
       if (now < nextFrameAt) return false;
-      nextFrameAt = !nextFrameAt || now - nextFrameAt > 100 ? now + 1000 / 30 : nextFrameAt + 1000 / 30;
+      const interval = 1000 / targetFps;
+      nextFrameAt = !nextFrameAt || now - nextFrameAt > 100 ? now + interval : nextFrameAt + interval;
       return true;
     },
     resetFrame() { nextFrameAt = 0; },
