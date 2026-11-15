@@ -1155,17 +1155,23 @@ impl App {
         let ctx = self.ctx.as_ref().unwrap();
         if let Some(pan) = self.panorama.as_ref() {
             let world = pan.world;
-            let boxes: Vec<IconBox> = if visible { rects.iter().map(|r| IconBox {
+            let desired_rects = if visible { rects.clone() } else { Vec::new() };
+            // Panorama dùng một theme chung; không được commit lại trường và
+            // bố trí lại toàn bộ cây mỗi chu kỳ đọc icon nếu dữ liệu không đổi.
+            if self.walls.first().and_then(|w| w.last_icons.as_ref()).is_some_and(|old| rects_eq(old, &desired_rects)) {
+                return;
+            }
+            let boxes: Vec<IconBox> = desired_rects.iter().map(|r| IconBox {
                 x: (r.left - world.left) as f32,
                 y: (r.top - world.top) as f32,
                 w: (r.right - r.left) as f32,
                 h: (r.bottom - r.top) as f32,
-            }).collect() } else { Vec::new() };
+            }).collect();
             let first = self.walls.first().and_then(|w| w.last_icons.as_ref()).is_none();
             if let Some(wp0) = self.walls.first_mut() {
                 ctx.make_current(wp0.gl_dc);
                 wp0.theme.set_icons(&ctx.gl, boxes, first, now);
-                wp0.last_icons = Some(rects.clone());
+                wp0.last_icons = Some(desired_rects);
                 if wp0.paused { wp0.needs_settle = true; }
             }
             return;
