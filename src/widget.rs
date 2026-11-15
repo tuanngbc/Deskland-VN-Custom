@@ -47,7 +47,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             0
         }
         WM_LBUTTONDOWN if !state.is_null() && !(*state).locked => {
-            ReleaseCapture();
             SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION as WPARAM, 0);
             0
         }
@@ -59,8 +58,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
 unsafe fn font(face: &str, height: i32, italic: bool, weight: i32) -> HFONT {
     let f = wide(face);
     CreateFontW(
-        height, 0, 0, 0, weight, italic as i32, 0, 0, DEFAULT_CHARSET as u32,
-        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+        height, 0, 0, 0, weight, italic as u32, 0, 0, DEFAULT_CHARSET as u32,
+        OUT_DEFAULT_PRECIS as u32, CLIP_DEFAULT_PRECIS as u32, CLEARTYPE_QUALITY as u32, (DEFAULT_PITCH | FF_DONTCARE) as u32,
         f.as_ptr(),
     )
 }
@@ -68,7 +67,7 @@ unsafe fn font(face: &str, height: i32, italic: bool, weight: i32) -> HFONT {
 unsafe fn text(dc: HDC, rect: RECT, value: &str, face: &str, size: i32, color: COLORREF, italic: bool, weight: i32) {
     let h = font(face, size, italic, weight);
     let old = SelectObject(dc, h as _);
-    SetBkMode(dc, TRANSPARENT);
+    SetBkMode(dc, TRANSPARENT as i32);
     SetTextColor(dc, color);
     let mut s = wide(value);
     DrawTextW(dc, s.as_mut_ptr(), -1, &rect as *const RECT as *mut RECT, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
@@ -85,8 +84,8 @@ unsafe fn paint(dc: HDC, r: RECT, state: &State) {
     } else {
         (weekday_en(hour.6), format!("{} {} {}", ordinal(hour.3), month_en(hour.2), hour.5))
     };
-    let alpha = RGB(185, 231, 245);
-    let bright = RGB(220, 247, 255);
+    let alpha = rgb(185, 231, 245);
+    let bright = rgb(220, 247, 255);
     let h1 = (100.0 * scale) as i32;
     let h2 = (68.0 * scale) as i32;
     let h3 = (29.0 * scale) as i32;
@@ -96,6 +95,8 @@ unsafe fn paint(dc: HDC, r: RECT, state: &State) {
     text(dc, box_rect((108.0 * scale) as i32, h2 + 8), &weekday, "Segoe Script", h2, bright, true, 400);
     text(dc, box_rect((178.0 * scale) as i32, h3 + 8), &date.to_uppercase(), "Segoe UI Light", h3, alpha, false, 300);
 }
+
+const fn rgb(r: u8, g: u8, b: u8) -> COLORREF { r as u32 | ((g as u32) << 8) | ((b as u32) << 16) }
 
 // (hour, minute, second, day, month, year, weekday; weekday: 0=Sunday)
 fn local_time() -> (u16, u16, u16, u16, u16, u16, u16) {
@@ -139,7 +140,7 @@ impl Widget {
         if hwnd.is_null() { return Err("Không tạo được widget đồng hồ".into()); }
         unsafe {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, ptr as isize);
-            SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), 0, LWA_COLORKEY);
+            SetLayeredWindowAttributes(hwnd, rgb(0, 0, 0), 0, LWA_COLORKEY);
             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             UpdateWindow(hwnd);
         }
