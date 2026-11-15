@@ -480,12 +480,19 @@ fn load_config(cli_theme: Option<String>) -> Config {
     let saved = root.get("theme").and_then(|v| v.as_str()).unwrap_or("beach").to_string();
     let interactions_enabled = root.get("interactionsEnabled").and_then(|v| v.as_bool()).unwrap_or(true);
     let env = root.get("environment");
+    let legacy = csv.as_ref();
+    let env_bool = |key: &str| env.and_then(|v| v.get(key)).and_then(|v| v.as_bool());
+    let legacy_bool = |key: &str| root.get(key).and_then(|v| v.as_bool()).or_else(|| legacy.and_then(|v| v.get(key)).and_then(|v| v.as_bool()));
+    let env_str = |key: &str| env.and_then(|v| v.get(key)).and_then(|v| v.as_str());
+    let legacy_str = |key: &str| root.get(key).and_then(|v| v.as_str()).or_else(|| legacy.and_then(|v| v.get(key)).and_then(|v| v.as_str()));
+    let env_location = env.and_then(|v| v.get("location")).cloned().filter(|v| !v.is_null());
+    let legacy_location = root.get("weatherLocation").cloned().filter(|v| !v.is_null()).or_else(|| legacy.and_then(|v| v.get("weatherLocation")).cloned().filter(|v| !v.is_null()));
     let environment = Environment {
-        time_enabled: env.and_then(|v| v.get("time")).and_then(|v| v.as_bool()).unwrap_or(true),
-        weather_enabled: env.and_then(|v| v.get("weather")).and_then(|v| v.as_bool()).unwrap_or(true),
-        preset: env.and_then(|v| v.get("preset")).and_then(|v| v.as_str()).unwrap_or("auto").to_string(),
-        source: env.and_then(|v| v.get("source")).and_then(|v| v.as_str()).unwrap_or("local").to_string(),
-        location: env.and_then(|v| v.get("location")).cloned(),
+        time_enabled: env_bool("time").or_else(|| legacy_bool("dynamicTime")).unwrap_or(true),
+        weather_enabled: env_bool("weather").or_else(|| legacy_bool("dynamicWeather")).unwrap_or(true),
+        preset: env_str("preset").or_else(|| legacy_str("weatherPreset")).unwrap_or("auto").to_string(),
+        source: env_str("source").or_else(|| legacy_str("weatherSource")).unwrap_or("local").to_string(),
+        location: env_location.or(legacy_location),
     };
     let raw_theme = cli_theme.unwrap_or(saved);
     let theme = match canonical_theme(&raw_theme) {
@@ -498,7 +505,7 @@ fn load_config(cli_theme: Option<String>) -> Config {
     Config {
         theme,
         params: root.get("params").cloned().unwrap_or(serde_json::Value::Null),
-        mode: root.get("mode").and_then(|v| v.as_str()).filter(|v| matches!(*v, "mirror" | "independent" | "panorama")).unwrap_or("mirror").to_string(),
+        mode: root.get("mode").and_then(|v| v.as_str()).map(|v| v.to_ascii_lowercase()).filter(|v| matches!(v.as_str(), "mirror" | "independent" | "panorama")).unwrap_or_else(|| "mirror".to_string()),
         environment,
         lock_sync: root.get("lockSyncWin").and_then(|v| v.as_bool()).unwrap_or(true),
         lang,
