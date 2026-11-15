@@ -1349,7 +1349,12 @@ fn main() {
 
     let fps: f64 = arg_value(&args, "--fps").and_then(|s| s.parse().ok()).unwrap_or(20.0);
     let interval = 1000.0 / fps.max(1.0);
-    let cfg = load_config(arg_value(&args, "--theme"));
+    let mut cfg = load_config(arg_value(&args, "--theme"));
+    if let Some(mode) = arg_value(&args, "--mode") {
+        if matches!(mode.as_str(), "mirror" | "independent" | "panorama") {
+            cfg.mode = mode;
+        }
+    }
     log!(
         "deskland-rs {} khởi động{}: chủ đề {}, {fps} khung/giây",
         env!("CARGO_PKG_VERSION"),

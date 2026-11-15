@@ -95,6 +95,7 @@ cargo build --release
 | Tham số | Chức năng |
 |---|---|
 | `--theme <id>` | Khởi chạy với chủ đề chỉ định (hỗ trợ cả mã chính thức lẫn alias trong bảng trên). |
+| `--mode mirror\|independent\|panorama` | Chọn chế độ nhiều màn hình ngay khi khởi chạy; chế độ này cũng có thể đổi trong Cài đặt. |
 | `--fps <số>` | Đặt tốc độ khung hình cơ sở khi nghỉ (mặc định `20`; tự nâng lên `50` khi đang tương tác). |
 | `--settings` | Mở cửa sổ Cài đặt WebView2 (tự lùi về Win32 nếu thiếu WebView2/prototype). |
 | `--settings-win32` | Buộc mở giao diện Cài đặt Win32 cổ điển siêu nhẹ. |
