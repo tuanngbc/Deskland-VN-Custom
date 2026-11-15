@@ -1668,9 +1668,9 @@ fn main() {
         start: Instant::now(),
         frames: 0,
         frame_cpu_ms: 0.0,
-        // OpenGL trực tiếp là đường mặc định cho nhiều màn hình. GDI vẫn có
-        // thể dùng bằng `--present gdi` trên máy có driver cũ hoặc gặp lỗi DWM.
-        gdi: arg_value(&args, "--present").as_deref() == Some("gdi"),
+        // GDI là đường mặc định để DWM luôn nhận đủ khung trên monitor phụ;
+        // `--present gl` vẫn có thể dùng trên máy đã xác nhận driver ổn định.
+        gdi: arg_value(&args, "--present").as_deref() != Some("gl"),
         dummy: None,
         saver,
         headless,
@@ -1931,6 +1931,22 @@ fn main() {
                     log!("Môi trường: time={}, weather={}, preset={}, source={}", app.environment.time_enabled, app.environment.weather_enabled, app.environment.preset, app.environment.source);
                     web::post(&web_init(&app).to_string());
                     web_changed = true;
+                }
+                "geocode" => {
+                    let query = s_("query");
+                    if query.trim().len() < 2 { web::post(&serde_json::json!({"t":"geocodeResults","results":[]}).to_string()); continue; }
+                    let language = s_("language");
+                    let url = format!("https://geocoding-api.open-meteo.com/v1/search?name={}&count=6&language={}&format=json", urlencoding::encode(query.trim()), if language == "vi" || language == "zh" { language } else { "en".to_string() });
+                    match reqwest::blocking::get(url).and_then(|r| r.json::<serde_json::Value>().map_err(Into::into)) {
+                        Ok(root) => {
+                            let results = root.get("results").cloned().unwrap_or_else(|| serde_json::json!([]));
+                            web::post(&serde_json::json!({"t":"geocodeResults","results":results}).to_string());
+                        }
+                        Err(e) => {
+                            log!("Tìm vị trí thời tiết lỗi: {e}");
+                            web::post(&serde_json::json!({"t":"geocodeResults","error":e.to_string()}).to_string());
+                        }
+                    }
                 }
                 "monitorTheme" => {
                     // Engine native dùng cùng cảnh trên toàn bộ màn hình; vẫn

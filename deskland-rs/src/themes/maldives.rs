@@ -118,19 +118,19 @@ impl Maldives {
     fn sync_palms(&mut self) {
         self.palms.clear();
         let want = self.p.palms.round().clamp(0.0, 10.0) as usize;
-        let candidates = [
-            (0.12, 0.74, 0.62, 0.0), (0.25, 0.66, 0.58, 1.0), (0.42, 0.82, 0.60, 2.0),
-            (0.58, 0.69, 0.58, 3.0), (0.76, 0.78, 0.62, 4.0), (0.90, 0.62, 0.56, 1.0),
-            (0.18, 0.52, 0.52, 2.0), (0.68, 0.53, 0.54, 0.0), (0.84, 0.46, 0.50, 3.0),
-            (0.48, 0.58, 0.52, 4.0),
-        ];
-        for &(nx, ny, scale, variant) in &candidates {
-            if self.palms.len() >= want { break; }
-            let x = self.b.w * nx; let y = self.b.h * ny;
-            let s = self.b.cur_s(x, y);
-            if s < -22.0 && s > -95.0 && self.palms.iter().all(|p| (p.x - x).hypot(p.y - y) > 110.0) {
-                self.palms.push(PalmPlacement { x, y, scale, variant, mirror: if nx > 0.5 { -1.0 } else { 1.0 } });
+        let mut variant = 0.0;
+        let mut y = 90.0;
+        while y < self.b.h - 120.0 && self.palms.len() < want {
+            let mut x = 80.0 + ((y as i32 / 13) % 2) as f32 * 38.0;
+            while x < self.b.w - 80.0 && self.palms.len() < want {
+                let s = self.b.cur_s(x, y);
+                if s < -10.0 && s > -130.0 && self.palms.iter().all(|p| (p.x - x).hypot(p.y - y) > 105.0) {
+                    self.palms.push(PalmPlacement { x, y, scale: 0.58, variant, mirror: if x > self.b.w * 0.5 { -1.0 } else { 1.0 } });
+                    variant = (variant + 1.0) % 5.0;
+                }
+                x += 62.0;
             }
+            y += 62.0;
         }
     }
 

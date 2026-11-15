@@ -639,6 +639,10 @@ async function searchWeatherLocations() {
   const query = $('locationQuery').value.trim();
   if (query.length < 2) { $('locationResults').innerHTML = `<div class="empty">${t('weatherLocationShort')}</div>`; return; }
   $('locationResults').innerHTML = `<div class="empty">${t('weatherLocationSearching')}</div>`;
+  if (host) {
+    send({ t: 'geocode', query, language: lang === 'vi' ? 'vi' : lang === 'zh-CN' ? 'zh' : 'en' });
+    return;
+  }
   try {
     const language = lang === 'vi' ? 'vi' : lang === 'zh-CN' ? 'zh' : 'en';
     const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=6&language=${language}&format=json`;
@@ -1062,6 +1066,12 @@ function onHost(m) {
     shareProgress(m.p);
   } else if (m.t === 'shareResult') {
     showShare(m);
+  } else if (m.t === 'geocodeResults') {
+    if (m.error) { $('locationResults').innerHTML = `<div class="empty">${t('weatherLocationError')}</div>`; return; }
+    const results = Array.isArray(m.results) ? m.results : [];
+    if (!results.length) { $('locationResults').innerHTML = `<div class="empty">${t('weatherLocationNone')}</div>`; return; }
+    $('locationResults').innerHTML = results.map((item, index) => `<button type="button" data-location-index="${index}">${esc(item.name || '')}${item.admin1 ? ', ' + esc(item.admin1) : ''}${item.country ? ' · ' + esc(item.country) : ''}</button>`).join('');
+    $('locationResults')._items = results;
   }
 }
 
