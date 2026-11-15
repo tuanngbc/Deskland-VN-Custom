@@ -654,7 +654,7 @@ pub fn build_palm_atlas(gl: &glow::Context) -> Result<glow::Texture, String> {
         let img = image::load_from_memory(bytes).map_err(|e| format!("đọc texture cây dừa: {e}"))?.to_rgba8();
         let (w, h) = match i { 3 => (148, 138), 4 => (128, 119), _ => (168, 156) };
         let resized = imageops::resize(&img, w, h, imageops::FilterType::Triangle);
-        imageops::overlay(&mut atlas, &resized, (i as i64 * 224 + (224 - w) / 2), (162 - h) as i64);
+        imageops::overlay(&mut atlas, &resized, i as i64 * 224 + ((224 - w) / 2) as i64, (162 - h) as i64);
     }
     unsafe {
         let t = gl.create_texture()?;
