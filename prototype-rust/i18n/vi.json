@@ -1,0 +1,840 @@
+{
+  "name": "Tiếng Việt",
+  "ui": {
+    "adaptive": "Thích ứng",
+    "themes": "Chủ đề",
+    "collectionTitle": "Chọn khung cảnh của bạn.",
+    "collectionSubtitle": "Biến các biểu tượng màn hình thành một phần của bức tranh thiên nhiên.",
+    "language": "Ngôn ngữ",
+    "langAuto": "Theo hệ thống",
+    "langAutoWith": "Theo hệ thống ({name})",
+    "autostart": "Khởi động cùng Windows",
+    "autostartTitle": "Tự động chạy Deskland-VN khi bạn đăng nhập vào Windows",
+    "interactions": "Tương tác chuột",
+    "interactionsTitle": "Nhấn chuột trái vào khoảng trống trên màn hình nền để tương tác với khung cảnh",
+    "autostartBlocked": "Khởi động cùng Windows có thể đã bị chặn",
+    "autostartWarnSw": "Deskland-VN đã không tự khởi động trong lần đăng nhập này — {sw} có thể đã chặn ứng dụng. Hãy mở {sw}, tìm Deskland-VN trong mục quản lý khởi động và chuyển sang Cho phép.",
+    "autostartWarnGeneric": "Deskland-VN đã không tự khởi động trong lần đăng nhập này — phần mềm bảo mật hoặc cài đặt Ứng dụng khởi động của Windows có thể đã chặn. Hãy bật lại Deskland-VN trong trình quản lý khởi động hoặc trong Cài đặt Windows → Ứng dụng → Khởi động.",
+    "gotIt": "Đã hiểu",
+    "updateAvailable": "Có bản cập nhật mới",
+    "updateVersion": "Deskland-VN {version} đã sẵn sàng. Chủ đề và cài đặt hiện tại của bạn sẽ được giữ nguyên.",
+    "updateProgram": "Cập nhật ngay",
+    "updateRetry": "Thử lại",
+    "updateWorking": "Đang cập nhật…",
+    "updateDownloading": "Đang tải và cài đặt… {progress}",
+    "updateInstalling": "Đang cài đặt bản cập nhật… {progress}",
+    "updateCompletedTitle": "Cập nhật hoàn tất",
+    "updateCompleted": "Bản cập nhật đã được tải và cài đặt. Nếu Deskland-VN không tự khởi động lại, hãy mở lại ứng dụng.",
+    "updateDone": "Hoàn tất",
+    "updateCanceled": "Đã hủy cập nhật. Bạn có thể thử lại sau.",
+    "updateLowBattery": "Không thể hoàn tất cập nhật khi đang dùng pin. Hãy cắm sạc thiết bị và thử lại.",
+    "updateWifiRecommended": "Mạng hiện tại có thể tính phí dữ liệu. Hãy đổi mạng hoặc thử lại sau.",
+    "updateWifiRequired": "Hãy kết nối Wi-Fi để tải bản cập nhật này.",
+    "updateStoreRequired": "Phương thức cập nhật này chỉ khả dụng trên phiên bản Microsoft Store.",
+    "updateFailed": "Cập nhật thất bại. Vui lòng kiểm tra kết nối mạng và thử lại.",
+    "updateCheckingTitle": "Đang kiểm tra cập nhật",
+    "updateChecking": "Đang kết nối máy chủ để kiểm tra phiên bản mới…",
+    "updateFailedTitle": "Chưa hoàn tất cập nhật",
+    "updateCheckFailedTitle": "Không thể kiểm tra cập nhật",
+    "networkTimeout": "Kết nối hoặc tải xuống quá thời gian chờ. Hãy kiểm tra mạng, proxy hoặc tường lửa rồi thử lại.",
+    "networkDns": "Không thể phân giải địa chỉ máy chủ. Hãy kiểm tra cài đặt mạng, DNS hoặc proxy rồi thử lại.",
+    "networkTls": "Không thể thiết lập kết nối bảo mật. Hãy kiểm tra giờ hệ thống và cấu hình mạng hoặc proxy rồi thử lại.",
+    "networkLocal": "Kết nối mạng bị lỗi hoặc bị gián đoạn. Hãy kiểm tra mạng, proxy hoặc tường lửa rồi thử lại.",
+    "serverUnavailable": "Dịch vụ máy chủ tạm thời không khả dụng (HTTP 5xx). Vui lòng thử lại sau.",
+    "serverRejected": "Máy chủ từ chối yêu cầu (HTTP 4xx). Vui lòng thử lại sau.",
+    "serverInvalid": "Máy chủ trả về phản hồi không hợp lệ. Vui lòng thử lại sau.",
+    "downloadInvalid": "Tệp tải xuống không đầy đủ hoặc không vượt qua kiểm tra bảo mật nên đã dừng cài đặt. Vui lòng thử lại.",
+    "livePreview": "Xem trước trực tiếp",
+    "previewIcons": "Xem trước trực tiếp · khớp với {n} biểu tượng trên màn hình của bạn",
+    "previewNoIcons": "Xem trước trực tiếp · các biểu tượng màn hình đang ẩn",
+    "refresh": "Đổi cảnh",
+    "refreshTitle": "Tạo bố cục ngẫu nhiên mới cho chủ đề này",
+    "shareImage": "Chia sẻ ảnh",
+    "shareImageTitle": "Chia sẻ ảnh màn hình nền của bạn mà vẫn bảo vệ quyền riêng tư",
+    "shareVideo": "Chia sẻ video",
+    "shareVideoTitle": "Chia sẻ video chuyển động màn hình nền mà vẫn bảo vệ quyền riêng tư",
+    "generating": "Đang tạo…",
+    "preparingRec": "Đang chuẩn bị…",
+    "recording": "Đang quay {p}%",
+    "savingVideo": "Đang lưu…",
+    "shareFailImage": "Không thể tạo ảnh: {msg}",
+    "shareFailVideo": "Không thể quay video: {msg}",
+    "unknownReason": "lỗi không xác định",
+    "shareReadyImage": "Ảnh màn hình nền của bạn đã sẵn sàng",
+    "shareReadyVideo": "Video màn hình nền của bạn đã sẵn sàng",
+    "sharePrivacy": "Các biểu tượng thật đã được thay bằng biểu tượng mẫu và tên tệp được thay bằng khối màu để bảo mật tuyệt đối dữ liệu cá nhân.",
+    "shareCopiedImage": "Ảnh đã được sao chép vào bộ nhớ tạm (Clipboard) — bạn có thể dán trực tiếp vào khung chat hoặc bài viết.",
+    "shareCopiedVideo": "Tệp video đã được sao chép vào bộ nhớ tạm — bạn có thể dán trực tiếp vào cửa sổ trò chuyện để gửi.",
+    "shareBrowserHint": " (Xem trước trên trình duyệt: nhấn “{btn}” để tải xuống.)",
+    "savedTo": "Đã lưu tại {path}",
+    "openFolder": "Mở thư mục chứa tệp",
+    "openImage": "Mở ảnh",
+    "openVideo": "Mở video",
+    "saveImage": "Lưu ảnh",
+    "saveVideo": "Lưu video",
+    "ok": "Đóng",
+    "close": "Đóng",
+    "sharePreviewAlt": "Xem trước ảnh chia sẻ",
+    "autosave": "Mọi thay đổi được lưu tự động và áp dụng ngay lập tức lên màn hình nền",
+    "saved": "Đã lưu ✓",
+    "resetAll": "Đặt lại tất cả",
+    "resetAllTitle": "Khôi phục toàn bộ thông số của chủ đề này về mặc định",
+    "helpButtonTitle": "Câu hỏi thường gặp và cách khắc phục sự cố",
+    "helpTitle": "Trợ giúp",
+    "helpSubtitle": "Câu hỏi thường gặp và hướng dẫn khắc phục",
+    "helpWallpaperQ": "Hình nền Deskland-VN bị nhấp nháy hoặc tự khởi động lại, khắc phục thế nào?",
+    "helpWallpaperA": "Nếu hình nền mặc định của Windows đang để chế độ tự động đổi ảnh định kỳ, mỗi lần Windows đổi ảnh có thể làm Deskland-VN nhấp nháy hoặc gắn lại. Hãy chuyển hình nền Windows sang một ảnh tĩnh cố định.",
+    "helpWallpaperStep1": "Mở Cài đặt Windows (Settings) → Cá nhân hóa (Personalization) → Nền (Background).",
+    "helpWallpaperStep2": "Đặt mục ‘Cá nhân hóa nền của bạn’ thành ‘Hình ảnh’ (Picture) hoặc ‘Màu đơn sắc’ (Solid color). Không chọn ‘Trình chiếu’ (Slideshow) hoặc ‘Windows spotlight’.",
+    "helpWallpaperStep3": "Khởi động lại Deskland-VN sau khi thay đổi cài đặt này.",
+    "badgeOn": "Đang dùng",
+    "badgeReady": "Sẵn sàng",
+    "badgeSoon": "Sắp ra mắt",
+    "ongoingTitle": "Đang phát triển thêm",
+    "ongoingDesc": "Các khung cảnh và hiệu ứng mới sẽ tiếp tục được bổ sung.",
+    "noParams": "Chủ đề này chưa có thông số tùy chỉnh",
+    "resetOne": "Khôi phục mặc định: {v}",
+    "resetOneAria": "Đặt lại {label} về mặc định",
+    "dblclickReset": "Nháy đúp để đặt lại mặc định ({v})",
+    "comingSoon": "Sắp có:",
+    "lockGroupTitle": "Màn hình khóa",
+    "lockNow": "Khóa màn hình",
+    "lockNowTitle": "Bật màn hình khóa động Deskland-VN ngay (Win+L / Ctrl+Alt+L)",
+    "lockWinLLabel": "Dùng phím Windows + L cho màn hình khóa động",
+    "lockWinLHint": "Nhấn Win + L sẽ mở ngay màn hình khóa động WebGL2 và Widget của Deskland-VN thay vì màn hình tĩnh",
+    "lockWidgetLabel": "Widget đồng hồ trên màn hình khóa",
+    "lockWidgetHint": "Hiển thị đồng hồ lớn, ngày tháng và uốn địa hình cảnh vật bao quanh Widget",
+    "lockPinLabel": "Mã PIN mở khóa nhanh (tùy chọn)",
+    "lockPinHint": "Mặc định dùng mật khẩu tài khoản Windows; có thể đặt thêm mã PIN riêng tại đây để mở khóa nhanh",
+    "lockPinPlaceholder": "Dùng MK Windows",
+    "lockIdleLabel": "Tự động bật khi máy nghỉ",
+    "lockIdleHint": "Tự động hiện màn hình khóa động khi không dùng chuột và bàn phím",
+    "lockIdleOff": "Tắt",
+    "lockIdle1m": "1 phút",
+    "lockIdle3m": "3 phút",
+    "lockIdle5m": "5 phút",
+    "lockIdle10m": "10 phút",
+    "lockIdle15m": "15 phút",
+    "lockIdle30m": "30 phút",
+    "lockAuthLabel": "Yêu cầu nhập mật khẩu trên màn hình khóa động",
+    "lockAuthHint": "Hiển thị khung tài khoản Windows và bắt nhập mật khẩu/PIN ngay trên nền cảnh động WebGL2",
+    "lockSyncWinLabel": "Đồng bộ ảnh nền uốn quanh đồng hồ Windows",
+    "lockSyncWinHint": "Tự động xuất ảnh cảnh hiện tại (có uốn địa hình quanh vị trí đồng hồ Windows 11) làm nền khóa mặc định",
+    "lockRealTitle": "Màn hình khóa (khóa thật của Windows)",
+    "lockSaverNowLabel": "Khóa với cảnh động",
+    "lockSaverNowHint": "Bật ngay cảnh động toàn màn hình; chạm chuột hoặc bàn phím là Windows khóa máy và hiện màn đăng nhập",
+    "lockSaverNowHintKey": "Bật ngay cảnh động toàn màn hình; chạm chuột hoặc bàn phím là Windows khóa máy và hiện màn đăng nhập (Ctrl+Alt+L)",
+    "lockSaverNowBtn": "Bật ngay",
+    "lockSaverIdleLabel": "Cảnh động khi máy rảnh",
+    "lockSaverIdleHint": "Đặt Deskland-VN làm trình bảo vệ màn hình của Windows, có bật khóa khi quay lại",
+    "lockSyncRealLabel": "Dùng cảnh làm ảnh màn khóa Windows",
+    "lockSyncRealHint": "Chụp cảnh hiện tại làm ảnh nền màn khóa (ảnh tĩnh)",
+    "lockRealNote": "Win+L và nút Khóa của Windows vẫn ra màn khóa ảnh tĩnh: Windows không cho ứng dụng vẽ lên màn khóa thật. Mở khóa bằng mật khẩu / PIN / Windows Hello của chính Windows.",
+    "lockNowRealTitle": "Khóa Windows ngay (giống Win+L)"
+  },
+  "host": {
+    "traySettings": "Cài đặt…",
+    "trayLock": "Khóa màn hình (Win+L / Ctrl+Alt+L)",
+    "trayPause": "Tạm dừng chuyển động",
+    "trayReload": "Tải lại",
+    "trayAutostart": "Khởi động cùng Windows",
+    "trayExit": "Thoát (khôi phục hình nền cũ)",
+    "welcomeTitle": "Deskland-VN đang chạy",
+    "welcomeBody": "Nhấn vào biểu tượng Deskland-VN ở khay hệ thống{hotkey} để mở menu điều khiển.\nNếu không thấy, hãy nhấn mũi tên ^ ở góc phải thanh tác vụ.",
+    "welcomeHotkey": " hoặc nhấn Ctrl+Alt+H",
+    "errNotReady": "Hình nền chưa sẵn sàng",
+    "errNoImage": "Không nhận được dữ liệu ảnh",
+    "errNoVideo": "Không nhận được dữ liệu video",
+    "errBusyImage": "Ảnh trước đó vẫn đang được tạo",
+    "errBusyVideo": "Video trước đó vẫn đang được quay",
+    "errImageTimeout": "Quá thời gian tạo ảnh",
+    "errVideoTimeout": "Quá thời gian quay video",
+    "errBadData": "Dữ liệu trả về từ trang chủ đề không đầy đủ",
+    "errRebuilt": "Windows liên tục tạo lại lớp hình nền nên Deskland-VN đã tạm dừng để tránh xung đột.",
+    "errSeeLog": "Xem tệp nhật ký (log) để biết chi tiết: {path}",
+    "errSettings": "Không thể mở cửa sổ cài đặt: {msg}",
+    "errNoPage": "Không tìm thấy trang chủ đề: {path}",
+    "errNoDesktop": "Không tìm thấy cửa sổ màn hình nền của Windows nên không thể gắn hình nền động.",
+    "errStart": "Không thể khởi động: {msg}"
+  },
+  "themes": {
+    "meadow": {
+      "name": "Thảo nguyên",
+      "desc": "Thảo nguyên màu nước dịu nhẹ, biểu tượng ẩn trong những đám mây trắng bồng bềnh đổ bóng xanh thẫm trên cỏ",
+      "groups": [
+        "Quanh biểu tượng",
+        "Mây",
+        "Nhân vật"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Kích thước đám mây",
+          "hint": "Đám mây bao quanh biểu tượng trải rộng ra bao xa"
+        },
+        "cover": {
+          "label": "Mây trên thảo nguyên",
+          "hint": "Mật độ những đám mây trôi tự do trên khoảng cỏ trống"
+        },
+        "flow": {
+          "label": "Tốc độ trôi",
+          "hint": "Tốc độ mây trôi và chuyển động phồng xẹp của đám mây"
+        },
+        "showBoy": {
+          "label": "Hiển thị cậu bé",
+          "hint": "Hiển thị hoặc ẩn cậu bé cùng chiếc diều trên tay",
+          "options": [
+            "Ẩn",
+            "Hiện"
+          ]
+        },
+        "showCat": {
+          "label": "Hiển thị mèo con",
+          "hint": "Chú mèo đen nhỏ nằm thư giãn trên bãi cỏ",
+          "options": [
+            "Ẩn",
+            "Hiện"
+          ]
+        }
+      }
+    },
+    "beach": {
+      "name": "Bãi biển",
+      "desc": "Đường bờ biển uốn lượn quanh các tệp tin của bạn với từng đợt sóng vỗ lên bãi cát vàng",
+      "groups": [
+        "Đường bờ biển",
+        "Mặt nước",
+        "Chi tiết"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Khoảng cách bờ biển",
+          "hint": "Đường bờ biển cách các biểu tượng bao xa"
+        },
+        "warp": {
+          "label": "Độ uốn lượn",
+          "hint": "Mức độ uốn cong tự nhiên của đường bờ biển"
+        },
+        "shoal": {
+          "label": "Bãi nước nông trong vắt",
+          "hint": "Độ rộng vùng nước nông nhìn thấu đáy cát"
+        },
+        "shallow": {
+          "label": "Vùng biển nông",
+          "hint": "Khoảng cách chuyển màu từ xanh ngọc sang xanh biển sâu"
+        },
+        "palms": {
+          "label": "Hàng dừa",
+          "hint": "Số lượng cây dừa dọc bờ biển (đặt 0 để ẩn; tự giảm nếu ít bãi cát)",
+          "unit": "cây"
+        },
+        "kayaks": {
+          "label": "Thuyền kayak",
+          "unit": "chiếc"
+        },
+        "birds": {
+          "label": "Chim biển",
+          "hint": "Những chú hải âu chao liệng trên bầu trời biển",
+          "unit": "con"
+        }
+      }
+    },
+    "beach-turquoise": {
+      "name": "Đảo Maldives",
+      "desc": "Làn nước xanh ngọc bích và bãi cát kem mịn màng, từng đàn cá nhỏ bơi lội giữa rạn san hô",
+      "groups": [
+        "Đường bờ biển",
+        "Mặt nước",
+        "Chi tiết"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Bán kính bãi cát",
+          "hint": "Phạm vi bãi cát quanh mỗi biểu tượng; các biểu tượng gần nhau sẽ nối liền thành đảo"
+        },
+        "warp": {
+          "label": "Độ uốn bờ cát",
+          "hint": "0 là cung tròn mượt mà, càng lớn các vịnh nhỏ và mũi cát càng rõ nét"
+        },
+        "shoal": {
+          "label": "Độ rộng bãi cạn",
+          "hint": "Vành đai nước nông màu xanh bạc hà trong suốt sát bờ cát"
+        },
+        "shallow": {
+          "label": "Chuyển sắc xanh ngọc",
+          "hint": "Khoảng cách chuyển từ xanh ngọc nhạt sang vùng biển xanh ngọc đậm"
+        },
+        "palms": {
+          "label": "Cây dừa",
+          "hint": "Những hàng dừa nghiêng bóng bên trong bãi cát",
+          "unit": "cây"
+        },
+        "fishSchools": {
+          "label": "Đàn cá",
+          "hint": "Những đàn cá nhỏ bơi lội giữa rạn san hô và vùng nước nông",
+          "unit": "đàn"
+        },
+        "turtles": {
+          "label": "Rùa biển",
+          "hint": "Những chú rùa biển thong thả bơi qua làn nước trong",
+          "unit": "con"
+        },
+        "kayaks": {
+          "label": "Thuyền kayak",
+          "hint": "Thuyền nhỏ đầy màu sắc nổi trên mặt nước trong vắt, in bóng xuống đáy cát",
+          "unit": "chiếc"
+        },
+        "birds": {
+          "label": "Chim biển",
+          "hint": "Hải âu sải cánh bay lượn trên mặt biển",
+          "unit": "con"
+        }
+      }
+    },
+    "lake": {
+      "name": "Hồ nước",
+      "desc": "Bờ cỏ màu nước bao quanh mặt hồ trong vắt, lộ rõ những viên đá cuội dưới làn nước nông và bóng mây trắng phản chiếu",
+      "groups": [
+        "Bờ hồ",
+        "Mặt hồ",
+        "Bóng mây"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Phạm vi bờ cỏ",
+          "hint": "Độ rộng bờ cỏ quanh mỗi biểu tượng; các biểu tượng gần nhau sẽ nối liền thành dải"
+        },
+        "warp": {
+          "label": "Độ uốn bờ hồ",
+          "hint": "0 là vịnh hồ tròn trịa, càng lớn đường bờ hồ càng uốn lượn tự nhiên"
+        },
+        "shoal": {
+          "label": "Bãi sỏi nước nông",
+          "hint": "Độ rộng dải nước nông ven bờ nơi nhìn thấy rõ sỏi và đá cuội dưới đáy"
+        },
+        "depth": {
+          "label": "Độ sâu mặt hồ",
+          "hint": "Khoảng cách chuyển màu từ xanh ngọc ven bờ sang xanh lục thẫm giữa lòng hồ"
+        },
+        "flow": {
+          "label": "Gợn sóng mặt hồ",
+          "hint": "Tốc độ gợn nước lăn tăn và bóng mây rung rinh nhẹ theo làn gió"
+        },
+        "clouds": {
+          "label": "Mây phản chiếu",
+          "hint": "Số lượng đám mây trắng in bóng rõ nét trên mặt hồ phẳng lặng",
+          "unit": "đám"
+        }
+      }
+    },
+    "sky": {
+      "name": "Bầu trời",
+      "desc": "Bầu trời xanh hoạt hình với những đám mây tròn xoe nâng đỡ biểu tượng của bạn; hỗ trợ Ban ngày, Hoàng hôn và Ban đêm",
+      "groups": [
+        "Thời gian",
+        "Quanh biểu tượng",
+        "Mây",
+        "Chi tiết"
+      ],
+      "params": {
+        "time": {
+          "label": "Thời điểm trong ngày",
+          "hint": "Tự động chuyển đổi theo giờ hệ thống hoặc cố định ở một khung giờ",
+          "options": [
+            "Tự động",
+            "Ban ngày",
+            "Hoàng hôn",
+            "Ban đêm"
+          ]
+        },
+        "sigma": {
+          "label": "Kích thước đám mây",
+          "hint": "Độ lớn đám mây nâng đỡ biểu tượng; các biểu tượng cạnh nhau sẽ gộp thành đám mây lớn"
+        },
+        "cover": {
+          "label": "Mây trôi tự do",
+          "hint": "Số lượng những đám mây nhỏ trôi ngang qua bầu trời"
+        },
+        "flow": {
+          "label": "Tốc độ gió mây",
+          "hint": "Tốc độ các tầng mây trôi và bồng bềnh theo gió"
+        },
+        "birds": {
+          "label": "Đàn chim bay",
+          "hint": "Những chú chim nhỏ sải cánh qua tầng mây (xuất hiện vào ban ngày và hoàng hôn)",
+          "unit": "con"
+        },
+        "plane": {
+          "label": "Máy bay nhỏ",
+          "hint": "Thỉnh thoảng bay ngang qua chân trời để lại vệt mây trắng dài",
+          "options": [
+            "Không hiện",
+            "Thỉnh thoảng",
+            "Thường xuyên"
+          ]
+        },
+        "moon": {
+          "label": "Mặt trăng",
+          "hint": "Vầng trăng khuyết treo trên bầu trời lúc hoàng hôn và ban đêm",
+          "options": [
+            "Tắt",
+            "Bật"
+          ]
+        },
+        "stars": {
+          "label": "Mật độ sao đêm",
+          "hint": "Những vì sao lấp lánh giữa khoảng trống các tầng mây vào buổi tối"
+        }
+      }
+    },
+    "ocean": {
+      "name": "Đại dương",
+      "desc": "Nhìn từ trên cao xuống đại dương xanh thẳm, các biểu tượng nằm trên những đám mây trắng đổ bóng xuống mặt biển",
+      "groups": [
+        "Quanh biểu tượng",
+        "Mây",
+        "Chi tiết"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Kích thước đám mây",
+          "hint": "Độ rộng đám mây trắng bao quanh biểu tượng cùng bóng mây xanh thẫm đổ chéo xuống mặt biển"
+        },
+        "cover": {
+          "label": "Mây trên biển",
+          "hint": "Số lượng những đám mây nhỏ trôi lững lờ trên mặt biển"
+        },
+        "flow": {
+          "label": "Tốc độ gió biển",
+          "hint": "Tốc độ sóng biển lấp lánh và những đám mây trôi theo gió"
+        },
+        "boats": {
+          "label": "Thuyền buồm",
+          "hint": "Những chiếc thuyền buồm trắng thong thả lướt trên mặt biển",
+          "unit": "chiếc"
+        },
+        "yachts": {
+          "label": "Du thuyền",
+          "hint": "Du thuyền rẽ sóng để lại vệt bọt trắng xóa phía sau",
+          "unit": "chiếc"
+        },
+        "birds": {
+          "label": "Chim biển",
+          "hint": "Đàn hải âu chao liệng giữa tầng mây và mặt biển",
+          "unit": "con"
+        }
+      }
+    },
+    "rainforest": {
+      "name": "Rừng mưa nhiệt đới",
+      "desc": "Trảng rêu xanh ẩm mượt được bao bọc bởi tán rừng rậm nhiệt đới nhiều tầng trong cơn mưa, hòa cùng gợn nước, sương mù và đom đóm",
+      "groups": [
+        "Quanh biểu tượng",
+        "Mưa & Tán rừng",
+        "Sinh vật rừng"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Độ rộng trảng rêu",
+          "hint": "Phạm vi khoảng đất rêu ẩm quanh mỗi biểu tượng; các biểu tượng gần nhau sẽ nối liền thành một trảng"
+        },
+        "warp": {
+          "label": "Độ uốn bìa rừng",
+          "hint": "0 là khoảng trống tròn đều, càng lớn bìa rừng nhiệt đới càng uốn lượn tự nhiên"
+        },
+        "rain": {
+          "label": "Mưa & Gợn nước",
+          "hint": "Mật độ hạt mưa rơi xiên và những vòng gợn sóng lan tỏa trên các vũng nước"
+        },
+        "mist": {
+          "label": "Sương mù rừng mưa",
+          "hint": "Làn sương mỏng bảng lảng trôi qua các tán cây và trảng cỏ"
+        },
+        "wind": {
+          "label": "Gió rừng",
+          "hint": "Độ đung đưa của các tầng lá rừng nhiệt đới trong mưa gió"
+        },
+        "birds": {
+          "label": "Chim nhiệt đới",
+          "hint": "Những chú vẹt xanh và chim bói cá bay lướt qua tán rừng",
+          "unit": "con"
+        },
+        "fireflies": {
+          "label": "Đom đóm rừng",
+          "hint": "Những đốm sáng đom đóm lập lòe dưới bóng râm tán cây nhiệt đới",
+          "unit": "con"
+        }
+      }
+    },
+    "mocchau": {
+      "name": "Hoa mận",
+      "desc": "Đồi cỏ xuân màu nước bao bọc bởi rừng hoa mận trắng tinh khôi, sương sớm bảng lảng và cánh hoa bay trong gió",
+      "groups": [
+        "Quanh biểu tượng",
+        "Hoa mận & Gió xuân",
+        "Không gian cao nguyên"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Độ rộng đồi cỏ",
+          "hint": "Phạm vi sườn cỏ xanh mùa xuân bao quanh mỗi biểu tượng"
+        },
+        "warp": {
+          "label": "Độ uốn sườn đồi",
+          "hint": "0 là thảm cỏ tròn đều, càng lớn ranh giới thung lũng và rừng mận càng uốn lượn tự nhiên"
+        },
+        "bloom": {
+          "label": "Độ dày hoa mận",
+          "hint": "Mật độ những tán hoa mận trắng nở rộ trên sườn đồi"
+        },
+        "petals": {
+          "label": "Cánh hoa bay",
+          "hint": "Số lượng cánh hoa mận trắng xoay tròn bay theo làn gió cao nguyên"
+        },
+        "wind": {
+          "label": "Gió cao nguyên",
+          "hint": "Tốc độ cành mận đung đưa và cánh hoa trôi trong gió"
+        },
+        "mist": {
+          "label": "Sương sớm",
+          "hint": "Làn sương mai dịu nhẹ phủ trên thung lũng và rừng hoa mận"
+        },
+        "birds": {
+          "label": "Chim rừng",
+          "hint": "Đàn chim nhỏ sải cánh bay qua biển hoa mận trắng",
+          "unit": "con"
+        }
+      }
+    },
+    "tet-sakura": {
+      "name": "Hoa anh đào Tết",
+      "desc": "Khoảng sân xuân ấm áp được bao bọc bởi sắc hoa đào và anh đào nở rộ, điểm xuyết đèn lồng đỏ, phong bao lì xì và đàn én mùa xuân",
+      "groups": [
+        "Quanh biểu tượng",
+        "Hoa đào & Gió xuân",
+        "Không khí Tết"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Độ rộng sân xuân",
+          "hint": "Phạm vi khoảng sân giấy tuyên ấm áp bao quanh mỗi biểu tượng"
+        },
+        "warp": {
+          "label": "Độ uốn cành hoa",
+          "hint": "0 là khoảng sân tròn trịa, càng lớn các nhánh hoa vươn vào càng tự nhiên"
+        },
+        "petals": {
+          "label": "Cánh đào bay",
+          "hint": "Mật độ cánh hoa đào và anh đào hồng phớt tung bay trong gió xuân"
+        },
+        "wind": {
+          "label": "Gió xuân",
+          "hint": "Tốc độ đung đưa của cành đào, đèn lồng đỏ và cánh hoa rơi"
+        },
+        "lanterns": {
+          "label": "Đèn lồng & Lì xì",
+          "hint": "Số lượng đèn lồng đỏ và phong bao lì xì may mắn treo trên cành hoa",
+          "unit": "cái"
+        },
+        "swallows": {
+          "label": "Chim én mùa xuân",
+          "hint": "Những đôi chim én chao liệng báo hiệu mùa xuân về",
+          "unit": "con"
+        }
+      }
+    },
+    "cat-hill": {
+      "name": "Đồi mèo nắng ấm",
+      "desc": "Đồi cỏ xanh mướt tràn ngập nắng ấm với đàn mèo mập đi dạo, ngồi liếm lông, nằm ngủ thở nhịp nhàng dưới bóng cây và lá bay trong gió",
+      "groups": [
+        "Đàn mèo trên đồi",
+        "Lùm cây & Gió thổi lá bay"
+      ],
+      "params": {
+        "cats": {
+          "label": "Số lượng mèo",
+          "hint": "Số lượng các chú mèo đi dạo, ngồi liếm lông và nằm ngủ thở trên đồi cỏ",
+          "unit": "bé"
+        },
+        "butterflies": {
+          "label": "Bươm bướm vàng",
+          "hint": "Những chú bươm bướm nhỏ bay lượn quanh đàn mèo và khóm hoa dại",
+          "unit": "con"
+        },
+        "leaves": {
+          "label": "Mật độ lá bay & lá rụng",
+          "hint": "Số lượng lá vàng và lá xanh bay theo gió và đáp nhẹ xuống thảm cỏ"
+        },
+        "wind": {
+          "label": "Sức gió trên đồi",
+          "hint": "Tốc độ đung đưa của tán cây, lùm cây bụi và tốc độ gió thổi bay lá"
+        }
+      }
+    },
+    "stadium": {
+      "name": "Sân bóng sôi động",
+      "desc": "Sân vận động bóng đá nhìn từ trên cao với mặt cỏ sọc xanh mướt, hai đội chạy chỗ ban bật chuyền bóng và đuổi theo bóng mỗi khi bạn click chuột",
+      "groups": [
+        "Trận đấu trên sân",
+        "Sân vận động & Mặt cỏ"
+      ],
+      "params": {
+        "players": {
+          "label": "Cầu thủ mỗi đội",
+          "hint": "Số lượng cầu thủ mỗi bên (tính cả thủ môn), từ sân nhỏ 3v3 đến đủ đội hình 11v11",
+          "unit": "người"
+        },
+        "speed": {
+          "label": "Nhịp độ trận đấu",
+          "hint": "Tốc độ chạy chỗ chiến thuật của cầu thủ và tốc độ lăn của quả bóng"
+        },
+        "passFreq": {
+          "label": "Tần suất chuyền bóng",
+          "hint": "Nhỏ để cầu thủ rê dắt nhiều nhịp hơn, lớn để đá phối hợp một chạm nhanh"
+        },
+        "lighting": {
+          "label": "Ánh sáng sân vận động",
+          "hint": "Đổi giữa nắng ban ngày trong trẻo, nắng chiều vàng ấm hoặc 4 cột đèn pha buổi tối",
+          "options": [
+            "Ban ngày",
+            "Nắng chiều",
+            "Đèn pha đêm"
+          ]
+        },
+        "stripes": {
+          "label": "Độ đậm sọc cỏ",
+          "hint": "Độ tương phản giữa các dải cỏ cắt xen kẽ chuẩn sân vận động"
+        }
+      }
+    },
+    "aquarium": {
+      "name": "Bể cá vàng",
+      "desc": "Bể cá vàng ngập nắng nhìn qua thành kính: biểu tượng nằm trên rạn cát vàng, rong xanh đung đưa và bong bóng nổi lên. Bấm vào nước để thả câu, chờ phao giật thì bấm ngay để kéo cá vàng lên",
+      "groups": [
+        "Bể cá & câu cá",
+        "Cảnh vật trong bể",
+        "Quanh biểu tượng"
+      ],
+      "params": {
+        "fish": {
+          "label": "Số cá vàng",
+          "hint": "Số chú cá vàng bơi trong bể; câu được con nào sẽ có con mới bơi vào",
+          "unit": "con"
+        },
+        "eager": {
+          "label": "Cá háu ăn",
+          "hint": "Cá tới rỉa mồi và cắn câu nhanh hay chậm sau khi bạn bấm vào nước để thả câu"
+        },
+        "plants": {
+          "label": "Rong rêu",
+          "hint": "Mật độ rong xanh mọc trên rạn cát và dưới đáy bể"
+        },
+        "bubbles": {
+          "label": "Bong bóng",
+          "hint": "Lượng bong bóng nổi lên từ các khóm rong"
+        },
+        "light": {
+          "label": "Tia nắng",
+          "hint": "Độ sáng của tia nắng rọi xiên và vệt sáng khúc xạ trên cát"
+        },
+        "sigma": {
+          "label": "Độ rộng rạn cát",
+          "hint": "Rạn cát vàng ôm lấy các biểu tượng rộng bao nhiêu",
+          "unit": "px"
+        },
+        "warp": {
+          "label": "Độ uốn rạn cát",
+          "hint": "Mép rạn cát thẳng gọn hay uốn lượn tự nhiên"
+        }
+      }
+    },
+    "commute": {
+      "name": "Chuyến xe chiều",
+      "desc": "Phong cảnh hoạt hình ven sông: trời đổi màu theo giờ trong ngày, phố lên đèn bên kia sông, xe buýt vàng chạy qua giữa đồng lau đung đưa. Bấm vào đường để gọi xe dừng, bấm lên trời để có đàn chim hay sao băng, bấm vào cỏ để gió thổi rạp lau",
+      "groups": [
+        "Thời gian & xe buýt",
+        "Gió & cảnh vật",
+        "Quanh biểu tượng"
+      ],
+      "params": {
+        "time": {
+          "label": "Giờ trong ngày",
+          "hint": "Bầu trời, ánh nắng và đèn phố theo đúng giờ trên máy, hoặc giữ cố định một thời điểm",
+          "options": [
+            "Theo giờ máy",
+            "Ban ngày",
+            "Hoàng hôn",
+            "Ban đêm"
+          ]
+        },
+        "busFreq": {
+          "label": "Xe buýt qua lại",
+          "hint": "Xe buýt chạy qua thường xuyên hay thưa thớt; bấm vào đường để gọi xe dừng bất cứ lúc nào"
+        },
+        "wind": {
+          "label": "Gió",
+          "hint": "Lau sậy, mây và hạt bồ công anh bay theo gió mạnh hay nhẹ"
+        },
+        "reeds": {
+          "label": "Lau sậy",
+          "hint": "Độ dày của đồng lau ở tiền cảnh"
+        },
+        "lights": {
+          "label": "Đèn phố ban đêm",
+          "hint": "Độ sáng đèn đường, đèn cầu và cửa sổ phố khi trời tối"
+        },
+        "sigma": {
+          "label": "Độ rộng đồi cỏ / mây",
+          "hint": "Biểu tượng trên trời nằm trên mây, dưới đất nằm trên đồi cỏ; vùng ấy rộng bao nhiêu",
+          "unit": "px"
+        },
+        "warp": {
+          "label": "Độ uốn mép",
+          "hint": "Mép mây và đồi cỏ thẳng gọn hay uốn lượn tự nhiên"
+        }
+      }
+    },
+    "summer-porch": {
+      "name": "Hiên nhà ngày hạ",
+      "desc": "Hiên gỗ màu nước ngập nắng kiểu Ghibli: đàn Corgi mập ngủ trưa lăn mình trước quạt bàn cổ điển, bên đĩa dưa hấu đỏ, sách mở và chuông gió đồng; luống vườn xanh nở hoa vàng ôm quanh biểu tượng. Bấm vào Corgi để gãi bụng, bấm quạt bàn đổi tốc độ gió, gõ chuông gió hoặc cắn dưa hấu",
+      "groups": [
+        "Hiên nhà & Corgi",
+        "Ánh sáng & không khí",
+        "Quanh biểu tượng"
+      ],
+      "params": {
+        "corgis": {
+          "label": "Số lượng Corgi",
+          "hint": "Số bé Corgi nằm ngủ trưa trên hiên gỗ (tự động lăn mình đổi tư thế hoặc khi được gãi bụng)",
+          "unit": "bé"
+        },
+        "fanSpeed": {
+          "label": "Tốc độ quạt bàn",
+          "hint": "Tốc độ quay đầu và thổi gió của chiếc quạt bàn cổ điển (làm trang sách lật và ruy băng bay)"
+        },
+        "timeOfDay": {
+          "label": "Thời điểm trong ngày",
+          "hint": "Chuyển đổi giữa nắng trưa rực rỡ, hoàng hôn mật ong, đêm hè đom đóm hoặc tự động theo giờ máy",
+          "options": [
+            "Trưa nắng",
+            "Hoàng hôn",
+            "Đêm đom đóm",
+            "Theo giờ thực"
+          ]
+        },
+        "sunbeams": {
+          "label": "Nắng & đom đóm",
+          "hint": "Độ rực của các dải nắng xiên qua mái ngói ban ngày và mật độ bướm / đom đóm bay quanh vườn"
+        },
+        "sigma": {
+          "label": "Độ rộng luống vườn",
+          "hint": "Các biểu tượng ngoài sân được bao bọc bởi luống rau xanh điểm hoa vàng; trên hiên nằm trên chiếu cói",
+          "unit": "px"
+        },
+        "warp": {
+          "label": "Độ uốn bờ vườn",
+          "hint": "Đường viền luống vườn thẳng tắp hay uốn lượn mềm mại tự nhiên"
+        }
+      }
+    },
+    "cats": {
+      "name": "Mèo con trên đồi",
+      "desc": "Ngọn đồi xanh tươi dưới trời xanh mây trắng, nhìn ra dãy núi xa; cây lá đung đưa trong gió, lá vàng bay, bướm lượn và đàn mèo mập lon ton đi dạo, liếm lông, nằm ngửa ngủ thở phập phồng. Bấm vào mèo để vuốt ve, bấm vào cây để rung lá, bấm xuống cỏ để thả cuộn len cho mèo vờn",
+      "groups": [
+        "Gò cỏ",
+        "Những chú mèo",
+        "Đồi cỏ"
+      ],
+      "params": {
+        "mound": {
+          "label": "Độ rộng gò cỏ",
+          "hint": "Gò cỏ êm quanh biểu tượng rộng bao nhiêu; các biểu tượng gần nhau sẽ nối liền thành một gò",
+          "unit": "px"
+        },
+        "cats": {
+          "label": "Số chú mèo",
+          "hint": "Số mèo mập đi lại trên đồi: cam, xám vằn, mướp, tam thể, mun, Xiêm",
+          "unit": "con"
+        },
+        "speed": {
+          "label": "Tốc độ đi",
+          "hint": "Mèo đi chậm rãi thong thả hay lon ton nhanh nhẹn"
+        },
+        "naps": {
+          "label": "Độ lười",
+          "hint": "Khả năng mèo cuộn tròn ngủ một giấc thay vì chỉ ngồi nghỉ"
+        },
+        "sun": {
+          "label": "Nắng ấm",
+          "hint": "Độ sáng của nắng chiếu xuống đồi cỏ từ góc trên"
+        },
+        "flowers": {
+          "label": "Hoa dại",
+          "hint": "Mật độ hoa cúc trắng, hoa hồng phấn và hoa vàng rải trên đồi"
+        },
+        "bushes": {
+          "label": "Cây & lùm cây",
+          "hint": "Số cây lớn và lùm cây trên đồi; mèo có thể đi khuất sau tán lá",
+          "unit": "cây"
+        },
+        "wind": {
+          "label": "Sức gió",
+          "hint": "Gió càng mạnh cây càng đung đưa, lá bay và lá rụng càng nhiều; 0 là lặng gió"
+        }
+      }
+    },
+    "boxing-ring": {
+      "name": "Võ đài quyền anh",
+      "desc": "Phòng tập & võ đài quyền anh Arcade góc nhìn 3/4 với hai võ sĩ đối kháng kết hợp vật lý biến dạng đàn hồi Squash & Stretch, phóng găng đa vùng, khói tròn puff, sao choáng combo và thảm tập tối màu ôm gọn biểu tượng Desktop. Click võ sĩ để tung đòn theo vùng đầu/má/cằm/bụng, hoặc gõ bao cát, lốp xe & đồng hồ hiệp đấu",
+      "groups": [
+        "Vật lý & Đòn đánh",
+        "Giao diện & Thảm icon"
+      ],
+      "params": {
+        "bounciness": {
+          "label": "Độ nảy biến dạng",
+          "hint": "Độ dẻo đàn hồi Squash & Stretch kiểu bánh mochi của đầu, má và thân võ sĩ khi dính đòn"
+        },
+        "punchPower": {
+          "label": "Lực đấm & Rung đài",
+          "hint": "Lực đẩy lùi võ sĩ về dây thừng, độ rung sàn bạt và độ bung khói puff khi va chạm"
+        },
+        "autoSpar": {
+          "label": "Chế độ giao đấu",
+          "hint": "Hai võ sĩ tự tung đòn thăm dò nhịp nhàng, đứng thủ thế chờ bạn click, hoặc đôi công liên hoàn",
+          "options": [
+            "Đấu nhịp tự nhiên",
+            "Chỉ đấm khi Click",
+            "Liên hoàn như GIF"
+          ]
+        },
+        "gloveStyle": {
+          "label": "Kiểu găng đấm",
+          "hint": "Đổi kiểu găng phóng vào khi click: găng đỏ cổ điển, siêu nắm đấm hoạt hình hoặc găng chân mèo",
+          "options": [
+            "Găng Đỏ Cổ Điển",
+            "Siêu Găng Hoạt Hình",
+            "Găng Mèo Đệm Thịt"
+          ]
+        },
+        "hudMode": {
+          "label": "Thanh máu & Đồng hồ",
+          "hint": "Hiện đầy đủ, thu gọn hoặc ẩn thanh máu đối kháng & đồng hồ hiệp đấu Arcade ở cạnh trên",
+          "options": [
+            "Hiện đầy đủ",
+            "Thu gọn",
+            "Ẩn"
+          ]
+        },
+        "sigma": {
+          "label": "Độ rộng thảm icon",
+          "hint": "Độ rộng thảm cao su EVA tối màu tự động trải ôm quanh các biểu tượng Desktop",
+          "unit": "px"
+        },
+        "warp": {
+          "label": "Độ uốn mép thảm",
+          "hint": "Độ bo uốn tự nhiên của đường viền thảm tập quanh nhóm biểu tượng"
+        }
+      }
+    }
+  }
+}

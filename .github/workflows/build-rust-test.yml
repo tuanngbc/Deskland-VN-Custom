@@ -1,0 +1,57 @@
+name: Build Rust native test
+
+on:
+  push:
+    branches: [rust-test]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-rust:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Build deskland-rs
+        working-directory: deskland-rs
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          cargo build --release --locked
+
+      - name: Package Rust native build
+        run: |
+          $name = 'Deskland-VN-Rust-test-1.0.2-win-x64'
+          $dir = "dist\$name"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item deskland-rs\target\release\deskland-rs.exe "$dir\Deskland-VN.exe"
+          Copy-Item -Recurse prototype-rust "$dir\prototype"
+          foreach ($file in 'README.md','LICENSE','NOTICE','THIRD_PARTY_NOTICES.md','TRADEMARKS.md') {
+            if (Test-Path $file) { Copy-Item $file $dir }
+          }
+          Copy-Item deskland-rs\README.md "$dir\README-deskland-rs.md"
+          @"
+          Deskland Rust Native test build
+
+          Giải nén toàn bộ thư mục này và chạy Deskland-VN.exe.
+          Giữ thư mục prototype cạnh file exe để mở Cài đặt.
+          Bản này dùng engine Rust + Win32 + OpenGL, một tiến trình native.
+          "@ | Set-Content "$dir\DOC-TRUOC.txt" -Encoding utf8
+          Compress-Archive -Path $dir -DestinationPath "dist\$name.zip"
+          $hash = (Get-FileHash "dist\$name.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name.zip" | Set-Content "dist\$name.zip.sha256" -Encoding ascii
+
+      - name: Upload Rust artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Deskland-VN-Rust-test-win-x64
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          retention-days: 14
