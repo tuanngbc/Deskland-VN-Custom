@@ -108,6 +108,9 @@ impl Beach {
     }
 
     fn sync_palms(&mut self) {
+        // Chốt bố cục sau lần đọc biểu tượng đầu tiên. Click desktop chỉ tạo
+        // hiệu ứng, không được bốc thăm lại cây.
+        if !self.palms.is_empty() { return; }
         let want = self.p.palms.round().clamp(0.0, 10.0) as usize;
         self.palms = palm_layout::choose(self.b.w, self.b.h, self.b.noise.seed, want,
             &self.b.viewports, &self.b.icons, |x, y| self.b.target_s(x, y));

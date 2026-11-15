@@ -115,6 +115,7 @@ impl Maldives {
     }
 
     fn sync_palms(&mut self) {
+        if !self.palms.is_empty() { return; }
         let want = self.p.palms.round().clamp(0.0, 10.0) as usize;
         self.palms = palm_layout::choose(self.b.w, self.b.h, self.b.noise.seed, want,
             &self.b.viewports, &self.b.icons, |x, y| self.b.target_s(x, y));

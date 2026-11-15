@@ -38,6 +38,7 @@ jobs:
           # Dùng giao diện prototype hiện tại để có panorama, công tắc thời
           # gian/thời tiết và tìm vị trí; engine Rust nhận các message tương ứng.
           Copy-Item -Recurse prototype "$dir\prototype"
+          Copy-Item -Recurse assets\widget "$dir\assets\widget"
           foreach ($file in 'README.md','LICENSE','NOTICE','THIRD_PARTY_NOTICES.md','TRADEMARKS.md') {
             if (Test-Path $file) { Copy-Item $file $dir }
           }
@@ -62,3 +63,4 @@ jobs:
             dist/*.zip
             dist/*.sha256
           retention-days: 14
+

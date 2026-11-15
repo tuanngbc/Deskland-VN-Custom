@@ -5,14 +5,16 @@
 
 use crate::desktop::wide;
 use std::mem::size_of;
+use std::sync::Once;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 const CLASS: &str = "DesklandRsClockWidget";
-const WIDTH: i32 = 420;
-const HEIGHT: i32 = 250;
+const WIDTH: i32 = 320;
+const HEIGHT: i32 = 230;
+static LOAD_FONTS: Once = Once::new();
 
 struct State {
     locked: bool,
@@ -64,6 +66,19 @@ unsafe fn font(face: &str, height: i32, italic: bool, weight: i32) -> HFONT {
     )
 }
 
+fn ensure_fonts() {
+    LOAD_FONTS.call_once(|| unsafe {
+        let Some(root) = std::env::current_exe().ok().and_then(|p| p.parent().map(|p| p.to_path_buf())) else { return };
+        for name in ["Gravity-Light.ttf", "la Compagnie des Ombres.ttf", "steelfish rg.ttf", "steelfish rg it.ttf"] {
+            let path = root.join("assets").join("widget").join(name);
+            if path.is_file() {
+                let p = wide(&path.to_string_lossy());
+                AddFontResourceExW(p.as_ptr(), FR_PRIVATE, std::ptr::null_mut());
+            }
+        }
+    });
+}
+
 unsafe fn text(dc: HDC, rect: RECT, value: &str, face: &str, size: i32, color: COLORREF, italic: bool, weight: i32) {
     let h = font(face, size, italic, weight);
     let old = SelectObject(dc, h as _);
@@ -87,13 +102,13 @@ unsafe fn paint(dc: HDC, r: RECT, state: &State) {
     let alpha = rgb(185, 231, 245);
     let bright = rgb(220, 247, 255);
     let h1 = (100.0 * scale) as i32;
-    let h2 = (68.0 * scale) as i32;
-    let h3 = (29.0 * scale) as i32;
+    let h2 = (85.0 * scale) as i32;
+    let h3 = (35.0 * scale) as i32;
     let center = (r.left + r.right) / 2;
     let box_rect = |top: i32, height: i32| RECT { left: center - r.right / 2, top, right: center + r.right / 2, bottom: top + height };
-    text(dc, box_rect(8, h1 + 8), &time, "Segoe UI Light", h1, alpha, false, 300);
-    text(dc, box_rect((108.0 * scale) as i32, h2 + 8), &weekday, "Segoe Script", h2, bright, true, 400);
-    text(dc, box_rect((178.0 * scale) as i32, h3 + 8), &date.to_uppercase(), "Segoe UI Light", h3, alpha, false, 300);
+    text(dc, box_rect(0, h1 + 8), &time, "Steelfish Rg", h1, alpha, false, 400);
+    text(dc, box_rect((105.0 * scale) as i32, h2 + 8), &weekday, "la Compagnie des Ombres", h2, bright, false, 400);
+    text(dc, box_rect((165.0 * scale) as i32, h3 + 8), &date.to_uppercase(), "Steelfish Rg", h3, alpha, false, 400);
 }
 
 const fn rgb(r: u8, g: u8, b: u8) -> COLORREF { r as u32 | ((g as u32) << 8) | ((b as u32) << 16) }
@@ -127,6 +142,7 @@ fn register() {
 
 impl Widget {
     pub fn new(screen: RECT, x: i32, y: i32, locked: bool, lang_vi: bool, scale: f32) -> Result<Self, String> {
+        ensure_fonts();
         register();
         let mut state = Box::new(State { locked, lang_vi, scale });
         let ptr = (&mut *state) as *mut State;

@@ -701,6 +701,10 @@ pub fn draw_palm(gl: &glow::Context, shared: &mut Shared, w: f32, h: f32, x: f32
     // Mặt trời đi từ đông (buổi sáng) lên cao rồi sang tây (buổi chiều).
     // Bóng chỉ hiện ban ngày, ngắn nhất vào giữa trưa và đổi hướng theo giờ.
     let (shadow_shear, shadow_flatten, sunlight) = crate::solar::shadow(shared.sun);
+    // A low morning/evening sun can project a mathematically huge shadow.
+    // Keep the silhouette attached to the trunk and within the scene band.
+    let shadow_shear = shadow_shear.clamp(-1.15, 1.15);
+    let shadow_flatten = shadow_flatten.clamp(-0.20, 0.65);
     let shadow_opacity = sunlight * (1.0 - shared.weather * 0.85);
     unsafe {
         gl.enable(glow::BLEND);
