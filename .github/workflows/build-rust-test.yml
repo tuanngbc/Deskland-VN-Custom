@@ -21,10 +21,13 @@ jobs:
       - name: Build deskland-rs
         working-directory: deskland-rs
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           rustup toolchain install stable --profile minimal
           rustup default stable
-          cargo test --locked
+          cargo test --release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package Rust native build
         run: |
