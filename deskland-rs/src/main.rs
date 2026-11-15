@@ -275,7 +275,7 @@ unsafe extern "system" fn wall_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LR
             if GAP_BACKDROP_HWND.with(|c| c.get() == h) {
                 let mut ps: PAINTSTRUCT = std::mem::zeroed();
                 let dc = BeginPaint(h, &mut ps);
-                let brush = CreateSolidBrush(18 | (157 << 8) | (190 << 16));
+                let brush = CreateSolidBrush(RGB(18, 157, 190));
                 FillRect(dc, &ps.rcPaint, brush);
                 DeleteObject(brush as _);
                 EndPaint(h, &ps);
