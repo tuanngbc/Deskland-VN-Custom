@@ -1400,6 +1400,10 @@ impl App {
 
     /// Đọc lại bộ đệm vẽ của từng màn hình từ GPU và lưu BMP (kiểm tra shader không cần chụp màn hình).
     fn snapshot(&self, dir: &str) {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            log!("Không tạo được thư mục kiểm tra: {e}");
+            return;
+        }
         let outputs: Vec<_> = self.walls.iter().map(|w| serde_json::json!({
             "screen": [w.screen.left, w.screen.top, w.screen.right, w.screen.bottom],
             "dpiScale": w.dpr,
@@ -1778,7 +1782,7 @@ fn main() {
     }
     // Đồng bộ ảnh màn khóa Windows vài giây sau khi cảnh đã ổn định
     // và hình nền tĩnh của Windows (luôn bật: tránh màn đen lúc mở máy trước khi app kịp chạy)
-    let mut lock_sync_at = (!saver).then(|| app.now() + 6_000.0);
+    let mut lock_sync_at = (!saver && !headless).then(|| app.now() + 6_000.0);
     let mut saver_check_at: Option<f64> = None;
     let mut rebuild_at: Option<f64> = None;
     let mut web_changed = false;
@@ -1803,6 +1807,10 @@ fn main() {
     let mut next_stat = app.now() + 10_000.0;
     let snapshot_dir = arg_value(&args, "--snapshot");
     let exit_after_snap = args.iter().any(|a| a == "--exit-after-snapshot");
+    // Integration check: reuse the same process/context across mode changes.
+    let cycle_modes = headless && args.iter().any(|a| a == "--test-mode-cycle");
+    let mode_steps = ["panorama", "independent", "panorama", "mirror", "panorama"];
+    let mut mode_step = 0usize;
     let test_click = args.iter().any(|a| a == "--test-click");
     let mut test_click_at = test_click.then(|| app.now() + 900.0);
     let mut snapshot_at = snapshot_dir.as_ref().map(|_| app.now() + if test_click { 1_500.0 } else { 4_000.0 });
@@ -2150,7 +2158,7 @@ fn main() {
                 lock::lock_now();
             }
         }
-        if matches!(PENDING_THEME_SYNC.with(|c| c.replace(false)), true) && !saver {
+        if matches!(PENDING_THEME_SYNC.with(|c| c.replace(false)), true) && !saver && !headless {
             lock_sync_at = Some(app.now() + 3_000.0);
         }
         if lock_sync_at.is_some_and(|t| app.now() >= t) {
@@ -2176,7 +2184,7 @@ fn main() {
         }
         let now = app.now();
         if now >= next_icons && !hidden {
-            if !headless {
+            if !headless || args.iter().any(|a| a == "--real-icons") {
                 app.fix_z_order();
                 app.poll_icons();
             }
@@ -2220,9 +2228,21 @@ fn main() {
             }
         }
         if snapshot_at.is_some_and(|t| now >= t) {
-            app.snapshot(snapshot_dir.as_deref().unwrap());
+            let root = snapshot_dir.as_deref().unwrap();
+            let dir = if cycle_modes { format!("{root}/{mode_step}-{}", app.cfg.mode) } else { root.to_string() };
+            app.snapshot(&dir);
             snapshot_at = None;
-            if exit_after_snap {
+            if cycle_modes && mode_step < mode_steps.len() {
+                let mode = mode_steps[mode_step];
+                if let Err(e) = app.switch_mode(mode) {
+                    log!("Kiểm tra chuyển chế độ thất bại: {e}");
+                    break;
+                }
+                app.poll_icons();
+                log!("Kiểm tra chuyển chế độ -> {mode}: đã dựng lại cảnh");
+                mode_step += 1;
+                snapshot_at = Some(app.now() + 4_000.0);
+            } else if exit_after_snap {
                 break;
             }
         }
