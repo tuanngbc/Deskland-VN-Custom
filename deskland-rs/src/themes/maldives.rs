@@ -119,7 +119,7 @@ impl Maldives {
         self.palms.clear();
         let want = self.p.palms.round().clamp(0.0, 10.0) as usize;
         if want == 0 { return; }
-        let mut candidates = Vec::new();
+        let mut candidates: Vec<(f32, f32)> = Vec::new();
         for &(lo, hi) in &[(-58.0, -25.0), (-90.0, -8.0), (-180.0, 2.0)] {
             for y in (92..(self.b.h.max(120.0) as i32 - 78)).step_by(18) {
                 let row = y as f32;

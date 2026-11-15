@@ -112,7 +112,7 @@ impl Beach {
         self.palms.clear();
         let want = self.p.palms.round().clamp(0.0, 10.0) as usize;
         if want == 0 { return; }
-        let mut candidates = Vec::new();
+        let mut candidates: Vec<(f32, f32)> = Vec::new();
         // Bản gốc chọn dải cát -25..-58. Hai dải nới rộng bên dưới chỉ dùng
         // khi màn hình/biểu tượng quá thưa, để số lượng đã chọn (ví dụ 8) vẫn
         // hiện đủ thay vì bị lưới thưa 62 px lọc còn một cây.
