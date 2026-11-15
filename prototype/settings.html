@@ -367,6 +367,16 @@
       </div>
       <p class="monitor-detail environment-status" id="environmentStatus" role="status" aria-live="polite"></p>
     </section>
+    <section class="monitor-panel environment-panel" aria-label="Native clock widget">
+      <h3>Đồng hồ native</h3>
+      <p class="monitor-detail">Đồng hồ kiểu La Compagnie des Ombres chạy trực tiếp trong Deskland, không cần Rainmeter.</p>
+      <div class="environment-controls">
+        <label class="switch-row"><span>Hiện đồng hồ</span><input type="checkbox" id="widgetEnabled"><i class="switch"></i></label>
+        <label class="switch-row"><span>Khóa vị trí</span><input type="checkbox" id="widgetLocked"><i class="switch"></i></label>
+        <button class="ghost-btn" id="widgetReset">Đặt lại vị trí</button>
+      </div>
+      <p class="monitor-detail">Khi mở khóa, kéo đồng hồ bằng chuột. Khi khóa, đồng hồ tự xuyên qua chuột để anh vẫn thao tác desktop.</p>
+    </section>
     <details class="monitor-panel" id="awayPanel">
       <summary data-i18n="awayTitle">Màn hình chờ và tiết kiệm tài nguyên</summary>
       <p class="monitor-detail" data-i18n="awayDescription">Phát vòng cảnh đã lưu ở 6 khung/giây, kèm đồng hồ trôi nhẹ. Giải phóng hình nền khi khóa máy hoặc tắt màn hình.</p>
@@ -634,10 +644,19 @@ function setEnvironment(patch) {
   toPreview({ ...message, environment: state.environment });
   flashSaved();
 }
+function renderWidget() {
+  const w = Object.assign({ enabled: true, locked: true }, state.widget || {});
+  state.widget = w;
+  $('widgetEnabled').checked = w.enabled !== false;
+  $('widgetLocked').checked = w.locked !== false;
+}
 $('environmentTime').addEventListener('change', e => setEnvironment({ time: e.target.checked }));
 $('environmentWeather').addEventListener('change', e => setEnvironment({ weather: e.target.checked }));
 $('weatherPreset').addEventListener('change', e => setEnvironment({ preset: e.target.value }));
 $('weatherSource').addEventListener('change', e => setEnvironment({ source: e.target.value }));
+$('widgetEnabled').addEventListener('change', e => { state.widget.enabled = e.target.checked; send({ t: 'widget', enabled: state.widget.enabled, locked: state.widget.locked }); flashSaved(); });
+$('widgetLocked').addEventListener('change', e => { state.widget.locked = e.target.checked; send({ t: 'widget', enabled: state.widget.enabled, locked: state.widget.locked }); flashSaved(); });
+$('widgetReset').addEventListener('click', () => { send({ t: 'widget', enabled: state.widget.enabled, locked: state.widget.locked, reset: true }); flashSaved(); });
 async function searchWeatherLocations() {
   const query = $('locationQuery').value.trim();
   if (query.length < 2) { $('locationResults').innerHTML = `<div class="empty">${t('weatherLocationShort')}</div>`; return; }
@@ -1018,6 +1037,7 @@ function onHost(m) {
       state.globalTheme = state.theme;
       state.globalPaused = !!m.globalPaused;
       state.environment = Object.assign({}, DEFAULT_ENVIRONMENT, m.environment || {});
+      state.widget = Object.assign({ enabled: true, locked: true }, m.widget || {});
       state.screen = m.screen;
       state.mode = m.mode || 'mirror';
       state.monitors = m.monitors || [];
@@ -1028,6 +1048,7 @@ function onHost(m) {
       state.autostartSw = m.autostartSw || '';
       showAutostartWarn();
       renderEnvironment();
+      renderWidget();
       showUpdate();
       selectTarget();
       shareBusy(null);

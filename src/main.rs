@@ -30,6 +30,7 @@ mod themes {
     pub mod tet_sakura;
 }
 mod wgl;
+mod widget;
 
 use desktop::wide;
 use engine::{IconBox, Prog, Shared, Theme};
@@ -82,6 +83,9 @@ const CMD_WINL: usize = 123;
 const CMD_SAVER_NOW: usize = 124;
 const CMD_SETTINGS: usize = 125;
 const CMD_INTERACTION: usize = 126;
+const CMD_WIDGET: usize = 127;
+const CMD_WIDGET_LOCK: usize = 128;
+const CMD_WIDGET_RESET: usize = 129;
 const WM_OPEN_SETTINGS: u32 = WM_APP + 2;
 const CMD_EXIT: usize = 199;
 const HOTKEY_SAVER: i32 = 1;
@@ -168,6 +172,8 @@ thread_local! {
     /// Phiên Windows đang khóa (WM_WTSSESSION_CHANGE): không ai thấy desktop -> ngừng vẽ.
     static SESSION_LOCKED: Cell<bool> = const { Cell::new(false) };
     static HOTKEY_OK: Cell<bool> = const { Cell::new(false) };
+    static WIDGET_ENABLED: Cell<bool> = const { Cell::new(true) };
+    static WIDGET_LOCKED: Cell<bool> = const { Cell::new(true) };
 }
 
 unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -249,6 +255,11 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
                 AppendMenuW(menu, chk(LOCK_SYNC.with(|c| c.get())), CMD_SYNC, wide("Dùng cảnh làm ảnh màn khóa Windows").as_ptr());
                 let chk_int = if INTERACTIONS_ENABLED.with(|c| c.get()) { MF_STRING | MF_CHECKED } else { MF_STRING };
                 AppendMenuW(menu, chk_int, CMD_INTERACTION, wide("Tương tác chuột trên màn hình nền").as_ptr());
+                let chk_widget = if WIDGET_ENABLED.with(|c| c.get()) { MF_STRING | MF_CHECKED } else { MF_STRING };
+                AppendMenuW(menu, chk_widget, CMD_WIDGET, wide("Hiện đồng hồ native").as_ptr());
+                let chk_widget_lock = if WIDGET_LOCKED.with(|c| c.get()) { MF_STRING | MF_CHECKED } else { MF_STRING };
+                AppendMenuW(menu, chk_widget_lock, CMD_WIDGET_LOCK, wide("Khóa vị trí đồng hồ").as_ptr());
+                AppendMenuW(menu, MF_STRING, CMD_WIDGET_RESET, wide("Đặt lại vị trí đồng hồ").as_ptr());
                 if lock::winl_disabled() {
                     AppendMenuW(menu, MF_STRING, CMD_WINL, wide("⚠ Bật lại Win+L của Windows (bản C# cũ đã tắt)").as_ptr());
                 }
@@ -480,6 +491,11 @@ struct Config {
     lang: String,
     /// Bật/tắt tương tác chuột trên màn hình nền
     interactions_enabled: bool,
+    widget_enabled: bool,
+    widget_locked: bool,
+    widget_x: i32,
+    widget_y: i32,
+    widget_scale: f32,
 }
 
 fn rust_settings_path() -> std::path::PathBuf {
@@ -497,6 +513,7 @@ fn load_config(cli_theme: Option<String>) -> Config {
     let lang = root.get("lang").or_else(|| csv.as_ref().and_then(|c| c.get("lang"))).and_then(|v| v.as_str()).unwrap_or("auto").to_string();
     let saved = root.get("theme").and_then(|v| v.as_str()).unwrap_or("beach").to_string();
     let interactions_enabled = root.get("interactionsEnabled").and_then(|v| v.as_bool()).unwrap_or(true);
+    let widget = root.get("widget");
     let env = root.get("environment");
     let legacy = csv.as_ref();
     let env_bool = |key: &str| env.and_then(|v| v.get(key)).and_then(|v| v.as_bool());
@@ -528,6 +545,11 @@ fn load_config(cli_theme: Option<String>) -> Config {
         lock_sync: root.get("lockSyncWin").and_then(|v| v.as_bool()).unwrap_or(true),
         lang,
         interactions_enabled,
+        widget_enabled: widget.and_then(|v| v.get("enabled")).and_then(|v| v.as_bool()).unwrap_or(true),
+        widget_locked: widget.and_then(|v| v.get("locked")).and_then(|v| v.as_bool()).unwrap_or(true),
+        widget_x: widget.and_then(|v| v.get("x")).and_then(|v| v.as_i64()).map(|v| v as i32).unwrap_or(-1),
+        widget_y: widget.and_then(|v| v.get("y")).and_then(|v| v.as_i64()).map(|v| v as i32).unwrap_or(-1),
+        widget_scale: widget.and_then(|v| v.get("scale")).and_then(|v| v.as_f64()).map(|v| v as f32).filter(|v| v.is_finite()).unwrap_or(1.0).clamp(0.7, 1.6),
         lock_idle_mins: root.get("lockIdleMins").and_then(|v| v.as_u64()).map(|v| v as u32).filter(|&v| v > 0).unwrap_or(5),
     }
 }
@@ -549,6 +571,13 @@ fn save_config(cfg: &Config) {
         "lockIdleMins": cfg.lock_idle_mins,
         "lang": cfg.lang,
         "interactionsEnabled": INTERACTIONS_ENABLED.with(|c| c.get()),
+        "widget": {
+            "enabled": WIDGET_ENABLED.with(|c| c.get()),
+            "locked": WIDGET_LOCKED.with(|c| c.get()),
+            "x": cfg.widget_x,
+            "y": cfg.widget_y,
+            "scale": cfg.widget_scale,
+        },
         "params": cfg.params,
     });
     let p = rust_settings_path();
@@ -609,6 +638,13 @@ fn web_init(app: &App) -> serde_json::Value {
         "autostart": settings::autostart_enabled(),
         "autostartWarn": false,
         "interactions": app.interactions_enabled,
+        "widget": {
+            "enabled": app.cfg.widget_enabled,
+            "locked": app.cfg.widget_locked,
+            "x": app.cfg.widget_x,
+            "y": app.cfg.widget_y,
+            "scale": app.cfg.widget_scale,
+        },
         "lang": app.cfg.lang, "langEff": eff, "langSys": sys,
         "lockCfg": {
             "idleMins": if lock::saver_installed() { app.cfg.lock_idle_mins } else { 0 },
@@ -618,6 +654,7 @@ fn web_init(app: &App) -> serde_json::Value {
             // Chỉ dùng khóa thật của Windows: trang hiện nhóm tùy chọn khóa riêng, không có PIN / chặn Win+L
             "realLock": true,
             "interactions": true,
+            "widget": true,
             "hotkey": HOTKEY_OK.with(|c| c.get()),
             "share": false,
             "themes": [
@@ -716,6 +753,28 @@ struct App {
     boost_until: f64,
     live_weather: Arc<StdMutex<Option<LiveWeather>>>,
     weather_fetch_at: f64,
+    widget: Option<widget::Widget>,
+}
+
+impl App {
+    fn init_widget(&mut self) {
+        if self.saver || self.headless || !self.cfg.widget_enabled || self.walls.is_empty() { return; }
+        let Some(screen) = primary_wall(self).map(|w| w.screen) else { return };
+        let lang_vi = self.cfg.lang == "vi" || (self.cfg.lang == "auto" && lang_eff("auto").0 == "vi");
+        match widget::Widget::new(screen, self.cfg.widget_x, self.cfg.widget_y, self.cfg.widget_locked, lang_vi, self.cfg.widget_scale) {
+            Ok(w) => { self.widget = Some(w); }
+            Err(e) => log!("Không tạo được đồng hồ native: {e}"),
+        }
+    }
+
+    fn set_widget_enabled(&mut self, on: bool) {
+        self.cfg.widget_enabled = on;
+        WIDGET_ENABLED.with(|c| c.set(on));
+        if on {
+            if self.widget.is_none() { self.init_widget(); }
+            if let Some(w) = self.widget.as_mut() { w.set_visible(true); }
+        } else if let Some(w) = self.widget.as_mut() { w.set_visible(false); }
+    }
 }
 
 impl App {
@@ -1658,6 +1717,8 @@ fn main() {
     let lock_sync = cfg.lock_sync;
     LOCK_SYNC.with(|c| c.set(lock_sync));
     INTERACTIONS_ENABLED.with(|c| c.set(cfg.interactions_enabled));
+    WIDGET_ENABLED.with(|c| c.set(cfg.widget_enabled));
+    WIDGET_LOCKED.with(|c| c.set(cfg.widget_locked));
 
     register_class(MSG_CLASS, Some(msg_proc), false);
     register_class(WALL_CLASS, Some(wall_proc), true);
@@ -1741,6 +1802,7 @@ fn main() {
         boost_until: 0.0,
         live_weather: Arc::new(StdMutex::new(None)),
         weather_fetch_at: 0.0,
+        widget: None,
     };
     log!("Cách hiển thị: {}", if app.gdi { "gdi (FBO -> đọc về -> StretchDIBits)" } else { "gl (SwapBuffers trực tiếp)" });
     if let Err(e) = app.create_walls() {
@@ -1749,6 +1811,7 @@ fn main() {
         unsafe { Shell_NotifyIconW(NIM_DELETE, &nid) };
         return;
     }
+    app.init_widget();
     if headless && !args.iter().any(|a| a == "--real-icons") {
         let now = app.now();
         if let Some(ctx) = app.ctx.as_ref() {
@@ -2064,6 +2127,23 @@ fn main() {
                     web::post(&serde_json::json!({ "t": "interactions", "v": on }).to_string());
                     web_changed = true;
                 }
+                "widget" => {
+                    if let Some(v) = m.get("enabled").and_then(|v| v.as_bool()) { app.set_widget_enabled(v); }
+                    if let Some(v) = m.get("locked").and_then(|v| v.as_bool()) {
+                        WIDGET_LOCKED.with(|c| c.set(v));
+                        app.cfg.widget_locked = v;
+                        if let Some(w) = app.widget.as_mut() { w.set_locked(v); }
+                    }
+                    if m.get("reset").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        app.cfg.widget_x = -1;
+                        app.cfg.widget_y = -1;
+                        if let Some(screen) = primary_wall(&app).map(|w| w.screen) {
+                            if let Some(w) = app.widget.as_mut() { w.reset(screen); }
+                        }
+                    }
+                    web::post(&web_init(&app).to_string());
+                    web_changed = true;
+                }
                 "lang" => {
                     app.cfg.lang = s_("v");
                     let (eff, sys) = lang_eff(&app.cfg.lang);
@@ -2115,6 +2195,25 @@ fn main() {
                     app.interactions_enabled = on;
                     app.cfg.interactions_enabled = on;
                     log!("Tương tác chuột: {}", if on { "bật" } else { "tắt" });
+                }
+                CMD_WIDGET => {
+                    app.set_widget_enabled(!WIDGET_ENABLED.with(|c| c.get()));
+                    log!("Đồng hồ native: {}", if app.cfg.widget_enabled { "bật" } else { "tắt" });
+                }
+                CMD_WIDGET_LOCK => {
+                    let on = !WIDGET_LOCKED.with(|c| c.get());
+                    WIDGET_LOCKED.with(|c| c.set(on));
+                    app.cfg.widget_locked = on;
+                    if let Some(w) = app.widget.as_mut() { w.set_locked(on); }
+                    log!("Khóa vị trí đồng hồ: {}", if on { "bật" } else { "tắt" });
+                }
+                CMD_WIDGET_RESET => {
+                    app.cfg.widget_x = -1;
+                    app.cfg.widget_y = -1;
+                    if let Some(screen) = primary_wall(&app).map(|w| w.screen) {
+                        if let Some(w) = app.widget.as_mut() { w.reset(screen); }
+                    }
+                    log!("Đã đặt lại vị trí đồng hồ");
                 }
                 CMD_SAVER_NOW => {
                     let mut ready = lock::saver_installed() && lock::saver_secure();
@@ -2170,11 +2269,13 @@ fn main() {
         }
         if DISPLAY_CHANGED.with(|c| c.replace(false)) {
             log!("Cấu hình màn hình thay đổi, dựng lại cửa sổ hình nền");
+            if let Some(mut w) = app.widget.take() { w.destroy(); }
             app.destroy_walls();
             if let Err(e) = app.create_walls() {
                 log!("Dựng lại thất bại: {e}");
                 break;
             }
+            app.init_widget();
         }
         if REPAINT.with(|c| c.replace(false)) {
             app.repaint_all();
@@ -2216,6 +2317,15 @@ fn main() {
             next_frame = next_fg;
             next_icons = next_fg;
         } else if now >= next_frame {
+            if let Some(w) = app.widget.as_mut() {
+                w.set_visible(!hidden && app.cfg.widget_enabled);
+                if !hidden && app.cfg.widget_enabled {
+                    w.tick();
+                    let r = w.rect();
+                    app.cfg.widget_x = r.left;
+                    app.cfg.widget_y = r.top;
+                }
+            }
             app.render();
             let cur_interval = if !saver && app.any_interacting(now) {
                 interval.min(20.0) // Adaptive FPS: 50 khung/giây mượt mà khi đang tương tác
@@ -2259,9 +2369,11 @@ fn main() {
     }
 
     log!("Đang thoát");
+    save_config(&app.cfg);
     if !hook.is_null() {
         unsafe { UnhookWinEvent(hook) };
     }
+    if let Some(mut w) = app.widget.take() { w.destroy(); }
     app.destroy_walls();
     app.drop_shared();
     app.ctx = None;
