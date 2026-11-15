@@ -7,12 +7,13 @@
   let draws = 0, iconsSeen = false;
   const errors = [];
 
-  // Lightweight, offline environmental clock shared by every theme.  The
-  // calculation is deliberately location-free: it gives a convincing local
-  // day/night rhythm without permissions, network requests, or per-frame work.
+  // Lightweight environmental clock shared by every theme. The default is a
+  // location-free offline simulation; an explicit saved location can opt into
+  // a low-frequency live weather request with the same offline fallback.
   const TAU = Math.PI * 2;
   let environmentCache = null, environmentStamp = 0;
-  let environmentOptions = { time: true, weather: true, preset: 'auto' };
+  let environmentOptions = { time: true, weather: true, preset: 'auto', source: 'local', location: null };
+  let liveWeather = null, liveRequest = null, liveNextTryAt = 0;
   const WEATHER_PRESETS = new Set(['auto', 'clear', 'cloudy', 'rain', 'storm', 'snow']);
   const clamp01 = v => Math.max(0, Math.min(1, v));
   const smooth = (a, b, x) => {
@@ -27,10 +28,44 @@
   const normalizeEnvironmentOptions = options => {
     const o = options || {};
     const preset = WEATHER_PRESETS.has(o.preset) ? o.preset : 'auto';
-    return { time: o.time !== false, weather: o.weather !== false, preset };
+    const source = o.source === 'live' ? 'live' : 'local';
+    const raw = o.location && typeof o.location === 'object' ? o.location : null;
+    const latitude = raw ? Number(raw.latitude) : NaN;
+    const longitude = raw ? Number(raw.longitude) : NaN;
+    const location = Number.isFinite(latitude) && Number.isFinite(longitude) && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180
+      ? Object.freeze({ latitude, longitude, name: String(raw.name || ''), timezone: String(raw.timezone || '') }) : null;
+    return { time: o.time !== false, weather: o.weather !== false, preset, source, location };
+  };
+  const locationKey = location => location ? `${location.latitude.toFixed(4)},${location.longitude.toFixed(4)}` : '';
+  const requestLiveWeather = options => {
+    if (options.source !== 'live' || !options.weather || !options.location || typeof root.fetch !== 'function') return;
+    const key = locationKey(options.location), now = Date.now();
+    if (liveRequest || now < liveNextTryAt || (liveWeather && liveWeather.key === key && now - liveWeather.fetchedAt < 15 * 60 * 1000)) return;
+    const q = new URLSearchParams({ latitude: String(options.location.latitude), longitude: String(options.location.longitude), timezone: 'auto',
+      current: 'temperature_2m,precipitation,rain,showers,snowfall,weather_code,cloud_cover,wind_speed_10m,wind_gusts_10m,wind_direction_10m,is_day' });
+    liveNextTryAt = now + 60 * 1000;
+    liveRequest = root.fetch(`https://api.open-meteo.com/v1/forecast?${q.toString()}`).then(response => {
+      if (!response.ok) throw new Error(`weather HTTP ${response.status}`);
+      return response.json();
+    }).then(payload => {
+      const c = payload && payload.current;
+      if (!c) throw new Error('weather response has no current data');
+      liveWeather = { key, fetchedAt: Date.now(), current: c };
+      liveNextTryAt = liveWeather.fetchedAt + 15 * 60 * 1000;
+      environmentCache = null;
+      if (root.dispatchEvent && typeof root.CustomEvent === 'function') {
+        try { root.dispatchEvent(new root.CustomEvent('deskland-environment', { detail: currentEnvironment() })); } catch (_) { /* old WebView */ }
+      }
+    }).catch(() => { /* keep the local simulation as an offline fallback */ })
+      .finally(() => { liveRequest = null; });
+  };
+  const liveWeatherFor = options => {
+    const key = locationKey(options.location);
+    return liveWeather && liveWeather.key === key ? liveWeather.current : null;
   };
   function environmentAt(value, options) {
     const opts = normalizeEnvironmentOptions(options || environmentOptions);
+    requestLiveWeather(opts);
     const date = value instanceof Date ? value : new Date(value == null ? Date.now() : value);
     const clockHour = date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600 + date.getMilliseconds() / 3600000;
     const h = opts.time ? clockHour : 12;
@@ -83,6 +118,23 @@
       const month = date.getMonth();
       snow = (month === 11 || month <= 1) ? rain * 0.78 : 0;
     }
+    const remote = liveWeatherFor(opts);
+    if (remote) {
+      const code = Number(remote.weather_code) || 0;
+      const precipitation = Number(remote.precipitation) || 0;
+      const rainNow = Number(remote.rain) || 0;
+      const showers = Number(remote.showers) || 0;
+      const snowfall = Number(remote.snowfall) || 0;
+      const remoteStorm = code >= 95 ? 1 : 0;
+      wind = clamp01((Number(remote.wind_speed_10m) || 0) / 70);
+      gust = clamp01((Number(remote.wind_gusts_10m) || 0) / 100);
+      windDirection = ((Number(remote.wind_direction_10m) || 0) + 360) % 360;
+      cloudiness = clamp01((Number(remote.cloud_cover) || 0) / 100);
+      rain = clamp01((precipitation + rainNow + showers) / 4);
+      snow = clamp01(snowfall / 3);
+      storm = remoteStorm;
+      lightning = remoteStorm ? clamp01(0.5 + 0.5 * Math.sin(date.getTime() / 1000 * 1.7 + opts.location.latitude)) : 0;
+    }
     let weatherState = 'clear';
     if (!opts.weather) weatherState = 'disabled';
     else if (storm > 0.5) weatherState = 'storm';
@@ -105,6 +157,7 @@
     return Object.freeze({
       now: date.getTime(), day, dayProgress, hour: h, clockHour,
       timeEnabled: opts.time, weatherEnabled: opts.weather, weatherPreset: opts.preset,
+      weatherSource: remote ? 'live' : 'local', location: opts.location,
       phase, daylight, dawn, dusk, golden, night,
       sunElevation, sunAzimuth, noon,
       light: Object.freeze(light),

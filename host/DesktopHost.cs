@@ -231,6 +231,8 @@ static class Settings
     public static bool DynamicTime = true;
     public static bool DynamicWeather = true;
     public static string WeatherPreset = "auto";
+    public static string WeatherSource = "local";
+    public static Dictionary<string, object> WeatherLocation;
     public static string Lang = "vi";                  // Vietnamese by default for new profiles; preserve existing choices.
     public static Dictionary<string, Dictionary<string, object>> Params = new Dictionary<string, Dictionary<string, object>>();
 
@@ -254,6 +256,8 @@ static class Settings
             if (root.TryGetValue("dynamicTime", out v) && v is bool) DynamicTime = (bool)v;
             if (root.TryGetValue("dynamicWeather", out v) && v is bool) DynamicWeather = (bool)v;
             if (root.TryGetValue("weatherPreset", out v) && v is string) WeatherPreset = (string)v;
+            if (root.TryGetValue("weatherSource", out v) && v is string && ((string)v) == "live") WeatherSource = "live";
+            if (root.TryGetValue("weatherLocation", out v)) WeatherLocation = NormalizeLocation(v);
             if (root.TryGetValue("mode", out v) && v is string)
             {
                 try { Mode = (WallpaperMode)Enum.Parse(typeof(WallpaperMode), (string)v, true); } catch { Mode = WallpaperMode.Mirror; }
@@ -286,7 +290,8 @@ static class Settings
             Directory.CreateDirectory(Log.DataDir);
             foreach (var field in Json.Obj("version", SchemaVersion, "mode", Mode.ToString(), "theme", Theme,
                 "lang", Lang, "params", Params, "monitorThemes", MonitorThemes, "monitorPaused", MonitorPaused, "globalPaused", GlobalPaused,
-                "dynamicTime", DynamicTime, "dynamicWeather", DynamicWeather, "weatherPreset", WeatherPreset)) retainedRoot[field.Key] = field.Value;
+                "dynamicTime", DynamicTime, "dynamicWeather", DynamicWeather, "weatherPreset", WeatherPreset,
+                "weatherSource", WeatherSource, "weatherLocation", WeatherLocation)) retainedRoot[field.Key] = field.Value;
             string json = Json.Stringify(retainedRoot);
             AtomicWrite(FilePath, json);
         }
@@ -351,7 +356,21 @@ static class Settings
     {
         string p = WeatherPreset;
         if (p != "auto" && p != "clear" && p != "cloudy" && p != "rain" && p != "storm" && p != "snow") p = "auto";
-        return Json.Obj("time", DynamicTime, "weather", DynamicWeather, "preset", p);
+        string source = WeatherSource == "live" && WeatherLocation != null ? "live" : "local";
+        return Json.Obj("time", DynamicTime, "weather", DynamicWeather, "preset", p, "source", source, "location", WeatherLocation);
+    }
+    public static Dictionary<string, object> NormalizeLocation(object value)
+    {
+        Dictionary<string, object> raw = value as Dictionary<string, object>;
+        if (raw == null) return null;
+        object latValue, lonValue;
+        if (!raw.TryGetValue("latitude", out latValue) || !raw.TryGetValue("longitude", out lonValue)) return null;
+        double latitude, longitude;
+        try { latitude = Convert.ToDouble(latValue); longitude = Convert.ToDouble(lonValue); } catch { return null; }
+        if (double.IsNaN(latitude) || double.IsInfinity(latitude) || latitude < -90 || latitude > 90 || double.IsNaN(longitude) || double.IsInfinity(longitude) || longitude < -180 || longitude > 180) return null;
+        string name = raw.ContainsKey("name") && raw["name"] is string ? (string)raw["name"] : "";
+        string timezone = raw.ContainsKey("timezone") && raw["timezone"] is string ? (string)raw["timezone"] : "";
+        return Json.Obj("latitude", latitude, "longitude", longitude, "name", name, "timezone", timezone);
     }
 }
 
@@ -713,8 +732,21 @@ partial class HostContext : ApplicationContext
                 if (m.ContainsKey("weather") && m["weather"] is bool) Settings.DynamicWeather = (bool)m["weather"];
                 string preset = m.ContainsKey("preset") ? m["preset"] as string : null;
                 if (preset == "auto" || preset == "clear" || preset == "cloudy" || preset == "rain" || preset == "storm" || preset == "snow") Settings.WeatherPreset = preset;
+                string source = m.ContainsKey("source") ? m["source"] as string : null;
+                if (source == "local") Settings.WeatherSource = "local";
+                else if (source == "live" && Settings.WeatherLocation != null) Settings.WeatherSource = "live";
+                object locationValue;
+                if (m.TryGetValue("location", out locationValue))
+                {
+                    Dictionary<string, object> location = Settings.NormalizeLocation(locationValue);
+                    if (location != null) Settings.WeatherLocation = location;
+                    else if (locationValue == null) { Settings.WeatherLocation = null; Settings.WeatherSource = "local"; }
+                    if (source == "live" && Settings.WeatherLocation != null) Settings.WeatherSource = "live";
+                }
                 SaveSoon();
-                string env = Json.Stringify(Json.Obj("t", "environment", "time", Settings.DynamicTime, "weather", Settings.DynamicWeather, "preset", Settings.WeatherPreset));
+                Dictionary<string, object> envObject = Settings.EnvironmentJson();
+                envObject["t"] = "environment";
+                string env = Json.Stringify(envObject);
                 foreach (WallpaperForm f in forms.ToArray()) f.Post(env);
                 break;
             }

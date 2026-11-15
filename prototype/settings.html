@@ -294,6 +294,16 @@
   .environment-status { margin: 0; padding-top: 2px; font-variant-numeric: tabular-nums; }
   .environment-select { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
   .environment-select select { min-width: 150px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); font: inherit; }
+  .weather-location { display: grid; gap: 8px; }
+  .weather-location[hidden] { display: none; }
+  .location-search { display: flex; gap: 6px; }
+  .location-search input { flex: 1; min-width: 0; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); font: inherit; }
+  .location-search button { flex: none; padding: 6px 10px; }
+  .location-results { display: grid; gap: 5px; max-height: 150px; overflow-y: auto; }
+  .location-results button { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+  .location-results button:hover { border-color: var(--muted); background: var(--accent-soft); }
+  .location-results .empty { padding: 4px; text-align: left; font-size: 11px; }
+  .location-map { color: var(--muted); font-size: 11px; }
   @media (max-width: 780px) { body { height:auto; min-height:100vh; overflow:auto; } .layout { display:flex; flex-direction:column; } .themes { min-height:460px; overflow:visible; padding-right:0; } .theme-list { max-height:none; flex:none; } .side { padding:14px; } .bottom { flex-wrap:wrap; } }
   .monitor-config select { min-width: 160px; padding: 7px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); }
   @media (prefers-reduced-motion: reduce) {
@@ -347,6 +357,13 @@
         <label class="switch-row"><span data-i18n="environmentTime">Đổi theo thời gian</span><input type="checkbox" id="environmentTime"><i class="switch"></i></label>
         <label class="switch-row"><span data-i18n="environmentWeather">Đổi theo thời tiết</span><input type="checkbox" id="environmentWeather"><i class="switch"></i></label>
         <label class="environment-select"><span data-i18n="weatherPreset">Bộ thời tiết</span><select id="weatherPreset" aria-label="Bộ thời tiết"></select></label>
+        <label class="environment-select"><span data-i18n="weatherSource">Nguồn thời tiết</span><select id="weatherSource" aria-label="Nguồn thời tiết"></select></label>
+      </div>
+      <div class="weather-location" id="weatherLocationBox" hidden>
+        <p class="monitor-detail" data-i18n="weatherLocationHint">Chỉ gửi địa điểm đã nhập khi anh bấm tìm; không tự lấy vị trí thiết bị.</p>
+        <div class="location-search"><input id="locationQuery" type="search" data-i18n-placeholder="weatherLocationPlaceholder" placeholder="ZIP, mã bưu chính hoặc thành phố"><button class="ghost-btn" id="locationSearch" data-i18n="weatherLocationSearch">Tìm địa điểm</button></div>
+        <div class="location-results" id="locationResults" role="listbox"></div>
+        <a class="location-map" id="locationMap" hidden target="_blank" rel="noreferrer" data-i18n="weatherLocationOpenMap">Mở vị trí trên bản đồ</a>
       </div>
       <p class="monitor-detail environment-status" id="environmentStatus" role="status" aria-live="polite"></p>
     </section>
@@ -454,7 +471,7 @@ const send = m => {
   if (host) host.postMessage(JSON.stringify(m));
 };
 
-const DEFAULT_ENVIRONMENT = { time: true, weather: true, preset: 'auto' };
+const DEFAULT_ENVIRONMENT = { time: true, weather: true, preset: 'auto', source: 'local', location: null };
 const state = { registry0: null, registry: null, theme: 'beach', params: {}, screen: null, icons: null,
   mode: 'mirror', monitors: [], selectedMonitor: null, world: null, allParams: {}, globalTheme: 'beach', globalPaused: false,
   environment: {...DEFAULT_ENVIRONMENT},
@@ -577,13 +594,15 @@ function renderMonitors() {
   }
 }
 const WEATHER_OPTIONS = [['auto', 'weatherAuto'], ['clear', 'weatherClear'], ['cloudy', 'weatherCloudy'], ['rain', 'weatherRain'], ['storm', 'weatherStorm'], ['snow', 'weatherSnow']];
+const WEATHER_SOURCES = [['local', 'weatherSourceLocal'], ['live', 'weatherSourceLive']];
 const WEATHER_STATUS_KEYS = { disabled: 'weatherStatusDisabled', clear: 'weatherStatusClear', cloudy: 'weatherStatusCloudy', rain: 'weatherStatusRain', storm: 'weatherStatusStorm', snow: 'weatherStatusSnow' };
 const weatherStatus = () => {
   const e = Object.assign({}, DEFAULT_ENVIRONMENT, state.environment || {});
   const sample = window.DeskWorld && DeskWorld.environmentAt ? DeskWorld.environmentAt(Date.now(), e) : null;
   const key = sample && WEATHER_STATUS_KEYS[sample.weatherState] ? WEATHER_STATUS_KEYS[sample.weatherState] : 'weatherStatusClear';
   const wind = sample ? Math.round(sample.wind * 100) : 0;
-  $('environmentStatus').textContent = t('weatherStatusNow') + ': ' + t(key) + ' · ' + t('weatherStatusWind', { value: wind });
+  const place = e.source === 'live' && e.location && e.location.name ? ' · ' + e.location.name : '';
+  $('environmentStatus').textContent = t('weatherStatusNow') + ': ' + t(key) + ' · ' + t('weatherStatusWind', { value: wind }) + place;
 };
 function renderEnvironment() {
   const e = Object.assign({}, DEFAULT_ENVIRONMENT, state.environment || {});
@@ -592,12 +611,22 @@ function renderEnvironment() {
   $('environmentWeather').checked = e.weather !== false;
   $('weatherPreset').innerHTML = WEATHER_OPTIONS.map(([value, key]) => `<option value="${value}">${t(key)}</option>`).join('');
   $('weatherPreset').value = WEATHER_OPTIONS.some(x => x[0] === e.preset) ? e.preset : 'auto';
+  $('weatherSource').innerHTML = WEATHER_SOURCES.map(([value, key]) => `<option value="${value}">${t(key)}</option>`).join('');
+  $('weatherSource').value = e.source === 'live' ? 'live' : 'local';
+  $('weatherLocationBox').hidden = $('weatherSource').value !== 'live';
+  const location = e.location;
+  $('locationMap').hidden = !location;
+  if (location) {
+    $('locationMap').href = `https://www.openstreetmap.org/?mlat=${encodeURIComponent(location.latitude)}&mlon=${encodeURIComponent(location.longitude)}#map=10/${encodeURIComponent(location.latitude)}/${encodeURIComponent(location.longitude)}`;
+    $('locationMap').textContent = t('weatherLocationOpenMap') + ': ' + (location.name || `${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}`);
+  }
   weatherStatus();
 }
 function setEnvironment(patch) {
   state.environment = Object.assign({}, DEFAULT_ENVIRONMENT, state.environment, patch || {});
   renderEnvironment();
-  const message = { t: 'environment', time: state.environment.time !== false, weather: state.environment.weather !== false, preset: state.environment.preset };
+  const message = { t: 'environment', time: state.environment.time !== false, weather: state.environment.weather !== false, preset: state.environment.preset,
+    source: state.environment.source === 'live' && state.environment.location ? 'live' : 'local', location: state.environment.location || null };
   send(message);
   toPreview({ ...message, environment: state.environment });
   flashSaved();
@@ -605,6 +634,34 @@ function setEnvironment(patch) {
 $('environmentTime').addEventListener('change', e => setEnvironment({ time: e.target.checked }));
 $('environmentWeather').addEventListener('change', e => setEnvironment({ weather: e.target.checked }));
 $('weatherPreset').addEventListener('change', e => setEnvironment({ preset: e.target.value }));
+$('weatherSource').addEventListener('change', e => setEnvironment({ source: e.target.value }));
+async function searchWeatherLocations() {
+  const query = $('locationQuery').value.trim();
+  if (query.length < 2) { $('locationResults').innerHTML = `<div class="empty">${t('weatherLocationShort')}</div>`; return; }
+  $('locationResults').innerHTML = `<div class="empty">${t('weatherLocationSearching')}</div>`;
+  try {
+    const language = lang === 'vi' ? 'vi' : lang === 'zh-CN' ? 'zh' : 'en';
+    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=6&language=${language}&format=json`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('geocoding HTTP ' + response.status);
+    const payload = await response.json();
+    const results = Array.isArray(payload.results) ? payload.results : [];
+    if (!results.length) { $('locationResults').innerHTML = `<div class="empty">${t('weatherLocationNone')}</div>`; return; }
+    $('locationResults').innerHTML = results.map((item, index) => `<button type="button" data-location-index="${index}">${esc(item.name || '')}${item.admin1 ? ', ' + esc(item.admin1) : ''}${item.country ? ' · ' + esc(item.country) : ''}</button>`).join('');
+    $('locationResults')._items = results;
+  } catch (_) { $('locationResults').innerHTML = `<div class="empty">${t('weatherLocationError')}</div>`; }
+}
+$('locationSearch').addEventListener('click', searchWeatherLocations);
+$('locationQuery').addEventListener('keydown', e => { if (e.key === 'Enter') searchWeatherLocations(); });
+$('locationResults').addEventListener('click', e => {
+  const button = e.target.closest('[data-location-index]'), items = $('locationResults')._items || [];
+  if (!button) return;
+  const item = items[Number(button.dataset.locationIndex)];
+  if (!item) return;
+  setEnvironment({ source: 'live', location: { latitude: Number(item.latitude), longitude: Number(item.longitude), name: [item.name, item.admin1, item.country].filter(Boolean).join(', '), timezone: item.timezone || '' } });
+  $('locationResults').innerHTML = `<div class="empty">${t('weatherLocationSelected')}</div>`;
+});
+if (window.DeskWorld && window.addEventListener) window.addEventListener('deskland-environment', weatherStatus);
 setInterval(weatherStatus, 10000);
 $('modeRow').addEventListener('click', e => { const b=e.target.closest('[data-mode]'); if (!b || state.mode===b.dataset.mode) return; flush(); state.mode=b.dataset.mode; send({t:'mode',v:state.mode}); selectTarget(); });
 $('monitorMap').addEventListener('click', e => { const b=e.target.closest('[data-monitor]'); if (!b) return; flush(); state.selectedMonitor=b.dataset.monitor; selectTarget(); });
