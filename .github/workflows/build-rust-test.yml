@@ -23,7 +23,7 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-          cargo build --release --locked
+          cargo build --release
 
       - name: Package Rust native build
         run: |

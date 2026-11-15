@@ -35,7 +35,7 @@ use glow::HasContext;
 use std::cell::Cell;
 use std::fs::File;
 use std::io::Write;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, Mutex as StdMutex};
 use std::time::Instant;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -374,6 +374,44 @@ struct Environment {
     location: Option<serde_json::Value>,
 }
 
+#[derive(Clone, Copy, Default)]
+struct LiveWeather {
+    cloud: f32,
+    rain: f32,
+    snow: f32,
+    storm: f32,
+    wind: f32,
+}
+
+fn live_weather_amount(env: &Environment, live: Option<LiveWeather>) -> Option<f32> {
+    if env.source != "live" || env.location.is_none() || !env.weather_enabled { return None; }
+    let w = live?;
+    Some(w.storm.max(w.snow).max(w.rain).max(w.cloud * 0.42).clamp(0.0, 1.0))
+}
+
+fn fetch_live_weather(env: &Environment, target: Arc<StdMutex<Option<LiveWeather>>>) {
+    let Some(loc) = env.location.as_ref() else { return };
+    let Some(lat) = loc.get("latitude").and_then(|v| v.as_f64()) else { return };
+    let Some(lon) = loc.get("longitude").and_then(|v| v.as_f64()) else { return };
+    std::thread::spawn(move || {
+        let url = format!("https://api.open-meteo.com/v1/forecast?latitude={lat:.5}&longitude={lon:.5}&timezone=auto&current=precipitation,rain,showers,snowfall,weather_code,cloud_cover,wind_speed_10m");
+        let Ok(resp) = reqwest::blocking::get(url) else { log!("Thời tiết live: không kết nối được Open-Meteo"); return };
+        let Ok(root) = resp.json::<serde_json::Value>() else { log!("Thời tiết live: dữ liệu JSON không hợp lệ"); return };
+        let Some(c) = root.get("current") else { log!("Thời tiết live: thiếu current"); return };
+        let n = |k: &str| c.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        let code = c.get("weather_code").and_then(|v| v.as_i64()).unwrap_or(0);
+        let sample = LiveWeather {
+            cloud: (n("cloud_cover") / 100.0).clamp(0.0, 1.0),
+            rain: ((n("precipitation") + n("rain") + n("showers")) / 4.0).clamp(0.0, 1.0),
+            snow: (n("snowfall") / 3.0).clamp(0.0, 1.0),
+            storm: if code >= 95 { 1.0 } else { 0.0 },
+            wind: (n("wind_speed_10m") / 70.0).clamp(0.0, 1.0),
+        };
+        if let Ok(mut slot) = target.lock() { *slot = Some(sample); }
+        log!("Thời tiết live: đã cập nhật lat={lat:.4}, lon={lon:.4}, code={code}");
+    });
+}
+
 #[repr(C)]
 struct LocalSystemTime {
     year: u16, month: u16, _dow: u16, day: u16,
@@ -575,10 +613,9 @@ fn web_init(app: &App) -> serde_json::Value {
                 "cats",
                 "boxing-ring"
             ],
-            // Cây dừa đã được vẽ trong shader native cho hai theme biển; các
-            // tuỳ chọn nhân vật chưa port vẫn giữ mặc định tắt.
-            "hide": ["showBoy", "showCat"],
-            "force": { "showBoy": 0, "showCat": 0 },
+            // Ảnh cây dừa gốc cần texture atlas; chưa bật renderer giả trong native.
+            "hide": ["palms", "showBoy", "showCat"],
+            "force": { "palms": 0, "showBoy": 0, "showCat": 0 },
         },
     })
 }
@@ -652,6 +689,8 @@ struct App {
     headless: bool,
     interactions_enabled: bool,
     boost_until: f64,
+    live_weather: Arc<StdMutex<Option<LiveWeather>>>,
+    weather_fetch_at: f64,
 }
 
 impl App {
@@ -713,6 +752,12 @@ impl App {
 
     fn now(&self) -> f64 {
         self.start.elapsed().as_secs_f64() * 1000.0
+    }
+
+    fn maybe_fetch_live_weather(&mut self, now: f64) {
+        if self.environment.source != "live" || self.environment.location.is_none() || now < self.weather_fetch_at { return; }
+        self.weather_fetch_at = now + 900_000.0;
+        fetch_live_weather(&self.environment, self.live_weather.clone());
     }
 
     fn seed(&self) -> i32 {
@@ -1202,9 +1247,11 @@ impl App {
 
     fn render(&mut self) {
         let now = self.now();
+        self.maybe_fetch_live_weather(now);
         let t0 = Instant::now();
         let day_phase = self.environment.day_phase();
-        let weather = self.environment.weather_amount(now);
+        let live = self.live_weather.lock().ok().and_then(|g| *g);
+        let weather = live_weather_amount(&self.environment, live).unwrap_or_else(|| self.environment.weather_amount(now));
         let ctx = self.ctx.as_ref().unwrap();
         let shared = self.shared.as_mut().unwrap();
         shared.day_phase = day_phase;
@@ -1623,6 +1670,8 @@ fn main() {
         headless,
         interactions_enabled,
         boost_until: 0.0,
+        live_weather: Arc::new(StdMutex::new(None)),
+        weather_fetch_at: 0.0,
     };
     log!("Cách hiển thị: {}", if app.gdi { "gdi (FBO -> đọc về -> StretchDIBits)" } else { "gl (SwapBuffers trực tiếp)" });
     if let Err(e) = app.create_walls() {
@@ -1871,6 +1920,8 @@ fn main() {
                     if let Some(v) = m.get("source").and_then(|v| v.as_str()) { app.cfg.environment.source = v.to_string(); }
                     if m.get("location").is_some() { app.cfg.environment.location = m.get("location").cloned().filter(|v| !v.is_null()); }
                     app.environment = app.cfg.environment.clone();
+                    app.weather_fetch_at = 0.0;
+                    if let Ok(mut live) = app.live_weather.lock() { *live = None; }
                     log!("Môi trường: time={}, weather={}, preset={}, source={}", app.environment.time_enabled, app.environment.weather_enabled, app.environment.preset, app.environment.source);
                     web::post(&web_init(&app).to_string());
                     web_changed = true;

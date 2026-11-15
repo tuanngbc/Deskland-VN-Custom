@@ -549,24 +549,25 @@ void main() {
   float daylight = smoothstep(0.18, 0.38, uDayPhase) * (1.0 - smoothstep(0.62, 0.86, uDayPhase));
   float night = 1.0 - daylight;
   float dusk = 1.0 - abs(daylight * 2.0 - 1.0);
-  vec3 tint = mix(vec3(0.34, 0.42, 0.72), vec3(1.0), daylight);
-  tint = mix(tint, vec3(1.0, 0.56, 0.30), dusk * 0.28);
-  vec3 color = src.rgb * mix(vec3(0.76, 0.82, 1.0), tint, 0.42);
+  // Giữ màu gốc của theme vào ban ngày; chỉ thêm một lớp rất nhẹ lúc đêm.
+  // Hậu kỳ cũ trộn xanh quá mạnh khiến 11 giờ sáng vẫn tối và lạnh màu.
+  vec3 tint = mix(vec3(0.78, 0.86, 1.0), vec3(1.0), daylight);
+  tint = mix(tint, vec3(1.0, 0.78, 0.58), dusk * 0.12);
+  vec3 color = src.rgb * mix(vec3(0.94, 0.96, 1.0), tint, 0.14);
 
   float cloud = smoothstep(0.42, 0.80, noise(uv * vec2(3.2, 2.1) + vec2(uTime * 0.004, 0.0)));
   float wet = clamp(uWeather, 0.0, 1.0);
   color = mix(color, color * vec3(0.70, 0.76, 0.84), cloud * wet * 0.28);
 
-  float rainBand = smoothstep(0.92, 1.0, fract((uv.x + uv.y * 0.22 + uTime * 0.055) * 145.0));
-  float rain = step(0.42, wet) * rainBand * (0.35 + 0.65 * noise(uv * 18.0 + uTime * 0.1));
-  color = mix(color, vec3(0.72, 0.84, 0.96), rain * 0.22);
+  // Không dùng dải fract theo x+y: đó là nguyên nhân các sọc chéo chạy đều
+  // trên toàn bộ nền khi preset auto/live chưa có dữ liệu.
 
   float snow = step(0.86, wet);
   float flakes = step(0.965, noise(uv * 42.0 + vec2(0.0, uTime * 0.04)));
   color = mix(color, vec3(0.98), flakes * snow * 0.75);
 
   float lightning = step(0.985, sin(uTime * 0.21 + noise(uv * 4.0) * 5.0) * 0.5 + 0.5);
-  color += vec3(0.28, 0.34, 0.48) * lightning * step(0.72, wet) * 0.25;
+  color += vec3(0.16, 0.20, 0.28) * lightning * step(0.72, wet) * 0.12;
   o = vec4(color, src.a);
 }
 "#;
