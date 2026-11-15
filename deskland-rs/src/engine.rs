@@ -629,6 +629,7 @@ uniform float uPalmShadow;
 uniform float uShadowShear;
 uniform float uShadowFlatten;
 uniform float uShadowOffset;
+uniform float uShadowBase;
 out vec2 vUv;
 void main() {
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
@@ -638,10 +639,10 @@ void main() {
     // Ép silhouette xuống mặt cát và kéo theo hướng ngược mặt trời.
     // uShadowOffset đổi dấu từ đông sang tây; uShadowFlatten ngắn nhất vào
     // giữa trưa và dài hơn khi mặt trời thấp.
-    // 96 px đặt mặt bóng ngay dưới chân (y=0); nếu không có khoảng này,
-    // silhouette nằm chồng dưới tán và bị thân cây vẽ sau che mất.
+    // uShadowBase và uShadowFlatten thay đổi theo độ cao mặt trời: giữa trưa
+    // bóng co sát chân, sáng/chiều thì kéo dài trên mặt cát.
     local = vec2(local.x * .84 + local.y * uShadowShear + uShadowOffset,
-                 96.0 - local.y * uShadowFlatten);
+                 uShadowBase - local.y * uShadowFlatten);
   }
   float a = sin(uTime * .65 + uPalm.w * 2.0) * .008;
   local = mat2(cos(a), sin(a), -sin(a), cos(a)) * local;
@@ -704,7 +705,8 @@ pub fn draw_palm(gl: &glow::Context, shared: &mut Shared, w: f32, h: f32, x: f32
     let shadow_opacity = (sun_height * (0.20 + sun_height * 0.16)).clamp(0.0, 0.38);
     let shadow_offset = -sun_x * (18.0 + (1.0 - sun_height) * 64.0);
     let shadow_shear = -sun_x * 0.16;
-    let shadow_flatten = 0.14 + sun_height * 0.20;
+    let shadow_flatten = 0.10 + (1.0 - sun_height) * 0.30;
+    let shadow_base = 24.0 + (1.0 - sun_height) * 70.0;
     unsafe {
         gl.enable(glow::BLEND);
         gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
@@ -724,6 +726,7 @@ pub fn draw_palm(gl: &glow::Context, shared: &mut Shared, w: f32, h: f32, x: f32
         shared.palm.f1(gl, "uShadowShear", shadow_shear);
         shared.palm.f1(gl, "uShadowFlatten", shadow_flatten);
         shared.palm.f1(gl, "uShadowOffset", shadow_offset);
+        shared.palm.f1(gl, "uShadowBase", shadow_base);
         unsafe { gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4); }
     }
     shared.palm.f1(gl, "uPalmShadow", 0.0);
@@ -731,5 +734,6 @@ pub fn draw_palm(gl: &glow::Context, shared: &mut Shared, w: f32, h: f32, x: f32
     shared.palm.f1(gl, "uShadowShear", 0.0);
     shared.palm.f1(gl, "uShadowFlatten", 1.0);
     shared.palm.f1(gl, "uShadowOffset", 0.0);
+    shared.palm.f1(gl, "uShadowBase", 0.0);
     unsafe { gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4); gl.use_program(None); gl.disable(glow::BLEND); }
 }
