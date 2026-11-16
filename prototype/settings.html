@@ -555,8 +555,16 @@ const frame = $('preview');
 const LANGS = { 'vi': 'Tiếng Việt', 'en': 'English', 'zh-CN': '简体中文' };
 const I18N = {};
 let lang = 'vi';
-const loadLang = code => I18N[code] ? Promise.resolve() :
-  fetch('i18n/' + code + '.json').then(r => r.json()).then(j => { I18N[code] = j; }).catch(() => { I18N[code] = {}; });
+const loadLang = code => I18N[code] ? Promise.resolve() : (async () => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2200);
+  try {
+    const response = await fetch('i18n/' + code + '.json?lang=' + Date.now(), { cache: 'no-store', signal: controller.signal });
+    if (!response.ok) throw new Error('i18n ' + response.status);
+    I18N[code] = await response.json();
+  } catch (_) { I18N[code] = {}; }
+  finally { clearTimeout(timer); }
+})();
 // 一句界面文字：当前语言 → 英文 → 简体中文；{名字} 换成 vars 里的值
 function t(key, vars) {
   const pick = c => I18N[c] && I18N[c].ui && I18N[c].ui[key];
