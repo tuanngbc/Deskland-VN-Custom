@@ -44,6 +44,51 @@ const TOP: i32 = 78;
 const PAGE: usize = 6;
 const REFRESH: u32 = WM_APP + 101;
 const OPEN_SELECTED: u32 = WM_APP + 102;
+const HISTORY_LIMIT: usize = 30;
+
+#[derive(Default, Debug, PartialEq)]
+struct History { paths: Vec<PathBuf> }
+impl History {
+    fn from_json(value: &serde_json::Value) -> Self {
+        let mut paths: Vec<PathBuf> = Vec::new();
+        if let Some(items) = value.get("items").and_then(|v| v.as_array()) {
+            for item in items {
+                if let Some(path) = item.as_str().filter(|p| !p.is_empty() && p.len() <= 32768) {
+                    let path = PathBuf::from(path);
+                    if !paths.iter().any(|p| same_path(p, &path)) { paths.push(path); }
+                    if paths.len() == HISTORY_LIMIT { break; }
+                }
+            }
+        }
+        Self { paths }
+    }
+    fn json(&self) -> serde_json::Value { serde_json::json!({"version":1,"items":self.paths}) }
+    fn remember(&mut self, path: &Path) -> bool {
+        if self.paths.first().is_some_and(|p| same_path(p, path)) { return false; }
+        self.paths.retain(|p| !same_path(p, path));
+        self.paths.insert(0, path.to_path_buf());
+        self.paths.truncate(HISTORY_LIMIT);
+        true
+    }
+}
+fn same_path(a: &Path, b: &Path) -> bool { a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase() }
+#[cfg(not(test))]
+fn load_history() -> History {
+    std::fs::read(crate::lock::data_dir().join("launcher-history.json")).ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok()).map(|v| History::from_json(&v)).unwrap_or_default()
+}
+#[cfg(test)]
+fn load_history() -> History { History::default() }
+#[cfg(not(test))]
+fn save_history(history: &History) {
+    if let Ok(bytes) = serde_json::to_vec(&history.json()) {
+        if let Err(error) = std::fs::write(crate::lock::data_dir().join("launcher-history.json"), bytes) {
+            crate::log!("Launcher: không lưu được lịch sử: {error}");
+        }
+    }
+}
+#[cfg(test)]
+fn save_history(_history: &History) {}
 
 #[derive(Clone, Debug)]
 struct Entry { name: String, path: PathBuf, kind: &'static str, detail: String }
@@ -55,6 +100,7 @@ struct State {
     icon_requests: std::sync::mpsc::Sender<(PathBuf, i32)>,
     icon_results: std::sync::mpsc::Receiver<((PathBuf, i32), Option<IconPixels>)>,
     pending_icons: usize,
+    history: History, launching: bool,
 }
 #[derive(Clone)]
 struct IconPixels { width: i32, height: i32, pixels: Vec<u8> }
@@ -108,11 +154,15 @@ fn entries() -> Vec<Entry> {
     out
 }
 
-fn filter(all: &[Entry], query: &str) -> Vec<usize> {
+fn filter(all: &[Entry], query: &str, history: &History) -> Vec<usize> {
     let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        let indexed: std::collections::HashMap<_, _> = all.iter().enumerate().map(|(i, e)| (e.path.to_string_lossy().to_lowercase(), i)).collect();
+        return history.paths.iter().filter_map(|path| indexed.get(&path.to_string_lossy().to_lowercase()).copied()).collect();
+    }
     let mut found: Vec<(u8, usize)> = all.iter().enumerate().filter_map(|(i, e)| {
         let name = e.name.to_lowercase();
-        let rank = if q.is_empty() || name == q { 0 } else if name.starts_with(&q) { 1 } else if q.split_whitespace().all(|part| name.contains(part)) { 2 } else { return None; };
+        let rank = if name == q { 0 } else if name.starts_with(&q) { 1 } else if q.split_whitespace().all(|part| name.contains(part)) { 2 } else { return None; };
         Some((rank, i))
     }).collect();
     found.sort_by_key(|&(rank, i)| (rank, all[i].kind != "Application"));
@@ -127,9 +177,25 @@ fn handles() -> Option<(HWND, i32, i32, f32)> {
 fn refresh() {
     let hwnd = STATE.with(|c| {
         let mut guard = c.borrow_mut(); let s = guard.as_mut()?;
-        s.matches = filter(&s.all, &s.query); s.selected = 0; s.first = 0; s.error.clear(); Some(s.hwnd)
+        s.matches = filter(&s.all, &s.query, &s.history); s.selected = 0; s.first = 0; s.error.clear(); Some(s.hwnd)
     });
     if let Some(hwnd) = hwnd { unsafe { InvalidateRect(hwnd, std::ptr::null(), 0); } }
+}
+
+fn remember_entry(path: &Path) {
+    STATE.with(|c| { if let Some(s) = c.borrow_mut().as_mut() {
+        if s.history.remember(path) { save_history(&s.history); }
+    } });
+}
+
+fn dismiss(hwnd: HWND) {
+    let searched = STATE.with(|c| {
+        let g = c.borrow(); let s = g.as_ref()?;
+        if s.launching || s.query.trim().is_empty() { return None; }
+        s.matches.get(s.selected).and_then(|&i| s.all.get(i)).map(|e| e.path.clone())
+    });
+    if let Some(path) = searched { remember_entry(&path); }
+    unsafe { ShowWindow(hwnd, SW_HIDE); }
 }
 
 fn move_selection(delta: i32) {
@@ -150,14 +216,18 @@ fn launch_selected() {
         Some((s.hwnd, s.all.get(idx)?.clone()))
     });
     let Some((hwnd, entry)) = target else { return; };
+    STATE.with(|c| if let Some(s) = c.borrow_mut().as_mut() { s.launching = true; });
     unsafe {
         // Hide before ShellExecute activates another process (WM_ACTIVATE is synchronous).
         ShowWindow(hwnd, SW_HIDE);
         let result = execute(hwnd, &entry.path);
+        STATE.with(|c| if let Some(s) = c.borrow_mut().as_mut() { s.launching = false; });
         if result <= 32 {
             crate::log!("Launcher: không mở được {} (ShellExecute {})", entry.path.display(), result);
             STATE.with(|c| { if let Some(s) = c.borrow_mut().as_mut() { s.error = format!("Could not open {} (Windows error {result})", entry.name); } });
             ShowWindow(hwnd, SW_SHOW); InvalidateRect(hwnd, std::ptr::null(), 0);
+        } else {
+            remember_entry(&entry.path);
         }
     }
 }
@@ -362,8 +432,8 @@ unsafe fn paint(hwnd: HWND) {
             label(dc,&format!("{} · {}",entry.kind,entry.detail),RECT {left:px(66),top:y+px(27),right:w-px(24),bottom:y+px(46)},small,secondary);
             if i==selected { label(dc,"↵",RECT {left:w-px(49),top:y+px(3),right:w-px(22),bottom:y+px(28)},body,secondary); }
         }
-        if rows.is_empty(){label(dc,"No results",RECT{left:px(28),top:px(105),right:w-px(24),bottom:px(147)},body,secondary);}
-        label(dc,if error.is_empty(){"↑ ↓  Select       ↵  Open       Esc  Close"}else{&error},RECT{left:px(22),top:h-px(36),right:w-px(80),bottom:h-px(10)},small,secondary);
+        if rows.is_empty(){label(dc,if query.trim().is_empty(){"Type to find apps and files. Recent items will appear here."}else{"No results"},RECT{left:px(28),top:px(105),right:w-px(24),bottom:px(147)},body,secondary);}
+        label(dc,if !error.is_empty(){&error}else if query.trim().is_empty(){"Recent · newest first     ↑ ↓  Select     ↵  Open     Esc  Close"}else{"↑ ↓  Select       ↵  Open       Esc  Close"},RECT{left:px(22),top:h-px(36),right:w-px(80),bottom:h-px(10)},small,secondary);
         label(dc,&format!("{count}"),RECT{left:w-px(58),top:h-px(36),right:w-px(15),bottom:h-px(10)},small,secondary);
         GdiFlush();
         for (icon,x,y) in icons { blend_pixels(pixels,ww,pad+x,pad+y,&icon.pixels,icon.width,icon.height,false); }
@@ -397,8 +467,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             if changed { InvalidateRect(hwnd,std::ptr::null(),0); }
             if !pending || IsWindowVisible(hwnd)==0 { KillTimer(hwnd,7); } 0
         }
-        WM_ACTIVATE if w & 0xffff == WA_INACTIVE as usize => { ShowWindow(hwnd, SW_HIDE); 0 }
-        WM_CLOSE => { ShowWindow(hwnd, SW_HIDE); 0 }
+        WM_ACTIVATE if w & 0xffff == WA_INACTIVE as usize => { dismiss(hwnd); 0 }
+        WM_CLOSE => { dismiss(hwnd); 0 }
         REFRESH => { refresh(); 0 }
         OPEN_SELECTED => { launch_selected(); 0 }
         WM_KEYDOWN => {
@@ -426,7 +496,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 return 0;
             }
             match w as u16 {
-                VK_ESCAPE => { ShowWindow(hwnd, SW_HIDE); }
+                VK_ESCAPE => { dismiss(hwnd); }
                 VK_RETURN => { PostMessageW(hwnd, OPEN_SELECTED, 0, 0); }
                 VK_DOWN => move_selection(1), VK_UP => move_selection(-1),
                 VK_NEXT => move_selection(PAGE as i32), VK_PRIOR => move_selection(-(PAGE as i32)),
@@ -465,7 +535,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
 pub fn toggle(_owner: HWND) {
     unsafe {
         if let Some((hwnd, _, _, _)) = handles() {
-            if IsWindowVisible(hwnd) != 0 { ShowWindow(hwnd, SW_HIDE); return; }
+            if IsWindowVisible(hwnd) != 0 { dismiss(hwnd); return; }
         } else {
             let instance = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(std::ptr::null());
             let cls = wide(CLASS); let mut wc: WNDCLASSEXW = std::mem::zeroed();
@@ -479,7 +549,7 @@ pub fn toggle(_owner: HWND) {
             let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED);
             let all = entries();
             let (icon_requests,icon_results)=icon_worker();
-            STATE.with(|c| *c.borrow_mut() = Some(State { hwnd, all, matches: Vec::new(), query: String::new(), selected: 0, first: 0, scale: 1.0, width: 660, height: 444, glass: Vec::new(), backdrop: Vec::new(), error: String::new(), select_all: false, icons:std::collections::HashMap::new(),icon_requests,icon_results,pending_icons:0 }));
+            STATE.with(|c| *c.borrow_mut() = Some(State { hwnd, all, matches: Vec::new(), query: String::new(), selected: 0, first: 0, scale: 1.0, width: 660, height: 444, glass: Vec::new(), backdrop: Vec::new(), error: String::new(), select_all: false, icons:std::collections::HashMap::new(),icon_requests,icon_results,pending_icons:0,history:load_history(),launching:false }));
         }
         let Some((hwnd, _, _, _)) = handles() else { return; };
         let mut mouse: POINT = std::mem::zeroed(); GetCursorPos(&mut mouse);
@@ -510,6 +580,37 @@ pub fn hotkey_text(mods: u32, vk: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn sample_entries() -> Vec<Entry> {
+        [("Paint", "C:\\Windows\\System32\\mspaint.exe"), ("Notepad", "C:\\Windows\\System32\\notepad.exe"), ("Budget", "C:\\Documents\\Budget.xlsx")]
+            .into_iter().map(|(name,path)| Entry {name:name.into(),path:path.into(),kind:if name=="Budget"{"File"}else{"Application"},detail:String::new()}).collect()
+    }
+    #[test]
+    fn recent_items_are_newest_first_unique_and_survive_reload() {
+        let all = sample_entries(); let mut history = History::default();
+        assert!(filter(&all,"",&history).is_empty());
+        history.remember(&all[0].path); history.remember(&all[2].path); history.remember(&all[1].path);
+        assert_eq!(filter(&all,"",&history),vec![1,2,0]);
+        history.remember(Path::new("c:\\WINDOWS\\system32\\MSPAINT.exe"));
+        assert_eq!(filter(&all,"  ",&History::from_json(&history.json())),vec![0,1,2]);
+        assert!(!history.remember(&all[0].path));
+        assert_eq!(history.paths.len(),3);
+        // A removed/unindexed item must not produce a dangling result index.
+        assert_eq!(filter(&all[..2],"",&history),vec![0,1]);
+        assert_eq!(filter(&all,"paint",&history),vec![0]);
+        assert_eq!(filter(&all,"missing",&history),Vec::<usize>::new());
+    }
+    #[test]
+    fn recent_history_is_bounded_and_tolerates_invalid_data() {
+        let mut history = History::default();
+        for i in 0..45 { history.remember(Path::new(&format!("C:\\item-{i}.lnk"))); }
+        assert_eq!(history.paths.len(),HISTORY_LIMIT);
+        assert_eq!(history.paths[0],Path::new("C:\\item-44.lnk"));
+        assert_eq!(history.paths[29],Path::new("C:\\item-15.lnk"));
+        assert_eq!(History::from_json(&history.json()),history);
+        assert_eq!(History::from_json(&serde_json::Value::Null),History::default());
+        let history=History::from_json(&serde_json::json!({"items":[null,42,"","C:\\x","c:\\X","C:\\y"]}));
+        assert_eq!(history.paths,vec![PathBuf::from("C:\\x"),PathBuf::from("C:\\y")]);
+    }
     #[test]
     fn appearance_roundtrip_clamps_and_preserves_defaults() {
         let d=Appearance::from_json(&serde_json::Value::Null); assert_eq!(d,Appearance::default());
@@ -547,9 +648,14 @@ mod tests {
                 while PeekMessageW(&mut msg, hwnd, 0, 0, PM_REMOVE) != 0 { DispatchMessageW(&msg); }
                 assert_eq!(IsWindowVisible(hwnd), 0);
                 toggle(std::ptr::null_mut()); assert_ne!(IsWindowVisible(hwnd), 0);
+                STATE.with(|c| { let g=c.borrow(); let s=g.as_ref().unwrap(); assert_eq!(s.matches.len(),1); assert_eq!(s.all[s.matches[0]].name,"Paint"); });
                 SendMessageW(hwnd, WM_KEYDOWN, VK_DOWN as usize, 0); SendMessageW(hwnd, WM_PAINT, 0, 0);
                 SendMessageW(hwnd, WM_KEYDOWN, VK_ESCAPE as usize, 0); toggle(std::ptr::null_mut());
             }
+            for ch in "notepad".chars() { SendMessageW(hwnd, WM_CHAR, ch as usize, 0); SendMessageW(hwnd, REFRESH, 0, 0); }
+            SendMessageW(hwnd, WM_KEYDOWN, VK_ESCAPE as usize, 0);
+            toggle(std::ptr::null_mut());
+            STATE.with(|c| { let g=c.borrow(); let s=g.as_ref().unwrap(); assert_eq!(s.matches.len(),2); assert_eq!(s.all[s.matches[0]].name,"Notepad"); assert_eq!(s.all[s.matches[1]].name,"Paint"); });
             DestroyWindow(hwnd); STATE.with(|c| *c.borrow_mut() = None);
         }
     }
