@@ -352,10 +352,9 @@
     </div>
     <div class="warn" id="autostartWarn" hidden role="alert"><p><b data-i18n="autostartBlocked">开机自动启动可能被拦截了</b><br><span id="autostartWarnText"></span></p><button id="autostartWarnOk" data-i18n="gotIt">知道了</button></div>
     <section class="monitor-panel" aria-label="Mini tools">
-      <h3 data-i18n="miniToolsTitle">Chụp, quay và Quick Look</h3>
+      <h3 data-i18n="miniToolsTitle">Chụp và quay</h3>
       <div class="environment-controls">
         <label><input id="toolsEnabled" type="checkbox" checked> <span data-i18n="miniToolsEnabled">Bật phím tắt tiện ích</span></label>
-        <label><input id="toolsSpace" type="checkbox" checked> <span data-i18n="miniToolsSpace">Space xem trước tệp trong Explorer</span></label>
       </div>
       <div class="launcher-options" id="toolShortcuts"></div>
       <div class="environment-controls">
@@ -365,10 +364,9 @@
       <div class="environment-controls">
         <button class="ghost-btn" id="toolCapture" data-i18n="miniToolsCapture">Chụp và chỉnh sửa</button>
         <button class="ghost-btn" id="toolRecord" data-i18n="miniToolsRecord">Quay vùng / Dừng và lưu</button>
-        <button class="ghost-btn" id="toolPreview">Quick Look</button>
       </div>
       <p class="launcher-note" id="toolsHotkeyStatus" role="status"></p>
-      <p class="launcher-note" data-i18n="miniToolsNote">Kéo chọn vùng hoặc nhấn Space để lấy cả màn hình. Ảnh chụp mở trình sửa ngay. Video MP4 lưu trong Videos/Deskland. Đóng tiện ích để giải phóng bộ nhớ.</p>
+      <p class="launcher-note" data-i18n="miniToolsNote">Kéo chọn vùng để chụp hoặc quay. Ảnh chụp mở trình sửa ngay. Video MP4 lưu trong Videos/Deskland. Đóng tiện ích để giải phóng bộ nhớ.</p>
     </section>
     <section class="monitor-panel" aria-label="Spotlight appearance">
       <h3 data-i18n="launcherAppearance">Giao diện Spotlight</h3>
@@ -924,8 +922,8 @@ function flashSaved() {
 $('autostart').addEventListener('change', e => send({ t: 'autostart', v: e.target.checked }));
 $('launcherMods').addEventListener('change', () => send({ t: 'launcherHotkey', mods: Number($('launcherMods').value), vk: Number($('launcherKey').value) }));
 $('launcherKey').addEventListener('change', () => send({ t: 'launcherHotkey', mods: Number($('launcherMods').value), vk: Number($('launcherKey').value) }));
-let miniTools = { enabled: true, spacePreview: true, fps: 30, audio: true, capture: { mods: 16390, vk: 83 }, record: { mods: 16390, vk: 82 }, preview: { mods: 16387, vk: 32 } };
-for (const [name, label] of [['capture', 'miniToolsCapture'], ['record', 'miniToolsRecord'], ['preview', 'miniToolsPreview']]) {
+let miniTools = { enabled: true, fps: 30, audio: true, capture: { mods: 16390, vk: 83 }, record: { mods: 16390, vk: 82 } };
+for (const [name, label] of [['capture', 'miniToolsCapture'], ['record', 'miniToolsRecord']]) {
   const row = document.createElement('label');
   const span = document.createElement('span'); span.dataset.i18n = label; span.textContent = t(label); row.appendChild(span);
   const mods = document.createElement('select'); mods.id = 'toolMods_' + name;
@@ -937,19 +935,19 @@ for (const [name, label] of [['capture', 'miniToolsCapture'], ['record', 'miniTo
   mods.addEventListener('change', saveMiniTools); key.addEventListener('change', saveMiniTools);
 }
 function saveMiniTools() {
-  const m = { t: 'miniTools', enabled: $('toolsEnabled').checked, spacePreview: $('toolsSpace').checked, fps: Number($('toolsFps').value), audio: $('toolsAudio').checked };
-  for (const name of ['capture', 'record', 'preview']) m[name] = { mods: Number($('toolMods_' + name).value), vk: Number($('toolKey_' + name).value) };
+  const m = { t: 'miniTools', enabled: $('toolsEnabled').checked, fps: Number($('toolsFps').value), audio: $('toolsAudio').checked };
+  for (const name of ['capture', 'record']) m[name] = { mods: Number($('toolMods_' + name).value), vk: Number($('toolKey_' + name).value) };
   send(m);
 }
 function syncMiniTools(m) {
   miniTools = Object.assign(miniTools, m.miniTools || {});
-  $('toolsEnabled').checked = miniTools.enabled; $('toolsSpace').checked = miniTools.spacePreview;
+  $('toolsEnabled').checked = miniTools.enabled;
   $('toolsFps').value = String(miniTools.fps); $('toolsAudio').checked = miniTools.audio;
   for (const name of ['capture', 'record', 'preview']) { $('toolMods_' + name).value = String(miniTools[name].mods); $('toolKey_' + name).value = String(miniTools[name].vk); }
-  $('toolsHotkeyStatus').textContent = !miniTools.enabled ? t('miniToolsDisabled') : ['miniToolsCapture', 'miniToolsRecord', 'miniToolsPreview'].map((label, i) => t(label) + ': ' + t(m.miniToolsHotkeys && m.miniToolsHotkeys[i] ? 'miniToolsReady' : 'miniToolsConflict')).join(' · ');
+  $('toolsHotkeyStatus').textContent = !miniTools.enabled ? t('miniToolsDisabled') : ['miniToolsCapture', 'miniToolsRecord'].map((label, i) => t(label) + ': ' + t(m.miniToolsHotkeys && m.miniToolsHotkeys[i] ? 'miniToolsReady' : 'miniToolsConflict')).join(' · ');
 }
-for (const id of ['toolsEnabled', 'toolsSpace', 'toolsFps', 'toolsAudio']) $(id).addEventListener('change', saveMiniTools);
-for (const [id, mode] of [['toolCapture', 'capture'], ['toolRecord', 'record'], ['toolPreview', 'preview']]) $(id).addEventListener('click', () => send({ t: 'miniToolOpen', mode }));
+for (const id of ['toolsEnabled', 'toolsFps', 'toolsAudio']) $(id).addEventListener('change', saveMiniTools);
+for (const [id, mode] of [['toolCapture', 'capture'], ['toolRecord', 'record']]) $(id).addEventListener('click', () => send({ t: 'miniToolOpen', mode }));
 function syncLauncherAppearance() {
   $('launcherTransparencyValue').textContent = $('launcherTransparency').value + '%';
   $('launcherBlurValue').textContent = $('launcherBlur').value + ' px';

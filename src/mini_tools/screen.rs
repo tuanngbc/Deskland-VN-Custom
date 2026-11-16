@@ -46,11 +46,11 @@ fn display_pixels(image:&RgbaImage)->Vec<u8>{
 }
 pub unsafe fn draw_image(dc:HDC,image:&RgbaImage,rect:Area){let bytes=display_pixels(image);SetStretchBltMode(dc,HALFTONE);StretchDIBits(dc,rect.x,rect.y,rect.w,rect.h,0,0,image.width() as i32,image.height() as i32,bytes.as_ptr() as *const _,&info(image.width() as i32,image.height() as i32),DIB_RGB_COLORS,SRCCOPY);}
 
-struct Selection {image:RgbaImage,origin:Area,start:Option<(i32,i32)>,area:Area,result:Option<Area>,record:bool}
+struct Selection {image:RgbaImage,origin:Area,start:Option<(i32,i32)>,area:Area,painted:Area,result:Option<Area>,record:bool}
 thread_local!{static PICK:RefCell<Option<Selection>>=const{RefCell::new(None)};}
 pub fn select(record:bool)->Result<Option<(RgbaImage,Area)>,String>{
     let origin=virtual_area();let image=Grab::new(origin)?.image()?;
-    PICK.with(|c|*c.borrow_mut()=Some(Selection{image,origin,start:None,area:Area::default(),result:None,record}));
+    PICK.with(|c|*c.borrow_mut()=Some(Selection{image,origin,start:None,area:Area::default(),painted:Area::default(),result:None,record}));
     unsafe{
         let cls=wide("DesklandCaptureSelection");let mut wc:WNDCLASSW=std::mem::zeroed();wc.lpfnWndProc=Some(proc);wc.lpszClassName=cls.as_ptr();wc.hCursor=LoadCursorW(std::ptr::null_mut(),IDC_CROSS);RegisterClassW(&wc);
         let hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_APPWINDOW,cls.as_ptr(),wide(if record{"Deskland — Chọn vùng quay"}else{"Deskland — Chọn vùng chụp"}).as_ptr(),WS_POPUP,origin.x,origin.y,origin.w,origin.h,std::ptr::null_mut(),std::ptr::null_mut(),std::ptr::null_mut(),std::ptr::null());
@@ -58,6 +58,10 @@ pub fn select(record:bool)->Result<Option<(RgbaImage,Area)>,String>{
         ShowWindow(hwnd,SW_SHOW);SetForegroundWindow(hwnd);super::loop_messages();
     }
     Ok(PICK.with(|c|c.borrow_mut().take()).and_then(|s|s.result.map(|mut r|{if record{r.x+=s.origin.x;r.y+=s.origin.y;}(s.image,r)})))
+}
+unsafe fn outline_xor(dc:HDC,a:Area){
+    if a.w<=0||a.h<=0{return;}
+    let pen=CreatePen(PS_SOLID,2,0x00FFFFFF);let old=SelectObject(dc,pen);let old_rop=SetROP2(dc,R2_XORPEN);let brush=SelectObject(dc,GetStockObject(NULL_BRUSH));Rectangle(dc,a.x,a.y,a.x+a.w,a.y+a.h);SelectObject(dc,brush);SetROP2(dc,old_rop);SelectObject(dc,old);DeleteObject(pen);
 }
 unsafe fn finish(hwnd:HWND,area:Area){
     let valid=PICK.with(|c|{let mut g=c.borrow_mut();let s=g.as_mut().unwrap();let a=area.intersect(Area{x:0,y:0,w:s.origin.w,h:s.origin.h});if a.w<4||a.h<4{return false;}s.result=Some(a);true});
@@ -67,14 +71,13 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{mat
     WM_ERASEBKGND=>1,
     WM_PAINT=>{let mut ps=std::mem::zeroed();let dc=BeginPaint(hwnd,&mut ps);PICK.with(|c|{let g=c.borrow();let Some(s)=g.as_ref()else{return;};draw_image(dc,&s.image,Area{x:0,y:0,w:s.origin.w,h:s.origin.h});
         let pen=CreatePen(PS_SOLID,2,0x00F4CF36);let old=SelectObject(dc,pen);let brush=SelectObject(dc,GetStockObject(NULL_BRUSH));let r=s.area;Rectangle(dc,r.x,r.y,r.x+r.w,r.y+r.h);SelectObject(dc,brush);SelectObject(dc,old);DeleteObject(pen);
-        let mut p=POINT{x:0,y:0};GetCursorPos(&mut p);let m=monitor_at(p.x,p.y);let box_area=Area{x:m.x-s.origin.x+20,y:m.y-s.origin.y+20,w:650.min(m.w-40),h:68};let bg=CreateSolidBrush(0x0025201B);FillRect(dc,&box_area.rect(),bg);DeleteObject(bg);let font=super::editor::make_font(17,500);let old_font=SelectObject(dc,font);SetBkMode(dc,TRANSPARENT as i32);SetTextColor(dc,0x00FFFFFF);
+        let box_area=Area{x:20,y:20,w:650.min(s.origin.w-40),h:68};let bg=CreateSolidBrush(0x00232322);FillRect(dc,&box_area.rect(),bg);DeleteObject(bg);let font=super::editor::make_font(17,500);let old_font=SelectObject(dc,font);SetBkMode(dc,TRANSPARENT as i32);SetTextColor(dc,0x00F5F5F1);
         let text=if s.record{"QUAY MÀN HÌNH  ·  Kéo chọn vùng; Space: cả màn hình; Esc: hủy"}else{"CHỤP MÀN HÌNH  ·  Kéo chọn vùng; Space: cả màn hình; Esc: hủy"};let mut r=box_area.rect();r.left+=15;r.top+=10;DrawTextW(dc,wide(text).as_ptr(),-1,&mut r,DT_LEFT|DT_WORDBREAK);
-        if s.area.w>0{let t=wide(&format!("{} × {}",s.area.w,s.area.h));TextOutW(dc,s.area.x+5,(s.area.y-24).max(box_area.y+box_area.h+5),t.as_ptr(),t.len() as i32-1);}
         SelectObject(dc,old_font);DeleteObject(font);
     });EndPaint(hwnd,&ps);0},
-    WM_LBUTTONDOWN=>{let p=((l as i16) as i32,((l>>16) as i16) as i32);PICK.with(|c|if let Some(s)=c.borrow_mut().as_mut(){s.start=Some(p);s.area=Area::default();});SetCapture(hwnd);0},
-    WM_MOUSEMOVE=>{let p=((l as i16) as i32,((l>>16) as i16) as i32);let changed=PICK.with(|c|{let mut g=c.borrow_mut();let s=g.as_mut().unwrap();if let Some(a)=s.start{s.area=Area::between(a,p);true}else{false}});if changed{InvalidateRect(hwnd,std::ptr::null(),0);}0},
-    WM_LBUTTONUP=>{ReleaseCapture();let area=PICK.with(|c|{let mut g=c.borrow_mut();let s=g.as_mut().unwrap();s.start=None;s.area});finish(hwnd,area);0},
+    WM_LBUTTONDOWN=>{let p=((l as i16) as i32,((l>>16) as i16) as i32);PICK.with(|c|if let Some(s)=c.borrow_mut().as_mut(){s.start=Some(p);s.area=Area::default();s.painted=Area::default();});SetCapture(hwnd);0},
+    WM_MOUSEMOVE=>{let p=((l as i16) as i32,((l>>16) as i16) as i32);let changed=PICK.with(|c|{let mut g=c.borrow_mut();let s=g.as_mut().unwrap();if let Some(a)=s.start{let old=s.painted;let next=Area::between(a,p);s.area=next;s.painted=next;Some(old)}else{None}});if let Some(old)=changed{let dc=GetDC(hwnd);outline_xor(dc,old);let next=PICK.with(|c|c.borrow().as_ref().map(|s|s.painted).unwrap_or_default());outline_xor(dc,next);ReleaseDC(hwnd,dc);}0},
+    WM_LBUTTONUP=>{ReleaseCapture();let area=PICK.with(|c|{let mut g=c.borrow_mut();let s=g.as_mut().unwrap();s.start=None;s.painted=Area::default();s.area});finish(hwnd,area);0},
     WM_KEYDOWN=>{if w==VK_ESCAPE as usize{DestroyWindow(hwnd);}else if w==VK_SPACE as usize{let mut p=POINT{x:0,y:0};GetCursorPos(&mut p);let mut a=monitor_at(p.x,p.y);PICK.with(|c|{let g=c.borrow();let s=g.as_ref().unwrap();a.x-=s.origin.x;a.y-=s.origin.y;});finish(hwnd,a);}0},
     WM_CLOSE=>{DestroyWindow(hwnd);0},WM_DESTROY=>{PostQuitMessage(0);0},_=>DefWindowProcW(hwnd,msg,w,l)
 }}

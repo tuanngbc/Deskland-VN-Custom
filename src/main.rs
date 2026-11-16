@@ -92,7 +92,6 @@ const CMD_WIDGET_RESET: usize = 129;
 const CMD_LAUNCHER: usize = 130;
 const CMD_CAPTURE: usize = 131;
 const CMD_RECORD: usize = 132;
-const CMD_PREVIEW: usize = 133;
 const WM_OPEN_SETTINGS: u32 = WM_APP + 2;
 const WM_OPEN_LAUNCHER: u32 = WM_APP + 3;
 const CMD_EXIT: usize = 199;
@@ -182,7 +181,7 @@ thread_local! {
     static SESSION_LOCKED: Cell<bool> = const { Cell::new(false) };
     static HOTKEY_OK: Cell<bool> = const { Cell::new(false) };
     static LAUNCHER_HOTKEY_OK: Cell<bool> = const { Cell::new(false) };
-    static TOOL_HOTKEYS: Cell<[bool;3]> = const { Cell::new([false;3]) };
+    static TOOL_HOTKEYS: Cell<[bool;2]> = const { Cell::new([false;2]) };
     static WIDGET_ENABLED: Cell<bool> = const { Cell::new(true) };
     static WIDGET_LOCKED: Cell<bool> = const { Cell::new(true) };
 }
@@ -249,7 +248,6 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
         }
         WM_HOTKEY if w as i32 == mini_tools::CAPTURE_ID => { PENDING_CMD.with(|c| c.set(CMD_CAPTURE)); 0 }
         WM_HOTKEY if w as i32 == mini_tools::RECORD_ID => { PENDING_CMD.with(|c| c.set(CMD_RECORD)); 0 }
-        WM_HOTKEY if w as i32 == mini_tools::PREVIEW_ID || w as i32 == mini_tools::PREVIEW_SPACE_ID => { PENDING_CMD.with(|c| c.set(CMD_PREVIEW)); 0 }
         WM_TRAY => {
             let ev = (l as u32) & 0xFFFF;
             if ev == WM_LBUTTONUP {
@@ -261,7 +259,6 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
                 AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
                 AppendMenuW(menu, MF_STRING, CMD_CAPTURE, wide("Chụp vùng và chỉnh sửa…").as_ptr());
                 AppendMenuW(menu, MF_STRING, CMD_RECORD, wide("Quay vùng / dừng và lưu…").as_ptr());
-                AppendMenuW(menu, MF_STRING, CMD_PREVIEW, wide("Quick Look — xem trước tệp…").as_ptr());
                 SetMenuDefaultItem(menu, CMD_SETTINGS as u32, 0);
                 AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
                 let cur = CURRENT_THEME.with(|c| c.get());
@@ -2353,7 +2350,6 @@ fn main() {
                 }
                 CMD_CAPTURE => mini_tools::spawn("capture",&app.cfg.tools),
                 CMD_RECORD => mini_tools::spawn("record",&app.cfg.tools),
-                CMD_PREVIEW => mini_tools::spawn("preview",&app.cfg.tools),
                 CMD_LOCK => lock::lock_now(),
                 CMD_SAVER => {
                     if lock::saver_installed() {
