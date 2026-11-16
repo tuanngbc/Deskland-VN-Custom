@@ -10,12 +10,20 @@ use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
+#[repr(C)]
+struct AccentPolicy { state: u32, flags: u32, gradient_color: u32, animation_id: u32 }
+#[repr(C)]
+struct WindowCompositionAttributeData { attribute: u32, data: *mut std::ffi::c_void, size: usize }
+unsafe extern "system" {
+    fn SetWindowCompositionAttribute(hwnd: HWND, data: *mut WindowCompositionAttributeData) -> BOOL;
+}
+
 const CLASS: &str = "DesklandRsLauncher";
 const IDC_EDIT: usize = 1;
 const IDC_LIST: usize = 2;
 
 struct Entry { name: String, path: PathBuf }
-struct State { hwnd: HWND, edit: HWND, list: HWND, all: Vec<Entry>, visible: Vec<usize>, font: HFONT }
+struct State { hwnd: HWND, edit: HWND, list: HWND, all: Vec<Entry>, visible: Vec<usize>, font: HFONT, brush: HBRUSH }
 thread_local! { static STATE: RefCell<Option<State>> = const { RefCell::new(None) }; }
 
 unsafe extern "system" { fn SetFocus(hwnd: HWND) -> HWND; }
@@ -44,8 +52,11 @@ fn entries() -> Vec<Entry> {
             enum_dir(&root, 4, &mut out);
         }
     }
+    for (name, command) in [("Paint", "mspaint.exe"), ("Notepad", "notepad.exe"), ("Calculator", "calc.exe"), ("File Explorer", "explorer.exe"), ("Settings", "ms-settings:")] {
+        out.push(Entry { name: name.to_string(), path: PathBuf::from(command) });
+    }
     out.sort_by_key(|e| e.name.to_ascii_lowercase());
-    out.dedup_by(|a, b| a.path.to_string_lossy().eq_ignore_ascii_case(&b.path.to_string_lossy()));
+    out.dedup_by(|a, b| a.name.eq_ignore_ascii_case(&b.name) || a.path.to_string_lossy().eq_ignore_ascii_case(&b.path.to_string_lossy()));
     out
 }
 
@@ -81,9 +92,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         WM_ERASEBKGND => 1,
         WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
             let dc = w as HDC;
-            SetTextColor(dc, 0x00F4F4F4); SetBkColor(dc, 0x00242424);
-            GetSysColorBrush(COLOR_WINDOW) as LRESULT
+            SetTextColor(dc, 0x00F5F5F7); SetBkColor(dc, 0x001C1C20);
+            STATE.with(|cell| cell.borrow().as_ref().map(|s| s.brush as LRESULT).unwrap_or(GetSysColorBrush(COLOR_WINDOW) as LRESULT))
         }
+        WM_ACTIVATE if (w & 0xffff) as u32 == WA_INACTIVE => { ShowWindow(hwnd, SW_HIDE); 0 }
         WM_COMMAND => {
             STATE.with(|cell| if let Some(s) = cell.borrow_mut().as_mut() {
                 let id = (w & 0xffff) as usize; let code = ((w >> 16) & 0xffff) as u16;
@@ -103,25 +115,37 @@ pub fn toggle(owner: HWND) {
     STATE.with(|cell| unsafe {
         if let Some(s) = cell.borrow_mut().as_mut() {
             let visible = IsWindowVisible(s.hwnd) != 0;
-            ShowWindow(s.hwnd, if visible { SW_HIDE } else { SW_SHOWNOACTIVATE });
-            if !visible { SetForegroundWindow(s.hwnd); SetFocus(s.edit); refresh(s); }
+            ShowWindow(s.hwnd, if visible { SW_HIDE } else { SW_SHOW });
+            if !visible {
+                SetWindowPos(s.hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+                SetForegroundWindow(s.hwnd); SetFocus(s.edit); refresh(s);
+            }
             return;
         }
         let cls = wide(CLASS); let mut wc: WNDCLASSEXW = std::mem::zeroed();
         wc.cbSize = std::mem::size_of::<WNDCLASSEXW>() as u32; wc.lpfnWndProc = Some(proc);
         wc.hInstance = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(std::ptr::null());
-        wc.hCursor = LoadCursorW(std::ptr::null_mut(), IDC_ARROW); wc.lpszClassName = cls.as_ptr(); wc.hbrBackground = CreateSolidBrush(0x00242424);
+        wc.hCursor = LoadCursorW(std::ptr::null_mut(), IDC_ARROW); wc.lpszClassName = cls.as_ptr(); wc.hbrBackground = CreateSolidBrush(0x001C1C20);
         RegisterClassExW(&wc);
         let sw = GetSystemMetrics(SM_CXSCREEN); let sh = GetSystemMetrics(SM_CYSCREEN); let w = 720; let h = 430;
-        let hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, cls.as_ptr(), wide("Deskland Launcher").as_ptr(), WS_POPUP | WS_BORDER, (sw-w)/2, (sh-h)/3, w, h, owner, std::ptr::null_mut(), wc.hInstance, std::ptr::null_mut());
+        let hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_LAYERED, cls.as_ptr(), wide("Deskland Launcher").as_ptr(), WS_POPUP, (sw-w)/2, (sh-h)/3, w, h, owner, std::ptr::null_mut(), wc.hInstance, std::ptr::null_mut());
         if hwnd.is_null() { return; }
         SetWindowRgn(hwnd, CreateRoundRectRgn(0, 0, w+1, h+1, 24, 24), 1);
+        SetLayeredWindowAttributes(hwnd, 0, 246, LWA_ALPHA);
+        let mut accent = AccentPolicy { state: 4, flags: 0, gradient_color: 0xE81C1C20, animation_id: 0 };
+        let mut composition = WindowCompositionAttributeData { attribute: 19, data: &mut accent as *mut _ as *mut std::ffi::c_void, size: std::mem::size_of::<AccentPolicy>() };
+        SetWindowCompositionAttribute(hwnd, &mut composition);
+        let backdrop: u32 = 3;
+        windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(hwnd, 38, &backdrop as *const u32 as *const _, 4);
         let font = CreateFontW(-20, 0, 0, 0, 400, 0, 0, 0, DEFAULT_CHARSET as u32, 0, 0, CLEARTYPE_QUALITY as u32, DEFAULT_PITCH as u32, wide("Segoe UI Variable").as_ptr());
-        let edit = CreateWindowExW(0, wide("EDIT").as_ptr(), std::ptr::null(), WS_CHILD|WS_VISIBLE|WS_BORDER|(ES_AUTOHSCROLL as u32), 28, 24, w-56, 48, hwnd, IDC_EDIT as _, wc.hInstance, std::ptr::null_mut());
+        let edit = CreateWindowExW(WS_EX_CLIENTEDGE, wide("EDIT").as_ptr(), std::ptr::null(), WS_CHILD|WS_VISIBLE|(ES_AUTOHSCROLL as u32), 28, 24, w-56, 48, hwnd, IDC_EDIT as _, wc.hInstance, std::ptr::null_mut());
         let list = CreateWindowExW(0, wide("LISTBOX").as_ptr(), std::ptr::null(), WS_CHILD|WS_VISIBLE|WS_VSCROLL|(LBS_NOTIFY as u32)|(LBS_NOINTEGRALHEIGHT as u32), 28, 88, w-56, h-112, hwnd, IDC_LIST as _, wc.hInstance, std::ptr::null_mut());
+        SendMessageW(edit, 0x1501, 1, wide("Search apps").as_ptr() as LPARAM);
+        SendMessageW(list, LB_SETITEMHEIGHT, 0, 42);
         set_font(edit, font); set_font(list, font);
-        let mut s = State { hwnd, edit, list, all: entries(), visible: Vec::new(), font };
-        refresh(&mut s); *cell.borrow_mut() = Some(s); ShowWindow(hwnd, SW_SHOWNOACTIVATE); SetForegroundWindow(hwnd); SetFocus(edit);
+        let brush = CreateSolidBrush(0x001C1C20);
+        let mut s = State { hwnd, edit, list, all: entries(), visible: Vec::new(), font, brush };
+        refresh(&mut s); *cell.borrow_mut() = Some(s); ShowWindow(hwnd, SW_SHOW); SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW); SetForegroundWindow(hwnd); SetFocus(edit);
     });
 }
 
