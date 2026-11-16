@@ -699,6 +699,17 @@ fn web_init(app: &App) -> serde_json::Value {
     })
 }
 
+fn away_state(app: &App, status: &str) -> serde_json::Value {
+    let enabled = lock::saver_installed();
+    serde_json::json!({
+        "t": "awayState",
+        "enabled": enabled,
+        "minutes": if enabled { app.cfg.lock_idle_mins } else { app.cfg.lock_idle_mins.max(1) },
+        "busy": false,
+        "status": status,
+    })
+}
+
 /// Vị trí biểu tượng trên màn hình chính (toạ độ trong màn hình, điểm ảnh vật lý) như bản C#.
 fn icons_json(app: &App) -> String {
     let Some(p) = primary_wall(app) else { return String::new() };
@@ -2028,6 +2039,7 @@ fn main() {
             match s_("t").as_str() {
                 "hello" => {
                     web::post(&web_init(&app).to_string());
+                    web::post(&away_state(&app, "").to_string());
                     last_icons_json.clear();
                 }
                 "set" => {
@@ -2154,7 +2166,37 @@ fn main() {
                             }
                         }
                     }
+                    web::post(&away_state(&app, "").to_string());
                     web_changed = true;
+                }
+                "awayEnable" => {
+                    let mins = m.get("minutes").and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(app.cfg.lock_idle_mins).max(1);
+                    app.cfg.lock_idle_mins = mins;
+                    let status = match lock::install_saver(mins) {
+                        Ok(()) => "Đã bật màn hình chờ Deskland".to_string(),
+                        Err(e) => {
+                            log!("Bật màn hình chờ lỗi: {e}");
+                            format!("Không bật được màn hình chờ: {e}")
+                        }
+                    };
+                    web::post(&away_state(&app, &status).to_string());
+                    web_changed = true;
+                }
+                "awayDisable" => {
+                    lock::uninstall_saver();
+                    web::post(&away_state(&app, "Đã tắt màn hình chờ Deskland").to_string());
+                    web_changed = true;
+                }
+                "awayRefresh" => {
+                    app.sync_static_wallpaper();
+                    web::post(&away_state(&app, "Đã cập nhật cảnh lưu cho màn hình chờ").to_string());
+                }
+                "awayLockImage" => {
+                    app.sync_lock_image();
+                    web::post(&away_state(&app, "Đã cập nhật ảnh màn khóa Windows").to_string());
+                }
+                "awayPreview" => {
+                    PENDING_CMD.with(|c| c.set(CMD_SAVER_NOW));
                 }
                 "autostart" => {
                     settings::set_autostart(m.get("v").and_then(|v| v.as_bool()).unwrap_or(false));
