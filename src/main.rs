@@ -90,6 +90,7 @@ const CMD_WIDGET_LOCK: usize = 128;
 const CMD_WIDGET_RESET: usize = 129;
 const CMD_LAUNCHER: usize = 130;
 const WM_OPEN_SETTINGS: u32 = WM_APP + 2;
+const WM_OPEN_LAUNCHER: u32 = WM_APP + 3;
 const CMD_EXIT: usize = 199;
 const HOTKEY_SAVER: i32 = 1;
 const HOTKEY_LAUNCHER: i32 = 2;
@@ -234,6 +235,10 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
             0
         }
         WM_HOTKEY if w as i32 == HOTKEY_LAUNCHER => {
+            PENDING_CMD.with(|c| c.set(CMD_LAUNCHER));
+            0
+        }
+        WM_OPEN_LAUNCHER => {
             PENDING_CMD.with(|c| c.set(CMD_LAUNCHER));
             0
         }
@@ -1685,12 +1690,16 @@ fn main() {
     let force_win32 = args.iter().any(|a| a == "--settings-win32");
     web::DEBUG_PORT.store(args.iter().any(|a| a == "--webview-debug"), std::sync::atomic::Ordering::Relaxed);
     let open_settings = force_win32 || args.iter().any(|a| a == "--settings");
-    if open_settings {
+    let open_launcher = args.iter().any(|a| a == "--launcher");
+    if open_settings || open_launcher {
         let cls = wide(MSG_CLASS);
         unsafe {
             let h = FindWindowW(cls.as_ptr(), std::ptr::null());
             if !h.is_null() {
-                PostMessageW(h, WM_OPEN_SETTINGS, 0, 0);
+                let mut pid = 0;
+                GetWindowThreadProcessId(h, &mut pid);
+                AllowSetForegroundWindow(pid);
+                PostMessageW(h, if open_launcher { WM_OPEN_LAUNCHER } else { WM_OPEN_SETTINGS }, 0, 0);
                 return;
             }
         }
@@ -1900,6 +1909,7 @@ fn main() {
     if open_settings && !saver {
         PENDING_CMD.with(|c| c.set(CMD_SETTINGS));
     }
+    if open_launcher && !saver { PENDING_CMD.with(|c| c.set(CMD_LAUNCHER)); }
     log!("Khung hình đầu tiên sau {:.0} ms kể từ khi khởi động", t_start.elapsed().as_secs_f64() * 1000.0);
     if saver {
         unsafe {

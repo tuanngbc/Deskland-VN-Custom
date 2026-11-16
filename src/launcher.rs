@@ -293,7 +293,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
     }
 }
 
-pub fn toggle(_owner: HWND) {
+pub fn toggle(owner: HWND) {
     unsafe {
         if let Some((hwnd, _, _, _)) = handles() {
             if IsWindowVisible(hwnd) != 0 { ShowWindow(hwnd, SW_HIDE); return; }
@@ -303,8 +303,9 @@ pub fn toggle(_owner: HWND) {
             wc.cbSize = std::mem::size_of::<WNDCLASSEXW>() as u32; wc.lpfnWndProc = Some(proc); wc.hInstance = instance;
             wc.style = CS_DBLCLKS | CS_DROPSHADOW; wc.lpszClassName = cls.as_ptr(); wc.hCursor = LoadCursorW(std::ptr::null_mut(), IDC_ARROW);
             RegisterClassExW(&wc);
-            let hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, cls.as_ptr(), wide("Deskland Spotlight").as_ptr(), WS_POPUP, 0, 0, 660, 444, std::ptr::null_mut(), std::ptr::null_mut(), instance, std::ptr::null_mut());
+            let hwnd = CreateWindowExW(0, cls.as_ptr(), wide("Deskland Spotlight").as_ptr(), WS_POPUP, 0, 0, 660, 444, owner, std::ptr::null_mut(), instance, std::ptr::null_mut());
             if hwnd.is_null() { crate::log!("Launcher: CreateWindowEx failed {}", GetLastError()); return; }
+            let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED);
             let all = entries();
             STATE.with(|c| *c.borrow_mut() = Some(State { hwnd, all, matches: Vec::new(), query: String::new(), selected: 0, first: 0, scale: 1.0, width: 660, height: 444, glass: Vec::new(), error: String::new(), select_all: false }));
         }
