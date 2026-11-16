@@ -181,7 +181,8 @@
     "awayNoScene": "还没有可用场景",
     "awayLockDone": "已将场景图片设置为 Windows 锁屏背景",
     "awayLockBlocked": "Windows 不允许更改锁屏图片",
-    "awayError": "无法更新屏幕保护：{msg}"
+    "awayError": "无法更新屏幕保护：{msg}",
+    "launcherHotkey": "Launcher 快捷键"
   },
   "host": {
     "traySettings": "设置…",

@@ -205,7 +205,8 @@
     "awayNoScene": "Chưa có cảnh để dùng",
     "awayLockDone": "Đã đặt ảnh cảnh làm ảnh nền màn khóa Windows",
     "awayLockBlocked": "Windows không cho phép đổi ảnh màn khóa",
-    "awayError": "Không thể cập nhật màn hình chờ: {msg}"
+    "awayError": "Không thể cập nhật màn hình chờ: {msg}",
+    "launcherHotkey": "Phím tắt Launcher"
   },
   "host": {
     "traySettings": "Cài đặt…",

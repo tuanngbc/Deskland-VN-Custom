@@ -63,6 +63,8 @@
   .switch-row input:checked + .switch { background: var(--accent); }
   .switch-row input:checked + .switch::after { transform: translateX(14px); background: var(--accent-ink); }
   .switch-row input:focus-visible + .switch { outline: 2px solid var(--muted); outline-offset: 3px; }
+  .hotkey-row { display: flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; }
+  .hotkey-row select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 7px; }
   .switch-row.is-disabled { cursor: not-allowed; opacity: .45; }
   .switch-row.is-disabled .switch { background: var(--track); }
   button:focus-visible, a:focus-visible { outline: 2px solid var(--muted); outline-offset: 3px; }
@@ -91,7 +93,7 @@
   .update-action:disabled { opacity: .65; cursor: default; }
 
   /* ---------- 左右两栏：左边主题，右边预览 + 参数 ---------- */
-  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 410px; gap: 28px; padding: 0 32px; min-height: 0; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 460px; gap: 32px; padding: 0 40px; min-height: 0; }
   .side { display: flex; flex-direction: column; gap: 18px; min-height: 0; padding: 22px; background: var(--panel); border-radius: 24px; }
 
   /* ---------- 主题 ---------- */
@@ -107,7 +109,7 @@
   .collection-head p { color: var(--muted); font-size: 12px; margin-top: 8px; }
   .section-title { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .04em; margin-bottom: 10px; }
   /* 按宽度自动排几列，主题多了就往下滚（以后会有很多辑、上百个主题） */
-  .theme-list { flex: none; min-height: 0; overflow: visible; display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  .theme-list { flex: none; min-height: 0; overflow: visible; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
     align-content: start; gap: 18px; padding: 4px 8px 18px 4px; margin-left: -4px; margin-right: -8px; }
   .theme-list::-webkit-scrollbar { width: 8px; }
   .theme-list::-webkit-scrollbar-thumb { background: var(--track); border-radius: 4px; }
@@ -325,6 +327,10 @@
     <label class="switch-row" data-i18n-title="autostartTitle" title="开机后自动运行 Deskland">
       <span data-i18n="autostart">开机自动启动</span><input type="checkbox" id="autostart"><i class="switch"></i>
     </label>
+    <label class="hotkey-row" title="Mở launcher nhanh"><span data-i18n="launcherHotkey">Launcher</span>
+      <select id="launcherMods"><option value="1025">Alt</option><option value="1026">Ctrl</option><option value="1028">Shift</option></select>
+      <select id="launcherKey"><option value="32">Space</option><option value="13">Enter</option><option value="65">A</option><option value="83">S</option><option value="68">D</option><option value="70">F</option><option value="81">Q</option><option value="87">W</option></select>
+    </label>
   </div>
 </header>
 
@@ -502,7 +508,7 @@ const DEFAULT_ENVIRONMENT = { time: true, weather: true, preset: 'auto', source:
 const state = { registry0: null, registry: null, theme: 'beach', params: {}, screen: null, icons: null,
   mode: 'mirror', monitors: [], selectedMonitor: null, world: null, allParams: {}, globalTheme: 'beach', globalPaused: false,
   environment: {...DEFAULT_ENVIRONMENT},
-  langSetting: 'auto', langSys: 'zh-CN', autostartWarn: false, autostartSw: '',
+  langSetting: 'auto', langSys: 'zh-CN', autostartWarn: false, autostartSw: '', launcherHotkey: { mods: 1025, vk: 32 },
   updateVersion: '', updateStatus: '', updateProgress: -1, updateError: '' };
 const $ = id => document.getElementById(id);
 const frame = $('preview');
@@ -883,6 +889,8 @@ function flashSaved() {
 }
 
 $('autostart').addEventListener('change', e => send({ t: 'autostart', v: e.target.checked }));
+$('launcherMods').addEventListener('change', () => send({ t: 'launcherHotkey', mods: Number($('launcherMods').value), vk: Number($('launcherKey').value) }));
+$('launcherKey').addEventListener('change', () => send({ t: 'launcherHotkey', mods: Number($('launcherMods').value), vk: Number($('launcherKey').value) }));
 $('adaptive').addEventListener('change', e => setParam('adaptive', e.target.checked ? 1 : 0));
 $('autostartWarnOk').addEventListener('click', () => { state.autostartWarn = false; showAutostartWarn(); send({ t: 'autostartWarnSeen' }); });
 // 开机自启被拦的提醒：宿主只给安全软件的名字，句子按界面语言拼
@@ -1074,6 +1082,9 @@ function onHost(m) {
       state.world = m.world || null;
       state.selectedMonitor = state.monitors[0] && state.monitors[0].id;
       $('autostart').checked = !!m.autostart;
+      state.launcherHotkey = Object.assign(state.launcherHotkey, m.launcherHotkey || {});
+      $('launcherMods').value = String(state.launcherHotkey.mods);
+      $('launcherKey').value = String(state.launcherHotkey.vk);
       state.autostartWarn = !!m.autostartWarn;
       state.autostartSw = m.autostartSw || '';
       showAutostartWarn();

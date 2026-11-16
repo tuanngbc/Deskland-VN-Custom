@@ -174,7 +174,9 @@ pub fn open(proto: &Path) -> Result<(), String> {
         RegisterClassExW(&wc);
 
         let s = windows_sys::Win32::UI::HiDpi::GetDpiForSystem().max(96) as f32 / 96.0;
-        let (w, h) = ((1120.0 * s) as i32, (800.0 * s) as i32);
+        // Cửa sổ rộng hơn để lưới theme, preview và nhóm điều khiển không bị
+        // ép chật; vẫn tự co theo màn hình nhỏ.
+        let (w, h) = ((1360.0 * s) as i32, (860.0 * s) as i32);
         let (sw, sh) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
         let hwnd = CreateWindowExW(
             0,

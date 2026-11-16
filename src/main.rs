@@ -10,6 +10,7 @@ mod palm_layout;
 mod solar;
 mod lock;
 mod settings;
+mod launcher;
 mod web;
 mod themes {
     pub mod aquarium;
@@ -86,9 +87,11 @@ const CMD_INTERACTION: usize = 126;
 const CMD_WIDGET: usize = 127;
 const CMD_WIDGET_LOCK: usize = 128;
 const CMD_WIDGET_RESET: usize = 129;
+const CMD_LAUNCHER: usize = 130;
 const WM_OPEN_SETTINGS: u32 = WM_APP + 2;
 const CMD_EXIT: usize = 199;
 const HOTKEY_SAVER: i32 = 1;
+const HOTKEY_LAUNCHER: i32 = 2;
 const WM_WTSSESSION_CHANGE_: u32 = 0x02B1;
 const WTS_SESSION_LOCK_: usize = 0x7;
 const WTS_SESSION_UNLOCK_: usize = 0x8;
@@ -172,6 +175,7 @@ thread_local! {
     /// Phiên Windows đang khóa (WM_WTSSESSION_CHANGE): không ai thấy desktop -> ngừng vẽ.
     static SESSION_LOCKED: Cell<bool> = const { Cell::new(false) };
     static HOTKEY_OK: Cell<bool> = const { Cell::new(false) };
+    static LAUNCHER_HOTKEY_OK: Cell<bool> = const { Cell::new(false) };
     static WIDGET_ENABLED: Cell<bool> = const { Cell::new(true) };
     static WIDGET_LOCKED: Cell<bool> = const { Cell::new(true) };
 }
@@ -228,6 +232,10 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
             PENDING_CMD.with(|c| c.set(CMD_SAVER_NOW));
             0
         }
+        WM_HOTKEY if w as i32 == HOTKEY_LAUNCHER => {
+            PENDING_CMD.with(|c| c.set(CMD_LAUNCHER));
+            0
+        }
         WM_TRAY => {
             let ev = (l as u32) & 0xFFFF;
             if ev == WM_LBUTTONUP {
@@ -235,6 +243,7 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
             } else if ev == WM_RBUTTONUP || ev == WM_CONTEXTMENU {
                 let menu = CreatePopupMenu();
                 AppendMenuW(menu, MF_STRING, CMD_SETTINGS, wide("Cài đặt…").as_ptr());
+                AppendMenuW(menu, MF_STRING, CMD_LAUNCHER, wide("Mở Launcher").as_ptr());
                 SetMenuDefaultItem(menu, CMD_SETTINGS as u32, 0);
                 AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
                 let cur = CURRENT_THEME.with(|c| c.get());
@@ -498,6 +507,8 @@ struct Config {
     widget_scale: f32,
     widget_opacity: f32,
     widget_lines: [widget::Line; 3],
+    launcher_mods: u32,
+    launcher_vk: u32,
 }
 
 fn rust_settings_path() -> std::path::PathBuf {
@@ -559,6 +570,8 @@ fn load_config(cli_theme: Option<String>) -> Config {
             opacity: widget.and_then(|v| v.get(k)).and_then(|v| v.get("opacity")).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(1.0).clamp(0.0, 1.0),
             size: widget.and_then(|v| v.get(k)).and_then(|v| v.get("size")).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(1.0).clamp(0.5, 2.0),
         }),
+        launcher_mods: root.get("launcherHotkey").and_then(|v| v.get("mods")).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(MOD_ALT | MOD_NOREPEAT),
+        launcher_vk: root.get("launcherHotkey").and_then(|v| v.get("vk")).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(VK_SPACE as u32),
         lock_idle_mins: root.get("lockIdleMins").and_then(|v| v.as_u64()).map(|v| v as u32).filter(|&v| v > 0).unwrap_or(5),
     }
 }
@@ -592,6 +605,7 @@ fn save_config(cfg: &Config) {
             "date": { "x": cfg.widget_lines[2].x, "y": cfg.widget_lines[2].y, "opacity": cfg.widget_lines[2].opacity, "size": cfg.widget_lines[2].size },
         },
         "params": cfg.params,
+        "launcherHotkey": { "mods": cfg.launcher_mods, "vk": cfg.launcher_vk },
     });
     let p = rust_settings_path();
     if let Err(e) = std::fs::write(&p, serde_json::to_string_pretty(&v).unwrap_or_default()) {
@@ -649,6 +663,7 @@ fn web_init(app: &App) -> serde_json::Value {
         },
         "screen": { "w": w, "h": h },
         "autostart": settings::autostart_enabled(),
+        "launcherHotkey": { "mods": app.cfg.launcher_mods, "vk": app.cfg.launcher_vk, "label": launcher::hotkey_text(app.cfg.launcher_mods, app.cfg.launcher_vk) },
         "autostartWarn": false,
         "interactions": app.interactions_enabled,
         "widget": {
@@ -1784,6 +1799,8 @@ fn main() {
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
             let ok = RegisterHotKey(msg_hwnd, HOTKEY_SAVER, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, b'L' as u32) != 0;
             HOTKEY_OK.with(|c| c.set(ok));
+            let launcher_ok = RegisterHotKey(msg_hwnd, HOTKEY_LAUNCHER, cfg.launcher_mods, cfg.launcher_vk) != 0;
+            LAUNCHER_HOTKEY_OK.with(|c| c.set(launcher_ok));
             log!("Phím tắt Ctrl+Alt+L (khóa với cảnh động): {}", if ok { "đã đăng ký" } else { "đã bị ứng dụng khác dùng" });
         }
         if lock::winl_disabled() {
@@ -2202,6 +2219,16 @@ fn main() {
                     settings::set_autostart(m.get("v").and_then(|v| v.as_bool()).unwrap_or(false));
                     web::post(&serde_json::json!({ "t": "autostart", "v": settings::autostart_enabled() }).to_string());
                 }
+                "launcherHotkey" => {
+                    let mods = m.get("mods").and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(MOD_ALT | MOD_NOREPEAT);
+                    let vk = m.get("vk").and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(VK_SPACE as u32);
+                    unsafe { UnregisterHotKey(msg_hwnd, HOTKEY_LAUNCHER); }
+                    let ok = unsafe { RegisterHotKey(msg_hwnd, HOTKEY_LAUNCHER, mods, vk) } != 0;
+                    if ok { app.cfg.launcher_mods = mods; app.cfg.launcher_vk = vk; }
+                    LAUNCHER_HOTKEY_OK.with(|c| c.set(ok));
+                    web::post(&web_init(&app).to_string());
+                    web_changed = true;
+                }
                 "interactions" => {
                     let on = m.get("v").and_then(|v| v.as_bool()).unwrap_or(true);
                     INTERACTIONS_ENABLED.with(|c| c.set(on));
@@ -2272,6 +2299,7 @@ fn main() {
         } else {
             match cmd {
                 CMD_EXIT => break,
+                CMD_LAUNCHER => launcher::toggle(msg_hwnd),
                 CMD_LOCK => lock::lock_now(),
                 CMD_SAVER => {
                     if lock::saver_installed() {
