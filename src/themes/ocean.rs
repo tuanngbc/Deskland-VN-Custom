@@ -624,7 +624,7 @@ impl Ocean {
         let p = &mut sh.prog;
         unsafe { gl.use_program(Some(p.prog)) };
         self.b.bind_common(gl, p, sh.noise_tex, sh.seed, t);
-        self.b.bind_shadow(gl, p);
+        sh.bind_shadow(gl, p);
         unsafe {
             gl.active_texture(glow::TEXTURE3);
             gl.bind_texture(glow::TEXTURE_2D, self.circ_tex);
