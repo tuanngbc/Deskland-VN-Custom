@@ -293,7 +293,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
     }
 }
 
-pub fn toggle(owner: HWND) {
+pub fn toggle(_owner: HWND) {
     unsafe {
         if let Some((hwnd, _, _, _)) = handles() {
             if IsWindowVisible(hwnd) != 0 { ShowWindow(hwnd, SW_HIDE); return; }
@@ -303,7 +303,9 @@ pub fn toggle(owner: HWND) {
             wc.cbSize = std::mem::size_of::<WNDCLASSEXW>() as u32; wc.lpfnWndProc = Some(proc); wc.hInstance = instance;
             wc.style = CS_DBLCLKS | CS_DROPSHADOW; wc.lpszClassName = cls.as_ptr(); wc.hCursor = LoadCursorW(std::ptr::null_mut(), IDC_ARROW);
             RegisterClassExW(&wc);
-            let hwnd = CreateWindowExW(0, cls.as_ptr(), wide("Deskland Spotlight").as_ptr(), WS_POPUP, 0, 0, 660, 444, owner, std::ptr::null_mut(), instance, std::ptr::null_mut());
+            // An independent top-level window receives focus and keyboard input
+            // without inheriting the hidden message window's visibility/owner chain.
+            let hwnd = CreateWindowExW(0, cls.as_ptr(), wide("Deskland Spotlight").as_ptr(), WS_POPUP, 0, 0, 660, 444, std::ptr::null_mut(), std::ptr::null_mut(), instance, std::ptr::null_mut());
             if hwnd.is_null() { crate::log!("Launcher: CreateWindowEx failed {}", GetLastError()); return; }
             let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED);
             let all = entries();
