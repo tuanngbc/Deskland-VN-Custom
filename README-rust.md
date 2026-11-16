@@ -30,11 +30,10 @@ Phiên bản viết lại hoàn toàn bằng **Rust native (Win32 + OpenGL 3.3 q
 
 ---
 
-## Chụp màn hình, quay desktop và Quick Look
+## Chụp màn hình và quay desktop
 
 - **Ctrl+Shift+S:** kéo chọn vùng chụp; Space chọn cả màn hình đang trỏ chuột; Esc hủy. Sau khi chọn, trình sửa ảnh mở ngay: cắt, mũi tên, khung, bút, chữ, số bước, pixel và tô kín. Enter copy rồi đóng; Ctrl+C copy, Ctrl+S lưu PNG/JPG, Ctrl+Z/Y hoàn tác/làm lại. Có nút ghim trên cùng.
 - **Ctrl+Shift+R:** chọn vùng quay desktop, lưu MP4 H.264, 30 FPS mặc định (tùy chọn 60 FPS), thu tiếng máy hoặc không tiếng. Nhấn lại phím quay để dừng và lưu; Ctrl+Shift+P tạm dừng/tiếp tục. Bảng điều khiển cũng có các nút tương ứng. Không có webcam, mic hay chế độ game.
-- **Ctrl+Alt+Space:** xem nhanh tệp đang chọn trong Explorer. Có thể bật Space trong Explorer/desktop; phím Space vẫn dùng bình thường khi nhập tên hay tìm kiếm. Hỗ trợ ảnh, văn bản, PDF, danh sách thư mục; Enter mở bằng ứng dụng mặc định; Space/Esc đóng.
 - Đổi phím tắt và tùy chọn tại **Cài đặt → Tiện ích**. Nếu ứng dụng khác đang giữ phím, Cài đặt báo xung đột để chọn phím khác.
 - Ảnh lưu mặc định ở Pictures/Deskland, video ở Videos/Deskland trong hồ sơ người dùng. Không tự tải ảnh/video lên mạng.
 - Hình nền giữ một tiến trình; mỗi tiện ích tạo một phiên của cùng EXE khi được gọi và thoát khi đóng. Bộ chụp, bộ mã hóa và âm thanh không được tạo lúc chạy nền. Quay dùng GDI và Media Foundation có trên Windows; tải CPU thực tế phụ thuộc vùng quay, FPS và bộ mã hóa của máy. Video có bảo vệ bản quyền có thể không được chụp.
