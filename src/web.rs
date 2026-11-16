@@ -203,7 +203,6 @@ pub fn open(proto: &Path) -> Result<(), String> {
                 WEB.with(|x| *x.borrow_mut() = Some(web));
                 resize(hwnd);
                 ShowWindow(hwnd, SW_SHOWNORMAL);
-                UpdateWindow(hwnd);
                 SetForegroundWindow(hwnd);
                 crate::log!("Mở cửa sổ cài đặt WebView2 sau {:.0} ms ({})", t0.elapsed().as_secs_f64() * 1000.0, proto.display());
                 Ok(())
