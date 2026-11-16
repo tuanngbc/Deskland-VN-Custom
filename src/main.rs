@@ -39,7 +39,7 @@ use std::cell::Cell;
 use std::fs::File;
 use std::io::Write;
 use std::sync::{Arc, Mutex, Mutex as StdMutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::Graphics::OpenGL::SwapBuffers;
@@ -1822,9 +1822,30 @@ fn main() {
         widget: None,
     };
     log!("Cách hiển thị: {}", if app.gdi { "gdi (FBO -> đọc về -> StretchDIBits)" } else { "gl (SwapBuffers trực tiếp)" });
-    if let Err(e) = app.create_walls() {
-        log!("Khởi động thất bại: {e}");
-        app.destroy_walls();
+    // Khi chạy từ HKCU\...\Run, Windows có thể khởi động tiến trình trước khi
+    // Explorer dựng xong Progman/WorkerW. Chờ và thử lại để Deskland tự chạy
+    // ổn định sau đăng nhập thay vì thoát ngay ở lần gắn hình nền đầu tiên.
+    let mut walls_ready = false;
+    for attempt in 0..12 {
+        match app.create_walls() {
+            Ok(()) => {
+                walls_ready = true;
+                break;
+            }
+            Err(e) => {
+                log!("Khởi động/gắn hình nền lần {} thất bại: {e}", attempt + 1);
+                app.destroy_walls();
+                app.drop_shared();
+                app.ctx = None;
+                app.vao = None;
+                if attempt < 11 {
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            }
+        }
+    }
+    if !walls_ready {
+        log!("Không thể gắn hình nền sau nhiều lần thử");
         unsafe { Shell_NotifyIconW(NIM_DELETE, &nid) };
         return;
     }
@@ -1885,6 +1906,10 @@ fn main() {
     let mut next_icons = app.now() + 400.0;
     let mut next_fg = app.now();
     let mut next_stat = app.now() + 10_000.0;
+    // Vị trí widget thay đổi khi kéo cửa sổ, nên lưu trễ một nhịp để không
+    // ghi settings.json liên tục trong lúc rê chuột nhưng vẫn giữ vị trí sau
+    // khi Windows khởi động lại.
+    let mut widget_save_at: Option<f64> = None;
     let snapshot_dir = arg_value(&args, "--snapshot");
     let exit_after_snap = args.iter().any(|a| a == "--exit-after-snapshot");
     // Integration check: reuse the same process/context across mode changes.
@@ -2358,8 +2383,11 @@ fn main() {
                 if !hidden && app.cfg.widget_enabled {
                     w.tick();
                     let r = w.rect();
-                    app.cfg.widget_x = r.left;
-                    app.cfg.widget_y = r.top;
+                    if app.cfg.widget_x != r.left || app.cfg.widget_y != r.top {
+                        app.cfg.widget_x = r.left;
+                        app.cfg.widget_y = r.top;
+                        widget_save_at = Some(now + 350.0);
+                    }
                 }
             }
             app.render();
@@ -2399,6 +2427,10 @@ fn main() {
             app.frames = 0;
             app.frame_cpu_ms = 0.0;
             next_stat = now + 10_000.0;
+        }
+        if widget_save_at.is_some_and(|t| now >= t) {
+            save_config(&app.cfg);
+            widget_save_at = None;
         }
         let wait = (next_frame.min(next_icons).min(next_fg) - app.now()).max(0.0) as u32;
         unsafe { MsgWaitForMultipleObjects(0, std::ptr::null(), 0, wait, QS_ALLINPUT) };

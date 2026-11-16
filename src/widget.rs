@@ -151,8 +151,11 @@ impl Widget {
         let ptr = (&mut *state) as *mut State;
         let w = (WIDTH as f32 * scale.max(0.7).min(1.6)) as i32;
         let h = (HEIGHT as f32 * scale.max(0.7).min(1.6)) as i32;
-        let left = if x < 0 { screen.left + ((screen.right - screen.left) - w) / 2 } else { x };
-        let top = if y < 0 { screen.top + 70 } else { y };
+        // Chỉ -1 là giá trị "chưa đặt". Toạ độ màn hình có thể âm khi màn hình
+        // phụ nằm bên trái hoặc phía trên màn hình chính, vì vậy không được coi
+        // mọi giá trị âm là vị trí mặc định.
+        let left = if x == -1 { screen.left + ((screen.right - screen.left) - w) / 2 } else { x };
+        let top = if y == -1 { screen.top + 70 } else { y };
         let ex = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | if locked { WS_EX_TRANSPARENT } else { 0 };
         let cls = wide(CLASS);
         let hwnd = unsafe { CreateWindowExW(ex, cls.as_ptr(), cls.as_ptr(), WS_POPUP, left, top, w, h, std::ptr::null_mut(), std::ptr::null_mut(), GetModuleHandleW(std::ptr::null()), std::ptr::null_mut()) };
