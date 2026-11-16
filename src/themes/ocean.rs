@@ -621,10 +621,12 @@ impl Ocean {
         for (i, r) in self.ripples.iter().take(6).enumerate() {
             rip[i * 4..i * 4 + 4].copy_from_slice(r);
         }
+        let (shadow_offset, shadow_alpha) = sh.shadow_values();
         let p = &mut sh.prog;
         unsafe { gl.use_program(Some(p.prog)) };
         self.b.bind_common(gl, p, sh.noise_tex, sh.seed, t);
-        sh.bind_shadow(gl, p);
+        p.f2(gl, "uShadowOffset", shadow_offset[0], shadow_offset[1]);
+        p.f1(gl, "uShadowAlpha", shadow_alpha);
         unsafe {
             gl.active_texture(glow::TEXTURE3);
             gl.bind_texture(glow::TEXTURE_2D, self.circ_tex);

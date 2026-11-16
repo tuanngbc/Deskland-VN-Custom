@@ -367,10 +367,12 @@ impl Beach {
         for (i, b) in self.birds.iter().enumerate() {
             bird[i * 4..i * 4 + 4].copy_from_slice(&[b.x, b.y, b.h, 0.68 + 0.32 * b.ph.cos()]);
         }
+        let (shadow_offset, shadow_alpha) = sh.shadow_values();
         let p = &mut sh.prog;
         unsafe { gl.use_program(Some(p.prog)) };
         self.b.bind_common(gl, p, sh.noise_tex, sh.seed, t);
-        sh.bind_shadow(gl, p);
+        p.f2(gl, "uShadowOffset", shadow_offset[0], shadow_offset[1]);
+        p.f1(gl, "uShadowAlpha", shadow_alpha);
         let q = &self.p;
         p.f1(gl, "uSpeed", q.speed);
         p.f1(gl, "uRunup", q.runup);
