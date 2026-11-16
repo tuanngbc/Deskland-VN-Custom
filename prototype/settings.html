@@ -955,9 +955,14 @@ function saveMiniTools() {
 }
 function syncMiniTools(m) {
   miniTools = Object.assign(miniTools, m.miniTools || {});
+  // Chỉ có hai phím tắt trong Settings (capture và record). Bản host cũ có
+  // thể không gửi đủ cấu hình, nên luôn bổ sung từ mặc định trước khi đọc.
+  for (const name of ['capture', 'record']) {
+    miniTools[name] = Object.assign({ mods: 16390, vk: name === 'capture' ? 83 : 82 }, miniTools[name] || {});
+  }
   $('toolsEnabled').checked = miniTools.enabled;
   $('toolsFps').value = String(miniTools.fps); $('toolsAudio').checked = miniTools.audio;
-  for (const name of ['capture', 'record', 'preview']) { $('toolMods_' + name).value = String(miniTools[name].mods); $('toolKey_' + name).value = String(miniTools[name].vk); }
+  for (const name of ['capture', 'record']) { $('toolMods_' + name).value = String(miniTools[name].mods); $('toolKey_' + name).value = String(miniTools[name].vk); }
   $('toolsHotkeyStatus').textContent = !miniTools.enabled ? t('miniToolsDisabled') : ['miniToolsCapture', 'miniToolsRecord'].map((label, i) => t(label) + ': ' + t(m.miniToolsHotkeys && m.miniToolsHotkeys[i] ? 'miniToolsReady' : 'miniToolsConflict')).join(' · ');
 }
 for (const id of ['toolsEnabled', 'toolsFps', 'toolsAudio']) $(id).addEventListener('change', saveMiniTools);
