@@ -37,7 +37,14 @@ impl Grab {
 impl Drop for Grab {fn drop(&mut self){unsafe{SelectObject(self.dc,self.old);DeleteObject(self.bitmap);DeleteDC(self.dc);}}}
 pub fn info(w:i32,h:i32)->BITMAPINFO {unsafe{let mut i:BITMAPINFO=std::mem::zeroed();i.bmiHeader.biSize=std::mem::size_of::<BITMAPINFOHEADER>() as u32;i.bmiHeader.biWidth=w;i.bmiHeader.biHeight=-h;i.bmiHeader.biPlanes=1;i.bmiHeader.biBitCount=32;i}}
 pub fn crop(image:&RgbaImage,area:Area)->RgbaImage {image::imageops::crop_imm(image,area.x.max(0) as u32,area.y.max(0) as u32,area.w as u32,area.h as u32).to_image()}
-pub unsafe fn draw_image(dc:HDC,image:&RgbaImage,rect:Area){let mut bytes=image.as_raw().clone();for p in bytes.chunks_exact_mut(4){p.swap(0,2);}SetStretchBltMode(dc,HALFTONE);StretchDIBits(dc,rect.x,rect.y,rect.w,rect.h,0,0,image.width() as i32,image.height() as i32,bytes.as_ptr() as *const _,&info(image.width() as i32,image.height() as i32),DIB_RGB_COLORS,SRCCOPY);}
+fn display_pixels(image:&RgbaImage)->Vec<u8>{
+    let mut bytes=image.as_raw().clone();
+    // StretchDIBits ignores alpha: composite straight RGBA onto the viewer's
+    // dark background before converting to BGR, including fully transparent RGB.
+    for p in bytes.chunks_exact_mut(4){let alpha=p[3]as u32;for(c,bg)in[28u32,32,37].into_iter().enumerate(){p[c]=((p[c]as u32*alpha+bg*(255-alpha)+127)/255)as u8;}p.swap(0,2);p[3]=255;}
+    bytes
+}
+pub unsafe fn draw_image(dc:HDC,image:&RgbaImage,rect:Area){let bytes=display_pixels(image);SetStretchBltMode(dc,HALFTONE);StretchDIBits(dc,rect.x,rect.y,rect.w,rect.h,0,0,image.width() as i32,image.height() as i32,bytes.as_ptr() as *const _,&info(image.width() as i32,image.height() as i32),DIB_RGB_COLORS,SRCCOPY);}
 
 struct Selection {image:RgbaImage,origin:Area,start:Option<(i32,i32)>,area:Area,result:Option<Area>,record:bool}
 thread_local!{static PICK:RefCell<Option<Selection>>=const{RefCell::new(None)};}
@@ -72,4 +79,4 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{mat
     WM_CLOSE=>{DestroyWindow(hwnd);0},WM_DESTROY=>{PostQuitMessage(0);0},_=>DefWindowProcW(hwnd,msg,w,l)
 }}
 
-#[cfg(test)]mod tests{use super::*;#[test]fn negative_origin_selection_and_crop_are_exact(){let r=Area::between((-1070,-700),(-900,-500));assert_eq!(r,Area{x:-1070,y:-700,w:170,h:200});assert_eq!(r.intersect(Area{x:-1000,y:-600,w:500,h:500}),Area{x:-1000,y:-600,w:100,h:100});let i=RgbaImage::from_fn(10,8,|x,y|image::Rgba([x as u8,y as u8,0,255]));let c=crop(&i,Area{x:2,y:3,w:4,h:2});assert_eq!(c.dimensions(),(4,2));assert_eq!(c.get_pixel(0,0).0,[2,3,0,255]);}}
+#[cfg(test)]mod tests{use super::*;#[test]fn transparent_images_composite_instead_of_showing_hidden_rgb(){let image=RgbaImage::from_raw(3,1,vec![255,0,255,0,255,0,0,128,255,0,0,255]).unwrap();assert_eq!(display_pixels(&image),vec![37,32,28,255,18,16,142,255,0,0,255,255]);}#[test]fn negative_origin_selection_and_crop_are_exact(){let r=Area::between((-1070,-700),(-900,-500));assert_eq!(r,Area{x:-1070,y:-700,w:170,h:200});assert_eq!(r.intersect(Area{x:-1000,y:-600,w:500,h:500}),Area{x:-1000,y:-600,w:100,h:100});let i=RgbaImage::from_fn(10,8,|x,y|image::Rgba([x as u8,y as u8,0,255]));let c=crop(&i,Area{x:2,y:3,w:4,h:2});assert_eq!(c.dimensions(),(4,2));assert_eq!(c.get_pixel(0,0).0,[2,3,0,255]);}}
