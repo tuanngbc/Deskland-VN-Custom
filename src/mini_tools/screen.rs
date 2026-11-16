@@ -60,14 +60,14 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{mat
     WM_ERASEBKGND=>1,
     WM_PAINT=>{let mut ps=std::mem::zeroed();let dc=BeginPaint(hwnd,&mut ps);PICK.with(|c|{let g=c.borrow();let Some(s)=g.as_ref()else{return;};draw_image(dc,&s.image,Area{x:0,y:0,w:s.origin.w,h:s.origin.h});
         let pen=CreatePen(PS_SOLID,2,0x00F4CF36);let old=SelectObject(dc,pen);let brush=SelectObject(dc,GetStockObject(NULL_BRUSH));let r=s.area;Rectangle(dc,r.x,r.y,r.x+r.w,r.y+r.h);SelectObject(dc,brush);SelectObject(dc,old);DeleteObject(pen);
-        let mut p=POINT::default();GetCursorPos(&mut p);let m=monitor_at(p.x,p.y);let box_area=Area{x:m.x-s.origin.x+20,y:m.y-s.origin.y+20,w:650.min(m.w-40),h:68};let bg=CreateSolidBrush(0x0025201B);FillRect(dc,&box_area.rect(),bg);DeleteObject(bg);SetBkMode(dc,TRANSPARENT as i32);SetTextColor(dc,0x00FFFFFF);
+        let mut p=POINT{x:0,y:0};GetCursorPos(&mut p);let m=monitor_at(p.x,p.y);let box_area=Area{x:m.x-s.origin.x+20,y:m.y-s.origin.y+20,w:650.min(m.w-40),h:68};let bg=CreateSolidBrush(0x0025201B);FillRect(dc,&box_area.rect(),bg);DeleteObject(bg);SetBkMode(dc,TRANSPARENT as i32);SetTextColor(dc,0x00FFFFFF);
         let text=if s.record{"QUAY MÀN HÌNH  ·  Kéo chọn vùng; Space: cả màn hình; Esc: hủy"}else{"CHỤP MÀN HÌNH  ·  Kéo chọn vùng; Space: cả màn hình; Esc: hủy"};let mut r=box_area.rect();r.left+=15;r.top+=10;DrawTextW(dc,wide(text).as_ptr(),-1,&mut r,DT_LEFT|DT_WORDBREAK);
         if s.area.w>0{let t=wide(&format!("{} × {}",s.area.w,s.area.h));TextOutW(dc,s.area.x+5,(s.area.y-24).max(box_area.y+box_area.h+5),t.as_ptr(),t.len() as i32-1);}
     });EndPaint(hwnd,&ps);0},
     WM_LBUTTONDOWN=>{let p=((l as i16) as i32,((l>>16) as i16) as i32);PICK.with(|c|if let Some(s)=c.borrow_mut().as_mut(){s.start=Some(p);s.area=Area::default();});SetCapture(hwnd);0},
     WM_MOUSEMOVE=>{let p=((l as i16) as i32,((l>>16) as i16) as i32);let changed=PICK.with(|c|{let mut g=c.borrow_mut();let s=g.as_mut().unwrap();if let Some(a)=s.start{s.area=Area::between(a,p);true}else{false}});if changed{InvalidateRect(hwnd,std::ptr::null(),0);}0},
     WM_LBUTTONUP=>{ReleaseCapture();let area=PICK.with(|c|{let mut g=c.borrow_mut();let s=g.as_mut().unwrap();s.start=None;s.area});finish(hwnd,area);0},
-    WM_KEYDOWN=>{if w==VK_ESCAPE as usize{DestroyWindow(hwnd);}else if w==VK_SPACE as usize{let mut p=POINT::default();GetCursorPos(&mut p);let mut a=monitor_at(p.x,p.y);PICK.with(|c|{let g=c.borrow();let s=g.as_ref().unwrap();a.x-=s.origin.x;a.y-=s.origin.y;});finish(hwnd,a);}0},
+    WM_KEYDOWN=>{if w==VK_ESCAPE as usize{DestroyWindow(hwnd);}else if w==VK_SPACE as usize{let mut p=POINT{x:0,y:0};GetCursorPos(&mut p);let mut a=monitor_at(p.x,p.y);PICK.with(|c|{let g=c.borrow();let s=g.as_ref().unwrap();a.x-=s.origin.x;a.y-=s.origin.y;});finish(hwnd,a);}0},
     WM_CLOSE=>{DestroyWindow(hwnd);0},WM_DESTROY=>{PostQuitMessage(0);0},_=>DefWindowProcW(hwnd,msg,w,l)
 }}
 

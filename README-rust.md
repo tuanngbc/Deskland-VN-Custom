@@ -1,12 +1,12 @@
 # deskland-rs — Phiên bản Rust Native (Win32 + OpenGL 3.3)
 
-Phiên bản viết lại hoàn toàn bằng **Rust thuần (1 tiến trình duy nhất, Win32 + OpenGL 3.3 qua WGL)** của Deskland, thay thế kiến trúc đa tiến trình C# + WebView2 thường trực để tối ưu triệt để RAM/CPU, bổ sung **tương tác chuột trực tiếp trên màn hình nền**, nâng tổng số chủ đề lên **16 chủ đề** và chuyển sang cơ chế **màn hình khóa thật 100% của Windows**.
+Phiên bản viết lại hoàn toàn bằng **Rust native (Win32 + OpenGL 3.3 qua WGL)** của Deskland, thay thế kiến trúc đa tiến trình C# + WebView2 thường trực để tối ưu triệt để RAM/CPU, bổ sung **tương tác chuột trực tiếp trên màn hình nền**, nâng tổng số chủ đề lên **16 chủ đề** và chuyển sang cơ chế **màn hình khóa thật 100% của Windows**.
 
 ---
 
 ## Điểm nổi bật của bản Rust Native
 
-1. **Siêu nhẹ — 1 tiến trình duy nhất (`deskland-rs.exe` ~2 MB):**
+1. **Tiến trình nền gọn, tiện ích chạy khi cần:**
    - Không nuôi trình duyệt ngầm khi chạy hình nền: chỉ **1 tiến trình** (~65–98 MB Private RAM tùy độ phân giải & số màn hình), giảm **~6–8 lần RAM** so với bản C# + WebView2 (~11 tiến trình, ~620–790 MB RAM).
    - Một ngữ cảnh OpenGL 3.3 dùng chung cho mọi màn hình; biên dịch shader & khởi tạo khung hình đầu tiên chỉ mất **~350–480 ms**.
 2. **Đầy đủ 16 chủ đề thích ứng biểu tượng + Tương tác Click chuột riêng biệt:**
@@ -29,6 +29,15 @@ Phiên bản viết lại hoàn toàn bằng **Rust thuần (1 tiến trình duy
    - Menu chuột phải ở khay hệ thống gọn gàng: chỉ hiển thị chủ đề đang chọn (`✓ Chủ đề: <Tên chủ đề>`) cùng các tác vụ nhanh, việc đổi chủ đề và tinh chỉnh chuyên sâu tập trung tại cửa sổ **Cài đặt…**.
 
 ---
+
+## Chụp màn hình, quay desktop và Quick Look
+
+- **Ctrl+Shift+S:** kéo chọn vùng chụp; Space chọn cả màn hình đang trỏ chuột; Esc hủy. Sau khi chọn, trình sửa ảnh mở ngay: cắt, mũi tên, khung, bút, chữ, số bước, pixel và tô kín. Enter copy rồi đóng; Ctrl+C copy, Ctrl+S lưu PNG/JPG, Ctrl+Z/Y hoàn tác/làm lại. Có nút ghim trên cùng.
+- **Ctrl+Shift+R:** chọn vùng quay desktop, lưu MP4 H.264, 30 FPS mặc định (tùy chọn 60 FPS), thu tiếng máy hoặc không tiếng. Nhấn lại phím quay để dừng và lưu; Ctrl+Shift+P tạm dừng/tiếp tục. Bảng điều khiển cũng có các nút tương ứng. Không có webcam, mic hay chế độ game.
+- **Ctrl+Alt+Space:** xem nhanh tệp đang chọn trong Explorer. Có thể bật Space trong Explorer/desktop; phím Space vẫn dùng bình thường khi nhập tên hay tìm kiếm. Hỗ trợ ảnh, văn bản, PDF, danh sách thư mục; Enter mở bằng ứng dụng mặc định; Space/Esc đóng.
+- Đổi phím tắt và tùy chọn tại **Cài đặt → Tiện ích**. Nếu ứng dụng khác đang giữ phím, Cài đặt báo xung đột để chọn phím khác.
+- Ảnh lưu mặc định ở Pictures/Deskland, video ở Videos/Deskland trong hồ sơ người dùng. Không tự tải ảnh/video lên mạng.
+- Hình nền giữ một tiến trình; mỗi tiện ích tạo một phiên của cùng EXE khi được gọi và thoát khi đóng. Bộ chụp, bộ mã hóa và âm thanh không được tạo lúc chạy nền. Quay dùng GDI và Media Foundation có trên Windows; tải CPU thực tế phụ thuộc vùng quay, FPS và bộ mã hóa của máy. Video có bảo vệ bản quyền có thể không được chụp.
 
 ## Danh sách 16 Chủ đề & Cơ chế Tương tác Chuột
 
