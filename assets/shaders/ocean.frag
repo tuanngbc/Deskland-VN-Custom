@@ -13,6 +13,8 @@ uniform vec4 uYacht[4];      // x, y, huong, pha
 uniform float uBirdN;
 uniform vec4 uBird[8];
 uniform vec4 uRip[6];        // x, y, age, strength
+uniform vec2 uShadowOffset;
+uniform float uShadowAlpha;
 out vec4 o;
 
 const vec3 SEA_LIGHT = vec3(0.24, 0.56, 0.90), SEA_MID = vec3(0.16, 0.45, 0.83), SEA_DEEP = vec3(0.11, 0.36, 0.74);
@@ -136,9 +138,9 @@ void main() {
       float wk = (1.0 - ss(-8.0, -38.0, q.x)) * (1.0 - ss(1.0, 6.0, abs(abs(q.y) - (-q.x - 8.0) * 0.22)));
       col = mix(col, vec3(0.85, 0.93, 0.99), wk * 0.45);
     }
-    vec2 qs = rot(-b.z) * (d0 - vec2(6.0, 9.0));
+    vec2 qs = rot(-b.z) * (d0 - uShadowOffset);
     vec2 sds = sailboatSD(qs, b.w);
-    col = mix(col, col * SHADOW, ss(1.4, -1.0, min(sds.x, sds.y)) * 0.65);
+    col = mix(col, col * SHADOW, ss(1.4, -1.0, min(sds.x, sds.y)) * 0.65 * uShadowAlpha);
     vec2 sd = sailboatSD(q, b.w);
     if (sd.x < 0.8) {
       vec3 hullC = mix(vec3(0.95, 0.97, 0.99), vec3(0.76, 0.82, 0.89), ss(-3.0, 0.0, sd.x));
@@ -165,8 +167,8 @@ void main() {
       float fade = 1.0 - ss(0.0, 42.0, distBack);
       col = mix(col, vec3(0.94, 0.98, 1.0), max(edgeWake * 0.65, centerFoam * 0.42) * fade);
     }
-    vec2 qs = rot(-y.z) * (d0 - vec2(7.0, 10.0));
-    col = mix(col, col * SHADOW, ss(1.5, -1.2, yachtHullSD(qs)) * 0.68);
+    vec2 qs = rot(-y.z) * (d0 - uShadowOffset * 1.12);
+    col = mix(col, col * SHADOW, ss(1.5, -1.2, yachtHullSD(qs)) * 0.68 * uShadowAlpha);
     float yh = yachtHullSD(q);
     if (yh < 0.8) {
       vec3 yc = mix(vec3(0.98, 0.99, 1.0), vec3(0.82, 0.86, 0.91), ss(-4.0, 0.0, yh));
@@ -184,10 +186,10 @@ void main() {
   for (int i = 0; i < 8; i++) {
     if (float(i) >= uBirdN) break;
     vec4 b = uBird[i];
-    vec2 d0 = p - b.xy, d1 = d0 - vec2(34.0, 55.0);
+    vec2 d0 = p - b.xy, d1 = d0 - uShadowOffset * 2.4;
     if (dot(d1, d1) < 400.0) {
       vec3 g = gullSD(rot(-b.z) * d1, b.w);
-      col = mix(col, col * SHADOW, ss(1.8, -1.8, min(g.x, g.y)) * 0.35);
+      col = mix(col, col * SHADOW, ss(1.8, -1.8, min(g.x, g.y)) * 0.35 * uShadowAlpha);
     }
     if (dot(d0, d0) < 400.0) {
       vec3 g = gullSD(rot(-b.z) * d0, b.w);

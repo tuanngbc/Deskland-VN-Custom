@@ -354,6 +354,7 @@ impl Maldives {
         let p = &mut sh.prog;
         unsafe { gl.use_program(Some(p.prog)) };
         self.b.bind_common(gl, p, sh.noise_tex, sh.seed, t);
+        self.b.bind_shadow(gl, p);
         let q = &self.p;
         p.f1(gl, "uSpeed", q.speed);
         p.f1(gl, "uRunup", q.runup);

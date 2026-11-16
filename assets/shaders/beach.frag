@@ -9,6 +9,8 @@ uniform vec4 uRip[6];
 uniform vec4 uSand[4];         // x, y, age, rot+1
 uniform float uBirdN;
 uniform vec4 uBird[8];         // x, y, hướng, độ sải cánh
+uniform vec2 uShadowOffset;     // hướng/độ dài bóng theo mặt trời hiện tại
+uniform float uShadowAlpha;     // cường độ ban ngày sau thời tiết
 out vec4 o;
 
 // ---- Bảng màu (sRGB) ----
@@ -167,7 +169,7 @@ void main() {
       vec2 pd = paddleSD(q2, k.w);
       shadow = max(shadow, ss(1.6, -1.6, min(sd, min(pd.x, pd.y))));
     }
-    col = mix(col, col * vec3(0.62, 0.78, 0.84), shadow * 0.7);
+    col = mix(col, col * vec3(0.62, 0.78, 0.84), shadow * 0.7 * uShadowAlpha);
 
     // Gợn sóng tương tác rõ nét
     float rip = 0.0;
@@ -291,10 +293,10 @@ void main() {
   for (int i = 0; i < 8; i++) {
     if (float(i) >= uBirdN) break;
     vec4 b = uBird[i];
-    vec2 d0 = p - b.xy, d1 = d0 - vec2(34.0, 55.0);
+    vec2 d0 = p - b.xy, d1 = d0 - uShadowOffset * 2.4;
     if (dot(d1, d1) < 400.0) {
       vec3 g = gullSD(rot(-b.z) * d1, b.w);
-      col = mix(col, col * vec3(0.70, 0.74, 0.84), ss(1.8, -1.8, min(g.x, g.y)) * 0.28);
+      col = mix(col, col * vec3(0.70, 0.74, 0.84), ss(1.8, -1.8, min(g.x, g.y)) * 0.28 * uShadowAlpha);
     }
     if (dot(d0, d0) < 400.0) {
       vec3 g = gullSD(rot(-b.z) * d0, b.w);

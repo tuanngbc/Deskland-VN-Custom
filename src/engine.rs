@@ -342,6 +342,16 @@ impl Base {
         p.f1(gl, "uDebug", 0.0);
     }
 
+    /// Uniform bóng cho các vật thể nhỏ trên mặt đất/nước. Cây dừa dùng cùng
+    /// dữ liệu này trong `draw_palm`; thuyền và chim cũng phải đổi hướng,
+    /// độ dài và độ đậm theo mặt trời thay vì giữ một vector cố định.
+    pub fn bind_shadow(&self, gl: &glow::Context, p: &mut Prog) {
+        let (shear, flatten, sunlight) = crate::solar::shadow(self.sun);
+        let alpha = sunlight * (1.0 - self.weather * 0.85);
+        p.f2(gl, "uShadowOffset", shear.clamp(-1.15, 1.15) * 18.0, flatten.clamp(-0.20, 0.65) * 18.0);
+        p.f1(gl, "uShadowAlpha", alpha.clamp(0.0, 1.0));
+    }
+
     pub fn destroy(&self, gl: &glow::Context) {
         unsafe {
             gl.delete_texture(self.ftex[0]);
