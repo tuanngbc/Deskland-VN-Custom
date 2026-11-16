@@ -10,14 +10,6 @@ use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-#[repr(C)]
-struct AccentPolicy { state: u32, flags: u32, gradient_color: u32, animation_id: u32 }
-#[repr(C)]
-struct WindowCompositionAttributeData { attribute: u32, data: *mut std::ffi::c_void, size: usize }
-unsafe extern "system" {
-    fn SetWindowCompositionAttribute(hwnd: HWND, data: *mut WindowCompositionAttributeData) -> BOOL;
-}
-
 const CLASS: &str = "DesklandRsLauncher";
 const IDC_EDIT: usize = 1;
 const IDC_LIST: usize = 2;
@@ -132,9 +124,6 @@ pub fn toggle(owner: HWND) {
         if hwnd.is_null() { return; }
         SetWindowRgn(hwnd, CreateRoundRectRgn(0, 0, w+1, h+1, 24, 24), 1);
         SetLayeredWindowAttributes(hwnd, 0, 246, LWA_ALPHA);
-        let mut accent = AccentPolicy { state: 4, flags: 0, gradient_color: 0xE81C1C20, animation_id: 0 };
-        let mut composition = WindowCompositionAttributeData { attribute: 19, data: &mut accent as *mut _ as *mut std::ffi::c_void, size: std::mem::size_of::<AccentPolicy>() };
-        SetWindowCompositionAttribute(hwnd, &mut composition);
         let backdrop: u32 = 3;
         windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(hwnd, 38, &backdrop as *const u32 as *const _, 4);
         let font = CreateFontW(-20, 0, 0, 0, 400, 0, 0, 0, DEFAULT_CHARSET as u32, 0, 0, CLEARTYPE_QUALITY as u32, DEFAULT_PITCH as u32, wide("Segoe UI Variable").as_ptr());
