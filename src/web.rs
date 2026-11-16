@@ -196,13 +196,14 @@ pub fn open(proto: &Path) -> Result<(), String> {
             return Err(format!("CreateWindowEx lỗi {}", F::GetLastError()));
         }
         theme_title_bar(hwnd);
-        // Nền trùng màu trang trong lúc WebView2 khởi động (khỏi chớp trắng ở chế độ tối)
-        ShowWindow(hwnd, SW_SHOWNORMAL);
-
+        // Chỉ hiện cửa sổ sau khi controller đã tạo xong. Nếu WebView2
+        // khởi tạo chậm/lỗi, người dùng không còn thấy một bảng đen rỗng.
         match create(hwnd, proto) {
             Ok(web) => {
                 WEB.with(|x| *x.borrow_mut() = Some(web));
                 resize(hwnd);
+                ShowWindow(hwnd, SW_SHOWNORMAL);
+                UpdateWindow(hwnd);
                 SetForegroundWindow(hwnd);
                 crate::log!("Mở cửa sổ cài đặt WebView2 sau {:.0} ms ({})", t0.elapsed().as_secs_f64() * 1000.0, proto.display());
                 Ok(())

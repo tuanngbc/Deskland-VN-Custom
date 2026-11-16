@@ -53,7 +53,12 @@
   .lang-row select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
     width: 170px; flex: none; padding: 7px 9px; cursor: pointer; }
   .lang-row select:hover, .lang-row select:focus-visible { border-color: var(--accent); outline: none; }
-  html:not(.ready) body { visibility: hidden; }   /* 按界面语言填好文字再显示，免得先闪一下中文 */
+  html:not(.ready) body { visibility: visible; }
+  #bootStatus { position: fixed; inset: 0; display: grid; place-items: center; padding: 32px; background: var(--bg); color: var(--muted); z-index: 20; }
+  #bootStatus[hidden] { display: none; }
+  #bootStatus .boot-card { max-width: 420px; padding: 24px 28px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); text-align: center; box-shadow: var(--selection-shadow); }
+  #bootStatus b { display: block; color: var(--text); font-size: 15px; margin-bottom: 6px; }
+  #bootStatus button { margin-top: 14px; padding: 8px 16px; border: 1px solid var(--line); border-radius: 9px; background: var(--accent); color: var(--accent-ink); font: inherit; cursor: pointer; }
 
   .switch-row { position: relative; display: flex; align-items: center; gap: 9px; color: var(--muted); cursor: pointer; white-space: nowrap; }
   .switch-row input { position: absolute; opacity: 0; width: 1px; height: 1px; }
@@ -319,6 +324,7 @@
 </style>
 </head>
 <body>
+<div id="bootStatus"><div class="boot-card"><b>Đang mở Cài đặt Deskland…</b><span>Đang tải danh sách giao diện.</span><br><button id="bootRetry" type="button" hidden>Thử lại</button></div></div>
 <header class="top">
   <div class="top-left">
     <div class="brand">Deskland Preview</div>
@@ -1166,6 +1172,7 @@ function onHost(m) {
       selectTarget();
       shareBusy(null);
       document.documentElement.classList.add('ready');
+      $('bootStatus').hidden = true;
     });
   } else if (m.t === 'miniToolsState') {
     syncMiniTools(m);
@@ -1233,13 +1240,21 @@ function mockHost() {
   if (new URLSearchParams(location.search).has('updateDemo')) onHost({ t: 'updateState', version: '0.2.0', status: 'available', progress: -1 });
 }
 
-fetch('themes.json').then(r => r.json()).then(reg => {
-  state.registry0 = state.registry = reg;
-  if (host) {
-    host.addEventListener('message', e => onHost(JSON.parse(e.data)));
-    send({ t: 'hello' });
-  } else mockHost();
-});
+const bootStatus = $('bootStatus'), bootRetry = $('bootRetry');
+function bootError() { bootStatus.querySelector('b').textContent = 'Không tải được giao diện Cài đặt'; bootStatus.querySelector('span').textContent = 'Kiểm tra thư mục prototype cạnh Deskland-VN.exe rồi thử lại.'; bootRetry.hidden = false; }
+async function boot() {
+  bootRetry.hidden = true;
+  try {
+    const response = await fetch('themes.json?boot=' + Date.now(), { cache: 'no-store' });
+    if (!response.ok) throw new Error('themes.json ' + response.status);
+    const reg = await response.json();
+    state.registry0 = state.registry = reg;
+    if (host) { host.addEventListener('message', e => onHost(JSON.parse(e.data))); send({ t: 'hello' }); }
+    else mockHost();
+  } catch (e) { console.error(e); bootError(); }
+}
+bootRetry.addEventListener('click', boot);
+boot();
 </script>
 </body>
 </html>
