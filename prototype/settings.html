@@ -1136,6 +1136,56 @@ $('shareOpen').addEventListener('click', () => send({ t: 'openShare' }));
 $('shareReveal').addEventListener('click', () => send({ t: 'revealShare' }));
 
 /* ---------- 和宿主通信 ---------- */
+function applyInitMessage(m) {
+  // Host đã gửi registry đầy đủ: dựng giao diện ngay, không chặn cửa sổ vì
+  // fetch themes/i18n mạng hoặc WebView2 đang khởi tạo chậm. Bản dịch sẽ
+  // cập nhật lại nền sau khi tải xong.
+  state.langSetting = m.lang || 'auto';
+  state.langSys = m.langSys || 'zh-CN';
+  const initialLang = m.langEff || state.langSys;
+  if (LANGS[initialLang]) lang = initialLang;
+  localizeRegistry();
+  applyStatic();
+  state.theme = themeById(m.theme) && themeById(m.theme).status === 'ready' ? m.theme : 'beach';
+  state.allParams = m.params || {};
+  state.params = state.allParams;
+  state.globalTheme = state.theme;
+  state.globalPaused = !!m.globalPaused;
+  state.environment = Object.assign({}, DEFAULT_ENVIRONMENT, m.environment || {});
+  state.widget = Object.assign({ enabled: true, locked: true }, m.widget || {});
+  state.screen = m.screen;
+  state.mode = m.mode || 'mirror';
+  state.monitors = m.monitors || [];
+  state.world = m.world || null;
+  state.selectedMonitor = state.monitors[0] && state.monitors[0].id;
+  $('autostart').checked = !!m.autostart;
+  syncMiniTools(m);
+  state.launcherHotkey = Object.assign(state.launcherHotkey, m.launcherHotkey || {});
+  $('launcherMods').value = String(state.launcherHotkey.mods);
+  $('launcherKey').value = String(state.launcherHotkey.vk);
+  if (m.launcherAppearance) {
+    $('launcherTheme').value = m.launcherAppearance.theme;
+    $('launcherTransparency').value = Math.round(m.launcherAppearance.transparency * 100);
+    $('launcherBlur').value = m.launcherAppearance.blur;
+    syncLauncherAppearance();
+  }
+  state.autostartWarn = !!m.autostartWarn;
+  state.autostartSw = m.autostartSw || '';
+  showAutostartWarn();
+  renderEnvironment();
+  renderWidget();
+  showUpdate();
+  selectTarget();
+  shareBusy(null);
+  document.documentElement.classList.add('ready');
+  $('bootStatus').hidden = true;
+  // Không để bản dịch chặn lần vẽ đầu tiên. Nếu file ngôn ngữ không tồn tại,
+  // timeout trong loadLang vẫn cho phép giao diện đã mở tiếp tục hoạt động.
+  setLang(initialLang).then(() => {
+    if (document.documentElement.classList.contains('ready')) rerenderTexts();
+  });
+}
+
 function onHost(m) {
   if (m.t === 'awayState') {
     state.away = m;
@@ -1146,47 +1196,15 @@ function onHost(m) {
     $('awayStatus').textContent = m.status || t(m.enabled ? 'awayOn' : 'awayOff');
   } else if (m.t === 'init') {
     if (!state.registry0) {
-      if (m.registry && Array.isArray(m.registry.themes)) state.registry0 = state.registry = m.registry;
-      state.pendingInit = m;
-      return;
-    }
-    state.langSetting = m.lang || 'auto';
-    state.langSys = m.langSys || 'zh-CN';
-    setLang(m.langEff || state.langSys).then(() => {        // 先按界面语言把文字表读进来，再画界面
-      state.theme = themeById(m.theme) && themeById(m.theme).status === 'ready' ? m.theme : 'beach';
-      state.allParams = m.params || {};
-      state.params = state.allParams;
-      state.globalTheme = state.theme;
-      state.globalPaused = !!m.globalPaused;
-      state.environment = Object.assign({}, DEFAULT_ENVIRONMENT, m.environment || {});
-      state.widget = Object.assign({ enabled: true, locked: true }, m.widget || {});
-      state.screen = m.screen;
-      state.mode = m.mode || 'mirror';
-      state.monitors = m.monitors || [];
-      state.world = m.world || null;
-      state.selectedMonitor = state.monitors[0] && state.monitors[0].id;
-      $('autostart').checked = !!m.autostart;
-      syncMiniTools(m);
-      state.launcherHotkey = Object.assign(state.launcherHotkey, m.launcherHotkey || {});
-      $('launcherMods').value = String(state.launcherHotkey.mods);
-      $('launcherKey').value = String(state.launcherHotkey.vk);
-      if (m.launcherAppearance) {
-        $('launcherTheme').value = m.launcherAppearance.theme;
-        $('launcherTransparency').value = Math.round(m.launcherAppearance.transparency * 100);
-        $('launcherBlur').value = m.launcherAppearance.blur;
-        syncLauncherAppearance();
+      if (m.registry && Array.isArray(m.registry.themes)) {
+        state.registry0 = state.registry = m.registry;
+        state.pendingInit = null;
+      } else {
+        state.pendingInit = m;
+        return;
       }
-      state.autostartWarn = !!m.autostartWarn;
-      state.autostartSw = m.autostartSw || '';
-      showAutostartWarn();
-      renderEnvironment();
-      renderWidget();
-      showUpdate();
-      selectTarget();
-      shareBusy(null);
-      document.documentElement.classList.add('ready');
-      $('bootStatus').hidden = true;
-    });
+    }
+    applyInitMessage(m);
   } else if (m.t === 'miniToolsState') {
     syncMiniTools(m);
   } else if (m.t === 'themeChanged') {
