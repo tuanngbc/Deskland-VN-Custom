@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::UI::Shell::*;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 const CLASS: &str = "DesklandRsLauncher";
@@ -42,7 +43,7 @@ fn entries() -> Vec<Entry> {
         }
     }
     out.sort_by_key(|e| e.name.to_ascii_lowercase());
-    out.dedup_by(|a, b| a.path.eq_ignore_ascii_case(&b.path));
+    out.dedup_by(|a, b| a.path.to_string_lossy().eq_ignore_ascii_case(&b.path.to_string_lossy()));
     out
 }
 
@@ -84,12 +85,12 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         WM_COMMAND => {
             STATE.with(|cell| if let Some(s) = cell.borrow_mut().as_mut() {
                 let id = (w & 0xffff) as usize; let code = ((w >> 16) & 0xffff) as u16;
-                if id == IDC_EDIT && code == EN_CHANGE { refresh(s); }
-                if id == IDC_LIST && code == LBN_DBLCLK { launch_selected(s); }
+                if id == IDC_EDIT && code == EN_CHANGE as u16 { refresh(s); }
+                if id == IDC_LIST && code == LBN_DBLCLK as u16 { launch_selected(s); }
             }); 0
         }
-        WM_KEYDOWN if w as u32 == VK_ESCAPE => { ShowWindow(hwnd, SW_HIDE); 0 }
-        WM_KEYDOWN if w as u32 == VK_RETURN => { STATE.with(|c| if let Some(s)=c.borrow_mut().as_mut(){ launch_selected(s); }); 0 }
+        WM_KEYDOWN if w as u32 == VK_ESCAPE as u32 => { ShowWindow(hwnd, SW_HIDE); 0 }
+        WM_KEYDOWN if w as u32 == VK_RETURN as u32 => { STATE.with(|c| if let Some(s)=c.borrow_mut().as_mut(){ launch_selected(s); }); 0 }
         WM_CLOSE => { ShowWindow(hwnd, SW_HIDE); 0 }
         WM_DESTROY => 0,
         _ => DefWindowProcW(hwnd, msg, w, l),
@@ -101,7 +102,7 @@ pub fn toggle(owner: HWND) {
         if let Some(s) = cell.borrow_mut().as_mut() {
             let visible = IsWindowVisible(s.hwnd) != 0;
             ShowWindow(s.hwnd, if visible { SW_HIDE } else { SW_SHOWNOACTIVATE });
-            if !visible { SetForegroundWindow(s.hwnd); SetFocus(s.edit); refresh(s); }
+            if !visible { SetForegroundWindow(s.hwnd); SendMessageW(s.edit, WM_SETFOCUS, 0, 0); refresh(s); }
             return;
         }
         let cls = wide(CLASS); let mut wc: WNDCLASSEXW = std::mem::zeroed();
@@ -114,16 +115,16 @@ pub fn toggle(owner: HWND) {
         if hwnd.is_null() { return; }
         SetWindowRgn(hwnd, CreateRoundRectRgn(0, 0, w+1, h+1, 24, 24), 1);
         let font = CreateFontW(-20, 0, 0, 0, 400, 0, 0, 0, DEFAULT_CHARSET as u32, 0, 0, CLEARTYPE_QUALITY as u32, DEFAULT_PITCH as u32, wide("Segoe UI Variable").as_ptr());
-        let edit = CreateWindowExW(0, wide("EDIT").as_ptr(), std::ptr::null(), WS_CHILD|WS_VISIBLE|WS_BORDER|ES_AUTOHSCROLL, 28, 24, w-56, 48, hwnd, IDC_EDIT as _, wc.hInstance, std::ptr::null_mut());
-        let list = CreateWindowExW(0, wide("LISTBOX").as_ptr(), std::ptr::null(), WS_CHILD|WS_VISIBLE|WS_VSCROLL|LBS_NOTIFY|LBS_NOINTEGRALHEIGHT, 28, 88, w-56, h-112, hwnd, IDC_LIST as _, wc.hInstance, std::ptr::null_mut());
+        let edit = CreateWindowExW(0, wide("EDIT").as_ptr(), std::ptr::null(), WS_CHILD|WS_VISIBLE|WS_BORDER|(ES_AUTOHSCROLL as u32), 28, 24, w-56, 48, hwnd, IDC_EDIT as _, wc.hInstance, std::ptr::null_mut());
+        let list = CreateWindowExW(0, wide("LISTBOX").as_ptr(), std::ptr::null(), WS_CHILD|WS_VISIBLE|WS_VSCROLL|(LBS_NOTIFY as u32)|(LBS_NOINTEGRALHEIGHT as u32), 28, 88, w-56, h-112, hwnd, IDC_LIST as _, wc.hInstance, std::ptr::null_mut());
         set_font(edit, font); set_font(list, font);
         let mut s = State { hwnd, edit, list, all: entries(), visible: Vec::new(), font };
-        refresh(&mut s); *cell.borrow_mut() = Some(s); ShowWindow(hwnd, SW_SHOWNOACTIVATE); SetForegroundWindow(hwnd); SetFocus(edit);
+        refresh(&mut s); *cell.borrow_mut() = Some(s); ShowWindow(hwnd, SW_SHOWNOACTIVATE); SetForegroundWindow(hwnd); SendMessageW(edit, WM_SETFOCUS, 0, 0);
     });
 }
 
 pub fn hotkey_text(mods: u32, vk: u32) -> String {
     let m = if mods & MOD_CONTROL != 0 { "Ctrl+" } else if mods & MOD_SHIFT != 0 { "Shift+" } else { "Alt+" };
-    let k = if vk == VK_SPACE { "Space".to_string() } else if (b'A' as u32..=b'Z' as u32).contains(&vk) { char::from_u32(vk).unwrap().to_string() } else { format!("F{}", vk.saturating_sub(0x6F)) };
+    let k = if vk == VK_SPACE as u32 { "Space".to_string() } else if (b'A' as u32..=b'Z' as u32).contains(&vk) { char::from_u32(vk).unwrap().to_string() } else { format!("F{}", vk.saturating_sub(0x6F)) };
     format!("{m}{k}")
 }

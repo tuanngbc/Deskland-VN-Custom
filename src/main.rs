@@ -51,6 +51,7 @@ use windows_sys::Win32::System::Threading::*;
 use windows_sys::Win32::UI::Accessibility::*;
 use windows_sys::Win32::UI::HiDpi::*;
 use windows_sys::Win32::UI::Input::*;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
