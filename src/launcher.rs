@@ -2,7 +2,7 @@
 //! nền riêng. Danh sách lấy từ Start Menu/Desktop và mở bằng ShellExecuteW.
 
 use crate::desktop::wide;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -15,8 +15,13 @@ const IDC_EDIT: usize = 1;
 const IDC_LIST: usize = 2;
 
 struct Entry { name: String, path: PathBuf }
-struct State { hwnd: HWND, edit: HWND, list: HWND, all: Vec<Entry>, visible: Vec<usize>, font: HFONT, brush: HBRUSH }
-thread_local! { static STATE: RefCell<Option<State>> = const { RefCell::new(None) }; }
+struct State { hwnd: HWND, edit: HWND, list: HWND, all: Vec<Entry>, visible: Vec<usize>, font: HFONT }
+thread_local! {
+    static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
+    // Tách brush khỏi STATE để WM_CTLCOLOR không mượn RefCell đang được giữ
+    // trong WM_COMMAND khi người dùng gõ tìm kiếm.
+    static BG_BRUSH: Cell<HBRUSH> = const { Cell::new(std::ptr::null_mut()) };
+}
 
 unsafe extern "system" { fn SetFocus(hwnd: HWND) -> HWND; }
 
@@ -85,7 +90,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
             let dc = w as HDC;
             SetTextColor(dc, 0x00F5F5F7); SetBkColor(dc, 0x001C1C20);
-            STATE.with(|cell| cell.borrow().as_ref().map(|s| s.brush as LRESULT).unwrap_or(GetSysColorBrush(COLOR_WINDOW) as LRESULT))
+            BG_BRUSH.with(|brush| {
+                let brush = brush.get();
+                if brush.is_null() { GetSysColorBrush(COLOR_WINDOW) as LRESULT } else { brush as LRESULT }
+            })
         }
         WM_ACTIVATE if (w & 0xffff) as u32 == WA_INACTIVE => { ShowWindow(hwnd, SW_HIDE); 0 }
         WM_COMMAND => {
@@ -123,7 +131,7 @@ pub fn toggle(owner: HWND) {
         let hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_LAYERED, cls.as_ptr(), wide("Deskland Launcher").as_ptr(), WS_POPUP, (sw-w)/2, (sh-h)/3, w, h, owner, std::ptr::null_mut(), wc.hInstance, std::ptr::null_mut());
         if hwnd.is_null() { return; }
         SetWindowRgn(hwnd, CreateRoundRectRgn(0, 0, w+1, h+1, 24, 24), 1);
-        SetLayeredWindowAttributes(hwnd, 0, 246, LWA_ALPHA);
+        SetLayeredWindowAttributes(hwnd, 0, 228, LWA_ALPHA);
         let backdrop: u32 = 3;
         windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(hwnd, 38, &backdrop as *const u32 as *const _, 4);
         let font = CreateFontW(-20, 0, 0, 0, 400, 0, 0, 0, DEFAULT_CHARSET as u32, 0, 0, CLEARTYPE_QUALITY as u32, DEFAULT_PITCH as u32, wide("Segoe UI Variable").as_ptr());
@@ -133,7 +141,8 @@ pub fn toggle(owner: HWND) {
         SendMessageW(list, LB_SETITEMHEIGHT, 0, 42);
         set_font(edit, font); set_font(list, font);
         let brush = CreateSolidBrush(0x001C1C20);
-        let mut s = State { hwnd, edit, list, all: entries(), visible: Vec::new(), font, brush };
+        BG_BRUSH.with(|cell| cell.set(brush));
+        let mut s = State { hwnd, edit, list, all: entries(), visible: Vec::new(), font };
         refresh(&mut s); *cell.borrow_mut() = Some(s); ShowWindow(hwnd, SW_SHOW); SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW); SetForegroundWindow(hwnd); SetFocus(edit);
     });
 }
