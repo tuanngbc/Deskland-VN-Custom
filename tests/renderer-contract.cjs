@@ -7,7 +7,18 @@ test('deterministic random seed',()=>{world.seed(71);const a=Array.from({length:
 test('independent random seeds',()=>{world.seed(1);const a=world.random();world.seed(2);assert.notEqual(a,world.random());});
 test('negative screen origin maps to world',()=>assert.deepEqual(world.localRect([-1000,-600,-920,-510],{x:-1080,y:-685}),[80,85,160,175]));
 test('mixed DPI physical coordinates',()=>{for(const ratio of [1,1.25,1.5,1.75,2,3]){const c=world.cssRect([300,150,390,270],ratio);assert.equal(c.x*ratio,300);assert.equal(c.h*ratio,120);}});
-test('global clock survives reload and viewport changes',()=>{const epoch=Date.now()-5000;world.configure({version:1,epoch,mode:'mirror'});const a=world.seconds(performance.now(),0);assert(a>=5&&a<6);world.configure({version:1,epoch,mode:'panorama'});assert(Math.abs(world.seconds(performance.now(),0)-a)<.02);});
+test('global clock survives reload and viewport changes',()=>{
+  let wall=20000, mono=1000;
+  const context={module:{exports:{}},Date:{now:()=>wall},performance:{now:()=>mono}};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../prototype/world-contract.js'),'utf8'),context);
+  const clock=context.module.exports, epoch=15000;
+  clock.configure({version:1,epoch,mode:'mirror'});
+  assert.equal(clock.seconds(mono,0),5);
+  wall+=137; mono+=137;
+  clock.configure({version:1,epoch,mode:'panorama'});
+  assert.equal(clock.seconds(mono,0),5.137);
+  assert.equal(clock.seconds(mono+1000,0),6.137);
+});
 test('offline environment follows local solar phases',()=>{const d=new Date(2026,5,21,12,0,0);const at=h=>{const x=new Date(d);x.setHours(h,0,0,0);return world.environmentAt(x);};const dawn=at(6), noon=at(12), dusk=at(18), night=at(23);assert.equal(dawn.phase,'dawn');assert.equal(noon.phase,'day');assert.equal(dusk.phase,'dusk');assert.equal(night.phase,'night');assert(noon.daylight>dawn.daylight&&dawn.daylight>night.daylight);assert(noon.sunElevation>0);assert(night.sunElevation<0);assert(noon.sunAzimuth>dawn.sunAzimuth);});
 test('offline environment is deterministic within a day',()=>{const a=world.environmentAt(new Date(2026,5,21,14,32,10)),b=world.environmentAt(new Date(2026,5,21,14,32,10));assert.deepEqual(a,b);assert(a.wind>=0&&a.wind<=1&&a.gust>=0&&a.gust<=1&&a.cloudiness>=0&&a.cloudiness<=1);});
 test('environment switches and weather presets are bounded',()=>{const still=world.environmentAt(new Date(2026,5,21,23,0,0),{time:false,weather:false});assert.equal(still.timeEnabled,false);assert.equal(still.weatherEnabled,false);assert.equal(still.hour,12);assert.equal(still.rain,0);const storm=world.environmentAt(new Date(2026,5,21,12,0,0),{time:true,weather:true,preset:'storm'});assert.equal(storm.weatherPreset,'storm');assert(storm.rain===1&&storm.storm===1&&storm.wind<=1);});
