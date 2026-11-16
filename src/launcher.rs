@@ -18,6 +18,8 @@ struct Entry { name: String, path: PathBuf }
 struct State { hwnd: HWND, edit: HWND, list: HWND, all: Vec<Entry>, visible: Vec<usize>, font: HFONT }
 thread_local! { static STATE: RefCell<Option<State>> = const { RefCell::new(None) }; }
 
+unsafe extern "system" { fn SetFocus(hwnd: HWND) -> HWND; }
+
 fn enum_dir(root: &Path, depth: u8, out: &mut Vec<Entry>) {
     if depth == 0 { return; }
     let Ok(rd) = std::fs::read_dir(root) else { return };
@@ -102,7 +104,7 @@ pub fn toggle(owner: HWND) {
         if let Some(s) = cell.borrow_mut().as_mut() {
             let visible = IsWindowVisible(s.hwnd) != 0;
             ShowWindow(s.hwnd, if visible { SW_HIDE } else { SW_SHOWNOACTIVATE });
-            if !visible { SetForegroundWindow(s.hwnd); SendMessageW(s.edit, WM_SETFOCUS, 0, 0); refresh(s); }
+            if !visible { SetForegroundWindow(s.hwnd); SetFocus(s.edit); refresh(s); }
             return;
         }
         let cls = wide(CLASS); let mut wc: WNDCLASSEXW = std::mem::zeroed();
@@ -119,7 +121,7 @@ pub fn toggle(owner: HWND) {
         let list = CreateWindowExW(0, wide("LISTBOX").as_ptr(), std::ptr::null(), WS_CHILD|WS_VISIBLE|WS_VSCROLL|(LBS_NOTIFY as u32)|(LBS_NOINTEGRALHEIGHT as u32), 28, 88, w-56, h-112, hwnd, IDC_LIST as _, wc.hInstance, std::ptr::null_mut());
         set_font(edit, font); set_font(list, font);
         let mut s = State { hwnd, edit, list, all: entries(), visible: Vec::new(), font };
-        refresh(&mut s); *cell.borrow_mut() = Some(s); ShowWindow(hwnd, SW_SHOWNOACTIVATE); SetForegroundWindow(hwnd); SendMessageW(edit, WM_SETFOCUS, 0, 0);
+        refresh(&mut s); *cell.borrow_mut() = Some(s); ShowWindow(hwnd, SW_SHOWNOACTIVATE); SetForegroundWindow(hwnd); SetFocus(edit);
     });
 }
 

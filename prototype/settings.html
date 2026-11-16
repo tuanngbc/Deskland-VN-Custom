@@ -328,7 +328,7 @@
       <span data-i18n="autostart">开机自动启动</span><input type="checkbox" id="autostart"><i class="switch"></i>
     </label>
     <label class="hotkey-row" title="Mở launcher nhanh"><span data-i18n="launcherHotkey">Launcher</span>
-      <select id="launcherMods"><option value="1025">Alt</option><option value="1026">Ctrl</option><option value="1028">Shift</option></select>
+      <select id="launcherMods"><option value="16385">Alt</option><option value="16386">Ctrl</option><option value="16388">Shift</option></select>
       <select id="launcherKey"><option value="32">Space</option><option value="13">Enter</option><option value="65">A</option><option value="83">S</option><option value="68">D</option><option value="70">F</option><option value="81">Q</option><option value="87">W</option></select>
     </label>
   </div>
@@ -508,7 +508,7 @@ const DEFAULT_ENVIRONMENT = { time: true, weather: true, preset: 'auto', source:
 const state = { registry0: null, registry: null, theme: 'beach', params: {}, screen: null, icons: null,
   mode: 'mirror', monitors: [], selectedMonitor: null, world: null, allParams: {}, globalTheme: 'beach', globalPaused: false,
   environment: {...DEFAULT_ENVIRONMENT},
-  langSetting: 'auto', langSys: 'zh-CN', autostartWarn: false, autostartSw: '', launcherHotkey: { mods: 1025, vk: 32 },
+  langSetting: 'auto', langSys: 'zh-CN', autostartWarn: false, autostartSw: '', launcherHotkey: { mods: 16385, vk: 32 },
   updateVersion: '', updateStatus: '', updateProgress: -1, updateError: '' };
 const $ = id => document.getElementById(id);
 const frame = $('preview');
