@@ -546,7 +546,7 @@ const state = { registry0: null, registry: null, theme: 'beach', params: {}, scr
   mode: 'mirror', monitors: [], selectedMonitor: null, world: null, allParams: {}, globalTheme: 'beach', globalPaused: false,
   environment: {...DEFAULT_ENVIRONMENT},
   langSetting: 'auto', langSys: 'zh-CN', autostartWarn: false, autostartSw: '', launcherHotkey: { mods: 16385, vk: 32 },
-  updateVersion: '', updateStatus: '', updateProgress: -1, updateError: '' };
+  updateVersion: '', updateStatus: '', updateProgress: -1, updateError: '', pendingInit: null };
 const $ = id => document.getElementById(id);
 const frame = $('preview');
 
@@ -1137,6 +1137,11 @@ function onHost(m) {
     for (const id of ['awayPreview','awayEnable','awayDisable','awayRefresh','awayLockImage']) $(id).disabled = !!m.busy;
     $('awayStatus').textContent = m.status || t(m.enabled ? 'awayOn' : 'awayOff');
   } else if (m.t === 'init') {
+    if (!state.registry0) {
+      if (m.registry && Array.isArray(m.registry.themes)) state.registry0 = state.registry = m.registry;
+      state.pendingInit = m;
+      return;
+    }
     state.langSetting = m.lang || 'auto';
     state.langSys = m.langSys || 'zh-CN';
     setLang(m.langEff || state.langSys).then(() => {        // 先按界面语言把文字表读进来，再画界面
@@ -1245,14 +1250,22 @@ function bootError() { bootStatus.querySelector('b').textContent = 'Không tải
 async function boot() {
   bootRetry.hidden = true;
   try {
-    const response = await fetch('themes.json?boot=' + Date.now(), { cache: 'no-store' });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2200);
+    const response = await fetch('themes.json?boot=' + Date.now(), { cache: 'no-store', signal: controller.signal });
+    clearTimeout(timer);
     if (!response.ok) throw new Error('themes.json ' + response.status);
     const reg = await response.json();
     state.registry0 = state.registry = reg;
-    if (host) { host.addEventListener('message', e => onHost(JSON.parse(e.data))); send({ t: 'hello' }); }
-    else mockHost();
-  } catch (e) { console.error(e); bootError(); }
+    if (state.pendingInit) { const init = state.pendingInit; state.pendingInit = null; onHost(init); }
+    else if (!host) mockHost();
+  } catch (e) {
+    console.error(e);
+    if (state.registry0 && state.pendingInit) { const init = state.pendingInit; state.pendingInit = null; onHost(init); }
+    else bootError();
+  }
 }
+if (host) { host.addEventListener('message', e => onHost(JSON.parse(e.data))); send({ t: 'hello' }); }
 bootRetry.addEventListener('click', boot);
 boot();
 </script>

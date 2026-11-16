@@ -668,8 +668,13 @@ fn web_init(app: &App) -> serde_json::Value {
             "theme": app.cfg.theme, "status": if p.paused { "paused" } else { "running" },
         }));
     }
+    let registry = web::find_prototype()
+        .and_then(|p| std::fs::read_to_string(p.join("themes.json")).ok())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .unwrap_or(serde_json::Value::Null);
     serde_json::json!({
         "t": "init",
+        "registry": registry,
         "theme": app.cfg.theme,
         "params": app.cfg.params,
         "mode": app.cfg.mode,
