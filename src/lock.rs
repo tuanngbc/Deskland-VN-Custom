@@ -19,6 +19,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 const POLICY_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Policies\System";
 const DESKTOP_KEY: &str = r"Control Panel\Desktop";
 const SAVER_POLICY_KEY: &str = r"Software\Policies\Microsoft\Windows\Control Panel\Desktop";
+const SAVER_MARKER: &str = "DesklandRsSaverInstalled";
 
 /// Thư mục dữ liệu của bản Rust (ngoài AppData để tránh ảo hoá MSIX khi chạy từ ứng dụng đóng gói).
 pub fn data_dir() -> std::path::PathBuf {
@@ -88,7 +89,8 @@ fn saver_path_old() -> std::path::PathBuf {
 /// Trình bảo vệ màn hình hiện tại có phải của Deskland Rust không.
 pub fn saver_installed() -> bool {
     let cur = reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, "SCRNSAVE.EXE").unwrap_or_default();
-    !cur.is_empty() && (cur.eq_ignore_ascii_case(&saver_path().to_string_lossy()) || cur.eq_ignore_ascii_case(&saver_path_old().to_string_lossy()))
+    (!cur.is_empty() && (cur.eq_ignore_ascii_case(&saver_path().to_string_lossy()) || cur.eq_ignore_ascii_case(&saver_path_old().to_string_lossy())))
+        || reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, SAVER_MARKER).is_some_and(|v| v == "1")
 }
 
 /// Đặt Deskland làm trình bảo vệ màn hình, BẮT BUỘC kèm "khi tiếp tục, hiện màn hình đăng nhập".
@@ -103,7 +105,8 @@ pub fn install_saver(idle_mins: u32) -> Result<(), String> {
     let ok = reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "SCRNSAVE.EXE", &dst.to_string_lossy())
         && reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaveActive", "1")
         && reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaveTimeOut", &secs)
-        && reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaverIsSecure", "1");
+        && reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaverIsSecure", "1")
+        && reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, SAVER_MARKER, "1");
     if !ok {
         return Err("Ghi cài đặt trình bảo vệ màn hình thất bại".into());
     }
@@ -160,6 +163,10 @@ pub fn start_secure_saver(hwnd: HWND) {
 pub fn uninstall_saver() {
     if saver_installed() {
         reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "SCRNSAVE.EXE", "");
+        // SPI_SETSCREENSAVEACTIVE không phải lúc nào cũng ghi ngược giá trị
+        // registry ngay (đặc biệt khi tắt từ WebView2), nên ghi rõ trạng thái 0.
+        reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaveActive", "0");
+        reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, SAVER_MARKER, "0");
         unsafe { SystemParametersInfoW(SPI_SETSCREENSAVEACTIVE, 0, std::ptr::null_mut(), SPIF_SENDCHANGE) };
         crate::log!("Đã gỡ trình bảo vệ màn hình Deskland-VN");
     }
