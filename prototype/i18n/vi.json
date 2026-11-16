@@ -207,6 +207,8 @@
     "awayLockBlocked": "Windows không cho phép đổi ảnh màn khóa",
     "awayError": "Không thể cập nhật màn hình chờ: {msg}",
     "launcherHotkey": "Phím tắt Launcher",
+    "customHotkey": "Tùy chỉnh",
+    "hotkeyWaiting": "Nhấn tổ hợp phím…",
     "launcherAppearance": "Giao diện Spotlight",
     "launcherTheme": "Chế độ màu",
     "launcherLight": "Sáng",

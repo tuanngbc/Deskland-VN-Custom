@@ -207,6 +207,8 @@
     "awayLockBlocked": "Windows did not allow changing the lock-screen image",
     "awayError": "Could not update the screen saver: {msg}",
     "launcherHotkey": "Launcher shortcut",
+    "customHotkey": "Customize",
+    "hotkeyWaiting": "Press keys…",
     "launcherAppearance": "Spotlight appearance",
     "launcherTheme": "Color mode",
     "launcherLight": "Light",

@@ -70,6 +70,8 @@
   .switch-row input:focus-visible + .switch { outline: 2px solid var(--muted); outline-offset: 3px; }
   .hotkey-row { display: flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; }
   .hotkey-row select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 7px; }
+  .hotkey-record { flex: none; font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; cursor: pointer; }
+  .hotkey-record:hover, .hotkey-record.capturing { border-color: var(--accent); background: var(--accent-soft); }
   .switch-row.is-disabled { cursor: not-allowed; opacity: .45; }
   .switch-row.is-disabled .switch { background: var(--track); }
   button:focus-visible, a:focus-visible { outline: 2px solid var(--muted); outline-offset: 3px; }
@@ -341,6 +343,7 @@
     <label class="hotkey-row" title="Mở launcher nhanh"><span data-i18n="launcherHotkey">Launcher</span>
       <select id="launcherMods"><option value="16385">Alt</option><option value="16386">Ctrl</option><option value="16388">Shift</option></select>
       <select id="launcherKey"><option value="32">Space</option><option value="13">Enter</option><option value="65">A</option><option value="83">S</option><option value="68">D</option><option value="70">F</option><option value="81">Q</option><option value="87">W</option></select>
+      <button class="hotkey-record" id="launcherRecord" type="button" data-i18n="customHotkey">Tùy chỉnh</button>
     </label>
   </div>
 </header>
@@ -937,6 +940,46 @@ $('autostart').addEventListener('change', e => send({ t: 'autostart', v: e.targe
 $('launcherMods').addEventListener('change', () => send({ t: 'launcherHotkey', mods: Number($('launcherMods').value), vk: Number($('launcherKey').value) }));
 $('launcherKey').addEventListener('change', () => send({ t: 'launcherHotkey', mods: Number($('launcherMods').value), vk: Number($('launcherKey').value) }));
 let miniTools = { enabled: true, fps: 30, audio: true, capture: { mods: 16390, vk: 83 }, record: { mods: 16390, vk: 82 } };
+const MOD_NOREPEAT_UI = 0x4000;
+for (const [value, label] of [[1,'Alt'],[2,'Ctrl'],[4,'Shift'],[3,'Ctrl+Alt'],[5,'Alt+Shift'],[6,'Ctrl+Shift'],[7,'Ctrl+Alt+Shift']]) if (!$('launcherMods').querySelector(`option[value="${value | MOD_NOREPEAT_UI}"]`)) $('launcherMods').add(new Option(label, value | MOD_NOREPEAT_UI));
+for (let code = 65; code <= 90; code++) if (!$('launcherKey').querySelector(`option[value="${code}"]`)) $('launcherKey').add(new Option(String.fromCharCode(code), code));
+for (let code = 112; code <= 123; code++) if (!$('launcherKey').querySelector(`option[value="${code}"]`)) $('launcherKey').add(new Option('F' + (code - 111), code));
+function hotkeyLabel(mods, vk) {
+  const names = [];
+  if ((mods & 2) !== 0) names.push('Ctrl');
+  if ((mods & 1) !== 0) names.push('Alt');
+  if ((mods & 4) !== 0) names.push('Shift');
+  const key = vk === 32 ? 'Space' : vk === 13 ? 'Enter' : vk >= 65 && vk <= 90 ? String.fromCharCode(vk) : vk >= 112 && vk <= 123 ? 'F' + (vk - 111) : String(vk);
+  return names.concat(key).join('+');
+}
+function keyCodeToVk(e) {
+  if (e.code === 'Space') return 32;
+  if (e.code === 'Enter' || e.code === 'NumpadEnter') return 13;
+  if (/^Key[A-Z]$/.test(e.code)) return e.code.charCodeAt(3);
+  if (/^F(?:[1-9]|1[0-2])$/.test(e.code)) return 111 + Number(e.code.slice(1));
+  return 0;
+}
+function startHotkeyCapture(button, onValue, allowEnter = true) {
+  if (button.dataset.capturing === '1') return;
+  button.dataset.capturing = '1';
+  const old = button.textContent;
+  button.textContent = t('hotkeyWaiting');
+  button.classList.add('capturing');
+  const done = (label) => { button.dataset.capturing = '0'; button.classList.remove('capturing'); button.textContent = old; if (label) onValue(label.mods, label.vk); };
+  const handler = e => {
+    if (e.key === 'Escape') { e.preventDefault(); window.removeEventListener('keydown', handler, true); done(null); return; }
+    const vk = keyCodeToVk(e), mods = (e.ctrlKey ? 2 : 0) | (e.altKey ? 1 : 0) | (e.shiftKey ? 4 : 0) | MOD_NOREPEAT_UI;
+    if (!vk || !(mods & 7) || (!allowEnter && vk === 13)) return;
+    e.preventDefault(); e.stopPropagation(); window.removeEventListener('keydown', handler, true); done({ mods, vk });
+  };
+  window.addEventListener('keydown', handler, true);
+  button.focus();
+}
+function bindHotkeyRecord(button, onValue, allowEnter = true) { button.addEventListener('click', () => startHotkeyCapture(button, onValue, allowEnter)); }
+bindHotkeyRecord($('launcherRecord'), (mods, vk) => {
+  $('launcherMods').value = String(mods); $('launcherKey').value = String(vk);
+  send({ t: 'launcherHotkey', mods, vk });
+}, true);
 for (const [name, label] of [['capture', 'miniToolsCapture'], ['record', 'miniToolsRecord']]) {
   const row = document.createElement('label');
   const span = document.createElement('span'); span.dataset.i18n = label; span.textContent = t(label); row.appendChild(span);
@@ -946,6 +989,10 @@ for (const [name, label] of [['capture', 'miniToolsCapture'], ['record', 'miniTo
   for (let code = 65; code <= 90; code++) key.add(new Option(String.fromCharCode(code), code));
   for (let i = 1; i <= 12; i++) key.add(new Option('F' + i, 111 + i));
   row.appendChild(mods); row.appendChild(key); $('toolShortcuts').appendChild(row);
+  const record = document.createElement('button'); record.type = 'button'; record.className = 'hotkey-record'; record.dataset.i18n = 'customHotkey'; record.textContent = t('customHotkey'); row.appendChild(record);
+  bindHotkeyRecord(record, (newMods, newVk) => {
+    mods.value = String(newMods); key.value = String(newVk); saveMiniTools();
+  }, false);
   mods.addEventListener('change', saveMiniTools); key.addEventListener('change', saveMiniTools);
 }
 function saveMiniTools() {
