@@ -277,6 +277,11 @@
   }
   .monitor-panel { margin: 0 0 18px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
   .monitor-panel h3 { margin: 0 0 10px; font-size: 13px; }
+  .launcher-options { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 20px; }
+  .launcher-options label { display: grid; gap: 6px; font-size: 12px; }
+  .launcher-options input[type="range"] { width: 100%; }
+  .launcher-options output { font-variant-numeric: tabular-nums; float: right; }
+  .launcher-note { margin: 10px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
   .mode-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
   .mode-row button { flex: 1 1 120px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-2); color: var(--text); cursor: pointer; }
   .mode-row button.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 650; }
@@ -346,6 +351,15 @@
       <button class="ghost-btn update-action" id="updateProgram" data-i18n="updateProgram">立即更新</button>
     </div>
     <div class="warn" id="autostartWarn" hidden role="alert"><p><b data-i18n="autostartBlocked">开机自动启动可能被拦截了</b><br><span id="autostartWarnText"></span></p><button id="autostartWarnOk" data-i18n="gotIt">知道了</button></div>
+    <section class="monitor-panel" aria-label="Spotlight appearance">
+      <h3 data-i18n="launcherAppearance">Giao diện Spotlight</h3>
+      <div class="launcher-options">
+        <label><span data-i18n="launcherTheme">Chế độ màu</span><select id="launcherTheme"><option value="light" data-i18n="launcherLight">Sáng</option><option value="dark" data-i18n="launcherDark">Tối</option></select></label>
+        <label><span><span data-i18n="launcherTransparency">Độ trong suốt</span><output id="launcherTransparencyValue">55%</output></span><input id="launcherTransparency" type="range" min="0" max="85" step="1" value="55"></label>
+        <label><span><span data-i18n="launcherBlur">Độ mờ kính</span><output id="launcherBlurValue">20 px</output></span><input id="launcherBlur" type="range" min="4" max="40" step="1" value="20"></label>
+      </div>
+      <p class="launcher-note" data-i18n="launcherGlassNote">Kính lấy nền phía sau mỗi lần mở. Chữ và biểu tượng luôn rõ; các tùy chọn này chỉ áp dụng cho Spotlight.</p>
+    </section>
     <section class="monitor-panel" aria-label="Multi-monitor">
       <h3 id="monitorTitle">显示器与壁纸模式</h3>
       <div class="mode-row" id="modeRow">
@@ -891,6 +905,14 @@ function flashSaved() {
 $('autostart').addEventListener('change', e => send({ t: 'autostart', v: e.target.checked }));
 $('launcherMods').addEventListener('change', () => send({ t: 'launcherHotkey', mods: Number($('launcherMods').value), vk: Number($('launcherKey').value) }));
 $('launcherKey').addEventListener('change', () => send({ t: 'launcherHotkey', mods: Number($('launcherMods').value), vk: Number($('launcherKey').value) }));
+function syncLauncherAppearance() {
+  $('launcherTransparencyValue').textContent = $('launcherTransparency').value + '%';
+  $('launcherBlurValue').textContent = $('launcherBlur').value + ' px';
+}
+for (const id of ['launcherTheme', 'launcherTransparency', 'launcherBlur']) {
+  $(id).addEventListener('input', syncLauncherAppearance);
+  $(id).addEventListener('change', () => send({ t: 'launcherAppearance', theme: $('launcherTheme').value, transparency: Number($('launcherTransparency').value) / 100, blur: Number($('launcherBlur').value) }));
+}
 $('adaptive').addEventListener('change', e => setParam('adaptive', e.target.checked ? 1 : 0));
 $('autostartWarnOk').addEventListener('click', () => { state.autostartWarn = false; showAutostartWarn(); send({ t: 'autostartWarnSeen' }); });
 // 开机自启被拦的提醒：宿主只给安全软件的名字，句子按界面语言拼
@@ -1085,6 +1107,12 @@ function onHost(m) {
       state.launcherHotkey = Object.assign(state.launcherHotkey, m.launcherHotkey || {});
       $('launcherMods').value = String(state.launcherHotkey.mods);
       $('launcherKey').value = String(state.launcherHotkey.vk);
+      if (m.launcherAppearance) {
+        $('launcherTheme').value = m.launcherAppearance.theme;
+        $('launcherTransparency').value = Math.round(m.launcherAppearance.transparency * 100);
+        $('launcherBlur').value = m.launcherAppearance.blur;
+        syncLauncherAppearance();
+      }
       state.autostartWarn = !!m.autostartWarn;
       state.autostartSw = m.autostartSw || '';
       showAutostartWarn();

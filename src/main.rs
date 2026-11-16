@@ -515,6 +515,7 @@ struct Config {
     widget_lines: [widget::Line; 3],
     launcher_mods: u32,
     launcher_vk: u32,
+    launcher_appearance: launcher::Appearance,
 }
 
 fn rust_settings_path() -> std::path::PathBuf {
@@ -578,6 +579,7 @@ fn load_config(cli_theme: Option<String>) -> Config {
         }),
         launcher_mods: root.get("launcherHotkey").and_then(|v| v.get("mods")).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(MOD_ALT | MOD_NOREPEAT),
         launcher_vk: root.get("launcherHotkey").and_then(|v| v.get("vk")).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(VK_SPACE as u32),
+        launcher_appearance: launcher::Appearance::from_json(&root["launcherAppearance"]),
         lock_idle_mins: root.get("lockIdleMins").and_then(|v| v.as_u64()).map(|v| v as u32).filter(|&v| v > 0).unwrap_or(5),
     }
 }
@@ -612,6 +614,7 @@ fn save_config(cfg: &Config) {
         },
         "params": cfg.params,
         "launcherHotkey": { "mods": cfg.launcher_mods, "vk": cfg.launcher_vk },
+        "launcherAppearance": cfg.launcher_appearance.json(),
     });
     let p = rust_settings_path();
     if let Err(e) = std::fs::write(&p, serde_json::to_string_pretty(&v).unwrap_or_default()) {
@@ -670,6 +673,7 @@ fn web_init(app: &App) -> serde_json::Value {
         "screen": { "w": w, "h": h },
         "autostart": settings::autostart_enabled(),
         "launcherHotkey": { "mods": app.cfg.launcher_mods, "vk": app.cfg.launcher_vk, "label": launcher::hotkey_text(app.cfg.launcher_mods, app.cfg.launcher_vk) },
+        "launcherAppearance": app.cfg.launcher_appearance.json(),
         "autostartWarn": false,
         "interactions": app.interactions_enabled,
         "widget": {
@@ -2240,6 +2244,11 @@ fn main() {
                     web::post(&web_init(&app).to_string());
                     web_changed = true;
                 }
+                "launcherAppearance" => {
+                    app.cfg.launcher_appearance = launcher::Appearance::from_json(&m);
+                    launcher::configure(app.cfg.launcher_appearance.clone());
+                    web_changed = true;
+                }
                 "interactions" => {
                     let on = m.get("v").and_then(|v| v.as_bool()).unwrap_or(true);
                     INTERACTIONS_ENABLED.with(|c| c.set(on));
@@ -2310,7 +2319,10 @@ fn main() {
         } else {
             match cmd {
                 CMD_EXIT => break,
-                CMD_LAUNCHER => launcher::toggle(msg_hwnd),
+                CMD_LAUNCHER => {
+                    launcher::configure(app.cfg.launcher_appearance.clone());
+                    launcher::toggle(msg_hwnd);
+                }
                 CMD_LOCK => lock::lock_now(),
                 CMD_SAVER => {
                     if lock::saver_installed() {

@@ -206,7 +206,14 @@
     "awayLockDone": "Đã đặt ảnh cảnh làm ảnh nền màn khóa Windows",
     "awayLockBlocked": "Windows không cho phép đổi ảnh màn khóa",
     "awayError": "Không thể cập nhật màn hình chờ: {msg}",
-    "launcherHotkey": "Phím tắt Launcher"
+    "launcherHotkey": "Phím tắt Launcher",
+    "launcherAppearance": "Giao diện Spotlight",
+    "launcherTheme": "Chế độ màu",
+    "launcherLight": "Sáng",
+    "launcherDark": "Tối",
+    "launcherTransparency": "Độ trong suốt",
+    "launcherBlur": "Độ mờ kính",
+    "launcherGlassNote": "Kính lấy nền phía sau mỗi lần mở. Chữ và biểu tượng luôn rõ; các tùy chọn này chỉ áp dụng cho Spotlight."
   },
   "host": {
     "traySettings": "Cài đặt…",

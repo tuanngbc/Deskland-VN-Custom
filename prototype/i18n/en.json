@@ -206,7 +206,14 @@
     "awayLockDone": "Scene image set as the Windows lock-screen background",
     "awayLockBlocked": "Windows did not allow changing the lock-screen image",
     "awayError": "Could not update the screen saver: {msg}",
-    "launcherHotkey": "Launcher shortcut"
+    "launcherHotkey": "Launcher shortcut",
+    "launcherAppearance": "Spotlight appearance",
+    "launcherTheme": "Color mode",
+    "launcherLight": "Light",
+    "launcherDark": "Dark",
+    "launcherTransparency": "Transparency",
+    "launcherBlur": "Glass blur",
+    "launcherGlassNote": "Glass captures the background each time Spotlight opens. Text and icons stay clear; these settings affect Spotlight only."
   },
   "host": {
     "traySettings": "Settings…",
