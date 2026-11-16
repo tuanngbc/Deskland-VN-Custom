@@ -213,7 +213,19 @@
     "launcherDark": "Tối",
     "launcherTransparency": "Độ trong suốt",
     "launcherBlur": "Độ mờ kính",
-    "launcherGlassNote": "Kính lấy nền phía sau mỗi lần mở. Chữ và biểu tượng luôn rõ; các tùy chọn này chỉ áp dụng cho Spotlight."
+    "launcherGlassNote": "Kính lấy nền phía sau mỗi lần mở. Chữ và biểu tượng luôn rõ; các tùy chọn này chỉ áp dụng cho Spotlight.",
+    "miniToolsTitle": "Chụp, quay và Quick Look",
+    "miniToolsEnabled": "Bật phím tắt tiện ích",
+    "miniToolsSpace": "Space xem trước tệp trong Explorer",
+    "miniToolsFps": "Tốc độ quay",
+    "miniToolsAudio": "Thu tiếng máy khi quay",
+    "miniToolsCapture": "Chụp và chỉnh sửa",
+    "miniToolsRecord": "Quay vùng / Dừng và lưu",
+    "miniToolsPreview": "Xem trước tệp",
+    "miniToolsDisabled": "Đã tắt phím tắt tiện ích",
+    "miniToolsReady": "sẵn sàng",
+    "miniToolsConflict": "phím tắt bị ứng dụng khác dùng",
+    "miniToolsNote": "Kéo chọn vùng hoặc nhấn Space để lấy cả màn hình. Ảnh chụp mở trình sửa ngay. Video MP4 lưu trong Videos/Deskland. Đóng tiện ích để giải phóng bộ nhớ."
   },
   "host": {
     "traySettings": "Cài đặt…",

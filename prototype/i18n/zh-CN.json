@@ -189,7 +189,19 @@
     "launcherDark": "深色",
     "launcherTransparency": "透明度",
     "launcherBlur": "玻璃模糊",
-    "launcherGlassNote": "每次打开时获取背景并模糊。文字和图标保持清晰；这些设置仅适用于 Spotlight。"
+    "launcherGlassNote": "每次打开时获取背景并模糊。文字和图标保持清晰；这些设置仅适用于 Spotlight。",
+    "miniToolsTitle": "截图、录屏与快速预览",
+    "miniToolsEnabled": "启用工具快捷键",
+    "miniToolsSpace": "在资源管理器中按空格预览文件",
+    "miniToolsFps": "录制帧率",
+    "miniToolsAudio": "录制系统声音",
+    "miniToolsCapture": "截图并编辑",
+    "miniToolsRecord": "区域录屏 / 停止并保存",
+    "miniToolsPreview": "文件预览",
+    "miniToolsDisabled": "工具快捷键已关闭",
+    "miniToolsReady": "就绪",
+    "miniToolsConflict": "快捷键已被占用",
+    "miniToolsNote": "拖动选择区域，或按空格选择整个显示器。截图后立即打开编辑器。MP4 保存到 Videos/Deskland。关闭工具后释放内存。"
   },
   "host": {
     "traySettings": "设置…",

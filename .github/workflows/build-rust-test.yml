@@ -27,6 +27,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/renderer-contract.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package Rust native build
         run: |
@@ -62,5 +64,6 @@ jobs:
           path: |
             dist/*.zip
             dist/*.sha256
+            Cargo.lock
           retention-days: 14
 

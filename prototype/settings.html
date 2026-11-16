@@ -351,6 +351,25 @@
       <button class="ghost-btn update-action" id="updateProgram" data-i18n="updateProgram">立即更新</button>
     </div>
     <div class="warn" id="autostartWarn" hidden role="alert"><p><b data-i18n="autostartBlocked">开机自动启动可能被拦截了</b><br><span id="autostartWarnText"></span></p><button id="autostartWarnOk" data-i18n="gotIt">知道了</button></div>
+    <section class="monitor-panel" aria-label="Mini tools">
+      <h3 data-i18n="miniToolsTitle">Chụp, quay và Quick Look</h3>
+      <div class="environment-controls">
+        <label><input id="toolsEnabled" type="checkbox" checked> <span data-i18n="miniToolsEnabled">Bật phím tắt tiện ích</span></label>
+        <label><input id="toolsSpace" type="checkbox" checked> <span data-i18n="miniToolsSpace">Space xem trước tệp trong Explorer</span></label>
+      </div>
+      <div class="launcher-options" id="toolShortcuts"></div>
+      <div class="environment-controls">
+        <label><span data-i18n="miniToolsFps">Tốc độ quay</span> <select id="toolsFps"><option value="30">30 FPS</option><option value="60">60 FPS</option></select></label>
+        <label><input id="toolsAudio" type="checkbox" checked> <span data-i18n="miniToolsAudio">Thu tiếng máy khi quay</span></label>
+      </div>
+      <div class="environment-controls">
+        <button class="ghost-btn" id="toolCapture" data-i18n="miniToolsCapture">Chụp và chỉnh sửa</button>
+        <button class="ghost-btn" id="toolRecord" data-i18n="miniToolsRecord">Quay vùng / Dừng và lưu</button>
+        <button class="ghost-btn" id="toolPreview">Quick Look</button>
+      </div>
+      <p class="launcher-note" id="toolsHotkeyStatus" role="status"></p>
+      <p class="launcher-note" data-i18n="miniToolsNote">Kéo chọn vùng hoặc nhấn Space để lấy cả màn hình. Ảnh chụp mở trình sửa ngay. Video MP4 lưu trong Videos/Deskland. Đóng tiện ích để giải phóng bộ nhớ.</p>
+    </section>
     <section class="monitor-panel" aria-label="Spotlight appearance">
       <h3 data-i18n="launcherAppearance">Giao diện Spotlight</h3>
       <div class="launcher-options">
@@ -905,6 +924,32 @@ function flashSaved() {
 $('autostart').addEventListener('change', e => send({ t: 'autostart', v: e.target.checked }));
 $('launcherMods').addEventListener('change', () => send({ t: 'launcherHotkey', mods: Number($('launcherMods').value), vk: Number($('launcherKey').value) }));
 $('launcherKey').addEventListener('change', () => send({ t: 'launcherHotkey', mods: Number($('launcherMods').value), vk: Number($('launcherKey').value) }));
+let miniTools = { enabled: true, spacePreview: true, fps: 30, audio: true, capture: { mods: 16390, vk: 83 }, record: { mods: 16390, vk: 82 }, preview: { mods: 16387, vk: 32 } };
+for (const [name, label] of [['capture', 'miniToolsCapture'], ['record', 'miniToolsRecord'], ['preview', 'miniToolsPreview']]) {
+  const row = document.createElement('label');
+  const span = document.createElement('span'); span.dataset.i18n = label; span.textContent = t(label); row.appendChild(span);
+  const mods = document.createElement('select'); mods.id = 'toolMods_' + name;
+  for (const [value, text] of [[16390, 'Ctrl+Shift'], [16387, 'Ctrl+Alt'], [16389, 'Alt+Shift'], [16391, 'Ctrl+Alt+Shift']]) mods.add(new Option(text, value));
+  const key = document.createElement('select'); key.id = 'toolKey_' + name; key.add(new Option('Space', 32));
+  for (let code = 65; code <= 90; code++) key.add(new Option(String.fromCharCode(code), code));
+  for (let i = 1; i <= 12; i++) key.add(new Option('F' + i, 111 + i));
+  row.appendChild(mods); row.appendChild(key); $('toolShortcuts').appendChild(row);
+  mods.addEventListener('change', saveMiniTools); key.addEventListener('change', saveMiniTools);
+}
+function saveMiniTools() {
+  const m = { t: 'miniTools', enabled: $('toolsEnabled').checked, spacePreview: $('toolsSpace').checked, fps: Number($('toolsFps').value), audio: $('toolsAudio').checked };
+  for (const name of ['capture', 'record', 'preview']) m[name] = { mods: Number($('toolMods_' + name).value), vk: Number($('toolKey_' + name).value) };
+  send(m);
+}
+function syncMiniTools(m) {
+  miniTools = Object.assign(miniTools, m.miniTools || {});
+  $('toolsEnabled').checked = miniTools.enabled; $('toolsSpace').checked = miniTools.spacePreview;
+  $('toolsFps').value = String(miniTools.fps); $('toolsAudio').checked = miniTools.audio;
+  for (const name of ['capture', 'record', 'preview']) { $('toolMods_' + name).value = String(miniTools[name].mods); $('toolKey_' + name).value = String(miniTools[name].vk); }
+  $('toolsHotkeyStatus').textContent = !miniTools.enabled ? t('miniToolsDisabled') : ['miniToolsCapture', 'miniToolsRecord', 'miniToolsPreview'].map((label, i) => t(label) + ': ' + t(m.miniToolsHotkeys && m.miniToolsHotkeys[i] ? 'miniToolsReady' : 'miniToolsConflict')).join(' · ');
+}
+for (const id of ['toolsEnabled', 'toolsSpace', 'toolsFps', 'toolsAudio']) $(id).addEventListener('change', saveMiniTools);
+for (const [id, mode] of [['toolCapture', 'capture'], ['toolRecord', 'record'], ['toolPreview', 'preview']]) $(id).addEventListener('click', () => send({ t: 'miniToolOpen', mode }));
 function syncLauncherAppearance() {
   $('launcherTransparencyValue').textContent = $('launcherTransparency').value + '%';
   $('launcherBlurValue').textContent = $('launcherBlur').value + ' px';
@@ -1104,6 +1149,7 @@ function onHost(m) {
       state.world = m.world || null;
       state.selectedMonitor = state.monitors[0] && state.monitors[0].id;
       $('autostart').checked = !!m.autostart;
+      syncMiniTools(m);
       state.launcherHotkey = Object.assign(state.launcherHotkey, m.launcherHotkey || {});
       $('launcherMods').value = String(state.launcherHotkey.mods);
       $('launcherKey').value = String(state.launcherHotkey.vk);
@@ -1123,6 +1169,8 @@ function onHost(m) {
       shareBusy(null);
       document.documentElement.classList.add('ready');
     });
+  } else if (m.t === 'miniToolsState') {
+    syncMiniTools(m);
   } else if (m.t === 'themeChanged') {
     if (!themeById(m.id) || themeById(m.id).status !== 'ready') return;
     state.theme = m.id;

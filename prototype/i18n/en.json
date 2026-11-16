@@ -213,7 +213,19 @@
     "launcherDark": "Dark",
     "launcherTransparency": "Transparency",
     "launcherBlur": "Glass blur",
-    "launcherGlassNote": "Glass captures the background each time Spotlight opens. Text and icons stay clear; these settings affect Spotlight only."
+    "launcherGlassNote": "Glass captures the background each time Spotlight opens. Text and icons stay clear; these settings affect Spotlight only.",
+    "miniToolsTitle": "Capture, record and Quick Look",
+    "miniToolsEnabled": "Enable utility shortcuts",
+    "miniToolsSpace": "Space previews files in Explorer",
+    "miniToolsFps": "Recording frame rate",
+    "miniToolsAudio": "Record system audio",
+    "miniToolsCapture": "Capture and edit",
+    "miniToolsRecord": "Record region / Stop and save",
+    "miniToolsPreview": "File preview",
+    "miniToolsDisabled": "Utility shortcuts disabled",
+    "miniToolsReady": "ready",
+    "miniToolsConflict": "shortcut already in use",
+    "miniToolsNote": "Drag a region or press Space for the whole monitor. Screenshots open the editor immediately. MP4 recordings are saved in Videos/Deskland. Close a utility to release its memory."
   },
   "host": {
     "traySettings": "Settings…",
