@@ -246,7 +246,12 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
             PENDING_CMD.with(|c| c.set(CMD_LAUNCHER));
             0
         }
-        WM_HOTKEY if w as i32 == mini_tools::CAPTURE_ID => { PENDING_CMD.with(|c| c.set(CMD_CAPTURE)); 0 }
+        WM_HOTKEY if w as i32 == mini_tools::CAPTURE_ID => {
+            // Lấy ảnh trước khi context menu nhận ra phím tắt và tự đóng.
+            let _ = mini_tools::stage_hotkey_capture();
+            PENDING_CMD.with(|c| c.set(CMD_CAPTURE));
+            0
+        }
         WM_HOTKEY if w as i32 == mini_tools::RECORD_ID => { PENDING_CMD.with(|c| c.set(CMD_RECORD)); 0 }
         WM_TRAY => {
             let ev = (l as u32) & 0xFFFF;
@@ -2353,7 +2358,7 @@ fn main() {
                     launcher::configure(app.cfg.launcher_appearance.clone());
                     launcher::toggle(msg_hwnd);
                 }
-                CMD_CAPTURE => mini_tools::spawn("capture",&app.cfg.tools),
+                CMD_CAPTURE => mini_tools::spawn_capture_staged(&app.cfg.tools),
                 CMD_RECORD => mini_tools::spawn("record",&app.cfg.tools),
                 CMD_LOCK => lock::lock_now(),
                 CMD_SAVER => {

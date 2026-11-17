@@ -12,6 +12,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 pub const CAPTURE_ID: i32 = 31;
 pub const RECORD_ID: i32 = 32;
+pub fn stage_hotkey_capture() -> bool { screen::stage_hotkey_capture() }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Options {
@@ -54,11 +55,21 @@ pub fn register(hwnd:HWND, o:&Options)->[bool;2] {
     }
 }
 pub fn spawn(mode:&str, o:&Options) {
+    spawn_inner(mode, o, None);
+}
+pub fn spawn_capture_staged(o:&Options) {
+    spawn_inner("capture", o, screen::take_hotkey_capture());
+}
+fn spawn_inner(mode:&str, o:&Options, staged:Option<PathBuf>) {
     if mode=="record"{unsafe{let existing=FindWindowW(wide("DesklandRecordingPanel").as_ptr(),std::ptr::null());if !existing.is_null(){PostMessageW(existing,WM_CLOSE,0,0);return;}}}
-    let result=std::env::current_exe().and_then(|exe| std::process::Command::new(exe)
+    let result=std::env::current_exe().and_then(|exe| {
+        let mut command=std::process::Command::new(exe);
+        command
         .arg("--mini-tool").arg(mode).arg("--tool-fps").arg(o.fps.to_string())
-        .arg(if o.audio{"--tool-audio"}else{"--tool-silent"})
-        .creation_flags(0x08000000).spawn());
+        .arg(if o.audio{"--tool-audio"}else{"--tool-silent"});
+        if let Some(path)=staged { command.arg("--capture-image").arg(path); }
+        command.creation_flags(0x08000000).spawn()
+    });
     if let Err(e)=result { message(&format!("Không mở được tiện ích: {e}")); }
 }
 /// Must run before wallpaper singleton, logging, WebView, timers or OpenGL.
@@ -71,8 +82,11 @@ pub fn dispatch(args:&[String])->bool {
     }
     let mutex=unsafe { windows_sys::Win32::System::Threading::CreateMutexW(std::ptr::null(),0,wide(&format!("DesklandMiniTool_{mode}")).as_ptr()) };
     if unsafe {GetLastError()}==ERROR_ALREADY_EXISTS { unsafe { if !mutex.is_null(){CloseHandle(mutex);} } return true; }
+    let staged= args.windows(2).find(|v|v[0]=="--capture-image").map(|v|PathBuf::from(&v[1]));
+    let initial=staged.as_ref().and_then(|path| image::open(path).ok().map(|image|image.to_rgba8()));
+    if let Some(path)=staged { let _=std::fs::remove_file(path); }
     let result=match mode {
-        "capture"=>screen::select(false).and_then(|selection| match selection {Some((image,rect))=>editor::run(editor::Document::new(screen::crop(&image,rect)),false),None=>Ok(())}),
+        "capture"=>screen::select_with_image(false, initial).and_then(|selection| match selection {Some((image,rect))=>editor::run(editor::Document::new(screen::crop(&image,rect)),false),None=>Ok(())}),
         "record"=>screen::select(true).and_then(|selection|match selection {Some((image,rect))=>{drop(image);recorder::run(rect,if args.windows(2).any(|v|v[0]=="--tool-fps"&&v[1]=="60"){60}else{30},args.iter().any(|a|a=="--tool-audio"))},None=>Ok(())}),
         _=>Err("Tiện ích không hợp lệ".into()),
     };

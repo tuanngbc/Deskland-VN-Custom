@@ -2,6 +2,7 @@
 use crate::desktop::wide;
 use image::RgbaImage;
 use std::cell::RefCell;
+use std::path::PathBuf;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
@@ -48,8 +49,29 @@ pub unsafe fn draw_image(dc:HDC,image:&RgbaImage,rect:Area){let bytes=display_pi
 
 struct Selection {image:RgbaImage,origin:Area,start:Option<(i32,i32)>,area:Area,painted:Area,result:Option<Area>,record:bool}
 thread_local!{static PICK:RefCell<Option<Selection>>=const{RefCell::new(None)};}
+// Ảnh được lấy ngay tại thời điểm WM_HOTKEY đến, trước khi Windows đóng
+// context menu. Tiến trình tiện ích đọc ảnh này khi khung chọn vùng mở ra.
+thread_local!{static HOTKEY_IMAGE:RefCell<Option<PathBuf>>=const{RefCell::new(None)};}
+
+pub fn stage_hotkey_capture() -> bool {
+    let origin = virtual_area();
+    let Ok(mut grab) = Grab::new(origin) else { return false; };
+    let Ok(image) = grab.image() else { return false; };
+    let path = crate::lock::data_dir().join(format!("capture-hotkey-{}.png", std::process::id()));
+    if image.save_with_format(&path, image::ImageFormat::Png).is_err() { return false; }
+    HOTKEY_IMAGE.with(|c| {
+        if let Some(old) = c.borrow_mut().replace(path.clone()) { let _ = std::fs::remove_file(old); }
+    });
+    true
+}
+
+pub fn take_hotkey_capture() -> Option<PathBuf> { HOTKEY_IMAGE.with(|c| c.borrow_mut().take()) }
+
 pub fn select(record:bool)->Result<Option<(RgbaImage,Area)>,String>{
-    let origin=virtual_area();let image=Grab::new(origin)?.image()?;
+    select_with_image(record, None)
+}
+pub fn select_with_image(record:bool, initial:Option<RgbaImage>)->Result<Option<(RgbaImage,Area)>,String>{
+    let origin=virtual_area();let image=initial.unwrap_or(Grab::new(origin)?.image()?);
     PICK.with(|c|*c.borrow_mut()=Some(Selection{image,origin,start:None,area:Area::default(),painted:Area::default(),result:None,record}));
     unsafe{
         let cls=wide("DesklandCaptureSelection");let mut wc:WNDCLASSW=std::mem::zeroed();wc.lpfnWndProc=Some(proc);wc.lpszClassName=cls.as_ptr();wc.hCursor=LoadCursorW(std::ptr::null_mut(),IDC_CROSS);RegisterClassW(&wc);
