@@ -635,6 +635,8 @@ async function setLang(code) {
 function rerenderTexts() {
   if (!state.screen) return;
   renderMonitors(); renderEnvironment(); renderHead(); renderThemes(); renderControls(); updateFoot(); shareBusy(shareState); showAutostartWarn(); showUpdate(); updatePurchaseText();
+  setHotkeyButton($('launcherRecord'), state.launcherHotkey.mods, state.launcherHotkey.vk);
+  for (const name of ['capture', 'record']) setHotkeyButton(document.querySelector(`[data-hotkey-for="${name}"]`), miniTools[name].mods, miniTools[name].vk);
 }
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -952,11 +954,18 @@ function hotkeyLabel(mods, vk) {
   const key = vk === 32 ? 'Space' : vk === 13 ? 'Enter' : vk >= 65 && vk <= 90 ? String.fromCharCode(vk) : vk >= 112 && vk <= 123 ? 'F' + (vk - 111) : String(vk);
   return names.concat(key).join('+');
 }
+function setHotkeyButton(button, mods, vk) {
+  if (button) button.textContent = hotkeyLabel(mods, vk) + ' · ' + t('customHotkey');
+}
 function keyCodeToVk(e) {
   if (e.code === 'Space') return 32;
   if (e.code === 'Enter' || e.code === 'NumpadEnter') return 13;
   if (/^Key[A-Z]$/.test(e.code)) return e.code.charCodeAt(3);
+  if (/^Digit[0-9]$/.test(e.code)) return 48 + Number(e.code.slice(5));
+  if (/^Numpad[0-9]$/.test(e.code)) return 96 + Number(e.code.slice(6));
   if (/^F(?:[1-9]|1[0-2])$/.test(e.code)) return 111 + Number(e.code.slice(1));
+  const named = { Tab: 9, Backspace: 8, Delete: 46, Insert: 45, Home: 36, End: 35, PageUp: 33, PageDown: 34, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40 };
+  if (named[e.key] || named[e.code]) return named[e.key] || named[e.code];
   return 0;
 }
 function startHotkeyCapture(button, onValue, allowEnter = true) {
@@ -978,6 +987,7 @@ function startHotkeyCapture(button, onValue, allowEnter = true) {
 function bindHotkeyRecord(button, onValue, allowEnter = true) { button.addEventListener('click', () => startHotkeyCapture(button, onValue, allowEnter)); }
 bindHotkeyRecord($('launcherRecord'), (mods, vk) => {
   $('launcherMods').value = String(mods); $('launcherKey').value = String(vk);
+  setHotkeyButton($('launcherRecord'), mods, vk);
   send({ t: 'launcherHotkey', mods, vk });
 }, true);
 for (const [name, label] of [['capture', 'miniToolsCapture'], ['record', 'miniToolsRecord']]) {
@@ -989,9 +999,9 @@ for (const [name, label] of [['capture', 'miniToolsCapture'], ['record', 'miniTo
   for (let code = 65; code <= 90; code++) key.add(new Option(String.fromCharCode(code), code));
   for (let i = 1; i <= 12; i++) key.add(new Option('F' + i, 111 + i));
   row.appendChild(mods); row.appendChild(key); $('toolShortcuts').appendChild(row);
-  const record = document.createElement('button'); record.type = 'button'; record.className = 'hotkey-record'; record.dataset.i18n = 'customHotkey'; record.textContent = t('customHotkey'); row.appendChild(record);
+  const record = document.createElement('button'); record.type = 'button'; record.className = 'hotkey-record'; record.dataset.i18n = 'customHotkey'; record.dataset.hotkeyFor = name; record.textContent = t('customHotkey'); row.appendChild(record);
   bindHotkeyRecord(record, (newMods, newVk) => {
-    mods.value = String(newMods); key.value = String(newVk); saveMiniTools();
+    mods.value = String(newMods); key.value = String(newVk); setHotkeyButton(record, newMods, newVk); saveMiniTools();
   }, false);
   mods.addEventListener('change', saveMiniTools); key.addEventListener('change', saveMiniTools);
 }
@@ -1009,7 +1019,10 @@ function syncMiniTools(m) {
   }
   $('toolsEnabled').checked = miniTools.enabled;
   $('toolsFps').value = String(miniTools.fps); $('toolsAudio').checked = miniTools.audio;
-  for (const name of ['capture', 'record']) { $('toolMods_' + name).value = String(miniTools[name].mods); $('toolKey_' + name).value = String(miniTools[name].vk); }
+  for (const name of ['capture', 'record']) {
+    $('toolMods_' + name).value = String(miniTools[name].mods); $('toolKey_' + name).value = String(miniTools[name].vk);
+    setHotkeyButton(document.querySelector(`[data-hotkey-for="${name}"]`), miniTools[name].mods, miniTools[name].vk);
+  }
   $('toolsHotkeyStatus').textContent = !miniTools.enabled ? t('miniToolsDisabled') : ['miniToolsCapture', 'miniToolsRecord'].map((label, i) => t(label) + ': ' + t(m.miniToolsHotkeys && m.miniToolsHotkeys[i] ? 'miniToolsReady' : 'miniToolsConflict')).join(' · ');
 }
 for (const id of ['toolsEnabled', 'toolsFps', 'toolsAudio']) $(id).addEventListener('change', saveMiniTools);
@@ -1213,8 +1226,9 @@ function applyInitMessage(m) {
   $('autostart').checked = !!m.autostart;
   syncMiniTools(m);
   state.launcherHotkey = Object.assign(state.launcherHotkey, m.launcherHotkey || {});
-  $('launcherMods').value = String(state.launcherHotkey.mods);
-  $('launcherKey').value = String(state.launcherHotkey.vk);
+      $('launcherMods').value = String(state.launcherHotkey.mods);
+      $('launcherKey').value = String(state.launcherHotkey.vk);
+      setHotkeyButton($('launcherRecord'), state.launcherHotkey.mods, state.launcherHotkey.vk);
   if (m.launcherAppearance) {
     $('launcherTheme').value = m.launcherAppearance.theme;
     $('launcherTransparency').value = Math.round(m.launcherAppearance.transparency * 100);

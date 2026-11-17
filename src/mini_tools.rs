@@ -13,6 +13,22 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 pub const CAPTURE_ID: i32 = 31;
 pub const RECORD_ID: i32 = 32;
 pub fn stage_hotkey_capture() -> bool { screen::stage_hotkey_capture() }
+pub fn hotkey_text(mods: u32, vk: u32) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if mods & MOD_CONTROL != 0 { parts.push("Ctrl".into()); }
+    if mods & MOD_ALT != 0 { parts.push("Alt".into()); }
+    if mods & MOD_SHIFT != 0 { parts.push("Shift".into()); }
+    let key = match vk {
+        x if x == VK_SPACE as u32 => "Space".to_string(),
+        x if x == VK_RETURN as u32 => "Enter".to_string(),
+        x if (b'A' as u32..=b'Z' as u32).contains(&x) => char::from_u32(x).unwrap().to_string(),
+        x if (b'0' as u32..=b'9' as u32).contains(&x) => char::from_u32(x).unwrap().to_string(),
+        x if (0x70..=0x7B).contains(&x) => format!("F{}", x - 0x6F),
+        _ => format!("VK 0x{vk:X}"),
+    };
+    parts.push(key);
+    parts.join("+")
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Options {
@@ -36,7 +52,7 @@ impl Options {
         for (name,mods,key) in [("capture",&mut o.capture_mods,&mut o.capture_key),("record",&mut o.record_mods,&mut o.record_key)] {
             let m=v[name]["mods"].as_u64().unwrap_or(*mods as u64) as u32;
             let k=v[name]["vk"].as_u64().unwrap_or(*key as u64) as u32;
-            if m&(MOD_CONTROL|MOD_ALT|MOD_SHIFT)!=0 && (k==VK_SPACE as u32 || (0x41..=0x5a).contains(&k) || (0x70..=0x7b).contains(&k)) {
+            if m&(MOD_CONTROL|MOD_ALT|MOD_SHIFT)!=0 && valid_key(k) {
                 *mods=(m&(MOD_CONTROL|MOD_ALT|MOD_SHIFT))|MOD_NOREPEAT; *key=k;
             }
         }
@@ -44,6 +60,11 @@ impl Options {
     }
     pub fn json(&self)->serde_json::Value { serde_json::json!({"enabled":self.enabled,"fps":self.fps,"audio":self.audio,
         "capture":{"mods":self.capture_mods,"vk":self.capture_key},"record":{"mods":self.record_mods,"vk":self.record_key}}) }
+}
+fn valid_key(k: u32) -> bool {
+    k == VK_SPACE as u32 || k == VK_RETURN as u32 || k == VK_TAB as u32 ||
+        (0x30..=0x39).contains(&k) || (0x41..=0x5a).contains(&k) || (0x60..=0x69).contains(&k) || (0x70..=0x7b).contains(&k) ||
+        [VK_LEFT as u32, VK_UP as u32, VK_RIGHT as u32, VK_DOWN as u32, VK_HOME as u32, VK_END as u32, VK_PRIOR as u32, VK_NEXT as u32, VK_INSERT as u32, VK_DELETE as u32].contains(&k)
 }
 static MAIN_WINDOW:std::sync::atomic::AtomicIsize=std::sync::atomic::AtomicIsize::new(0);
 pub fn register(hwnd:HWND, o:&Options)->[bool;2] {

@@ -260,10 +260,14 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
             } else if ev == WM_RBUTTONUP || ev == WM_CONTEXTMENU {
                 let menu = CreatePopupMenu();
                 AppendMenuW(menu, MF_STRING, CMD_SETTINGS, wide("Cài đặt…").as_ptr());
-                AppendMenuW(menu, MF_STRING, CMD_LAUNCHER, wide("Mở Launcher").as_ptr());
+                let menu_cfg = load_config(None);
+                let launcher_label = format!("Mở Launcher\t{}", launcher::hotkey_text(menu_cfg.launcher_mods, menu_cfg.launcher_vk));
+                AppendMenuW(menu, MF_STRING, CMD_LAUNCHER, wide(&launcher_label).as_ptr());
                 AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
-                AppendMenuW(menu, MF_STRING, CMD_CAPTURE, wide("Chụp vùng và chỉnh sửa…").as_ptr());
-                AppendMenuW(menu, MF_STRING, CMD_RECORD, wide("Quay vùng / dừng và lưu…").as_ptr());
+                let capture_label = format!("Chụp vùng và chỉnh sửa…\t{}", mini_tools::hotkey_text(menu_cfg.tools.capture_mods, menu_cfg.tools.capture_key));
+                let record_label = format!("Quay vùng / dừng và lưu…\t{}", mini_tools::hotkey_text(menu_cfg.tools.record_mods, menu_cfg.tools.record_key));
+                AppendMenuW(menu, MF_STRING, CMD_CAPTURE, wide(&capture_label).as_ptr());
+                AppendMenuW(menu, MF_STRING, CMD_RECORD, wide(&record_label).as_ptr());
                 SetMenuDefaultItem(menu, CMD_SETTINGS as u32, 0);
                 AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
                 let cur = CURRENT_THEME.with(|c| c.get());

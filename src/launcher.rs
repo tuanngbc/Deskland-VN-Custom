@@ -572,9 +572,20 @@ pub fn toggle(_owner: HWND) {
 }
 
 pub fn hotkey_text(mods: u32, vk: u32) -> String {
-    let m = if mods & MOD_CONTROL != 0 { "Ctrl+" } else if mods & MOD_SHIFT != 0 { "Shift+" } else { "Alt+" };
-    let k = if vk == VK_SPACE as u32 { "Space".to_string() } else if (b'A' as u32..=b'Z' as u32).contains(&vk) { char::from_u32(vk).unwrap().to_string() } else { format!("F{}", vk.saturating_sub(0x6F)) };
-    format!("{m}{k}")
+    let mut parts = Vec::new();
+    if mods & MOD_CONTROL != 0 { parts.push("Ctrl".to_string()); }
+    if mods & MOD_ALT != 0 { parts.push("Alt".to_string()); }
+    if mods & MOD_SHIFT != 0 { parts.push("Shift".to_string()); }
+    let k = match vk {
+        x if x == VK_SPACE as u32 => "Space".to_string(),
+        x if x == VK_RETURN as u32 => "Enter".to_string(),
+        x if (b'A' as u32..=b'Z' as u32).contains(&x) => char::from_u32(x).unwrap().to_string(),
+        x if (b'0' as u32..=b'9' as u32).contains(&x) => char::from_u32(x).unwrap().to_string(),
+        x if (0x70..=0x7B).contains(&x) => format!("F{}", x - 0x6F),
+        _ => format!("VK 0x{vk:X}"),
+    };
+    parts.push(k);
+    parts.join("+")
 }
 
 #[cfg(test)]
