@@ -25,6 +25,10 @@ jobs:
           rustup default stable
           cargo test --release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Tái tạo Registry=tắt / Winlogon=bật trên runner cách ly, kiểm tra
+          # tắt thật bằng SPI_GET thay vì chỉ đọc Registry.
+          cargo test --release lock::tests::saver_disable_repairs_stale_winlogon_state -- --ignored --exact
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/renderer-contract.cjs

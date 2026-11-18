@@ -179,6 +179,7 @@ thread_local! {
     static CURRENT_THEME: Cell<usize> = const { Cell::new(102) };
     /// Phiên Windows đang khóa (WM_WTSSESSION_CHANGE): không ai thấy desktop -> ngừng vẽ.
     static SESSION_LOCKED: Cell<bool> = const { Cell::new(false) };
+    static SAVER_RECONCILE_PENDING: Cell<bool> = const { Cell::new(false) };
     static HOTKEY_OK: Cell<bool> = const { Cell::new(false) };
     static LAUNCHER_HOTKEY_OK: Cell<bool> = const { Cell::new(false) };
     static TOOL_HOTKEYS: Cell<[bool;2]> = const { Cell::new([false;2]) };
@@ -252,8 +253,16 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
         }
         WM_WTSSESSION_CHANGE_ => {
             match w {
-                WTS_SESSION_LOCK_ => SESSION_LOCKED.with(|c| c.set(true)),
-                WTS_SESSION_UNLOCK_ => SESSION_LOCKED.with(|c| c.set(false)),
+                WTS_SESSION_LOCK_ => {
+                    SESSION_LOCKED.with(|c| c.set(true));
+                    log!("Windows thông báo phiên đã khóa (WTS_SESSION_LOCK)");
+                    lock::log_saver_state("phiên khóa");
+                }
+                WTS_SESSION_UNLOCK_ => {
+                    SESSION_LOCKED.with(|c| c.set(false));
+                    SAVER_RECONCILE_PENDING.with(|c| c.set(true));
+                    log!("Windows thông báo phiên đã mở khóa (WTS_SESSION_UNLOCK)");
+                }
                 _ => {}
             }
             0
@@ -314,7 +323,7 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
                 let label = if HOTKEY_OK.with(|c| c.get()) { "Khóa với cảnh động\tCtrl+Alt+L" } else { "Khóa với cảnh động" };
                 AppendMenuW(menu, MF_STRING, CMD_SAVER_NOW, wide(label).as_ptr());
                 let chk = |on: bool| if on { MF_STRING | MF_CHECKED } else { MF_STRING };
-                AppendMenuW(menu, chk(lock::saver_installed()), CMD_SAVER, wide("Cảnh động khi rảnh (trình bảo vệ màn hình, khóa khi quay lại)").as_ptr());
+                AppendMenuW(menu, chk(lock::saver_active()), CMD_SAVER, wide("Cảnh động khi rảnh (trình bảo vệ màn hình, khóa khi quay lại)").as_ptr());
                 AppendMenuW(menu, chk(LOCK_SYNC.with(|c| c.get())), CMD_SYNC, wide("Dùng cảnh làm ảnh màn khóa Windows").as_ptr());
                 let chk_int = if INTERACTIONS_ENABLED.with(|c| c.get()) { MF_STRING | MF_CHECKED } else { MF_STRING };
                 AppendMenuW(menu, chk_int, CMD_INTERACTION, wide("Tương tác chuột trên màn hình nền").as_ptr());
@@ -1312,7 +1321,7 @@ impl App {
         settings::State {
             theme: self.cfg.theme.clone(),
             params: self.cfg.params.get(&self.cfg.theme).cloned().unwrap_or(serde_json::Value::Null),
-            saver: lock::saver_installed(),
+            saver: lock::saver_active(),
             idle: self.cfg.lock_idle_mins,
             sync: LOCK_SYNC.with(|c| c.get()),
             autostart: settings::autostart_enabled(),
@@ -1877,6 +1886,10 @@ fn main() {
     }
     let headless = args.iter().any(|a| a == "--headless");
     if !saver && !headless {
+        lock::log_saver_state("khởi động");
+        if let Err(e) = lock::reconcile_disabled_saver() {
+            log!("Chưa đồng bộ được trạng thái saver lúc khởi động: {e}; sẽ thử lại khi mở khóa");
+        }
         unsafe {
             Shell_NotifyIconW(NIM_ADD, &nid);
             // Báo khi khóa / mở khóa phiên để ngừng vẽ lúc không ai thấy desktop
@@ -2100,7 +2113,10 @@ fn main() {
                 Action::Saver(on) => {
                     if !on {
                         saver_check_at = None;
-                        lock::uninstall_saver();
+                        if let Err(e) = lock::uninstall_saver() {
+                            log!("Tắt màn hình chờ lỗi: {e}");
+                            unsafe { MessageBoxW(settings::hwnd().unwrap_or(msg_hwnd), wide(&e).as_ptr(), wide("Deskland-VN").as_ptr(), MB_OK | MB_ICONWARNING) };
+                        }
                     } else if let Err(e) = lock::install_saver(app.cfg.lock_idle_mins) {
                         log!("Đặt trình bảo vệ màn hình lỗi: {e}");
                         unsafe { MessageBoxW(settings::hwnd().unwrap_or(msg_hwnd), wide(&e).as_ptr(), wide("Deskland-VN").as_ptr(), MB_OK | MB_ICONWARNING) };
@@ -2250,6 +2266,7 @@ fn main() {
                 "lockNow" => lock::lock_now(),
                 "saverNow" => PENDING_CMD.with(|c| c.set(CMD_SAVER_NOW)),
                 "lockCfg" => {
+                    let mut saver_status = String::new();
                     if let Some(on) = m.get("syncWin").and_then(|v| v.as_bool()) {
                         if on != LOCK_SYNC.with(|c| c.get()) {
                             LOCK_SYNC.with(|c| c.set(on));
@@ -2260,10 +2277,12 @@ fn main() {
                         }
                     }
                     if let Some(mins) = m.get("idleMins").and_then(|v| v.as_u64()).map(|v| v as u32) {
-                        let installed = lock::saver_installed();
-                        if mins == 0 && installed {
+                        if mins == 0 {
                             saver_check_at = None;
-                            lock::uninstall_saver();
+                            if let Err(e) = lock::uninstall_saver() {
+                                log!("Tắt màn hình chờ lỗi: {e}");
+                                saver_status = format!("Không tắt được màn hình chờ: {e}");
+                            }
                         } else if mins > 0 && (!lock::saver_active() || mins != app.cfg.lock_idle_mins) {
                             app.cfg.lock_idle_mins = mins;
                             if let Err(e) = lock::install_saver(mins) {
@@ -2273,7 +2292,7 @@ fn main() {
                             }
                         }
                     }
-                    web::post(&away_state(&app, "").to_string());
+                    web::post(&away_state(&app, &saver_status).to_string());
                     web_changed = true;
                 }
                 "awayEnable" => {
@@ -2291,8 +2310,11 @@ fn main() {
                 }
                 "awayDisable" => {
                     saver_check_at = None;
-                    lock::uninstall_saver();
-                    web::post(&away_state(&app, "Đã tắt màn hình chờ Deskland").to_string());
+                    let status = match lock::uninstall_saver() {
+                        Ok(()) => "Đã tắt màn hình chờ Deskland; Windows đã xác nhận trạng thái".to_string(),
+                        Err(e) => { log!("Tắt màn hình chờ lỗi: {e}"); format!("Không tắt được màn hình chờ: {e}") }
+                    };
+                    web::post(&away_state(&app, &status).to_string());
                     web_changed = true;
                 }
                 "awayRefresh" => {
@@ -2304,7 +2326,11 @@ fn main() {
                     web::post(&away_state(&app, "Đã cập nhật ảnh màn khóa Windows").to_string());
                 }
                 "awayPreview" => {
-                    PENDING_CMD.with(|c| c.set(CMD_SAVER_NOW));
+                    // Xem thử là tiến trình vẽ thông thường, không được cài
+                    // saver tự động hoặc gọi SC_SCREENSAVE có khóa.
+                    if let Err(e) = lock::preview_saver() {
+                        web::post(&away_state(&app, &format!("Không xem thử được: {e}")).to_string());
+                    }
                 }
                 "autostart" => {
                     settings::set_autostart(m.get("v").and_then(|v| v.as_bool()).unwrap_or(false));
@@ -2441,7 +2467,10 @@ fn main() {
                 CMD_SAVER => {
                     saver_check_at = None;
                     if lock::saver_installed() {
-                        lock::uninstall_saver();
+                        if let Err(e) = lock::uninstall_saver() {
+                            log!("Tắt màn hình chờ lỗi: {e}");
+                            unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("Deskland-VN").as_ptr(), MB_OK | MB_ICONWARNING) };
+                        }
                     } else if let Err(e) = lock::install_saver(app.cfg.lock_idle_mins) {
                         log!("Đặt trình bảo vệ màn hình lỗi: {e}");
                         unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("Deskland-VN").as_ptr(), MB_OK | MB_ICONWARNING) };
@@ -2569,11 +2598,19 @@ fn main() {
         }
         if now >= next_fg {
             if !saver && snapshot_dir.is_none() {
+                if SAVER_RECONCILE_PENDING.with(|c| c.replace(false)) {
+                    if let Err(e) = lock::reconcile_disabled_saver() { log!("Đồng bộ saver sau mở khóa lỗi: {e}"); }
+                    lock::log_saver_state("sau mở khóa");
+                }
                 app.poll_foreground();
-                let h = SESSION_LOCKED.with(|c| c.get()) || lock::saver_running() || !lock::input_desktop_is_default();
+                let locked = SESSION_LOCKED.with(|c| c.get());
+                let saver_running = lock::saver_running();
+                let default_desktop = lock::input_desktop_is_default();
+                let h = locked || saver_running || !default_desktop;
                 if h != hidden {
                     hidden = h;
-                    log!("{}", if h { "Desktop không hiển thị (khóa / trình bảo vệ màn hình) -> ngừng vẽ" } else { "Desktop hiển thị lại -> vẽ tiếp" });
+                    log!("Desktop {}: sessionLocked={locked}, saverRunning={saver_running}, inputDefault={default_desktop}", if h { "ẩn -> ngừng vẽ" } else { "hiển thị -> vẽ tiếp" });
+                    lock::log_saver_state("desktop đổi trạng thái");
                     if !h {
                         REPAINT.with(|c| c.set(true));
                     }
