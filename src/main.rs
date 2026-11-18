@@ -976,26 +976,27 @@ impl App {
         Ok(dc)
     }
 
-    /// Đẩy khung hình đang nằm trong PBO lên cửa sổ hình nền bằng GDI (không phóng to trên CPU).
+    /// Transfer at the existing scene resolution; GDI scales directly to the
+    /// physical window, avoiding full-resolution GPU readback every frame.
     /// Ngữ cảnh GL phải đang current.
     fn present_gdi(gl: &glow::Context, wp: &Wallpaper) {
         let Some((_, _, pbo)) = wp.out else { return };
         if !wp.pbo_ready {
             return;
         }
-        let n = (wp.phys_w * wp.phys_h * 4) as i32;
+        let n = wp.buf_w * wp.buf_h * 4;
         unsafe {
             gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(pbo));
             let ptr = gl.map_buffer_range(glow::PIXEL_PACK_BUFFER, 0, n, glow::MAP_READ_BIT);
             if !ptr.is_null() {
                 let mut bmi: BITMAPINFO = std::mem::zeroed();
                 bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-                bmi.bmiHeader.biWidth = wp.phys_w;
-                bmi.bmiHeader.biHeight = wp.phys_h; // dương = hàng dưới lên trên, trùng thứ tự OpenGL
+                bmi.bmiHeader.biWidth = wp.buf_w;
+                bmi.bmiHeader.biHeight = wp.buf_h; // dương = hàng dưới lên trên, trùng thứ tự OpenGL
                 bmi.bmiHeader.biPlanes = 1;
                 bmi.bmiHeader.biBitCount = 32;
                 bmi.bmiHeader.biCompression = BI_RGB;
-                SetDIBitsToDevice(wp.hdc, 0, 0, wp.phys_w as u32, wp.phys_h as u32, 0, 0, 0, wp.phys_h as u32, ptr as *const _, &bmi, DIB_RGB_COLORS);
+                StretchDIBits(wp.hdc,0,0,wp.phys_w,wp.phys_h,0,0,wp.buf_w,wp.buf_h,ptr as *const _,&bmi,DIB_RGB_COLORS,SRCCOPY);
                 gl.unmap_buffer(glow::PIXEL_PACK_BUFFER);
             }
             gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
@@ -1171,6 +1172,7 @@ impl App {
                 Some(desktop::attach(hwnd, m.rect).ok_or("Không gắn được vào lớp hình nền")?)
             };
             let hdc = unsafe { GetDC(hwnd) };
+            unsafe {SetStretchBltMode(hdc,HALFTONE);SetBrushOrgEx(hdc,0,0,std::ptr::null_mut());}
             let gl_dc = if self.gdi {
                 self.ensure_dummy()?
             } else {
@@ -1213,7 +1215,7 @@ impl App {
                 gl.bind_framebuffer(glow::FRAMEBUFFER, None);
                 (f, t)
             };
-            let out = if self.gdi {Some(output_surface(gl,pw,ph)?)}else{None};
+            let out = if self.gdi {Some(output_surface(gl,buf_w,buf_h)?)}else{None};
             // Ở panorama, mọi theme nhận cùng kích thước canvas ảo. Chỉ theme
             // của màn hình đầu tiên được vẽ; các cửa sổ còn lại nhận viewport
             // cắt từ canvas đó ở render().
@@ -1585,7 +1587,7 @@ impl App {
                 if wp.paused {wp.pbo_ready=false;continue;}
                 ctx.make_current(wp.gl_dc);
                 if self.gdi && wp.out.is_none() {
-                    match output_surface(gl,wp.phys_w,wp.phys_h) {
+                    match output_surface(gl,wp.buf_w,wp.buf_h) {
                         Ok(surface)=>wp.out=Some(surface),Err(error)=>{log!("Khôi phục bộ đệm lỗi: {error}");continue;}
                     }
                 }
@@ -1599,12 +1601,12 @@ impl App {
                 let sh = (wp.screen.bottom - wp.screen.top) as f32 * pan.scale;
                 Self::crop_panorama(gl, shared, ptex, wp.fbo, wp.buf_w, wp.buf_h, ox, oy, sw, sh, total_w, total_h);
                 if let Some((out_fbo, _, pbo)) = wp.out {
-                    Self::post_process(gl, shared, wp, Some(out_fbo), wp.phys_w, wp.phys_h, now);
+                    Self::post_process(gl, shared, wp, Some(out_fbo), wp.buf_w, wp.buf_h, now);
                     unsafe {
                         gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(out_fbo));
                         gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(pbo));
                         gl.pixel_store_i32(glow::PACK_ALIGNMENT, 4);
-                        gl.read_pixels(0, 0, wp.phys_w, wp.phys_h, glow::BGRA, glow::UNSIGNED_BYTE, glow::PixelPackData::BufferOffset(0));
+                        gl.read_pixels(0, 0, wp.buf_w, wp.buf_h, glow::BGRA, glow::UNSIGNED_BYTE, glow::PixelPackData::BufferOffset(0));
                         gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None); gl.bind_framebuffer(glow::FRAMEBUFFER, None); gl.flush();
                     }
                     wp.pbo_ready = true;
@@ -1627,7 +1629,7 @@ impl App {
             let settle=wp.needs_settle;
             ctx.make_current(wp.gl_dc);
             if self.gdi && wp.out.is_none() {
-                match output_surface(gl,wp.phys_w,wp.phys_h) {
+                match output_surface(gl,wp.buf_w,wp.buf_h) {
                     Ok(surface)=>wp.out=Some(surface),Err(error)=>{log!("Khôi phục bộ đệm lỗi: {error}");continue;}
                 }
             }
@@ -1652,12 +1654,12 @@ impl App {
                     // Hậu kỳ đồng thời phóng hình lên độ phân giải vật lý.
                     gl.bind_framebuffer(glow::FRAMEBUFFER, Some(out_fbo));
                 }
-                Self::post_process(gl, shared, wp, Some(out_fbo), wp.phys_w, wp.phys_h, now);
+                Self::post_process(gl, shared, wp, Some(out_fbo), wp.buf_w, wp.buf_h, now);
                 unsafe {
                     gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(out_fbo));
                     gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(pbo));
                     gl.pixel_store_i32(glow::PACK_ALIGNMENT, 4);
-                    gl.read_pixels(0, 0, wp.phys_w, wp.phys_h, glow::BGRA, glow::UNSIGNED_BYTE, glow::PixelPackData::BufferOffset(0));
+                    gl.read_pixels(0, 0, wp.buf_w, wp.buf_h, glow::BGRA, glow::UNSIGNED_BYTE, glow::PixelPackData::BufferOffset(0));
                     gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
                     gl.bind_framebuffer(glow::FRAMEBUFFER, None);
                     gl.flush();
@@ -1707,7 +1709,7 @@ impl App {
         let wp = &self.walls[i];
         ctx.make_current(wp.gl_dc);
         let (fbo, w, h) = match wp.out {
-            Some((f, _, _)) => (f, wp.phys_w as usize, wp.phys_h as usize),
+            Some((f, _, _)) => (f, wp.buf_w as usize, wp.buf_h as usize),
             None => (wp.fbo, wp.buf_w as usize, wp.buf_h as usize),
         };
         let mut px = vec![0u8; w * h * 4];
