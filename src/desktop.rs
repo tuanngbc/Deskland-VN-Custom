@@ -283,14 +283,14 @@ impl Drop for IconReader {
 
 // ---------------------------------------------------------------- Tạm dừng khi bị che
 struct FgScan<'a> {
-    screen: RECT,
+    screens: &'a [RECT],
     own: &'a [HWND],
-    pause: bool,
+    paused: Vec<bool>,
 }
 
 unsafe extern "system" fn enum_fg(w: HWND, l: LPARAM) -> BOOL {
     let s = &mut *(l as *mut FgScan);
-    if s.own.contains(&w) || IsWindowVisible(w) == 0 {
+    if s.own.contains(&w) || IsWindowVisible(w) == 0 || IsIconic(w) != 0 {
         return 1;
     }
     let mut cloaked = 0i32;
@@ -313,25 +313,19 @@ unsafe extern "system" fn enum_fg(w: HWND, l: LPARAM) -> BOOL {
         return 1;
     }
     let (cx, cy) = ((wr.left + wr.right) / 2, (wr.top + wr.bottom) / 2);
-    let sc = s.screen;
-    if !(cx >= sc.left && cx < sc.right && cy >= sc.top && cy < sc.bottom) {
-        return 1;
-    }
     let zoomed = IsZoomed(w) != 0;
-    let covers = ex & WS_EX_TOOLWINDOW == 0
-        && wr.left <= sc.left + 2
-        && wr.top <= sc.top + 2
-        && wr.right >= sc.right - 2
-        && wr.bottom >= sc.bottom - 56;
-    if zoomed || covers {
-        s.pause = true;
-        return 0;
+    for (index,sc) in s.screens.iter().enumerate() {
+        if s.paused[index] || !(cx >= sc.left && cx < sc.right && cy >= sc.top && cy < sc.bottom) {continue;}
+        let covers = ex & WS_EX_TOOLWINDOW == 0
+            && wr.left <= sc.left + 2 && wr.top <= sc.top + 2
+            && wr.right >= sc.right - 2 && wr.bottom >= sc.bottom - 56;
+        if zoomed || covers {s.paused[index]=true;}
     }
-    1
+    if s.paused.iter().all(|paused|*paused) {0}else{1}
 }
 
-pub fn covered_by_fullscreen(screen: RECT, own: &[HWND]) -> bool {
-    let mut s = FgScan { screen, own, pause: false };
+pub fn covered_monitors(screens: &[RECT], own: &[HWND]) -> Vec<bool> {
+    let mut s = FgScan { screens, own, paused: vec![false;screens.len()] };
     unsafe { EnumWindows(Some(enum_fg), &mut s as *mut FgScan as LPARAM) };
-    s.pause
+    s.paused
 }

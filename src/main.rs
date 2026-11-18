@@ -47,7 +47,7 @@ use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::Graphics::OpenGL::SwapBuffers;
-use windows_sys::Win32::Media::timeBeginPeriod;
+use windows_sys::Win32::Media::{timeBeginPeriod,timeEndPeriod};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::ProcessStatus::*;
 use windows_sys::Win32::System::Threading::*;
@@ -855,7 +855,8 @@ struct Wallpaper {
     dpr: f32,
     /// None ở chế độ trình bảo vệ màn hình (cửa sổ toàn màn hình trên cùng, không gắn vào desktop)
     attach: Option<desktop::Attach>,
-    theme: Box<dyn Theme>,
+    // Panorama owns one simulation on output 0; other outputs only present it.
+    theme: Option<Box<dyn Theme>>,
     fbo: glow::Framebuffer,
     fbo_tex: glow::Texture,
     buf_w: i32,
@@ -904,6 +905,7 @@ struct App {
     boost_until: f64,
     live_weather: Arc<StdMutex<Option<LiveWeather>>>,
     weather_fetch_at: f64,
+    environment_update_at: f64,
     widget: Option<widget::Widget>,
     system_monitor: Option<system_monitor::Monitor>,
 }
@@ -1209,8 +1211,10 @@ impl App {
             } else {
                 (w, h, buf_w, buf_h, scale)
             };
-            let mut theme = self.make_theme(gl, theme_w, theme_h, theme_bw, theme_bh, theme_scale, idx);
-            if let Some(world) = panorama_world {
+            let mut theme = if panorama_world.is_none() || idx == 0 {
+                Some(self.make_theme(gl, theme_w, theme_h, theme_bw, theme_bh, theme_scale, idx))
+            } else { None };
+            if let (Some(world),Some(theme)) = (panorama_world,theme.as_mut()) {
                 theme.set_viewports(mons.iter().map(|m| [
                     (m.rect.left-world.left) as f32, (m.rect.top-world.top) as f32,
                     (m.rect.right-m.rect.left) as f32, (m.rect.bottom-m.rect.top) as f32,
@@ -1278,7 +1282,7 @@ impl App {
         for mut wp in walls {
             if let Some(ctx) = self.ctx.as_ref() {
                 ctx.make_current(wp.gl_dc);
-                wp.theme.destroy(&ctx.gl);
+                if let Some(theme)=wp.theme.as_mut() { theme.destroy(&ctx.gl); }
                 unsafe {
                     ctx.gl.delete_framebuffer(wp.fbo);
                     ctx.gl.delete_texture(wp.fbo_tex);
@@ -1384,7 +1388,8 @@ impl App {
         ]).collect::<Vec<_>>());
         for (i, wp) in walls.iter_mut().enumerate() {
             ctx.make_current(wp.gl_dc);
-            wp.theme.destroy(&ctx.gl);
+            if let Some(theme)=wp.theme.take().as_mut() { theme.destroy(&ctx.gl); }
+            if self.panorama.is_some() && i > 0 { continue; }
             let (w, h, bw, bh, scale) = if let Some(pan) = self.panorama.as_ref() {
                 ( (pan.world.right - pan.world.left) as f32,
                   (pan.world.bottom - pan.world.top) as f32,
@@ -1392,8 +1397,9 @@ impl App {
             } else {
                 (wp.phys_w as f32 / wp.dpr, wp.phys_h as f32 / wp.dpr, wp.buf_w, wp.buf_h, wp.dpr.min(0.72))
             };
-            wp.theme = self.make_theme(&ctx.gl, w, h, bw, bh, scale, i);
-            if let Some(ref v) = viewports { wp.theme.set_viewports(v.clone()); }
+            let mut theme = self.make_theme(&ctx.gl, w, h, bw, bh, scale, i);
+            if let Some(ref v) = viewports { theme.set_viewports(v.clone()); }
+            wp.theme = Some(theme);
             wp.last_icons = None;
             wp.last_frame = now;
         }
@@ -1423,7 +1429,7 @@ impl App {
             let first = self.walls.first().and_then(|w| w.last_icons.as_ref()).is_none();
             if let Some(wp0) = self.walls.first_mut() {
                 ctx.make_current(wp0.gl_dc);
-                wp0.theme.set_icons(&ctx.gl, boxes, first, now);
+                if let Some(theme)=wp0.theme.as_mut() { theme.set_icons(&ctx.gl, boxes, first, now); }
                 wp0.last_icons = Some(desired_rects);
                 if wp0.paused { wp0.needs_settle = true; }
             }
@@ -1455,8 +1461,9 @@ impl App {
                 })
                 .collect();
             ctx.make_current(wp.gl_dc);
-            wp.theme.set_icons(&ctx.gl, boxes, first, now);
-            log!("Biểu tượng thay đổi (màn hình [{},{}]): {} mục, trường {:.1} ms", s.left, s.top, mine.len(), wp.theme.field_ms());
+            let Some(theme)=wp.theme.as_mut() else {continue};
+            theme.set_icons(&ctx.gl, boxes, first, now);
+            log!("Biểu tượng thay đổi (màn hình [{},{}]): {} mục, trường {:.1} ms", s.left, s.top, mine.len(), theme.field_ms());
             wp.last_icons = Some(mine);
             if wp.paused {
                 wp.needs_settle = true;
@@ -1466,8 +1473,9 @@ impl App {
 
     fn poll_foreground(&mut self) {
         let own: Vec<HWND> = self.walls.iter().map(|w| w.hwnd).collect();
-        for wp in &mut self.walls {
-            let p = desktop::covered_by_fullscreen(wp.screen, &own);
+        let screens:Vec<RECT>=self.walls.iter().map(|w|w.screen).collect();
+        let covered=desktop::covered_monitors(&screens,&own);
+        for (wp,p) in self.walls.iter_mut().zip(covered) {
             if p != wp.paused {
                 wp.paused = p;
                 log!("Màn hình [{},{}] {}", wp.screen.left, wp.screen.top, if p { "tạm dừng (bị che)" } else { "tiếp tục phát" });
@@ -1519,33 +1527,48 @@ impl App {
     }
 
     fn render(&mut self) {
+        // Return before weather/solar calculations, simulation, GL or readback.
+        let Some(visible)=visible_bounds(self.walls.iter().map(|w|(w.screen,w.paused))) else {
+            for wp in &mut self.walls {wp.last_frame=0.0;}
+            return;
+        };
         let now = self.now();
         self.maybe_fetch_live_weather(now);
         let t0 = Instant::now();
-        let day_phase = self.environment.day_phase();
-        let sun = self.environment.sun();
-        let live = self.live_weather.lock().ok().and_then(|g| *g);
-        let weather = live_weather_amount(&self.environment, live).unwrap_or_else(|| self.environment.weather_amount(now));
+        // Solar angles and weather change slowly; don't recalculate 30 times/s.
+        if now >= self.environment_update_at {
+            let shared=self.shared.as_mut().unwrap();
+            shared.day_phase=self.environment.day_phase();
+            shared.sun=self.environment.sun();
+            let live=self.live_weather.lock().ok().and_then(|g|*g);
+            shared.weather=live_weather_amount(&self.environment,live).unwrap_or_else(||self.environment.weather_amount(now));
+            self.environment_update_at=now+1000.0;
+        }
         let ctx = self.ctx.as_ref().unwrap();
         let shared = self.shared.as_mut().unwrap();
-        shared.day_phase = day_phase;
-        shared.sun = sun;
-        shared.weather = weather;
         let gl = &ctx.gl;
         let mut drew = false;
         if let Some(pan) = self.panorama.as_ref() {
             // Vẽ một lần vào canvas ảo, sau đó cắt viewport cho từng màn hình.
             ctx.make_current(self.walls[0].gl_dc);
-            unsafe { gl.bind_framebuffer(glow::FRAMEBUFFER, Some(pan.fbo)); gl.viewport(0, 0, pan.buf_w, pan.buf_h); }
+            unsafe {
+                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(pan.fbo)); gl.viewport(0, 0, pan.buf_w, pan.buf_h);
+                let clip=panorama_clip(visible,pan.world,pan.scale,pan.buf_w,pan.buf_h);
+                gl.enable(glow::SCISSOR_TEST);gl.scissor(clip[0],clip[1],clip[2],clip[3]);
+            }
             {
                 let wp0 = &mut self.walls[0];
                 let dt = if wp0.last_frame > 0.0 { ((now - wp0.last_frame) / 1000.0).min(0.1) as f32 } else { 0.03 };
                 wp0.last_frame = now;
-                wp0.theme.frame(gl, shared, dt, now);
-                wp0.theme.draw_overlay(gl, shared, now);
+                let theme=wp0.theme.as_mut().expect("panorama scene owner");
+                theme.frame(gl, shared, dt, now);
+                theme.draw_overlay(gl, shared, now);
+                wp0.needs_settle=false;
             }
+            unsafe {gl.disable(glow::SCISSOR_TEST);}
             let (world, total_w, total_h, ptex) = (pan.world, (pan.world.right - pan.world.left) as f32 * pan.scale, (pan.world.bottom - pan.world.top) as f32 * pan.scale, pan.tex);
             for wp in &mut self.walls {
+                if wp.paused {wp.pbo_ready=false;continue;}
                 ctx.make_current(wp.gl_dc);
                 // GDI presentation is pipelined: display the previous PBO
                 // before rendering the next viewport. The panorama branch
@@ -1576,27 +1599,30 @@ impl App {
             return;
         }
         for wp in &mut self.walls {
-            let settle = wp.paused && wp.needs_settle;
-            if wp.paused && !settle {
+            if wp.paused {
                 wp.last_frame = 0.0;
+                wp.pbo_ready=false;
                 continue;
             }
+            if wp.theme.is_none() {continue;}
+            let settle=wp.needs_settle;
             ctx.make_current(wp.gl_dc);
             // Chế độ gdi: hiện khung đã đọc về ở lượt trước (GPU xong từ lâu, map không phải chờ)
             Self::present_gdi(gl, wp);
+            let theme=wp.theme.as_mut().unwrap();
             unsafe {
                 gl.bind_framebuffer(glow::FRAMEBUFFER, Some(wp.fbo));
                 gl.viewport(0, 0, wp.buf_w, wp.buf_h);
             }
             if settle {
-                wp.theme.settle(gl, shared, now);
+                theme.settle(gl, shared, now);
                 wp.needs_settle = false;
             } else {
                 let dt = if wp.last_frame > 0.0 { ((now - wp.last_frame) / 1000.0).min(0.1) as f32 } else { 0.03 };
                 wp.last_frame = now;
-                wp.theme.frame(gl, shared, dt, now);
+                theme.frame(gl, shared, dt, now);
             }
-            wp.theme.draw_overlay(gl, shared, now);
+            theme.draw_overlay(gl, shared, now);
             if let Some((out_fbo, _, pbo)) = wp.out {
                 unsafe {
                     // Hậu kỳ đồng thời phóng hình lên độ phân giải vật lý.
@@ -1722,7 +1748,7 @@ impl App {
     }
 
     fn any_interacting(&self, now: f64) -> bool {
-        now < self.boost_until || self.walls.iter().any(|w| !w.paused && w.theme.is_interacting(now))
+        now < self.boost_until || self.walls.iter().any(|w| w.theme.as_ref().is_some_and(|theme| (!w.paused || self.panorama.is_some()) && theme.is_interacting(now)))
     }
 
     fn handle_click(&mut self, x: i32, y: i32) -> bool {
@@ -1752,7 +1778,7 @@ impl App {
             }
             let Some(wp0) = self.walls.first_mut() else { return false };
             ctx.make_current(wp0.gl_dc);
-            wp0.theme.handle_click(&ctx.gl, (pt.x - pan.world.left) as f32, (pt.y - pan.world.top) as f32, now);
+            if let Some(theme)=wp0.theme.as_mut() { theme.handle_click(&ctx.gl, (pt.x - pan.world.left) as f32, (pt.y - pan.world.top) as f32, now); }
             self.boost_until = now + 3_500.0;
             return true;
         }
@@ -1766,7 +1792,7 @@ impl App {
                 }
                 ctx.make_current(wp.gl_dc);
                 let (cx, cy) = ((pt.x - wp.screen.left) as f32 / wp.dpr, (pt.y - wp.screen.top) as f32 / wp.dpr);
-                wp.theme.handle_click(&ctx.gl, cx, cy, now);
+                if let Some(theme)=wp.theme.as_mut() { theme.handle_click(&ctx.gl, cx, cy, now); }
                 self.boost_until = now + 3_500.0;
                 return true;
             }
@@ -1782,8 +1808,10 @@ impl App {
             ctx.make_current(wp.gl_dc);
             let w = (wp.screen.right - wp.screen.left) as f32 / wp.dpr;
             let h = (wp.screen.bottom - wp.screen.top) as f32 / wp.dpr;
-            wp.theme.handle_click(&ctx.gl, w * 0.56, h * 0.48, now);
-            wp.theme.handle_click(&ctx.gl, w * 0.72, h * 0.64, now + 60.0);
+            if let Some(theme)=wp.theme.as_mut() {
+                theme.handle_click(&ctx.gl, w * 0.56, h * 0.48, now);
+                theme.handle_click(&ctx.gl, w * 0.72, h * 0.64, now + 60.0);
+            }
         }
         self.boost_until = now + 3_500.0;
     }
@@ -1791,6 +1819,20 @@ impl App {
 
 fn rects_eq(a: &[RECT], b: &[RECT]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.left == y.left && x.top == y.top && x.right == y.right && x.bottom == y.bottom)
+}
+
+fn visible_bounds(outputs:impl Iterator<Item=(RECT,bool)>)->Option<RECT> {
+    outputs.filter(|(_,paused)|!*paused).map(|(rect,_)|rect).reduce(|a,b|RECT {
+        left:a.left.min(b.left),top:a.top.min(b.top),right:a.right.max(b.right),bottom:a.bottom.max(b.bottom),
+    })
+}
+
+fn panorama_clip(visible:RECT,world:RECT,scale:f32,width:i32,height:i32)->[i32;4] {
+    let x=((visible.left-world.left) as f32*scale).floor().clamp(0.0,width as f32) as i32;
+    let y=((world.bottom-visible.bottom) as f32*scale).floor().clamp(0.0,height as f32) as i32;
+    let right=((visible.right-world.left) as f32*scale).ceil().clamp(x as f32,width as f32) as i32;
+    let top=((world.bottom-visible.top) as f32*scale).ceil().clamp(y as f32,height as f32) as i32;
+    [x,y,right-x,top-y]
 }
 
 fn private_mb() -> (f64, f64) {
@@ -1989,6 +2031,7 @@ fn main() {
         boost_until: 0.0,
         live_weather: Arc::new(StdMutex::new(None)),
         weather_fetch_at: 0.0,
+        environment_update_at: 0.0,
         widget: None,
         system_monitor: None,
     };
@@ -2032,8 +2075,10 @@ fn main() {
                     IconBox { x: 48.0, y: 152.0, w: 74.0, h: 86.0 },
                     IconBox { x: 148.0, y: 48.0, w: 74.0, h: 86.0 },
                 ];
-                wp.theme.set_icons(&ctx.gl, sample_icons, true, now);
-                wp.theme.settle(&ctx.gl, app.shared.as_mut().unwrap(), now);
+                if let Some(theme)=wp.theme.as_mut() {
+                    theme.set_icons(&ctx.gl, sample_icons, true, now);
+                    theme.settle(&ctx.gl, app.shared.as_mut().unwrap(), now);
+                }
             }
         }
     } else {
@@ -2080,6 +2125,7 @@ fn main() {
     let mut next_icons = app.now() + 400.0;
     let mut next_fg = app.now();
     let mut next_stat = app.now() + 10_000.0;
+    let mut precise_timer=true;
     // Vị trí widget thay đổi khi kéo cửa sổ, nên lưu trễ một nhịp để không
     // ghi settings.json liên tục trong lúc rê chuột nhưng vẫn giữ vị trí sau
     // khi Windows khởi động lại.
@@ -2284,6 +2330,7 @@ fn main() {
                     if m.get("location").is_some() { app.cfg.environment.location = m.get("location").cloned().filter(|v| !v.is_null()); }
                     app.environment = app.cfg.environment.clone();
                     app.weather_fetch_at = 0.0;
+                    app.environment_update_at = 0.0;
                     if let Ok(mut live) = app.live_weather.lock() { *live = None; }
                     log!("Môi trường: time={}, weather={}, preset={}, source={}", app.environment.time_enabled, app.environment.weather_enabled, app.environment.preset, app.environment.source);
                     web::post(&web_init(&app).to_string());
@@ -2703,7 +2750,8 @@ fn main() {
             app.fix_z_order();
         }
         let now = app.now();
-        if now >= next_icons && !hidden {
+        let scene_visible=app.walls.iter().any(|w|!w.paused);
+        if now >= next_icons && !hidden && scene_visible {
             if !headless || args.iter().any(|a| a == "--real-icons") {
                 app.fix_z_order();
                 app.poll_icons();
@@ -2739,24 +2787,29 @@ fn main() {
             }
             next_fg = now + 500.0;
             if let Some(monitor) = app.system_monitor.as_mut() { monitor.tick(hidden); }
-        }
-        if hidden {
-            // Chỉ thức dậy theo nhịp kiểm tra 500 ms, không vẽ, không đọc biểu tượng
-            next_frame = next_fg;
-            next_icons = next_fg;
-        } else if now >= next_frame {
             if let Some(w) = app.widget.as_mut() {
                 w.set_visible(!hidden && app.cfg.widget_enabled);
                 if !hidden && app.cfg.widget_enabled {
                     w.tick();
-                    let r = w.rect();
-                    if app.cfg.widget_x != r.left || app.cfg.widget_y != r.top {
-                        app.cfg.widget_x = r.left;
-                        app.cfg.widget_y = r.top;
-                        widget_save_at = Some(now + 350.0);
+                    let r=w.rect();
+                    if app.cfg.widget_x!=r.left || app.cfg.widget_y!=r.top {
+                        app.cfg.widget_x=r.left;app.cfg.widget_y=r.top;widget_save_at=Some(now+350.0);
                     }
                 }
             }
+        }
+        let scene_visible=app.walls.iter().any(|w|!w.paused);
+        let animate=!hidden && scene_visible;
+        if animate!=precise_timer {
+            unsafe {if animate {timeBeginPeriod(1);}else{timeEndPeriod(1);}}
+            precise_timer=animate;
+        }
+        if hidden || !scene_visible {
+            // Chỉ thức dậy theo nhịp kiểm tra 500 ms, không vẽ, không đọc biểu tượng
+            next_frame = next_fg;
+            next_icons = next_fg;
+            for wp in &mut app.walls {wp.last_frame=0.0;}
+        } else if now >= next_frame {
             app.render();
             let cur_interval = if !saver && app.any_interacting(now) {
                 interval.min(20.0) // Adaptive FPS: 50 khung/giây mượt mà khi đang tương tác
@@ -2799,10 +2852,12 @@ fn main() {
             save_config(&app.cfg);
             widget_save_at = None;
         }
-        let wait = (next_frame.min(next_icons).min(next_fg) - app.now()).max(0.0) as u32;
+        // Rounding down left a sub-millisecond busy loop before every frame.
+        let wait = (next_frame.min(next_icons).min(next_fg) - app.now()).ceil().clamp(1.0,500.0) as u32;
         unsafe { MsgWaitForMultipleObjects(0, std::ptr::null(), 0, wait, QS_ALLINPUT) };
     }
 
+    if precise_timer {unsafe {timeEndPeriod(1);}}
     log!("Đang thoát");
     save_config(&app.cfg);
     if !hook.is_null() {
@@ -2822,5 +2877,28 @@ fn main() {
             Shell_NotifyIconW(NIM_DELETE, &nid);
         }
         DestroyWindow(msg_hwnd);
+    }
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+    fn rect(v:[i32;4])->RECT {RECT{left:v[0],top:v[1],right:v[2],bottom:v[3]}}
+    #[test]
+    fn panorama_pauses_all_outputs_and_resumes_the_secondary_without_moving_the_scene() {
+        let world=rect([-1080,-720,2560,1200]);
+        let primary=rect([0,0,2560,1080]);let secondary=rect([-1080,-720,0,1200]);
+        assert!(visible_bounds([(primary,true),(secondary,true)].into_iter()).is_none());
+        let visible=visible_bounds([(primary,true),(secondary,false)].into_iter()).unwrap();
+        assert_eq!(panorama_clip(visible,world,0.5,1820,960),[0,0,540,960]);
+        let visible=visible_bounds([(primary,false),(secondary,true)].into_iter()).unwrap();
+        assert_eq!(panorama_clip(visible,world,0.5,1820,960),[540,60,1280,540]);
+        let visible=visible_bounds([(primary,false),(secondary,false)].into_iter()).unwrap();
+        assert_eq!(panorama_clip(visible,world,0.5,1820,960),[0,0,1820,960]);
+    }
+    #[test]
+    fn fractional_panorama_clip_keeps_edge_pixels_inside_the_framebuffer() {
+        let clip=panorama_clip(rect([-1,0,101,99]),rect([-1,-1,101,101]),0.72,73,73);
+        assert_eq!(clip,[0,1,73,72]);
     }
 }

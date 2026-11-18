@@ -604,19 +604,25 @@ void main() {
   tint = mix(tint, vec3(1.0, 0.78, 0.58), dusk * 0.12);
   vec3 color = src.rgb * mix(vec3(0.94, 0.96, 1.0), tint, 0.14);
 
-  float cloud = smoothstep(0.42, 0.80, noise(uv * vec2(3.2, 2.1) + vec2(uTime * 0.004, 0.0)));
   float wet = clamp(uWeather, 0.0, 1.0);
-  color = mix(color, color * vec3(0.70, 0.76, 0.84), cloud * wet * 0.28);
+  // Uniform branches skip inactive effects across the entire output. Clear
+  // weather used to calculate cloud/snow/lightning noise for every pixel.
+  if (wet > 0.0) {
+    float cloud = smoothstep(0.42, 0.80, noise(uv * vec2(3.2, 2.1) + vec2(uTime * 0.004, 0.0)));
+    color = mix(color, color * vec3(0.70, 0.76, 0.84), cloud * wet * 0.28);
+  }
 
   // Không dùng dải fract theo x+y: đó là nguyên nhân các sọc chéo chạy đều
   // trên toàn bộ nền khi preset auto/live chưa có dữ liệu.
 
-  float snow = step(0.86, wet);
-  float flakes = step(0.965, noise(uv * 42.0 + vec2(0.0, uTime * 0.04)));
-  color = mix(color, vec3(0.98), flakes * snow * 0.75);
-
-  float lightning = step(0.985, sin(uTime * 0.21 + noise(uv * 4.0) * 5.0) * 0.5 + 0.5);
-  color += vec3(0.16, 0.20, 0.28) * lightning * step(0.72, wet) * 0.12;
+  if (wet >= 0.86) {
+    float flakes = step(0.965, noise(uv * 42.0 + vec2(0.0, uTime * 0.04)));
+    color = mix(color, vec3(0.98), flakes * 0.75);
+  }
+  if (wet >= 0.72) {
+    float lightning = step(0.985, sin(uTime * 0.21 + noise(uv * 4.0) * 5.0) * 0.5 + 0.5);
+    color += vec3(0.16, 0.20, 0.28) * lightning * 0.12;
+  }
   o = vec4(color, src.a);
 }
 "#;

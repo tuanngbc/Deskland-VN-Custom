@@ -164,7 +164,9 @@ void main() {
     for (int i = 0; i < 4; i++) {
       if (float(i) >= uKayN) break;
       vec4 k = uKay[i];
-      vec2 q2 = rot(-k.z) * (p - k.xy - vec2(8.0, 13.0));
+      vec2 delta = p - k.xy - vec2(8.0, 13.0);
+      if (dot(delta, delta) > 1024.0 || uShadowAlpha <= 0.0) continue;
+      vec2 q2 = rot(-k.z) * delta;
       float sd = hullSD(q2);
       vec2 pd = paddleSD(q2, k.w);
       shadow = max(shadow, ss(1.6, -1.6, min(sd, min(pd.x, pd.y))));
@@ -262,8 +264,9 @@ void main() {
   for (int i = 0; i < 4; i++) {
     if (float(i) >= uKayN) break;
     vec4 k = uKay[i];
-    vec2 q = rot(-k.z) * (p - k.xy);
-    if (dot(q, q) > 900.0) continue;
+    vec2 delta = p - k.xy;
+    if (dot(delta, delta) > 900.0) continue;
+    vec2 q = rot(-k.z) * delta;
     float sd = hullSD(q);
     vec2 pd = paddleSD(q, k.w);
     vec3 kc = col;

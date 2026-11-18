@@ -89,6 +89,9 @@ impl Probe {
                                         if let Ok(element) = elements.GetElement(index) {
                                             if let Ok(rect) = element.CurrentBoundingRectangle() {
                                                 if rect.right > rect.left && rect.top < bar.bottom && rect.bottom > bar.top && rect.right <= tray_left {
+                                                    let class=element.CurrentClassName().map(|s|s.to_string()).unwrap_or_default();
+                                                    let id=element.CurrentAutomationId().map(|s|s.to_string()).unwrap_or_default();
+                                                    if class.contains("SystemTray") || id.contains("Overflow") || id.contains("SystemTray") {continue;}
                                                     buttons_right = buttons_right.max(rect.right);
                                                 }
                                             }
@@ -119,12 +122,18 @@ fn light_taskbar() -> bool {
 unsafe fn fullscreen(monitor: [i32; 4], taskbar: HWND) -> bool {
     let foreground = GetForegroundWindow();
     if foreground.is_null() || foreground == taskbar { return false; }
+    if GetWindowLongW(foreground,GWL_EXSTYLE) as u32 & (WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE) != 0 {return false;}
     let mut class = [0u16; 64];
     let count = GetClassNameW(foreground, class.as_mut_ptr(), 64);
-    if matches!(String::from_utf16_lossy(&class[..count.max(0) as usize]).as_str(), "Progman" | "WorkerW") { return false; }
+    if shell_popup(&String::from_utf16_lossy(&class[..count.max(0) as usize])) { return false; }
     let mut rect: RECT = std::mem::zeroed();
     GetWindowRect(foreground, &mut rect) != 0 && rect.left <= monitor[0] && rect.top <= monitor[1]
         && rect.right >= monitor[2] && rect.bottom >= monitor[3]
+}
+
+fn shell_popup(class:&str)->bool {
+    matches!(class,"Progman"|"WorkerW"|"Shell_TrayWnd"|"Shell_SecondaryTrayWnd"|"NotifyIconOverflowWindow"
+        |"TopLevelWindowForOverflowXamlIsland"|"XamlExplorerHostIslandWindow"|"ControlCenterWindow")
 }
 
 struct WindowState { owner: HWND }
@@ -168,6 +177,9 @@ pub(super) struct Window {
     _state: Box<WindowState>,
     visible: bool,
     last: String,
+    bitmap: Option<Bitmap>,
+    rect: Option<[i32;4]>,
+    taskbar: HWND,
 }
 impl Window {
     pub fn new(owner: HWND) -> Result<Self, String> {
@@ -186,7 +198,7 @@ impl Window {
             if hwnd.is_null() { return Err("Không tạo được thống kê taskbar".into()); }
             let mut state = Box::new(WindowState { owner });
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, (&mut *state) as *mut WindowState as isize);
-            Ok(Self { hwnd, _state: state, visible: false, last: String::new() })
+            Ok(Self { hwnd, _state: state, visible: false, last: String::new(),bitmap:None,rect:None,taskbar:std::ptr::null_mut() })
         }
     }
     pub fn update(&mut self, snapshot: &Snapshot, dock: Option<&Dock>, suspended: bool) {
@@ -198,32 +210,42 @@ impl Window {
                 });
             let Some((dock, rect)) = placement else {
                 if self.visible { ShowWindow(self.hwnd, SW_HIDE); self.visible = false; }
-                self.last.clear();
                 return;
             };
-            let key = format!("{}:{rect:?}:{}", snapshot.sequence, dock.light);
+            if self.taskbar!=dock.taskbar as HWND {
+                self.taskbar=dock.taskbar as HWND;
+                // An owned popup stays above its taskbar automatically. Don't
+                // repeatedly splice it into Explorer's changing popup Z order.
+                SetWindowLongPtrW(self.hwnd,GWLP_HWNDPARENT,self.taskbar as isize);
+            }
+            let key = visual_key(snapshot,rect[2]-rect[0],rect[3]-rect[1],dock.dpi,dock.light);
+            let mut changed=false;
             if key != self.last {
                 if let Ok(bitmap) = render(snapshot, rect[2]-rect[0], rect[3]-rect[1], dock.dpi, dock.light) {
+                    self.bitmap=Some(bitmap);changed=true;
+                }
+            }
+            if changed || self.rect!=Some(rect) || !self.visible {
+                if let Some(bitmap)=self.bitmap.as_ref() {
                     let destination = POINT { x:rect[0], y:rect[1] };
                     let size = SIZE { cx:bitmap.width, cy:bitmap.height };
                     let source = POINT { x:0, y:0 };
                     let blend = BLENDFUNCTION { BlendOp:AC_SRC_OVER as u8, BlendFlags:0, SourceConstantAlpha:255, AlphaFormat:AC_SRC_ALPHA as u8 };
-                    if UpdateLayeredWindow(self.hwnd, std::ptr::null_mut(), &destination, &size, bitmap.dc, &source, 0, &blend, ULW_ALPHA) != 0 { self.last = key; }
+                    if UpdateLayeredWindow(self.hwnd, std::ptr::null_mut(), &destination, &size, bitmap.dc, &source, 0, &blend, ULW_ALPHA) != 0 {
+                        self.last = key;self.rect=Some(rect);
+                    }
                 }
             }
             if !self.visible { ShowWindow(self.hwnd, SW_SHOWNOACTIVATE); self.visible = true; }
-            let previous = GetWindow(dock.taskbar as HWND, GW_HWNDPREV);
-            if previous != self.hwnd {
-                // Above the taskbar, below menus/Start/other topmost windows;
-                // never reorder or resize any Explorer-owned window.
-                SetWindowPos(self.hwnd, if previous.is_null() { HWND_TOP } else { previous }, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
-            }
         }
     }
 }
 impl Drop for Window { fn drop(&mut self) { unsafe { DestroyWindow(self.hwnd); } } }
 
 fn percent(value: Option<f64>) -> String { value.filter(|n| n.is_finite()).map(|n| format!("{:.0}%", n.clamp(0.0,100.0))).unwrap_or_else(|| "--".into()) }
+fn visual_key(snapshot:&Snapshot,width:i32,height:i32,dpi:u32,light:bool)->String {
+    format!("{width}:{height}:{dpi}:{light}:{}:{}:{}:{}:{}",percent(snapshot.cpu),percent(snapshot.ram),percent(snapshot.gpu),speed(snapshot.down),speed(snapshot.up))
+}
 fn speed(value: Option<f64>) -> String {
     let Some(value) = value.filter(|n| n.is_finite() && *n >= 0.0) else { return "--".into(); };
     let (number,unit)=if value >= 1024.0*1024.0*1024.0 {(value/(1024.0*1024.0*1024.0),"GB/s")}
@@ -371,6 +393,41 @@ mod tests {
         assert_eq!(speed(Some(1023.9*1048576.0)),"1024 MB/s");
         assert_eq!(speed(None),"--");assert_eq!(percent(Some(500.0)),"100%");
     }
+    #[test]
+    fn tray_popups_are_not_fullscreen_and_equal_labels_reuse_the_surface() {
+        assert!(shell_popup("TopLevelWindowForOverflowXamlIsland"));
+        assert!(shell_popup("XamlExplorerHostIslandWindow"));
+        assert!(!shell_popup("SDL_app"));
+        let a=Snapshot{cpu:Some(20.1),ram:Some(70.1),sequence:1,..Snapshot::default()};
+        let b=Snapshot{cpu:Some(20.2),ram:Some(70.2),sequence:2,..Snapshot::default()};
+        assert_eq!(visual_key(&a,WIDTH,HEIGHT,96,true),visual_key(&b,WIDTH,HEIGHT,96,true));
+        assert_ne!(visual_key(&a,WIDTH,HEIGHT,96,true),visual_key(&a,WIDTH,HEIGHT,96,false));
+    }
+    #[test]
+    fn native_panel_keeps_owner_and_cached_bitmap_while_popups_toggle() {unsafe {
+        let owner=CreateWindowExW(WS_EX_TOOLWINDOW,wide("STATIC").as_ptr(),wide("Monitor test owner").as_ptr(),
+            WS_POPUP|WS_VISIBLE,10000,10000,1000,48,std::ptr::null_mut(),std::ptr::null_mut(),GetModuleHandleW(std::ptr::null()),std::ptr::null());
+        assert!(!owner.is_null());
+        let dock=Dock{taskbar:owner as isize,bar:[10000,10000,11000,10048],monitor:[10000,9500,11000,10048],
+            tray_left:10900,buttons_right:10500,dpi:96,light:true};
+        let mut window=Window::new(std::ptr::null_mut()).unwrap();
+        let mut snapshot=Snapshot{cpu:Some(20.0),sequence:1,..Snapshot::default()};
+        window.update(&snapshot,Some(&dock),false);
+        let dc=window.bitmap.as_ref().unwrap().dc;
+        assert_eq!(GetWindow(window.hwnd,GW_OWNER),owner);
+        let popup=CreateWindowExW(WS_EX_TOOLWINDOW,wide("STATIC").as_ptr(),wide("Monitor test popup").as_ptr(),
+            WS_POPUP,10000,9700,200,300,owner,std::ptr::null_mut(),GetModuleHandleW(std::ptr::null()),std::ptr::null());
+        for index in 0..10 {
+            ShowWindow(popup,if index%2==0 {SW_SHOWNOACTIVATE}else{SW_HIDE});snapshot.sequence+=1;
+            window.update(&snapshot,Some(&dock),false);
+            assert!(window.visible);assert_eq!(window.bitmap.as_ref().unwrap().dc,dc);
+            assert_eq!(GetWindow(window.hwnd,GW_OWNER),owner);
+        }
+        window.update(&snapshot,Some(&dock),true);assert!(!window.visible);
+        window.update(&snapshot,Some(&dock),false);assert!(window.visible);
+        assert_eq!(window.bitmap.as_ref().unwrap().dc,dc);
+        drop(window);DestroyWindow(popup);DestroyWindow(owner);
+    }}
     #[test]
     fn native_text_has_alpha_in_both_taskbar_themes() {
         let snapshot=Snapshot{cpu:Some(100.0),ram:Some(99.0),gpu:Some(88.0),down:Some(1e8),up:Some(1e7),..Snapshot::default()};

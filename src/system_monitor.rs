@@ -80,8 +80,12 @@ impl Monitor {
                         if let Ok(mut state) = worker_shared.lock() { state.snapshot = snapshot; }
                     }
                     if Instant::now() >= next_dock {
-                        let dock = probe.read();
-                        if let Ok(mut state) = worker_shared.lock() { state.dock = dock; }
+                        // Explorer can briefly omit its WinUI tray during an
+                        // overflow animation. Keep the last valid dock until
+                        // a new one is available; HWND visibility is checked live.
+                        if let Some(dock) = probe.read() {
+                            if let Ok(mut state) = worker_shared.lock() { state.dock = Some(dock); }
+                        }
                         next_dock = Instant::now() + Duration::from_secs(5);
                     }
                 }
