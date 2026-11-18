@@ -13,8 +13,8 @@ use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 const CLASS: &str = "TuanpcDeskSystemMonitor";
-const WIDTH: i32 = 216;
-const HEIGHT: i32 = 38;
+const WIDTH: i32 = 176;
+const HEIGHT: i32 = 28;
 
 #[derive(Clone, Debug)]
 pub(super) struct Dock {
@@ -42,7 +42,7 @@ impl Dock {
         let right = self.tray_left + offset - px(6);
         let available = right - (self.buttons_right + offset + px(8)).max(bar[0]);
         let width = px(WIDTH).min(available);
-        if width < px(180) { return None; }
+        if width < px(WIDTH) { return None; }
         let h = px(HEIGHT).min(height - px(4));
         let top = bar[1].max(self.monitor[1]) + (height - h) / 2;
         Some([right - width, top, right, top + h])
@@ -226,15 +226,15 @@ impl Drop for Window { fn drop(&mut self) { unsafe { DestroyWindow(self.hwnd); }
 fn percent(value: Option<f64>) -> String { value.filter(|n| n.is_finite()).map(|n| format!("{:.0}%", n.clamp(0.0,100.0))).unwrap_or_else(|| "--".into()) }
 fn speed(value: Option<f64>) -> String {
     let Some(value) = value.filter(|n| n.is_finite() && *n >= 0.0) else { return "--".into(); };
-    if value >= 1024.0*1024.0*1024.0 { format!("{:.1} GB/s",value/(1024.0*1024.0*1024.0)) }
-    else if value >= 1024.0*1024.0 { format!("{:.1} MB/s",value/(1024.0*1024.0)) }
-    else { format!("{:.0} KB/s",value/1024.0) }
+    let (number,unit)=if value >= 1024.0*1024.0*1024.0 {(value/(1024.0*1024.0*1024.0),"GB/s")}
+        else if value >= 1024.0*1024.0 {(value/(1024.0*1024.0),"MB/s")}
+        else {(value/1024.0,"KB/s")};
+    if number >= 100.0 || unit=="KB/s" {format!("{number:.0} {unit}")}else{format!("{number:.1} {unit}")}
 }
 
 struct Bitmap { dc:HDC, bitmap:HBITMAP, old:HGDIOBJ, bits:*mut u8, width:i32, height:i32 }
-impl Drop for Bitmap { fn drop(&mut self) { unsafe { SelectObject(self.dc,self.old); DeleteObject(self.bitmap as _); DeleteDC(self.dc); } } }
-fn render(snapshot:&Snapshot, width:i32, height:i32, dpi:u32, light:bool) -> Result<Bitmap,String> {
-    unsafe {
+impl Bitmap {
+    fn new(width:i32,height:i32)->Result<Self,String> { unsafe {
         let dc = CreateCompatibleDC(std::ptr::null_mut());
         if dc.is_null() { return Err("Không tạo được DC".into()); }
         let mut info:BITMAPINFO = std::mem::zeroed();
@@ -245,28 +245,75 @@ fn render(snapshot:&Snapshot, width:i32, height:i32, dpi:u32, light:bool) -> Res
         let bitmap=CreateDIBSection(dc,&info,DIB_RGB_COLORS,&mut bits,std::ptr::null_mut(),0);
         if bitmap.is_null() || bits.is_null() { DeleteDC(dc); return Err("Không tạo được bitmap".into()); }
         let old=SelectObject(dc,bitmap as _);
-        let bitmap=Bitmap { dc,bitmap,old,bits:bits as _,width,height };
-        let pixels=std::slice::from_raw_parts_mut(bitmap.bits,(width*height*4) as usize);
-        pixels.fill(0);
-        let scale=(dpi.max(96) as f32/96.0).min(width as f32/WIDTH as f32);
-        let font=CreateFontW(-(11.5*scale).round() as i32,0,0,0,400,0,0,0,DEFAULT_CHARSET as u32,
+        std::ptr::write_bytes(bits,0,(width*height*4) as usize);
+        Ok(Self { dc,bitmap,old,bits:bits as _,width,height })
+    } }
+}
+impl Drop for Bitmap { fn drop(&mut self) { unsafe { SelectObject(self.dc,self.old); DeleteObject(self.bitmap as _); DeleteDC(self.dc); } } }
+fn render(snapshot:&Snapshot, width:i32, height:i32, dpi:u32, light:bool) -> Result<Bitmap,String> {
+    unsafe {
+        // Render at twice the physical size, then downsample the coverage mask.
+        // Small labels and hand-drawn arrows stay smooth at 100% and fractional DPI.
+        const AA:i32=2;
+        let mask=Bitmap::new(width*AA,height*AA)?;
+        let dc=mask.dc;
+        let scale=(dpi.max(96) as f32/96.0).min(width as f32/WIDTH as f32).min(height as f32/HEIGHT as f32)*AA as f32;
+        let px=|value:f32| (value*scale).round() as i32;
+        let font=|size:f32,weight:i32| CreateFontW(-px(size),0,0,0,weight,0,0,0,DEFAULT_CHARSET as u32,
             OUT_DEFAULT_PRECIS as u32,CLIP_DEFAULT_PRECIS as u32,ANTIALIASED_QUALITY as u32,DEFAULT_PITCH as u32,wide("Segoe UI").as_ptr());
-        let old_font=SelectObject(dc,font as _);
-        SetBkMode(dc,TRANSPARENT as i32); SetTextColor(dc,0xffffff);
-        let draw=|value:&str,left:i32,top:i32,right:i32,bottom:i32| {
-            let mut rect=RECT {left,top,right,bottom};let mut text=wide(value);
-            DrawTextW(dc,text.as_mut_ptr(),-1,&mut rect,DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);
+        let label_font=font(9.0,400);
+        let value_font=font(11.0,600);
+        let network_font=font(10.0,400);
+        let old_font=SelectObject(dc,label_font as _);
+        SetBkMode(dc,TRANSPARENT as i32);
+        let draw=|value:&str,left:f32,top:f32,right:f32,bottom:f32,alignment:u32| {
+            let mut rect=RECT {left:px(left),top:px(top),right:px(right),bottom:px(bottom)};let mut text=wide(value);
+            DrawTextW(dc,text.as_mut_ptr(),-1,&mut rect,alignment|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);
         };
-        let row=height/2;
-        for (index,value) in [format!("CPU {}",percent(snapshot.cpu)),format!("RAM {}",percent(snapshot.ram)),format!("GPU {}",percent(snapshot.gpu))].iter().enumerate() {
-            draw(value,index as i32*width/3,0,(index as i32+1)*width/3,row);
+        for (index,(label,value)) in [("CPU",snapshot.cpu),("RAM",snapshot.ram),("GPU",snapshot.gpu)].iter().enumerate() {
+            let left=2.0+index as f32*33.0;
+            SelectObject(dc,label_font as _);SetTextColor(dc,0x999999);
+            draw(label,left,0.0,left+31.0,12.0,DT_CENTER);
+            SelectObject(dc,value_font as _);SetTextColor(dc,0xffffff);
+            draw(&percent(*value),left,12.0,left+31.0,28.0,DT_CENTER);
         }
-        draw(&format!("↓ {}",speed(snapshot.down)),0,row,width/2,height);
-        draw(&format!("↑ {}",speed(snapshot.up)),width/2,row,width,height);
-        SelectObject(dc,old_font);DeleteObject(font as _);GdiFlush();
-        let color=if light {[35u8,28,23]}else{[248u8,244,240]};
-        for pixel in pixels.chunks_exact_mut(4) {
-            let alpha=pixel[0].max(pixel[1]).max(pixel[2]);
+        let divider=RECT {left:px(106.0),top:px(5.0),right:px(106.0)+AA,bottom:px(23.0)};
+        SetDCBrushColor(dc,0x303030);FillRect(dc,&divider,GetStockObject(DC_BRUSH) as _);
+        SelectObject(dc,network_font as _);SetTextColor(dc,0xeeeeee);
+        draw(&speed(snapshot.down),125.0,0.0,175.0,14.0,DT_RIGHT);
+        draw(&speed(snapshot.up),125.0,14.0,175.0,28.0,DT_RIGHT);
+        // Vector arrows avoid font-dependent glyphs and keep their strokes crisp.
+        let pen=CreatePen(PS_SOLID,px(1.0).max(1),0xffffff);
+        let old_pen=SelectObject(dc,pen as _);
+        for (top,down) in [(0.0,true),(14.0,false)] {
+            let tip=if down {top+10.0}else{top+4.0};
+            let end=if down {top+3.0}else{top+11.0};
+            let shoulder=if down {tip-3.0}else{tip+3.0};
+            MoveToEx(dc,px(117.5),px(end),std::ptr::null_mut());LineTo(dc,px(117.5),px(tip));
+            let points=[POINT{x:px(114.5),y:px(shoulder)},POINT{x:px(117.5),y:px(tip)},POINT{x:px(120.5),y:px(shoulder)}];
+            Polyline(dc,points.as_ptr(),points.len() as i32);
+        }
+        SelectObject(dc,old_pen);DeleteObject(pen as _);
+        SelectObject(dc,old_font);
+        for font in [label_font,value_font,network_font] { DeleteObject(font as _); }
+        GdiFlush();
+        let bitmap=Bitmap::new(width,height)?;
+        let source=std::slice::from_raw_parts(mask.bits,(mask.width*mask.height*4) as usize);
+        let pixels=std::slice::from_raw_parts_mut(bitmap.bits,(width*height*4) as usize);
+        let primary=if light {[57u8,50,46]}else{[248u8,244,240]};
+        let download=if light {[194u8,116,36]}else{[245u8,190,111]};
+        let upload=if light {[117u8,137,35]}else{[183u8,213,116]};
+        for (index,pixel) in pixels.chunks_exact_mut(4).enumerate() {
+            let x=index as i32%width;let y=index as i32/width;
+            let mut coverage=0u16;
+            for dy in 0..AA { for dx in 0..AA {
+                let offset=(((y*AA+dy)*mask.width+x*AA+dx)*4) as usize;
+                coverage+=source[offset].max(source[offset+1]).max(source[offset+2]) as u16;
+            } }
+            let alpha=((coverage+2)/(AA*AA) as u16) as u8;
+            let color=if x*AA>=px(112.0)&&x*AA<px(123.0) {
+                if y*AA<px(14.0) {download}else{upload}
+            }else{primary};
             for channel in 0..3 { pixel[channel]=(color[channel] as u16*alpha as u16/255) as u8; }
             // Alpha 1 keeps the empty space clickable for the context menu
             // without adding a visible rectangle over the taskbar.
@@ -305,7 +352,7 @@ mod tests {
     #[test]
     fn placement_is_left_of_tray_and_never_over_icons() {
         let mut dock=dock();
-        assert_eq!(dock.placement(dock.bar),Some([2078,1037,2294,1075]));
+        assert_eq!(dock.placement(dock.bar),Some([2118,1042,2294,1070]));
         dock.buttons_right=2200;
         assert!(dock.placement(dock.bar).is_none());
     }
@@ -313,22 +360,23 @@ mod tests {
     fn placement_handles_negative_monitors_dpi_and_auto_hide() {
         let mut dock=dock();
         dock.bar=[-2560,1032,0,1080];dock.monitor=[-2560,0,0,1080];dock.tray_left=-260;dock.buttons_right=-760;
-        assert_eq!(dock.placement(dock.bar),Some([-482,1037,-266,1075]));
+        assert_eq!(dock.placement(dock.bar),Some([-442,1042,-266,1070]));
         assert!(dock.placement([-2560,1078,0,1126]).is_none());
         dock.dpi=144;dock.bar=[-2560,1008,0,1080];
-        let rect=dock.placement(dock.bar).unwrap();assert_eq!(rect[2]-rect[0],324);
+        let rect=dock.placement(dock.bar).unwrap();assert_eq!(rect[2]-rect[0],264);
     }
     #[test]
     fn rates_and_unavailable_counters_have_readable_units() {
         assert_eq!(speed(Some(0.0)),"0 KB/s");assert_eq!(speed(Some(1048576.0)),"1.0 MB/s");
+        assert_eq!(speed(Some(1023.9*1048576.0)),"1024 MB/s");
         assert_eq!(speed(None),"--");assert_eq!(percent(Some(500.0)),"100%");
     }
     #[test]
     fn native_text_has_alpha_in_both_taskbar_themes() {
         let snapshot=Snapshot{cpu:Some(100.0),ram:Some(99.0),gpu:Some(88.0),down:Some(1e8),up:Some(1e7),..Snapshot::default()};
         for light in [true,false] {
-            let bitmap=render(&snapshot,216,38,96,light).unwrap();
-            let pixels=unsafe {std::slice::from_raw_parts(bitmap.bits,(216*38*4) as usize)};
+            let bitmap=render(&snapshot,WIDTH,HEIGHT,96,light).unwrap();
+            let pixels=unsafe {std::slice::from_raw_parts(bitmap.bits,(WIDTH*HEIGHT*4) as usize)};
             assert!(pixels.chunks_exact(4).filter(|p|p[3]>16).count()>500);
             assert!(pixels.chunks_exact(4).all(|p|p[..3].iter().all(|color|*color<=p[3])));
         }
