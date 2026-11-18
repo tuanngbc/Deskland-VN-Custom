@@ -6,7 +6,7 @@
 //! - Khóa = `LockWorkStation()`: Windows chuyển sang desktop an toàn (Winlogon), mở khóa bằng
 //!   mật khẩu / PIN / Windows Hello của chính Windows.
 //! - Cảnh động khi máy rảnh = trình bảo vệ màn hình Windows (`.scr`) với `ScreenSaverIsSecure=1`:
-//!   Windows tự khóa phiên khi người dùng quay lại; Deskland chỉ vẽ, không quyết định khóa / mở.
+//!   Windows tự khóa phiên khi người dùng quay lại; tuanpc-desk chỉ vẽ, không quyết định khóa / mở.
 //! - Ảnh màn khóa: chụp cảnh hiện tại, đặt qua API WinRT `LockScreen.SetImageFileAsync`.
 
 use crate::desktop::wide;
@@ -19,6 +19,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 const POLICY_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Policies\System";
 const DESKTOP_KEY: &str = r"Control Panel\Desktop";
 const SAVER_POLICY_KEY: &str = r"Software\Policies\Microsoft\Windows\Control Panel\Desktop";
+// Legacy registry name retained to reconcile settings written by earlier builds.
 const SAVER_MARKER: &str = "DesklandRsSaverInstalled";
 
 /// Thư mục dữ liệu của bản Rust (ngoài AppData để tránh ảo hoá MSIX khi chạy từ ứng dụng đóng gói).
@@ -78,7 +79,7 @@ pub fn restore_winl() -> bool {
 
 /// Tên tệp hiện trong danh sách trình bảo vệ màn hình của Windows
 fn saver_path() -> std::path::PathBuf {
-    data_dir().join("Deskland-VN.scr")
+    data_dir().join("tuanpc-desk.scr")
 }
 
 /// Tên cũ (trước bản 1.0.0) - vẫn nhận là của mình để bật / gỡ đúng
@@ -150,6 +151,7 @@ fn is_our_saver(path: &str) -> bool {
     let path = path.trim().trim_matches('"');
     path.eq_ignore_ascii_case(&saver_path().to_string_lossy())
         || path.eq_ignore_ascii_case(&saver_path_old().to_string_lossy())
+        || path.eq_ignore_ascii_case(&data_dir().join("Deskland-VN.scr").to_string_lossy())
 }
 
 fn needs_disabled_repair(path: &str, known_deskland: bool, stored_active: bool, runtime_active: bool) -> bool {
@@ -188,22 +190,22 @@ pub fn log_saver_state(reason: &str) {
         reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, SAVER_MARKER));
 }
 
-/// Trình bảo vệ màn hình hiện tại có phải của Deskland Rust không.
+/// Trình bảo vệ màn hình hiện tại có phải của tuanpc-desk Rust không.
 pub fn saver_installed() -> bool {
     let cur = reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, "SCRNSAVE.EXE").unwrap_or_default();
     is_our_saver(&cur) || (cur.trim().is_empty()
         && reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, SAVER_MARKER).is_some_and(|v| v == "1"))
 }
 
-/// Đặt Deskland làm trình bảo vệ màn hình, BẮT BUỘC kèm "khi tiếp tục, hiện màn hình đăng nhập".
+/// Đặt tuanpc-desk làm trình bảo vệ màn hình, BẮT BUỘC kèm "khi tiếp tục, hiện màn hình đăng nhập".
 pub fn install_saver(idle_mins: u32) -> Result<(), String> {
     if let Some(p) = reg_get_string(HKEY_CURRENT_USER, SAVER_POLICY_KEY, "SCRNSAVE.EXE") {
         return Err(format!("Chính sách nhóm đang ép trình bảo vệ màn hình '{p}', không đổi được"));
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dst = saver_path();
-    // Chỉ lưu cấu hình bên ngoài Deskland; nếu đang cập nhật saver của chính
-    // mình thì không được ghi đè bản sao gốc bằng đường dẫn Deskland.
+    // Chỉ lưu cấu hình bên ngoài tuanpc-desk; nếu đang cập nhật saver của chính
+    // mình thì không được ghi đè bản sao gốc bằng đường dẫn tuanpc-desk.
     if !saver_installed() { save_saver_backup()?; }
     std::fs::copy(&exe, &dst).map_err(|e| format!("Chép {} lỗi: {e}", dst.display()))?;
     let secs = (idle_mins.max(1) * 60).to_string();
@@ -229,7 +231,7 @@ pub fn saver_secure() -> bool {
     runtime_value(SPI_GETSCREENSAVESECURE).is_ok_and(|v| v != 0)
 }
 
-/// Trình bảo vệ màn hình Deskland hiện vừa được cài vừa đang được Windows bật.
+/// Trình bảo vệ màn hình tuanpc-desk hiện vừa được cài vừa đang được Windows bật.
 /// `saver_installed()` chỉ nói về chủ sở hữu cấu hình; Windows có thể đang để
 /// `ScreenSaveActive=0` (ví dụ người dùng chọn Never). Không được coi trường
 /// hợp đó là tín hiệu để tự khóa phiên.
@@ -267,7 +269,7 @@ pub fn input_desktop_is_default() -> bool {
 
 /// "Khóa với cảnh động": nhờ CHÍNH Windows bật trình bảo vệ màn hình đã cài (SC_SCREENSAVE).
 /// Vì `ScreenSaverIsSecure=1`, Windows coi đây là trạng thái an toàn và tự hiện màn đăng nhập khi
-/// có thao tác. Deskland không tự chạy file .scr (như vậy Windows không biết để khóa).
+/// có thao tác. tuanpc-desk không tự chạy file .scr (như vậy Windows không biết để khóa).
 pub fn start_secure_saver(hwnd: HWND) {
     crate::log!("Nhờ Windows bật trình bảo vệ màn hình (SC_SCREENSAVE)");
     unsafe {
@@ -316,15 +318,15 @@ pub fn uninstall_saver() -> Result<(), String> {
                 && reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaveActive").is_some_and(|v| v.trim() == "1");
             set_saver_active(active)?;
             if is_our_saver(&path) {
-                // Bản sao cũ không được cài lại Deskland vừa yêu cầu gỡ.
+                // Bản sao cũ không được cài lại tuanpc-desk vừa yêu cầu gỡ.
                 if !reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "SCRNSAVE.EXE", "")
                     || !reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, SAVER_MARKER, "0") {
-                    return Err("Chưa bỏ được đường dẫn saver Deskland trong cài đặt cũ".into());
+                    return Err("Chưa bỏ được đường dẫn saver tuanpc-desk trong cài đặt cũ".into());
                 }
             }
             let _ = std::fs::remove_file(saver_backup_path());
         }
-        crate::log!("Đã gỡ trình bảo vệ màn hình Deskland-VN");
+        crate::log!("Đã gỡ trình bảo vệ màn hình tuanpc-desk");
     } else {
         reconcile_disabled_saver()?;
     }
@@ -477,7 +479,7 @@ mod tests {
         uninstall_saver().unwrap();
         assert_eq!(runtime_value(SPI_GETSCREENSAVEACTIVE).unwrap(), 0);
 
-        // Marker Deskland cũ không cho phép chạm saver mới của ứng dụng khác.
+        // Marker tuanpc-desk cũ không cho phép chạm saver mới của ứng dụng khác.
         if can_enable { set_saver_active(true).unwrap(); }
         assert!(reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaveActive", "0"));
         assert!(reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "SCRNSAVE.EXE", r"C:\Windows\System32\Mystify.scr"));

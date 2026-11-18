@@ -1,6 +1,6 @@
-//! deskland-rs: bản Rust native (1 tiến trình, OpenGL 3.3) của Deskland — 16 chủ đề tương tác thích ứng.
-//! Chạy:   deskland-rs.exe [--theme <id>] [--fps 20] [--settings]
-//! Thoát:  deskland-rs.exe --quit   (hoặc menu khay hệ thống)
+//! tuanpc-desk: bản Rust native (1 tiến trình, OpenGL 3.3) của tuanpc-desk — 16 chủ đề tương tác thích ứng.
+//! Chạy:   tuanpc-desk.exe [--theme <id>] [--fps 20] [--settings]
+//! Thoát:  tuanpc-desk.exe --quit   (hoặc menu khay hệ thống)
 
 #![windows_subsystem = "windows"]
 
@@ -13,6 +13,7 @@ mod settings;
 mod launcher;
 mod mini_tools;
 mod web;
+mod shortcuts;
 mod themes {
     pub mod aquarium;
     pub mod beach;
@@ -75,9 +76,9 @@ macro_rules! log {
 }
 
 // ---------------------------------------------------------------- Thông điệp cửa sổ
-const MSG_CLASS: &str = "DesklandRsMsg";
-const WALL_CLASS: &str = "DesklandRsWall";
-const SAVER_CLASS: &str = "DesklandRsSaver";
+const MSG_CLASS: &str = "TuanpcDeskMsg";
+const WALL_CLASS: &str = "TuanpcDeskWall";
+const SAVER_CLASS: &str = "TuanpcDeskSaver";
 const WM_TRAY: u32 = WM_APP + 1;
 const CMD_LOCK: usize = 120;
 const CMD_SAVER: usize = 121;
@@ -180,6 +181,7 @@ thread_local! {
     /// Phiên Windows đang khóa (WM_WTSSESSION_CHANGE): không ai thấy desktop -> ngừng vẽ.
     static SESSION_LOCKED: Cell<bool> = const { Cell::new(false) };
     static SAVER_RECONCILE_PENDING: Cell<bool> = const { Cell::new(false) };
+    static SHORTCUT_RECORDING: Cell<bool> = const { Cell::new(false) };
     static HOTKEY_OK: Cell<bool> = const { Cell::new(false) };
     static LAUNCHER_HOTKEY_OK: Cell<bool> = const { Cell::new(false) };
     static TOOL_HOTKEYS: Cell<[bool;2]> = const { Cell::new([false;2]) };
@@ -187,21 +189,7 @@ thread_local! {
     static WIDGET_LOCKED: Cell<bool> = const { Cell::new(true) };
 }
 
-fn normalize_hotkey(mods: u32, vk: u32) -> Option<u32> {
-    let modifiers = mods & (MOD_ALT | MOD_CONTROL | MOD_SHIFT);
-    let has_modifier = modifiers != 0;
-    let valid_key = vk == VK_SPACE as u32
-        || vk == VK_RETURN as u32
-        || vk == VK_TAB as u32
-        || (0x30..=0x39).contains(&vk)
-        || (0x41..=0x5A).contains(&vk)
-        || (0x60..=0x69).contains(&vk)
-        || (0x70..=0x7B).contains(&vk)
-        || [VK_LEFT as u32, VK_UP as u32, VK_RIGHT as u32, VK_DOWN as u32,
-            VK_HOME as u32, VK_END as u32, VK_PRIOR as u32, VK_NEXT as u32,
-            VK_INSERT as u32, VK_DELETE as u32].contains(&vk);
-    (has_modifier && valid_key).then_some(modifiers | MOD_NOREPEAT)
-}
+fn normalize_hotkey(mods: u32, vk: u32) -> Option<u32> { shortcuts::normalize(mods,vk) }
 
 unsafe fn register_hotkey_logged(hwnd: HWND, id: i32, mods: u32, vk: u32, name: &str) -> bool {
     if normalize_hotkey(mods, vk).is_none() {
@@ -219,6 +207,7 @@ unsafe fn register_hotkey_logged(hwnd: HWND, id: i32, mods: u32, vk: u32, name: 
 
 unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match m {
+        WM_HOTKEY if SHORTCUT_RECORDING.with(|c| c.get()) => 0,
         WM_INPUT => {
             let mut raw: RAWINPUT = std::mem::zeroed();
             let mut size = std::mem::size_of::<RAWINPUT>() as u32;
@@ -320,8 +309,8 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
                 AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
                 // Màn hình khóa: chỉ dùng khóa thật của Windows
                 AppendMenuW(menu, MF_STRING, CMD_LOCK, wide("Khóa máy ngay (khóa Windows)").as_ptr());
-                let label = if HOTKEY_OK.with(|c| c.get()) { "Khóa với cảnh động\tCtrl+Alt+L" } else { "Khóa với cảnh động" };
-                AppendMenuW(menu, MF_STRING, CMD_SAVER_NOW, wide(label).as_ptr());
+                let label = format!("Khóa với cảnh động\t{}",shortcuts::label(menu_cfg.saver_mods,menu_cfg.saver_vk));
+                AppendMenuW(menu, MF_STRING, CMD_SAVER_NOW, wide(&label).as_ptr());
                 let chk = |on: bool| if on { MF_STRING | MF_CHECKED } else { MF_STRING };
                 AppendMenuW(menu, chk(lock::saver_active()), CMD_SAVER, wide("Cảnh động khi rảnh (trình bảo vệ màn hình, khóa khi quay lại)").as_ptr());
                 AppendMenuW(menu, chk(LOCK_SYNC.with(|c| c.get())), CMD_SYNC, wide("Dùng cảnh làm ảnh màn khóa Windows").as_ptr());
@@ -336,7 +325,7 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
                     AppendMenuW(menu, MF_STRING, CMD_WINL, wide("⚠ Bật lại Win+L của Windows (bản C# cũ đã tắt)").as_ptr());
                 }
                 AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
-                AppendMenuW(menu, MF_STRING, CMD_EXIT, wide("Thoát Deskland-VN").as_ptr());
+                AppendMenuW(menu, MF_STRING, CMD_EXIT, wide("Thoát tuanpc-desk").as_ptr());
                 let mut pt = POINT { x: 0, y: 0 };
                 GetCursorPos(&mut pt);
                 SetForegroundWindow(h);
@@ -366,7 +355,7 @@ unsafe extern "system" fn wall_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LR
 }
 
 /// Cửa sổ trình bảo vệ màn hình: có bất kỳ thao tác nào thì thoát. Việc khóa / mở khóa do Windows
-/// làm (ScreenSaverIsSecure), Deskland không kiểm mật khẩu và không chặn phím nào.
+/// làm (ScreenSaverIsSecure), tuanpc-desk không kiểm mật khẩu và không chặn phím nào.
 unsafe extern "system" fn saver_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     let warm = SAVER_START.with(|c| c.get()).is_some_and(|t| t.elapsed().as_millis() > 800);
     match m {
@@ -570,6 +559,8 @@ struct Config {
     widget_scale: f32,
     widget_opacity: f32,
     widget_lines: [widget::Line; 3],
+    saver_mods: u32,
+    saver_vk: u32,
     launcher_mods: u32,
     launcher_vk: u32,
     launcher_appearance: launcher::Appearance,
@@ -635,6 +626,8 @@ fn load_config(cli_theme: Option<String>) -> Config {
             opacity: widget.and_then(|v| v.get(k)).and_then(|v| v.get("opacity")).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(1.0).clamp(0.0, 1.0),
             size: widget.and_then(|v| v.get(k)).and_then(|v| v.get("size")).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(1.0).clamp(0.5, 2.0),
         }),
+        saver_mods: shortcuts::normalize(root["saverHotkey"]["mods"].as_u64().unwrap_or(16387) as u32, root["saverHotkey"]["vk"].as_u64().unwrap_or(76) as u32).unwrap_or(16387),
+        saver_vk: { let mods=root["saverHotkey"]["mods"].as_u64().unwrap_or(16387) as u32; let vk=root["saverHotkey"]["vk"].as_u64().unwrap_or(76) as u32; if shortcuts::normalize(mods,vk).is_some() {vk} else {76} },
         launcher_mods: {
             let mods = root.get("launcherHotkey").and_then(|v| v.get("mods")).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(MOD_ALT | MOD_NOREPEAT);
             let vk = root.get("launcherHotkey").and_then(|v| v.get("vk")).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(VK_SPACE as u32);
@@ -648,6 +641,24 @@ fn load_config(cli_theme: Option<String>) -> Config {
         tools: mini_tools::Options::from_json(&root["miniTools"]),
         lock_idle_mins: root.get("lockIdleMins").and_then(|v| v.as_u64()).map(|v| v as u32).filter(|&v| v > 0).unwrap_or(5),
     }
+}
+
+fn configured_shortcuts(cfg: &Config) -> [(&'static str,i32,u32,u32,&'static str);4] {
+    [("launcher",HOTKEY_LAUNCHER,cfg.launcher_mods,cfg.launcher_vk,"Spotlight"),
+     ("saver",HOTKEY_SAVER,cfg.saver_mods,cfg.saver_vk,"Khóa với cảnh động"),
+     ("capture",mini_tools::CAPTURE_ID,cfg.tools.capture_mods,cfg.tools.capture_key,"Chụp màn hình"),
+     ("record",mini_tools::RECORD_ID,cfg.tools.record_mods,cfg.tools.record_key,"Quay màn hình")]
+}
+fn unregister_shortcuts(hwnd: HWND) {
+    unsafe { for id in [HOTKEY_LAUNCHER,HOTKEY_SAVER,mini_tools::CAPTURE_ID,mini_tools::RECORD_ID] { UnregisterHotKey(hwnd,id); } }
+}
+fn register_configured_shortcuts(hwnd: HWND,cfg: &Config) {
+    unregister_shortcuts(hwnd);
+    unsafe {
+        HOTKEY_OK.with(|c|c.set(register_hotkey_logged(hwnd,HOTKEY_SAVER,cfg.saver_mods,cfg.saver_vk,"Khóa với cảnh động")));
+        LAUNCHER_HOTKEY_OK.with(|c|c.set(register_hotkey_logged(hwnd,HOTKEY_LAUNCHER,cfg.launcher_mods,cfg.launcher_vk,"Spotlight")));
+    }
+    TOOL_HOTKEYS.with(|c|c.set(mini_tools::register(hwnd,&cfg.tools)));
 }
 
 /// Lưu cài đặt của bản Rust (không đụng file của bản C#). Không lưu mật khẩu / PIN nào.
@@ -679,6 +690,7 @@ fn save_config(cfg: &Config) {
             "date": { "x": cfg.widget_lines[2].x, "y": cfg.widget_lines[2].y, "opacity": cfg.widget_lines[2].opacity, "size": cfg.widget_lines[2].size },
         },
         "params": cfg.params,
+        "saverHotkey": { "mods": cfg.saver_mods, "vk": cfg.saver_vk },
         "launcherHotkey": { "mods": cfg.launcher_mods, "vk": cfg.launcher_vk },
         "launcherAppearance": cfg.launcher_appearance.json(),
         "miniTools": cfg.tools.json(),
@@ -744,6 +756,7 @@ fn web_init(app: &App) -> serde_json::Value {
         },
         "screen": { "w": w, "h": h },
         "autostart": settings::autostart_enabled(),
+        "saverHotkey": { "mods": app.cfg.saver_mods, "vk": app.cfg.saver_vk, "label": shortcuts::label(app.cfg.saver_mods,app.cfg.saver_vk) },
         "launcherHotkey": { "mods": app.cfg.launcher_mods, "vk": app.cfg.launcher_vk, "label": launcher::hotkey_text(app.cfg.launcher_mods, app.cfg.launcher_vk) },
         "launcherAppearance": app.cfg.launcher_appearance.json(),
         "miniTools": app.cfg.tools.json(),
@@ -1067,7 +1080,7 @@ impl App {
         } else { None };
         let panorama_scale = mons.iter().map(|m| m.dpr).fold(0.72f32, f32::min).clamp(0.5, 0.72);
         let cls = wide(if self.saver { SAVER_CLASS } else { WALL_CLASS });
-        let title = wide("DesklandWindow");
+        let title = wide("tuanpc-deskWindow");
         let ex_style = if self.saver { WS_EX_TOPMOST | WS_EX_TOOLWINDOW } else { WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE };
         for (idx, m) in mons.iter().enumerate() {
             let (pw, ph) = (m.rect.right - m.rect.left, m.rect.bottom - m.rect.top);
@@ -1810,8 +1823,8 @@ fn main() {
             unsafe {
                 MessageBoxW(
                     std::ptr::null_mut(),
-                    wide("Bật / tắt trình bảo vệ màn hình Deskland-VN trong menu khay của Deskland-VN.\n\nKhi quay lại, Windows sẽ hiện màn hình đăng nhập thật (khóa bằng mật khẩu / PIN / Windows Hello của Windows).").as_ptr(),
-                    wide("Deskland-VN").as_ptr(),
+                    wide("Bật / tắt trình bảo vệ màn hình tuanpc-desk trong menu khay của tuanpc-desk.\n\nKhi quay lại, Windows sẽ hiện màn hình đăng nhập thật (khóa bằng mật khẩu / PIN / Windows Hello của Windows).").as_ptr(),
+                    wide("tuanpc-desk").as_ptr(),
                     MB_OK | MB_ICONINFORMATION,
                 );
             }
@@ -1819,14 +1832,14 @@ fn main() {
         return; // "/p": không vẽ khung xem trước nhỏ
     }
 
-    let log_name = if saver { "deskland-saver.log" } else { "deskland-rs.log" };
+    let log_name = if saver { "tuanpc-desk-saver.log" } else { "tuanpc-desk.log" };
     let log_dir = if is_scr { Some(lock::data_dir()) } else { std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) };
     let log_path = log_dir.map(|d| d.join(log_name)).unwrap_or_else(|| log_name.into());
     *LOG.lock().unwrap() = File::create(&log_path).ok();
     std::panic::set_hook(Box::new(|info| log!("PANIC: {info}")));
 
     unsafe {
-        let name = wide(if saver { "DesklandRs_Saver" } else { "DesklandRs_Singleton" });
+        let name = wide(if saver { "TuanpcDesk_Saver" } else { "TuanpcDesk_Singleton" });
         CreateMutexW(std::ptr::null(), 1, name.as_ptr());
         if GetLastError() == ERROR_ALREADY_EXISTS {
             return;
@@ -1846,7 +1859,7 @@ fn main() {
         }
     }
     log!(
-        "deskland-rs {} khởi động{}: chủ đề {}, {fps} khung/giây",
+        "tuanpc-desk {} khởi động{}: chủ đề {}, {fps} khung/giây",
         env!("CARGO_PKG_VERSION"),
         if saver { " (trình bảo vệ màn hình)" } else { "" },
         cfg.theme
@@ -1881,11 +1894,12 @@ fn main() {
     nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     nid.uCallbackMessage = WM_TRAY;
     nid.hIcon = unsafe { app_icon(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON)) };
-    for (i, c) in "Deskland-VN".encode_utf16().enumerate() {
+    for (i, c) in "tuanpc-desk".encode_utf16().enumerate() {
         nid.szTip[i] = c;
     }
     let headless = args.iter().any(|a| a == "--headless");
     if !saver && !headless {
+        settings::migrate_autostart();
         lock::log_saver_state("khởi động");
         if let Err(e) = lock::reconcile_disabled_saver() {
             log!("Chưa đồng bộ được trạng thái saver lúc khởi động: {e}; sẽ thử lại khi mở khóa");
@@ -1896,12 +1910,7 @@ fn main() {
             windows_sys::Win32::System::RemoteDesktop::WTSRegisterSessionNotification(msg_hwnd, 0);
             // Phím tắt riêng (RegisterHotKey, không hook bàn phím; Win+L để nguyên cho Windows)
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
-            let ok = register_hotkey_logged(msg_hwnd, HOTKEY_SAVER, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, b'L' as u32, "Khóa với cảnh động");
-            HOTKEY_OK.with(|c| c.set(ok));
-            let launcher_ok = register_hotkey_logged(msg_hwnd, HOTKEY_LAUNCHER, cfg.launcher_mods, cfg.launcher_vk, "Launcher");
-            LAUNCHER_HOTKEY_OK.with(|c| c.set(launcher_ok));
-            TOOL_HOTKEYS.with(|c|c.set(mini_tools::register(msg_hwnd,&cfg.tools)));
-            log!("Phím tắt Ctrl+Alt+L (khóa với cảnh động): {}", if ok { "đã đăng ký" } else { "không đăng ký được" });
+            register_configured_shortcuts(msg_hwnd, &cfg);
         }
         if lock::winl_disabled() {
             // Bản C# cũ để lại DisableLockWorkstation=1: Win+L của Windows đang bị tắt. Chỉ cảnh báo,
@@ -1911,7 +1920,7 @@ fn main() {
             b.uFlags = NIF_INFO;
             b.dwInfoFlags = NIIF_WARNING;
             let title = "Win+L của Windows đang bị tắt";
-            let text = "Bản C# cũ đã tắt khóa Windows. Chuột phải icon Deskland-VN > \"Bật lại Win+L của Windows\".";
+            let text = "Bản C# cũ đã tắt khóa Windows. Chuột phải icon tuanpc-desk > \"Bật lại Win+L của Windows\".";
             for (i, c) in title.encode_utf16().take(63).enumerate() {
                 b.szInfoTitle[i] = c;
             }
@@ -1951,7 +1960,7 @@ fn main() {
     };
     log!("Cách hiển thị: {}", if app.gdi { "gdi (FBO -> đọc về -> StretchDIBits)" } else { "gl (SwapBuffers trực tiếp)" });
     // Khi chạy từ HKCU\...\Run, Windows có thể khởi động tiến trình trước khi
-    // Explorer dựng xong Progman/WorkerW. Chờ và thử lại để Deskland tự chạy
+    // Explorer dựng xong Progman/WorkerW. Chờ và thử lại để tuanpc-desk tự chạy
     // ổn định sau đăng nhập thay vì thoát ngay ở lần gắn hình nền đầu tiên.
     let mut walls_ready = false;
     for attempt in 0..12 {
@@ -2016,6 +2025,7 @@ fn main() {
     let mut saver_check_at: Option<f64> = None;
     let mut rebuild_at: Option<f64> = None;
     let mut web_changed = false;
+    let mut shortcut_capture_started: Option<Instant> = None;
     let mut last_icons_json = String::new();
     // Ngừng vẽ khi không ai thấy desktop: phiên khóa / màn Winlogon / trình bảo vệ màn hình đang chạy
     let mut hidden = false;
@@ -2115,11 +2125,11 @@ fn main() {
                         saver_check_at = None;
                         if let Err(e) = lock::uninstall_saver() {
                             log!("Tắt màn hình chờ lỗi: {e}");
-                            unsafe { MessageBoxW(settings::hwnd().unwrap_or(msg_hwnd), wide(&e).as_ptr(), wide("Deskland-VN").as_ptr(), MB_OK | MB_ICONWARNING) };
+                            unsafe { MessageBoxW(settings::hwnd().unwrap_or(msg_hwnd), wide(&e).as_ptr(), wide("tuanpc-desk").as_ptr(), MB_OK | MB_ICONWARNING) };
                         }
                     } else if let Err(e) = lock::install_saver(app.cfg.lock_idle_mins) {
                         log!("Đặt trình bảo vệ màn hình lỗi: {e}");
-                        unsafe { MessageBoxW(settings::hwnd().unwrap_or(msg_hwnd), wide(&e).as_ptr(), wide("Deskland-VN").as_ptr(), MB_OK | MB_ICONWARNING) };
+                        unsafe { MessageBoxW(settings::hwnd().unwrap_or(msg_hwnd), wide(&e).as_ptr(), wide("tuanpc-desk").as_ptr(), MB_OK | MB_ICONWARNING) };
                     }
                 }
                 Action::Idle(m) => {
@@ -2155,6 +2165,12 @@ fn main() {
             }
         }
         // Thông điệp từ trang cài đặt WebView2
+        if shortcut_capture_started.is_some_and(|started| started.elapsed() > Duration::from_secs(120) || !web::is_open()) {
+            SHORTCUT_RECORDING.with(|c| c.set(false));
+            register_configured_shortcuts(msg_hwnd, &app.cfg);
+            shortcut_capture_started = None;
+            web::post(&serde_json::json!({"t":"shortcutCaptureState","active":false}).to_string());
+        }
         for raw in web::take_inbox() {
             let Ok(m) = serde_json::from_str::<serde_json::Value>(&raw) else { continue };
             let s_ = |k: &str| m.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -2287,7 +2303,7 @@ fn main() {
                             app.cfg.lock_idle_mins = mins;
                             if let Err(e) = lock::install_saver(mins) {
                                 log!("Đặt trình bảo vệ màn hình lỗi: {e}");
-                                unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("Deskland-VN").as_ptr(), MB_OK | MB_ICONWARNING) };
+                                unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("tuanpc-desk").as_ptr(), MB_OK | MB_ICONWARNING) };
                                 web::post(&web_init(&app).to_string());
                             }
                         }
@@ -2299,7 +2315,7 @@ fn main() {
                     let mins = m.get("minutes").and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(app.cfg.lock_idle_mins).max(1);
                     app.cfg.lock_idle_mins = mins;
                     let status = match lock::install_saver(mins) {
-                        Ok(()) => "Đã bật màn hình chờ Deskland".to_string(),
+                        Ok(()) => "Đã bật màn hình chờ tuanpc-desk".to_string(),
                         Err(e) => {
                             log!("Bật màn hình chờ lỗi: {e}");
                             format!("Không bật được màn hình chờ: {e}")
@@ -2311,7 +2327,7 @@ fn main() {
                 "awayDisable" => {
                     saver_check_at = None;
                     let status = match lock::uninstall_saver() {
-                        Ok(()) => "Đã tắt màn hình chờ Deskland; Windows đã xác nhận trạng thái".to_string(),
+                        Ok(()) => "Đã tắt màn hình chờ tuanpc-desk; Windows đã xác nhận trạng thái".to_string(),
                         Err(e) => { log!("Tắt màn hình chờ lỗi: {e}"); format!("Không tắt được màn hình chờ: {e}") }
                     };
                     web::post(&away_state(&app, &status).to_string());
@@ -2335,6 +2351,65 @@ fn main() {
                 "autostart" => {
                     settings::set_autostart(m.get("v").and_then(|v| v.as_bool()).unwrap_or(false));
                     web::post(&serde_json::json!({ "t": "autostart", "v": settings::autostart_enabled() }).to_string());
+                }
+                "settingsAppearance" => { web::set_appearance(m["value"].as_str().unwrap_or("system")); }
+                "shortcutCapture" => {
+                    let active = m["active"].as_bool().unwrap_or(false) && web::is_open();
+                    if active {
+                        unregister_shortcuts(msg_hwnd);
+                        SHORTCUT_RECORDING.with(|c| c.set(true));
+                        shortcut_capture_started = Some(Instant::now());
+                        log!("Tạm ngưng phím tắt để ghi tổ hợp mới");
+                    } else if SHORTCUT_RECORDING.with(|c| c.replace(false)) {
+                        register_configured_shortcuts(msg_hwnd, &app.cfg);
+                        shortcut_capture_started = None;
+                    }
+                    web::post(&serde_json::json!({"t":"shortcutCaptureState","active":active}).to_string());
+                }
+                "shortcut" => {
+                    let kind = m["kind"].as_str().unwrap_or("");
+                    let requested = (m["mods"].as_u64().unwrap_or(0) as u32,m["vk"].as_u64().unwrap_or(0) as u32);
+                    let current = configured_shortcuts(&app.cfg);
+                    let index = current.iter().position(|item| item.0 == kind);
+                    let normalized = shortcuts::normalize(requested.0,requested.1);
+                    let mut error = None;
+                    if index.is_none() || normalized.is_none() {
+                        error=Some("Tổ hợp không hợp lệ. Dùng Ctrl, Alt hoặc Shift cùng một phím; F12 dành riêng cho Windows.".to_string());
+                    } else if let Some(other) = current.iter().find(|item| item.0 != kind && item.2 & 7 == requested.0 & 7 && item.3 == requested.1) {
+                        error=Some(format!("Tổ hợp này đã dùng cho {}. Hãy chọn tổ hợp khác.",other.4));
+                    } else {
+                        let (_,id,old_mods,old_vk,_) = current[index.unwrap()];
+                        if SHORTCUT_RECORDING.with(|c| c.replace(false)) { register_configured_shortcuts(msg_hwnd,&app.cfg); }
+                        shortcut_capture_started=None;
+                        match shortcuts::replace(msg_hwnd,id,(old_mods,old_vk),(normalized.unwrap(),requested.1)) {
+                            Ok(()) => {
+                                let mods=normalized.unwrap(); let vk=requested.1;
+                                match kind {
+                                    "launcher" => { app.cfg.launcher_mods=mods;app.cfg.launcher_vk=vk;LAUNCHER_HOTKEY_OK.with(|c|c.set(true)); },
+                                    "saver" => {app.cfg.saver_mods=mods;app.cfg.saver_vk=vk;HOTKEY_OK.with(|c|c.set(true));},
+                                    "capture" => {app.cfg.tools.capture_mods=mods;app.cfg.tools.capture_key=vk;},
+                                    "record" => {app.cfg.tools.record_mods=mods;app.cfg.tools.record_key=vk;},
+                                    _=>{},
+                                }
+                                if kind == "capture" || kind == "record" {
+                                    let index=if kind == "capture" {0} else {1};
+                                    if !app.cfg.tools.enabled { unsafe { UnregisterHotKey(msg_hwnd,id); } }
+                                    TOOL_HOTKEYS.with(|c|{let mut flags=c.get();flags[index]=app.cfg.tools.enabled;c.set(flags);});
+                                }
+                                log!("Đã áp dụng phím tắt {kind}: {}",shortcuts::label(mods,vk));
+                                web_changed=true;
+                            }
+                            Err(e) => {
+                                error=Some(e);
+                                unregister_shortcuts(msg_hwnd);
+                                SHORTCUT_RECORDING.with(|c|c.set(true));
+                                shortcut_capture_started=Some(Instant::now());
+                            }
+                        }
+                    }
+                    let ok=error.is_none();
+                    web::post(&web_init(&app).to_string());
+                    web::post(&serde_json::json!({"t":"hotkeyStatus","kind":kind,"ok":ok,"message":error.unwrap_or_else(||"Đã lưu và áp dụng phím tắt".into())}).to_string());
                 }
                 "launcherHotkey" => {
                     let requested_mods = m.get("mods").and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(MOD_ALT | MOD_NOREPEAT);
@@ -2469,11 +2544,11 @@ fn main() {
                     if lock::saver_installed() {
                         if let Err(e) = lock::uninstall_saver() {
                             log!("Tắt màn hình chờ lỗi: {e}");
-                            unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("Deskland-VN").as_ptr(), MB_OK | MB_ICONWARNING) };
+                            unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("tuanpc-desk").as_ptr(), MB_OK | MB_ICONWARNING) };
                         }
                     } else if let Err(e) = lock::install_saver(app.cfg.lock_idle_mins) {
                         log!("Đặt trình bảo vệ màn hình lỗi: {e}");
-                        unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("Deskland-VN").as_ptr(), MB_OK | MB_ICONWARNING) };
+                        unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("tuanpc-desk").as_ptr(), MB_OK | MB_ICONWARNING) };
                     }
                 }
                 CMD_SYNC => {
@@ -2516,14 +2591,14 @@ fn main() {
                 CMD_SAVER_NOW => {
                     let mut ready = lock::saver_active() && lock::saver_secure();
                     if !ready {
-                        let q = "\"Khóa với cảnh động\" dùng trình bảo vệ màn hình của Windows, có bật \"khi quay lại, hiện màn hình đăng nhập\".\n\nĐặt Deskland-VN làm trình bảo vệ màn hình (có khóa) ngay bây giờ?";
-                        let r = unsafe { MessageBoxW(msg_hwnd, wide(q).as_ptr(), wide("Deskland-VN").as_ptr(), MB_YESNO | MB_ICONQUESTION) };
+                        let q = "\"Khóa với cảnh động\" dùng trình bảo vệ màn hình của Windows, có bật \"khi quay lại, hiện màn hình đăng nhập\".\n\nĐặt tuanpc-desk làm trình bảo vệ màn hình (có khóa) ngay bây giờ?";
+                        let r = unsafe { MessageBoxW(msg_hwnd, wide(q).as_ptr(), wide("tuanpc-desk").as_ptr(), MB_YESNO | MB_ICONQUESTION) };
                         if r == IDYES {
                             match lock::install_saver(app.cfg.lock_idle_mins) {
                                 Ok(()) => ready = lock::saver_active() && lock::saver_secure(),
                                 Err(e) => {
                                     log!("Đặt trình bảo vệ màn hình lỗi: {e}");
-                                    unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("Deskland-VN").as_ptr(), MB_OK | MB_ICONWARNING) };
+                                    unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("tuanpc-desk").as_ptr(), MB_OK | MB_ICONWARNING) };
                                 }
                             }
                         }
@@ -2548,7 +2623,7 @@ fn main() {
             }
         }
         // Chỉ chẩn đoán lỗi khởi chạy saver. Không được tự gọi LockWorkStation:
-        // người dùng có thể đã chọn Never hoặc đã tắt màn hình chờ trong Deskland.
+        // người dùng có thể đã chọn Never hoặc đã tắt màn hình chờ trong tuanpc-desk.
         if saver_check_at.is_some_and(|t| app.now() >= t) {
             saver_check_at = None;
             if lock::saver_active() && lock::saver_secure() && !lock::saver_running() && !SESSION_LOCKED.with(|c| c.get()) {

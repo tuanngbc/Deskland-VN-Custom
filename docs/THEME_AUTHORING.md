@@ -1,7 +1,7 @@
-# Tạo theme cho Deskland Preview
+# Tạo theme cho tuanpc-desk
 
-Gói Deskland-VN có nhắc tới `CONTRIBUTING.md`. Tệp đó không được đóng trong
-ZIP anh gửi, nhưng hướng dẫn gốc trên kho Deskland-VN mô tả đúng cấu trúc
+Gói tuanpc-desk có nhắc tới `CONTRIBUTING.md`. Tệp đó không được đóng trong
+ZIP anh gửi, nhưng hướng dẫn gốc trên kho tuanpc-desk mô tả đúng cấu trúc
 theme: một trang web, shader (nếu dùng WebGL), đăng ký trong `themes.json`, bản
 dịch và thumbnail. Bản Preview C# này dùng phần web đó; không cần Rust để tạo
 theme mới.

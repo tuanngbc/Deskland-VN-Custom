@@ -1,4 +1,4 @@
-# Liên kết tĩnh thư viện C (CRT) để deskland-rs.exe chạy được trên mọi máy Windows 10/11 x64
+# Liên kết tĩnh thư viện C (CRT) để tuanpc-desk.exe chạy được trên mọi máy Windows 10/11 x64
 # mà không cần cài Microsoft Visual C++ Redistributable (không còn phụ thuộc VCRUNTIME140.dll).
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]

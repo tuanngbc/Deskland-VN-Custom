@@ -1,4 +1,4 @@
-/* Compatibility bridge for the GPL Deskland-VN 1.0.2 browser themes.
+/* Compatibility bridge for the GPL tuanpc-desk 1.0.2 browser themes.
    The host still owns monitor routing and the single Panorama surface. */
 (() => {
   'use strict';

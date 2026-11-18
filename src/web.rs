@@ -14,7 +14,7 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-const CLASS: &str = "DesklandRsWebSettings";
+const CLASS: &str = "TuanpcDeskWebSettings";
 
 /// `--webview-debug` (chỉ để phát triển / kiểm thử): mở cổng DevTools 9222 cho trang cài đặt.
 pub static DEBUG_PORT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -29,6 +29,13 @@ thread_local! {
     static WEB: RefCell<Option<Web>> = const { RefCell::new(None) };
     static INBOX: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static COM_READY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static APPEARANCE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+pub fn set_appearance(value: &str) {
+    APPEARANCE.with(|c|c.set(match value {"light"=>Some(true),"dark"=>Some(false),_=>None}));
+    let hwnd=WEB.with(|w|w.try_borrow().ok().and_then(|w|w.as_ref().map(|w|w.hwnd)));
+    if let Some(hwnd)=hwnd { theme_title_bar(hwnd); }
 }
 
 /// Tìm thư mục `prototype` (có `settings.html` + `themes.json`): cạnh exe, hoặc đi ngược lên từ exe
@@ -89,9 +96,9 @@ fn light_theme() -> bool {
 /// Thanh tiêu đề theo chế độ sáng / tối của Windows (như bản C#).
 fn theme_title_bar(hwnd: F::HWND) {
     use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
-    let light = light_theme();
+    let light = APPEARANCE.with(|c|c.get()).unwrap_or_else(light_theme);
     let dark: i32 = if light { 0 } else { 1 };
-    let color: u32 = if light { 0x00FF_FFFF } else { 0x0017_1717 };
+    let color: u32 = if light { 0x00FB_F9F7 } else { 0x0023_1B11 };
     unsafe {
         DwmSetWindowAttribute(hwnd, 20, &dark as *const i32 as *const _, 4);
         DwmSetWindowAttribute(hwnd, 35, &color as *const u32 as *const _, 4);
@@ -120,15 +127,20 @@ unsafe extern "system" fn proc_(h: F::HWND, m: u32, wp: F::WPARAM, lp: F::LPARAM
         WM_GETMINMAXINFO => {
             let s = GetDpiForWindow(h).max(96) as f32 / 96.0;
             let mi = &mut *(lp as *mut MINMAXINFO);
-            mi.ptMinTrackSize.x = (940.0 * s) as i32;
-            mi.ptMinTrackSize.y = (680.0 * s) as i32;
+            mi.ptMinTrackSize.x = (900.0 * s) as i32;
+            mi.ptMinTrackSize.y = (620.0 * s) as i32;
             0
         }
         WM_SETTINGCHANGE => {
             theme_title_bar(h);
             DefWindowProcW(h, m, wp, lp)
         }
+        WM_ACTIVATE if wp as u32 & 0xffff == WA_INACTIVE => {
+            INBOX.with(|i| i.borrow_mut().push(r#"{"t":"shortcutCapture","active":false}"#.into()));
+            DefWindowProcW(h,m,wp,lp)
+        }
         WM_CLOSE => {
+            INBOX.with(|i| i.borrow_mut().push(r#"{"t":"shortcutCapture","active":false}"#.into()));
             DestroyWindow(h);
             0
         }
@@ -181,7 +193,7 @@ pub fn open(proto: &Path) -> Result<(), String> {
         let hwnd = CreateWindowExW(
             0,
             cls.as_ptr(),
-            wide("Deskland-VN").as_ptr(),
+            wide("tuanpc-desk").as_ptr(),
             WS_OVERLAPPEDWINDOW,
             ((sw - w) / 2).max(0),
             ((sh - h) / 2).max(0),
@@ -263,6 +275,9 @@ fn create(hwnd: F::HWND, proto: &Path) -> Result<Web, String> {
         let _ = st.SetAreDefaultContextMenusEnabled(false);
         let _ = st.SetIsStatusBarEnabled(false);
         let _ = st.SetIsZoomControlEnabled(false);
+        if let Ok(s3) = st.cast::<ICoreWebView2Settings3>() {
+            let _ = s3.SetAreBrowserAcceleratorKeysEnabled(false);
+        }
         let _ = st.SetAreDevToolsEnabled(cfg!(debug_assertions));
         let w3 = webview.cast::<ICoreWebView2_3>().map_err(|e| format!("WebView2 Runtime quá cũ: {e}"))?;
         let host = HSTRING::from("app.local");

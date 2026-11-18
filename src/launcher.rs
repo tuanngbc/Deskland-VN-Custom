@@ -38,7 +38,7 @@ pub fn configure(appearance: Appearance) {
     }
 }
 
-const CLASS: &str = "DesklandRsLauncherGlass";
+const CLASS: &str = "TuanpcDeskLauncherGlass";
 const ROW: i32 = 54;
 const TOP: i32 = 78;
 const PAGE: usize = 6;
@@ -544,7 +544,7 @@ pub fn toggle(_owner: HWND) {
             RegisterClassExW(&wc);
             // An independent top-level window receives focus and keyboard input
             // without inheriting the hidden message window's visibility/owner chain.
-            let hwnd = CreateWindowExW(WS_EX_LAYERED, cls.as_ptr(), wide("Deskland Spotlight").as_ptr(), WS_POPUP, 0, 0, 684, 468, std::ptr::null_mut(), std::ptr::null_mut(), instance, std::ptr::null_mut());
+            let hwnd = CreateWindowExW(WS_EX_LAYERED, cls.as_ptr(), wide("tuanpc-desk Spotlight").as_ptr(), WS_POPUP, 0, 0, 684, 468, std::ptr::null_mut(), std::ptr::null_mut(), instance, std::ptr::null_mut());
             if hwnd.is_null() { crate::log!("Launcher: CreateWindowEx failed {}", GetLastError()); return; }
             let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED);
             let all = entries();
@@ -571,22 +571,7 @@ pub fn toggle(_owner: HWND) {
     }
 }
 
-pub fn hotkey_text(mods: u32, vk: u32) -> String {
-    let mut parts = Vec::new();
-    if mods & MOD_CONTROL != 0 { parts.push("Ctrl".to_string()); }
-    if mods & MOD_ALT != 0 { parts.push("Alt".to_string()); }
-    if mods & MOD_SHIFT != 0 { parts.push("Shift".to_string()); }
-    let k = match vk {
-        x if x == VK_SPACE as u32 => "Space".to_string(),
-        x if x == VK_RETURN as u32 => "Enter".to_string(),
-        x if (b'A' as u32..=b'Z' as u32).contains(&x) => char::from_u32(x).unwrap().to_string(),
-        x if (b'0' as u32..=b'9' as u32).contains(&x) => char::from_u32(x).unwrap().to_string(),
-        x if (0x70..=0x7B).contains(&x) => format!("F{}", x - 0x6F),
-        _ => format!("VK 0x{vk:X}"),
-    };
-    parts.push(k);
-    parts.join("+")
-}
+pub fn hotkey_text(mods: u32, vk: u32) -> String { crate::shortcuts::label(mods,vk) }
 
 #[cfg(test)]
 mod tests {

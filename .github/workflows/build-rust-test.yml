@@ -1,4 +1,4 @@
-name: Build Deskland Rust
+name: Build tuanpc-desk Rust
 
 on:
   push:
@@ -29,18 +29,22 @@ jobs:
           # không có timer tương tác dùng trạng thái bật giả ở bước quyết định.
           cargo test --release lock::tests::saver_disable_applies_and_verifies_live_windows_state -- --ignored --exact --nocapture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release shortcuts::tests::windows_conflict_restores_previous_registration -- --ignored --exact --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/renderer-contract.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/shortcuts-contract.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package Rust native build
         run: |
           $short = '${{ github.sha }}'.Substring(0, 7)
-          $name = "Deskland-VN-Rust-$short-win-x64"
+          $name = "tuanpc-desk-Rust-$short-win-x64"
           $dir = "dist\$name"
           New-Item -ItemType Directory -Force $dir | Out-Null
-          Copy-Item target\release\deskland-rs.exe "$dir\Deskland-VN.exe"
+          Copy-Item target\release\tuanpc-desk.exe "$dir\tuanpc-desk.exe"
           # Dùng giao diện prototype hiện tại để có panorama, công tắc thời
           # gian/thời tiết và tìm vị trí; engine Rust nhận các message tương ứng.
           Copy-Item -Recurse prototype "$dir\prototype"
@@ -51,9 +55,9 @@ jobs:
           Copy-Item README-rust.md "$dir\README-rust.md"
           '${{ github.sha }}' | Set-Content "$dir\BUILD-COMMIT.txt" -Encoding ascii
           @"
-          Deskland Rust Native build
+          tuanpc-desk Rust Native build
 
-          Giải nén toàn bộ thư mục này và chạy Deskland-VN.exe.
+          Giải nén toàn bộ thư mục này và chạy tuanpc-desk.exe.
           Giữ thư mục prototype cạnh file exe để mở Cài đặt.
           Bản này dùng engine Rust + Win32 + OpenGL, một tiến trình native.
           "@ | Set-Content "$dir\DOC-TRUOC.txt" -Encoding utf8
@@ -64,7 +68,7 @@ jobs:
       - name: Upload Rust artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Deskland-VN-Rust-win-x64
+          name: tuanpc-desk-Rust-win-x64
           path: |
             dist/*.zip
             dist/*.sha256

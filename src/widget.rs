@@ -12,7 +12,7 @@ use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-const CLASS: &str = "DesklandRsClockWidget";
+const CLASS: &str = "TuanpcDeskClockWidget";
 const WIDTH: i32 = 320;
 const HEIGHT: i32 = 230;
 static LOAD_FONTS: Once = Once::new();
@@ -184,7 +184,7 @@ impl Widget {
     pub fn rect(&self) -> RECT { self.rect }
     /// Giữ đồng hồ dưới ứng dụng đang hoạt động. Widget là cửa sổ top-level để
     /// kéo được trên màn hình, vì vậy nếu không cập nhật z-order thì một ứng
-    /// dụng khởi động sau Deskland (như Cockpit) sẽ bị đồng hồ phủ lên.
+    /// dụng khởi động sau tuanpc-desk (như Cockpit) sẽ bị đồng hồ phủ lên.
     pub fn sync_z_order(&self) {
         unsafe {
             let foreground = GetForegroundWindow();
