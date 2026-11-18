@@ -35,11 +35,12 @@ mod themes {
 mod wgl;
 mod widget;
 mod system_monitor;
+mod presentation;
 
 use desktop::wide;
 use engine::{IconBox, Prog, Shared, Theme};
 use glow::HasContext;
-use std::cell::Cell;
+use std::cell::{Cell,RefCell};
 use std::fs::File;
 use std::io::Write;
 use std::sync::{Arc, Mutex, Mutex as StdMutex};
@@ -847,10 +848,11 @@ struct Wallpaper {
     hdc: HDC,
     /// DC dùng cho wglMakeCurrent: chính cửa sổ (chế độ gl) hoặc cửa sổ ẩn (chế độ gdi)
     gl_dc: HDC,
-    /// Chế độ gdi: FBO độ phân giải thật (GPU phóng to LINEAR) + PBO đọc về không chặn.
+    /// Chế độ gdi: FBO độ phân giải cảnh + PBO đọc về không chặn.
     /// Khung N được đọc vào PBO, đầu khung N+1 (sau ~50 ms, GPU đã xong) mới map và vẽ ra cửa sổ.
     out: Option<(glow::Framebuffer, glow::Texture, glow::Buffer)>,
     pbo_ready: bool,
+    benchmark_target: Option<presentation::MemoryTarget>,
     screen: RECT,
     dpr: f32,
     /// None ở chế độ trình bảo vệ màn hình (cửa sổ toàn màn hình trên cùng, không gắn vào desktop)
@@ -920,6 +922,10 @@ struct App {
     environment_update_at: f64,
     widget: Option<widget::Widget>,
     system_monitor: Option<system_monitor::Monitor>,
+    // One cached CPU buffer shared by all outputs, never scaled while GPU-mapped.
+    staging: RefCell<Vec<u8>>,
+    benchmark_gdi: bool,
+    benchmark_direct_readback: bool,
 }
 
 impl App {
@@ -979,7 +985,7 @@ impl App {
     /// Transfer at the existing scene resolution; GDI scales directly to the
     /// physical window, avoiding full-resolution GPU readback every frame.
     /// Ngữ cảnh GL phải đang current.
-    fn present_gdi(gl: &glow::Context, wp: &Wallpaper) {
+    fn present_gdi(gl: &glow::Context, wp: &Wallpaper, staging:&RefCell<Vec<u8>>, direct:bool) {
         let Some((_, _, pbo)) = wp.out else { return };
         if !wp.pbo_ready {
             return;
@@ -987,8 +993,7 @@ impl App {
         let n = wp.buf_w * wp.buf_h * 4;
         unsafe {
             gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(pbo));
-            let ptr = gl.map_buffer_range(glow::PIXEL_PACK_BUFFER, 0, n, glow::MAP_READ_BIT);
-            if !ptr.is_null() {
+            let draw=|ptr:*const u8| {
                 let mut bmi: BITMAPINFO = std::mem::zeroed();
                 bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
                 bmi.bmiHeader.biWidth = wp.buf_w;
@@ -996,8 +1001,23 @@ impl App {
                 bmi.bmiHeader.biPlanes = 1;
                 bmi.bmiHeader.biBitCount = 32;
                 bmi.bmiHeader.biCompression = BI_RGB;
-                StretchDIBits(wp.hdc,0,0,wp.phys_w,wp.phys_h,0,0,wp.buf_w,wp.buf_h,ptr as *const _,&bmi,DIB_RGB_COLORS,SRCCOPY);
-                gl.unmap_buffer(glow::PIXEL_PACK_BUFFER);
+                let dc=wp.benchmark_target.as_ref().map_or(wp.hdc,|target|target.dc);
+                StretchDIBits(dc,0,0,wp.phys_w,wp.phys_h,0,0,wp.buf_w,wp.buf_h,ptr as *const _,&bmi,DIB_RGB_COLORS,SRCCOPY);
+            };
+            if direct {
+                // Diagnostic comparison only: reproduce the old mapped-memory
+                // path on an offscreen memory target, never on the live desktop.
+                let ptr=gl.map_buffer_range(glow::PIXEL_PACK_BUFFER,0,n,glow::MAP_READ_BIT);
+                if !ptr.is_null() {draw(ptr);gl.unmap_buffer(glow::PIXEL_PACK_BUFFER);}
+            } else {
+                let mut pixels=staging.borrow_mut();
+                if pixels.len()<n as usize {pixels.resize(n as usize,0);}
+                // Driver-managed readback copies sequentially into cacheable RAM.
+                // HALFTONE otherwise repeatedly reads mapped GPU/staging memory
+                // while resampling, keeping the copy engine and CPU busy.
+                gl.get_buffer_sub_data(glow::PIXEL_PACK_BUFFER,0,&mut pixels[..n as usize]);
+                gl.bind_buffer(glow::PIXEL_PACK_BUFFER,None);
+                draw(pixels.as_ptr());
             }
             gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
         }
@@ -1010,7 +1030,7 @@ impl App {
         let Some(ctx) = self.ctx.as_ref() else { return };
         for wp in &self.walls {
             ctx.make_current(wp.gl_dc);
-            Self::present_gdi(&ctx.gl, wp);
+            Self::present_gdi(&ctx.gl, wp,&self.staging,self.benchmark_direct_readback);
         }
     }
 
@@ -1023,12 +1043,15 @@ impl App {
             ctx.make_current(wp.gl_dc);
             // Drain the last pending readback once, retain the scene and the
             // window's displayed pixels, then release full-size output buffers.
-            Self::present_gdi(&ctx.gl,wp);
+            Self::present_gdi(&ctx.gl,wp,&self.staging,self.benchmark_direct_readback);
             if let Some((fbo,texture,buffer))=wp.out.take() {unsafe {
                 ctx.gl.delete_buffer(buffer);ctx.gl.delete_framebuffer(fbo);ctx.gl.delete_texture(texture);ctx.gl.flush();
             }}
             wp.pbo_ready=false;
             log!("Giải phóng bộ đệm màn hình đang nghỉ [{},{}]",wp.screen.left,wp.screen.top);
+        }
+        if self.walls.iter().all(|w|w.out.is_none()) && !self.staging.borrow().is_empty() {
+            *self.staging.borrow_mut()=Vec::new();
         }
     }
 
@@ -1242,6 +1265,7 @@ impl App {
                 gl_dc,
                 out,
                 pbo_ready: false,
+                benchmark_target:if self.benchmark_gdi {Some(presentation::MemoryTarget::new(pw,ph)?)}else{None},
                 screen: m.rect,
                 dpr: m.dpr,
                 attach,
@@ -1565,6 +1589,11 @@ impl App {
         let gl = &ctx.gl;
         let mut drew = false;
         if let Some(pan) = self.panorama.as_ref() {
+            // Consume last frame before submitting the new scene. Mapping or
+            // copying the PBO after drawing can wait on unrelated new GPU work.
+            for wp in &self.walls {
+                if !wp.paused {ctx.make_current(wp.gl_dc);Self::present_gdi(gl,wp,&self.staging,self.benchmark_direct_readback);}
+            }
             // Vẽ một lần vào canvas ảo, sau đó cắt viewport cho từng màn hình.
             ctx.make_current(self.walls[0].gl_dc);
             unsafe {
@@ -1591,10 +1620,6 @@ impl App {
                         Ok(surface)=>wp.out=Some(surface),Err(error)=>{log!("Khôi phục bộ đệm lỗi: {error}");continue;}
                     }
                 }
-                // GDI presentation is pipelined: display the previous PBO
-                // before rendering the next viewport. The panorama branch
-                // previously skipped this step, leaving every monitor black.
-                Self::present_gdi(gl, wp);
                 let ox = (wp.screen.left - world.left) as f32 * pan.scale;
                 let oy = (world.bottom - wp.screen.bottom) as f32 * pan.scale;
                 let sw = (wp.screen.right - wp.screen.left) as f32 * pan.scale;
@@ -1634,7 +1659,7 @@ impl App {
                 }
             }
             // Chế độ gdi: hiện khung đã đọc về ở lượt trước (GPU xong từ lâu, map không phải chờ)
-            Self::present_gdi(gl, wp);
+            Self::present_gdi(gl, wp,&self.staging,self.benchmark_direct_readback);
             let theme=wp.theme.as_mut().unwrap();
             unsafe {
                 gl.bind_framebuffer(glow::FRAMEBUFFER, Some(wp.fbo));
@@ -2060,6 +2085,9 @@ fn main() {
         environment_update_at: 0.0,
         widget: None,
         system_monitor: None,
+        staging:RefCell::new(Vec::new()),
+        benchmark_gdi:headless && args.iter().any(|a|a=="--benchmark-gdi"),
+        benchmark_direct_readback:headless && args.iter().any(|a|a=="--benchmark-direct-readback"),
     };
     log!("Cách hiển thị: {}", if app.gdi { "gdi (FBO -> đọc về -> StretchDIBits)" } else { "gl (SwapBuffers trực tiếp)" });
     // Khi chạy từ HKCU\...\Run, Windows có thể khởi động tiến trình trước khi
@@ -2111,6 +2139,20 @@ fn main() {
         app.poll_icons();
     }
     app.render();
+    if app.benchmark_gdi && app.gdi && args.iter().any(|a|a=="--test-readback") {
+        let ctx=app.ctx.as_ref().unwrap();
+        for wp in &app.walls {
+            ctx.make_current(wp.gl_dc);
+            App::present_gdi(&ctx.gl,wp,&app.staging,true);
+            let direct=wp.benchmark_target.as_ref().unwrap().pixels();
+            App::present_gdi(&ctx.gl,wp,&app.staging,false);
+            let staged=wp.benchmark_target.as_ref().unwrap().pixels();
+            assert!(direct.chunks_exact(4).any(|p|p[..3]!=[0,0,0]),"GDI target stayed black");
+            assert_eq!(direct,staged,"Staging changed the scaled output pixels");
+            assert_eq!(unsafe{ctx.gl.get_error()},glow::NO_ERROR,"Readback GL error");
+        }
+        log!("PASS: ảnh GDI đầy đủ hai màn giống từng pixel giữa đọc trực tiếp và RAM đệm");
+    }
     if headless && args.iter().any(|a|a=="--test-output-resume") {
         let now=app.now();
         for wp in &mut app.walls {wp.paused=true;wp.paused_since=Some(now-11_000.0);}
@@ -2177,6 +2219,8 @@ fn main() {
     let test_click = args.iter().any(|a| a == "--test-click");
     let mut test_click_at = test_click.then(|| app.now() + 900.0);
     let mut snapshot_at = snapshot_dir.as_ref().map(|_| app.now() + if test_click { 1_500.0 } else { 4_000.0 });
+    let benchmark_until=if headless {arg_value(&args,"--run-seconds").and_then(|s|s.parse::<f64>().ok())
+        .filter(|s|s.is_finite()).map(|s|app.now()+s.clamp(1.0,120.0)*1000.0)}else{None};
     'outer: loop {
         unsafe {
             let mut msg: MSG = std::mem::zeroed();
@@ -2195,6 +2239,7 @@ fn main() {
             }
         }
         let cmd = PENDING_CMD.with(|c| c.replace(0));
+        if benchmark_until.is_some_and(|t|app.now()>=t) {break 'outer;}
         let click = PENDING_CLICK.with(|c| c.take());
         if let Some((x, y)) = click {
             if !saver && INTERACTIONS_ENABLED.with(|c| c.get()) && app.handle_click(x, y) {
