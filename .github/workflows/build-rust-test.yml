@@ -35,6 +35,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release widget::tests::windows_clock_padding_preserves_position_when_resized_and_dragged -- --ignored --exact --nocapture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release system_monitor::taskbar::tests::native_panel_recovers_visibility_geometry_and_shell_recreation -- --ignored --exact --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/renderer-contract.cjs

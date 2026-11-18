@@ -442,6 +442,7 @@ mod tests {
         assert_ne!(visual_key(&a,WIDTH,HEIGHT,96,true),visual_key(&a,WIDTH,HEIGHT,96,false));
     }
     #[test]
+    #[ignore = "Isolated native taskbar visibility test; runs explicitly in CI"]
     fn native_panel_recovers_visibility_geometry_and_shell_recreation() {unsafe {
         let owner=CreateWindowExW(WS_EX_TOOLWINDOW,wide("STATIC").as_ptr(),wide("Monitor test owner").as_ptr(),
             WS_POPUP|WS_VISIBLE,10000,10000,1000,48,std::ptr::null_mut(),std::ptr::null_mut(),GetModuleHandleW(std::ptr::null()),std::ptr::null());
