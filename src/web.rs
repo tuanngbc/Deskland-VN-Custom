@@ -161,7 +161,7 @@ unsafe extern "system" fn proc_(h: F::HWND, m: u32, wp: F::WPARAM, lp: F::LPARAM
 pub fn open(proto: &Path) -> Result<(), String> {
     if let Some(h) = WEB.with(|w| w.borrow().as_ref().map(|w| w.hwnd)) {
         unsafe {
-            if IsIconic(h) != 0 {
+            if IsIconic(h) != 0 || IsWindowVisible(h) == 0 {
                 ShowWindow(h, SW_RESTORE);
             }
             SetForegroundWindow(h);

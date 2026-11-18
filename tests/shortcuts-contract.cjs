@@ -14,6 +14,11 @@ test('invalid and reserved shortcuts are rejected rather than silently replaced 
   for(const input of ['','K','Ctrl','Ctrl+K+L','Win+K','Ctrl+F12','Ctrl+F25','Ctrl+Unknown','Ctrl++'])assert.equal(model.parse(input),null,input);
   assert.equal(model.fromEvent({code:'KeyK',key:'k',ctrlKey:true,metaKey:true}),null);
 });
+test('native WebView and accessibility input work without a physical code',()=>{
+  assert.deepEqual(model.fromEvent({code:'',key:'k',keyCode:75,ctrlKey:true,altKey:true}),{mods:16387,vk:75});
+  assert.deepEqual(model.fromEvent({code:'Unidentified',key:'K',ctrlKey:true,altKey:true}),{mods:16387,vk:75});
+  assert.deepEqual(model.fromEvent({key:'0',location:3,shiftKey:true}),{mods:16388,vk:96});
+});
 test('typed shortcuts accept casing, whitespace and common named keys',()=>{
   assert.deepEqual(model.parse(' alt + k '),{mods:16385,vk:75});
   assert.deepEqual(model.parse('Control+Shift+PageDown'),{mods:16390,vk:34});
