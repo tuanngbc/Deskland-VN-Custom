@@ -127,6 +127,7 @@
       <button class="ghost-btn update-action" id="updateProgram" data-i18n="updateProgram">立即更新</button>
     </div>
     <div class="warn" id="autostartWarn" hidden role="alert"><p><b data-i18n="autostartBlocked">开机自动启动可能被拦截了</b><br><span id="autostartWarnText"></span></p><button id="autostartWarnOk" data-i18n="gotIt">知道了</button></div>
+    <section class="setting-card" id="systemMonitorPanel"><h3 data-i18n="systemMonitorTitle">Thống kê trên taskbar</h3><p class="monitor-detail" data-i18n="systemMonitorDescription">CPU, RAM, GPU và tốc độ tải xuống / tải lên ở bên trái khay hệ thống. Màu chữ theo Windows; nhấp đúp để mở Trình quản lý tác vụ.</p><div class="setting-row"><div><b data-i18n="systemMonitorEnabled">Hiện thống kê</b><small data-i18n="systemMonitorHint">Chạy native, ngừng lấy mẫu khi khóa máy. GPU không hỗ trợ sẽ hiện --.</small></div><label class="switch-row"><input id="systemMonitorEnabled" type="checkbox" checked aria-label="Hiện thống kê trên taskbar"><i class="switch"></i></label></div><div class="setting-row"><div><b data-i18n="systemMonitorInterval">Chu kỳ cập nhật</b><small data-i18n="systemMonitorIntervalHint">Tốc độ mạng tính bằng KB/s hoặc MB/s, theo lưu lượng thực tế.</small></div><select id="systemMonitorInterval" aria-label="Chu kỳ cập nhật thống kê"><option value="1" data-i18n="systemMonitorEvery1">Mỗi giây</option><option value="2" data-i18n="systemMonitorEvery2">Mỗi 2 giây</option><option value="5" data-i18n="systemMonitorEvery5">Mỗi 5 giây</option></select></div><p class="monitor-detail" data-i18n="systemMonitorSpace">Tự ẩn khi toàn màn hình, taskbar tự ẩn hoặc không đủ khoảng trống, để không che các nút ứng dụng. Có thể bật/tắt nhanh trong menu khay hệ thống.</p></section>
     <section class="setting-card"><h3 data-i18n="generalTitle">Thiết lập chung</h3><div class="setting-row"><div><b data-i18n="startupTitle">Khởi động cùng Windows</b><small data-i18n="startupHint">Tự mở nền và tiện ích sau khi anh đăng nhập.</small></div><label class="switch-row" data-i18n-title="autostartTitle" title="开机后自动运行 tuanpc-desk">
       <span data-i18n="autostart">开机自动启动</span><input type="checkbox" id="autostart"><i class="switch"></i>
     </label></div><div class="setting-row"><div><b data-i18n="language">Ngôn ngữ</b><small data-i18n="languageHint">Ngôn ngữ của cửa sổ cài đặt.</small></div><label class="lang-row">
@@ -687,6 +688,15 @@ function syncMiniTools(m) {
   for(const name of ['capture','record'])setHotkeyButton(document.querySelector('[data-shortcut="'+name+'"]'),miniTools[name].mods,miniTools[name].vk);
   $('toolsHotkeyStatus').textContent=!host?t('shortcutPreviewOnly'):!miniTools.enabled?t('miniToolsDisabled'):['miniToolsCapture','miniToolsRecord'].map((label,i)=>t(label)+': '+t(miniToolsHotkeys&&miniToolsHotkeys[i]?'miniToolsReady':'miniToolsConflict')).join(' · ');
 }
+function syncSystemMonitor(m) {
+  const options=Object.assign({enabled:true,interval:1},m.systemMonitor||{});
+  $('systemMonitorEnabled').checked=options.enabled!==false;
+  $('systemMonitorInterval').value=String(options.interval);
+}
+for(const id of ['systemMonitorEnabled','systemMonitorInterval'])$(id).addEventListener('change',()=>{
+  send({t:'systemMonitor',enabled:$('systemMonitorEnabled').checked,interval:Number($('systemMonitorInterval').value)});
+  flashSaved();
+});
 for(const id of ['toolsEnabled','toolsFps','toolsAudio'])$(id).addEventListener('change',saveMiniTools);
 for(const [id,mode] of [['toolCapture','capture'],['toolRecord','record']])$(id).addEventListener('click',()=>send({t:'miniToolOpen',mode}));
 
@@ -889,6 +899,7 @@ function applyInitMessage(m) {
   state.selectedMonitor = state.monitors[0] && state.monitors[0].id;
   $('autostart').checked = !!m.autostart;
   syncMiniTools(m);
+  syncSystemMonitor(m);
   state.launcherHotkey = Object.assign(state.launcherHotkey, m.launcherHotkey || {});
   state.saverHotkey = Object.assign({mods:16387,vk:76}, m.saverHotkey || {});
   setHotkeyButton($('saverRecord'), state.saverHotkey.mods, state.saverHotkey.vk);
@@ -939,6 +950,8 @@ function onHost(m) {
     applyInitMessage(m);
   } else if (m.t === 'miniToolsState') {
     syncMiniTools(m);
+  } else if (m.t === 'systemMonitorState') {
+    syncSystemMonitor(m);
   } else if (m.t === 'shortcutCaptureState') {
     if (!shortcutSession) return;
     if (!m.active) { closeShortcutEditor(false); return; }

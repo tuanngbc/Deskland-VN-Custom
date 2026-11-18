@@ -34,6 +34,7 @@ mod themes {
 }
 mod wgl;
 mod widget;
+mod system_monitor;
 
 use desktop::wide;
 use engine::{IconBox, Prog, Shared, Theme};
@@ -93,6 +94,7 @@ const CMD_WIDGET_RESET: usize = 129;
 const CMD_LAUNCHER: usize = 130;
 const CMD_CAPTURE: usize = 131;
 const CMD_RECORD: usize = 132;
+const CMD_SYSTEM_MONITOR: usize = 133;
 const WM_OPEN_SETTINGS: u32 = WM_APP + 2;
 const WM_OPEN_LAUNCHER: u32 = WM_APP + 3;
 const CMD_EXIT: usize = 199;
@@ -260,6 +262,10 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
             PENDING_CMD.with(|c| c.set(CMD_SETTINGS));
             0
         }
+        WM_COMMAND if w & 0xffff == CMD_SYSTEM_MONITOR => {
+            PENDING_CMD.with(|c| c.set(CMD_SYSTEM_MONITOR));
+            0
+        }
         WM_HOTKEY if w as i32 == HOTKEY_SAVER => {
             // Nhận WM_HOTKEY cho phép tiến trình đưa cửa sổ lên trước (cần cho SC_SCREENSAVE)
             SetForegroundWindow(h);
@@ -296,6 +302,7 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
                 let record_label = format!("Quay vùng / dừng và lưu…\t{}", mini_tools::hotkey_text(menu_cfg.tools.record_mods, menu_cfg.tools.record_key));
                 AppendMenuW(menu, MF_STRING, CMD_CAPTURE, wide(&capture_label).as_ptr());
                 AppendMenuW(menu, MF_STRING, CMD_RECORD, wide(&record_label).as_ptr());
+                AppendMenuW(menu, MF_STRING | if menu_cfg.system_monitor.enabled { MF_CHECKED } else { 0 }, CMD_SYSTEM_MONITOR, wide("Thống kê CPU / RAM / GPU / mạng trên taskbar").as_ptr());
                 SetMenuDefaultItem(menu, CMD_SETTINGS as u32, 0);
                 AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
                 let cur = CURRENT_THEME.with(|c| c.get());
@@ -565,6 +572,7 @@ struct Config {
     launcher_vk: u32,
     launcher_appearance: launcher::Appearance,
     tools: mini_tools::Options,
+    system_monitor: system_monitor::Options,
 }
 
 fn rust_settings_path() -> std::path::PathBuf {
@@ -639,6 +647,7 @@ fn load_config(cli_theme: Option<String>) -> Config {
         },
         launcher_appearance: launcher::Appearance::from_json(&root["launcherAppearance"]),
         tools: mini_tools::Options::from_json(&root["miniTools"]),
+        system_monitor: system_monitor::Options::from_json(&root["systemMonitor"]),
         lock_idle_mins: root.get("lockIdleMins").and_then(|v| v.as_u64()).map(|v| v as u32).filter(|&v| v > 0).unwrap_or(5),
     }
 }
@@ -694,6 +703,7 @@ fn save_config(cfg: &Config) {
         "launcherHotkey": { "mods": cfg.launcher_mods, "vk": cfg.launcher_vk },
         "launcherAppearance": cfg.launcher_appearance.json(),
         "miniTools": cfg.tools.json(),
+        "systemMonitor": cfg.system_monitor.json(),
     });
     let p = rust_settings_path();
     if let Err(e) = std::fs::write(&p, serde_json::to_string_pretty(&v).unwrap_or_default()) {
@@ -760,6 +770,7 @@ fn web_init(app: &App) -> serde_json::Value {
         "launcherHotkey": { "mods": app.cfg.launcher_mods, "vk": app.cfg.launcher_vk, "label": launcher::hotkey_text(app.cfg.launcher_mods, app.cfg.launcher_vk) },
         "launcherAppearance": app.cfg.launcher_appearance.json(),
         "miniTools": app.cfg.tools.json(),
+        "systemMonitor": app.cfg.system_monitor.json(),
         "miniToolsHotkeys": TOOL_HOTKEYS.with(|c|c.get()),
         "autostartWarn": false,
         "interactions": app.interactions_enabled,
@@ -894,9 +905,23 @@ struct App {
     live_weather: Arc<StdMutex<Option<LiveWeather>>>,
     weather_fetch_at: f64,
     widget: Option<widget::Widget>,
+    system_monitor: Option<system_monitor::Monitor>,
 }
 
 impl App {
+    fn configure_system_monitor(&mut self, owner: HWND) {
+        if self.saver || self.headless || !self.cfg.system_monitor.enabled {
+            self.system_monitor = None;
+        } else if let Some(monitor) = self.system_monitor.as_ref() {
+            monitor.set_interval(self.cfg.system_monitor.interval);
+        } else {
+            match system_monitor::Monitor::new(owner, &self.cfg.system_monitor) {
+                Ok(monitor) => { self.system_monitor = Some(monitor); }
+                Err(error) => log!("Thống kê taskbar: {error}"),
+            }
+        }
+    }
+
     fn init_widget(&mut self) {
         if self.saver || self.headless || !self.cfg.widget_enabled || self.walls.is_empty() { return; }
         let Some(screen) = primary_wall(self).map(|w| w.screen) else { return };
@@ -1783,6 +1808,10 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if let Some(path) = arg_value(&args, "--system-monitor-diagnostics") {
+        let _ = system_monitor::diagnostics(std::path::Path::new(&path));
+        return;
+    }
     if let Some(path) = arg_value(&args, "--clock-diagnostics") {
         let _ = widget::write_diagnostics(std::path::Path::new(&path));
         return;
@@ -1961,6 +1990,7 @@ fn main() {
         live_weather: Arc::new(StdMutex::new(None)),
         weather_fetch_at: 0.0,
         widget: None,
+        system_monitor: None,
     };
     log!("Cách hiển thị: {}", if app.gdi { "gdi (FBO -> đọc về -> StretchDIBits)" } else { "gl (SwapBuffers trực tiếp)" });
     // Khi chạy từ HKCU\...\Run, Windows có thể khởi động tiến trình trước khi
@@ -1991,6 +2021,7 @@ fn main() {
         return;
     }
     app.init_widget();
+    app.configure_system_monitor(msg_hwnd);
     if headless && !args.iter().any(|a| a == "--real-icons") {
         let now = app.now();
         if let Some(ctx) = app.ctx.as_ref() {
@@ -2442,6 +2473,12 @@ fn main() {
                     launcher::configure(app.cfg.launcher_appearance.clone());
                     web_changed = true;
                 }
+                "systemMonitor" => {
+                    app.cfg.system_monitor = system_monitor::Options::from_json(&m);
+                    app.configure_system_monitor(msg_hwnd);
+                    web::post(&serde_json::json!({"t":"systemMonitorState","systemMonitor":app.cfg.system_monitor.json()}).to_string());
+                    web_changed = true;
+                }
                 "miniTools" => {
                     let old_tools = app.cfg.tools.clone();
                     let requested_tools = mini_tools::Options::from_json(&m);
@@ -2577,6 +2614,11 @@ fn main() {
                     app.set_widget_enabled(!WIDGET_ENABLED.with(|c| c.get()));
                     log!("Đồng hồ native: {}", if app.cfg.widget_enabled { "bật" } else { "tắt" });
                 }
+                CMD_SYSTEM_MONITOR => {
+                    app.cfg.system_monitor.enabled = !app.cfg.system_monitor.enabled;
+                    app.configure_system_monitor(msg_hwnd);
+                    web::post(&serde_json::json!({"t":"systemMonitorState","systemMonitor":app.cfg.system_monitor.json()}).to_string());
+                }
                 CMD_WIDGET_LOCK => {
                     let on = !WIDGET_LOCKED.with(|c| c.get());
                     WIDGET_LOCKED.with(|c| c.set(on));
@@ -2696,6 +2738,7 @@ fn main() {
                 }
             }
             next_fg = now + 500.0;
+            if let Some(monitor) = app.system_monitor.as_mut() { monitor.tick(hidden); }
         }
         if hidden {
             // Chỉ thức dậy theo nhịp kiểm tra 500 ms, không vẽ, không đọc biểu tượng
@@ -2766,6 +2809,7 @@ fn main() {
         unsafe { UnhookWinEvent(hook) };
     }
     if let Some(mut w) = app.widget.take() { w.destroy(); }
+    app.system_monitor = None;
     app.destroy_walls();
     app.drop_shared();
     app.ctx = None;

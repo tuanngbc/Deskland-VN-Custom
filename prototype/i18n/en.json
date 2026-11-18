@@ -1,6 +1,16 @@
 {
   "name": "English",
   "ui": {
+    "systemMonitorTitle": "Taskbar monitor",
+    "systemMonitorDescription": "CPU, RAM, GPU and download / upload speed beside the system tray. Follows the Windows theme; double-click to open Task Manager.",
+    "systemMonitorEnabled": "Show statistics",
+    "systemMonitorHint": "Native sampling pauses while locked. Unsupported GPU counters display --.",
+    "systemMonitorInterval": "Update interval",
+    "systemMonitorIntervalHint": "Network throughput is shown in KB/s or MB/s from actual transferred data.",
+    "systemMonitorEvery1": "Every second",
+    "systemMonitorEvery2": "Every 2 seconds",
+    "systemMonitorEvery5": "Every 5 seconds",
+    "systemMonitorSpace": "Hides during fullscreen, taskbar auto-hide or when space is insufficient, keeping application buttons clear. Toggle it from the tray menu.",
     "adaptive": "Adaptive",
     "themes": "Themes",
     "collectionTitle": "Find your scenery.",

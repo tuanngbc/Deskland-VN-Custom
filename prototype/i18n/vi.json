@@ -1,6 +1,16 @@
 {
   "name": "Tiếng Việt",
   "ui": {
+    "systemMonitorTitle": "Thống kê trên taskbar",
+    "systemMonitorDescription": "CPU, RAM, GPU và tốc độ tải xuống / tải lên ở bên trái khay hệ thống. Màu chữ theo Windows; nhấp đúp để mở Trình quản lý tác vụ.",
+    "systemMonitorEnabled": "Hiện thống kê",
+    "systemMonitorHint": "Chạy native, ngừng lấy mẫu khi khóa máy. GPU không hỗ trợ sẽ hiện --.",
+    "systemMonitorInterval": "Chu kỳ cập nhật",
+    "systemMonitorIntervalHint": "Tốc độ mạng tính bằng KB/s hoặc MB/s, theo lưu lượng thực tế.",
+    "systemMonitorEvery1": "Mỗi giây",
+    "systemMonitorEvery2": "Mỗi 2 giây",
+    "systemMonitorEvery5": "Mỗi 5 giây",
+    "systemMonitorSpace": "Tự ẩn khi toàn màn hình, taskbar tự ẩn hoặc không đủ khoảng trống, để không che các nút ứng dụng. Có thể bật/tắt nhanh trong menu khay hệ thống.",
     "adaptive": "Thích ứng",
     "themes": "Chủ đề",
     "collectionTitle": "Chọn khung cảnh của bạn.",
