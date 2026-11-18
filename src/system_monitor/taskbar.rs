@@ -8,7 +8,7 @@ use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Registry::*;
-use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetWindowDpiAwarenessContext, SetThreadDpiAwarenessContext};
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -75,7 +75,10 @@ impl Probe {
                     if let Ok(condition) = automation.CreatePropertyCondition(UIA_ClassNamePropertyId, &VARIANT::from("SystemTray.SystemTrayFrame")) {
                         if let Ok(tray) = root.FindFirst(TreeScope_Descendants, &condition) {
                             if let Ok(rect) = tray.CurrentBoundingRectangle() {
-                                if rect.right > rect.left && rect.left > bar.left { tray_left = Some(rect.left); }
+                                if rect.right > rect.left && rect.left > bar.left && rect.right <= bar.right
+                                    && rect.top < bar.bottom && rect.bottom > bar.top {
+                                    tray_left = Some(tray_left.map_or(rect.left, |native| native.min(rect.left)));
+                                }
                             }
                         }
                     }
@@ -175,11 +178,9 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
 pub(super) struct Window {
     hwnd: HWND,
     _state: Box<WindowState>,
-    visible: bool,
     last: String,
     bitmap: Option<Bitmap>,
     rect: Option<[i32;4]>,
-    taskbar: HWND,
 }
 impl Window {
     pub fn new(owner: HWND) -> Result<Self, String> {
@@ -192,36 +193,51 @@ impl Window {
             class.hCursor = LoadCursorW(std::ptr::null_mut(), IDC_ARROW);
             let name = wide(CLASS);
             class.lpszClassName = name.as_ptr();
-            RegisterClassExW(&class);
-            let hwnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, name.as_ptr(), name.as_ptr(), WS_POPUP,
-                0, 0, WIDTH, HEIGHT, std::ptr::null_mut(), std::ptr::null_mut(), class.hInstance, std::ptr::null());
-            if hwnd.is_null() { return Err("Không tạo được thống kê taskbar".into()); }
-            let mut state = Box::new(WindowState { owner });
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (&mut *state) as *mut WindowState as isize);
-            Ok(Self { hwnd, _state: state, visible: false, last: String::new(),bitmap:None,rect:None,taskbar:std::ptr::null_mut() })
+            if RegisterClassExW(&class)==0 && GetLastError()!=ERROR_CLASS_ALREADY_EXISTS {
+                return Err("Không đăng ký được thống kê taskbar".into());
+            }
+            // Create the actual child only once Explorer has a valid taskbar.
+            // A top-level owned popup participates in Explorer's flyout Z order
+            // and can be hidden/covered when the overflow tray opens or closes.
+            Ok(Self { hwnd:std::ptr::null_mut(), _state:Box::new(WindowState { owner }),
+                last:String::new(),bitmap:None,rect:None })
         }
+    }
+    unsafe fn attach(&mut self, taskbar: HWND) -> bool {
+        if IsWindow(self.hwnd)!=0 && GetParent(self.hwnd)==taskbar { return true; }
+        if IsWindow(self.hwnd)!=0 { DestroyWindow(self.hwnd); }
+        self.hwnd=std::ptr::null_mut();self.last.clear();self.rect=None;
+        // Create as a child directly, instead of reparenting a layered popup.
+        // Matching Explorer's DPI context avoids resetting our process awareness.
+        let previous=SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(taskbar));
+        self.hwnd=CreateWindowExW(WS_EX_LAYERED|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,
+            wide(CLASS).as_ptr(),wide(CLASS).as_ptr(),WS_CHILD|WS_CLIPSIBLINGS,
+            0,0,WIDTH,HEIGHT,taskbar,std::ptr::null_mut(),GetModuleHandleW(std::ptr::null()),std::ptr::null());
+        if !previous.is_null() { SetThreadDpiAwarenessContext(previous); }
+        if self.hwnd.is_null() { return false; }
+        SetWindowLongPtrW(self.hwnd,GWLP_USERDATA,(&mut *self._state) as *mut WindowState as isize);
+        true
     }
     pub fn update(&mut self, snapshot: &Snapshot, dock: Option<&Dock>, suspended: bool) {
         unsafe {
-            // Explorer destroys its owned popups when the shell restarts.
-            if IsWindow(self.hwnd)==0 {
-                match Self::new(self._state.owner) {Ok(window)=>*self=window,Err(_)=>return,}
-            }
-            let placement = dock.filter(|dock| !suspended && IsWindowVisible(dock.taskbar as HWND) != 0 && !fullscreen(dock.monitor, dock.taskbar as HWND))
+            let placement = dock.filter(|dock| !suspended && IsWindow(dock.taskbar as HWND)!=0
+                    && IsWindowVisible(dock.taskbar as HWND) != 0 && !fullscreen(dock.monitor, dock.taskbar as HWND))
                 .and_then(|dock| {
                     let mut bar: RECT = std::mem::zeroed();
                     if GetWindowRect(dock.taskbar as HWND, &mut bar) == 0 { None } else { dock.placement(array(bar)).map(|rect| (dock, rect)) }
                 });
             let Some((dock, rect)) = placement else {
-                if self.visible { ShowWindow(self.hwnd, SW_HIDE); self.visible = false; }
+                if IsWindow(self.hwnd)!=0 && GetWindowLongW(self.hwnd,GWL_STYLE) as u32 & WS_VISIBLE != 0 {
+                    ShowWindow(self.hwnd,SW_HIDE);
+                }
                 return;
             };
-            if self.taskbar!=dock.taskbar as HWND {
-                self.taskbar=dock.taskbar as HWND;
-                // An owned popup stays above its taskbar automatically. Don't
-                // repeatedly splice it into Explorer's changing popup Z order.
-                SetWindowLongPtrW(self.hwnd,GWLP_HWNDPARENT,self.taskbar as isize);
-            }
+            if !self.attach(dock.taskbar as HWND) { return; }
+            // Inspect the HWND, not a cached bool: shell changes, display changes
+            // and a restored taskbar can invalidate our previous visibility.
+            let visible=IsWindowVisible(self.hwnd)!=0;
+            let mut actual:RECT=std::mem::zeroed();
+            let moved=GetWindowRect(self.hwnd,&mut actual)==0 || array(actual)!=rect;
             let key = visual_key(snapshot,rect[2]-rect[0],rect[3]-rect[1],dock.dpi,dock.light);
             let mut changed=false;
             if key != self.last {
@@ -229,7 +245,7 @@ impl Window {
                     self.bitmap=Some(bitmap);changed=true;
                 }
             }
-            if changed || self.rect!=Some(rect) || !self.visible {
+            if changed || self.rect!=Some(rect) || moved || !visible {
                 if let Some(bitmap)=self.bitmap.as_ref() {
                     let destination = POINT { x:rect[0], y:rect[1] };
                     let size = SIZE { cx:bitmap.width, cy:bitmap.height };
@@ -240,11 +256,18 @@ impl Window {
                     }
                 }
             }
-            if !self.visible { ShowWindow(self.hwnd, SW_SHOWNOACTIVATE); self.visible = true; }
+            if self.rect==Some(rect) {
+                // Only repair sibling order when Explorer really changed it.
+                // This cannot lift the panel over taskbar flyouts or other apps.
+                if !GetWindow(self.hwnd,GW_HWNDPREV).is_null() {
+                    SetWindowPos(self.hwnd,HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_NOOWNERZORDER);
+                }
+                if !visible { ShowWindow(self.hwnd,SW_SHOWNOACTIVATE); }
+            }
         }
     }
 }
-impl Drop for Window { fn drop(&mut self) { unsafe { DestroyWindow(self.hwnd); } } }
+impl Drop for Window { fn drop(&mut self) { unsafe { if IsWindow(self.hwnd)!=0 { DestroyWindow(self.hwnd); } } } }
 
 fn percent(value: Option<f64>) -> String { value.filter(|n| n.is_finite()).map(|n| format!("{:.0}%", n.clamp(0.0,100.0))).unwrap_or_else(|| "--".into()) }
 fn visual_key(snapshot:&Snapshot,width:i32,height:i32,dpi:u32,light:bool)->String {
@@ -364,10 +387,18 @@ pub(super) fn save_preview(snapshot:&Snapshot,dock:&Dock,path:&std::path::Path)-
 
 pub(super) fn window_diagnostics()->serde_json::Value {
     unsafe {
-        let hwnd=FindWindowW(wide(CLASS).as_ptr(),std::ptr::null());
+        let taskbar=FindWindowW(wide("Shell_TrayWnd").as_ptr(),std::ptr::null());
+        let child=FindWindowExW(taskbar,std::ptr::null_mut(),wide(CLASS).as_ptr(),std::ptr::null());
+        let hwnd=if child.is_null() {FindWindowW(wide(CLASS).as_ptr(),std::ptr::null())}else{child};
         if hwnd.is_null(){return serde_json::Value::Null;}
         let mut rect:RECT=std::mem::zeroed();GetWindowRect(hwnd,&mut rect);
-        serde_json::json!({"handle":hwnd as usize,"visible":IsWindowVisible(hwnd)!=0,"rect":array(rect)})
+        let point=WindowFromPoint(POINT{x:(rect.left+rect.right)/2,y:(rect.top+rect.bottom)/2});
+        let mut class=[0u16;128];let length=GetClassNameW(point,class.as_mut_ptr(),class.len() as i32).max(0) as usize;
+        serde_json::json!({"handle":hwnd as usize,"visible":IsWindowVisible(hwnd)!=0,"rect":array(rect),
+            "parent":GetParent(hwnd) as usize,"owner":GetWindow(hwnd,GW_OWNER) as usize,
+            "style":GetWindowLongW(hwnd,GWL_STYLE) as u32,"exStyle":GetWindowLongW(hwnd,GWL_EXSTYLE) as u32,
+            "siblingAbove":GetWindow(hwnd,GW_HWNDPREV) as usize,
+            "windowAtCenter":{"handle":point as usize,"class":String::from_utf16_lossy(&class[..length])}})
     }
 }
 
@@ -408,7 +439,7 @@ mod tests {
         assert_ne!(visual_key(&a,WIDTH,HEIGHT,96,true),visual_key(&a,WIDTH,HEIGHT,96,false));
     }
     #[test]
-    fn native_panel_keeps_owner_and_cached_bitmap_while_popups_toggle() {unsafe {
+    fn native_panel_recovers_visibility_geometry_and_shell_recreation() {unsafe {
         let owner=CreateWindowExW(WS_EX_TOOLWINDOW,wide("STATIC").as_ptr(),wide("Monitor test owner").as_ptr(),
             WS_POPUP|WS_VISIBLE,10000,10000,1000,48,std::ptr::null_mut(),std::ptr::null_mut(),GetModuleHandleW(std::ptr::null()),std::ptr::null());
         assert!(!owner.is_null());
@@ -418,23 +449,52 @@ mod tests {
         let mut snapshot=Snapshot{cpu:Some(20.0),sequence:1,..Snapshot::default()};
         window.update(&snapshot,Some(&dock),false);
         let dc=window.bitmap.as_ref().unwrap().dc;
-        assert_eq!(GetWindow(window.hwnd,GW_OWNER),owner);
+        assert_ne!(IsWindowVisible(window.hwnd),0);
+        assert_eq!(GetParent(window.hwnd),owner);
+        assert_ne!(GetWindowLongW(window.hwnd,GWL_STYLE) as u32 & WS_CHILD,0);
+        assert_eq!(GetWindowLongW(window.hwnd,GWL_STYLE) as u32 & WS_POPUP,0);
+        let assert_rect=|hwnd:HWND| {let mut rect:RECT=std::mem::zeroed();assert_ne!(GetWindowRect(hwnd,&mut rect),0);assert_eq!(array(rect),dock.placement(dock.bar).unwrap());};
+        assert_rect(window.hwnd);
         let popup=CreateWindowExW(WS_EX_TOOLWINDOW,wide("STATIC").as_ptr(),wide("Monitor test popup").as_ptr(),
             WS_POPUP,10000,9700,200,300,owner,std::ptr::null_mut(),GetModuleHandleW(std::ptr::null()),std::ptr::null());
+        let sibling=CreateWindowExW(0,wide("STATIC").as_ptr(),wide("Monitor test backdrop").as_ptr(),
+            WS_CHILD|WS_VISIBLE,0,0,1000,48,owner,std::ptr::null_mut(),GetModuleHandleW(std::ptr::null()),std::ptr::null());
+        let foreground=GetForegroundWindow();
         for index in 0..10 {
             ShowWindow(popup,if index%2==0 {SW_SHOWNOACTIVATE}else{SW_HIDE});snapshot.sequence+=1;
+            // Simulate an overlapping taskbar backdrop being reordered by WinUI.
+            SetWindowPos(sibling,HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
             window.update(&snapshot,Some(&dock),false);
-            assert!(window.visible);assert_eq!(window.bitmap.as_ref().unwrap().dc,dc);
-            assert_eq!(GetWindow(window.hwnd,GW_OWNER),owner);
+            assert_ne!(IsWindowVisible(window.hwnd),0);assert_eq!(window.bitmap.as_ref().unwrap().dc,dc);
+            assert_eq!(GetParent(window.hwnd),owner);assert!(GetWindow(window.hwnd,GW_HWNDPREV).is_null());
+            assert_rect(window.hwnd);
         }
-        window.update(&snapshot,Some(&dock),true);assert!(!window.visible);
-        window.update(&snapshot,Some(&dock),false);assert!(window.visible);
+        assert_eq!(GetForegroundWindow(),foreground);
+        ShowWindow(window.hwnd,SW_HIDE);
+        assert_eq!(IsWindowVisible(window.hwnd),0);
+        window.update(&snapshot,Some(&dock),false);assert_ne!(IsWindowVisible(window.hwnd),0);
+        SetWindowPos(window.hwnd,std::ptr::null_mut(),0,0,WIDTH,HEIGHT,SWP_NOZORDER|SWP_NOACTIVATE);
+        window.update(&snapshot,Some(&dock),false);assert_rect(window.hwnd);
+        window.update(&snapshot,Some(&dock),true);assert_eq!(IsWindowVisible(window.hwnd),0);
+        window.update(&snapshot,Some(&dock),false);assert_ne!(IsWindowVisible(window.hwnd),0);
         assert_eq!(window.bitmap.as_ref().unwrap().dc,dc);
         DestroyWindow(window.hwnd);
         window.update(&snapshot,Some(&dock),false);
-        assert!(window.visible);assert_ne!(IsWindow(window.hwnd),0);
-        assert_eq!(GetWindow(window.hwnd,GW_OWNER),owner);
-        drop(window);DestroyWindow(popup);DestroyWindow(owner);
+        assert_ne!(IsWindowVisible(window.hwnd),0);assert_eq!(GetParent(window.hwnd),owner);
+        ShowWindow(owner,SW_HIDE);
+        window.update(&snapshot,Some(&dock),false);assert_eq!(IsWindowVisible(window.hwnd),0);
+        ShowWindow(owner,SW_SHOWNOACTIVATE);
+        window.update(&snapshot,Some(&dock),false);assert_ne!(IsWindowVisible(window.hwnd),0);
+        assert_rect(window.hwnd);
+        DestroyWindow(popup);DestroyWindow(sibling);DestroyWindow(owner);
+        assert_eq!(IsWindow(window.hwnd),0);
+        window.update(&snapshot,Some(&dock),false); // stale Explorer handle
+        let replacement=CreateWindowExW(WS_EX_TOOLWINDOW,wide("STATIC").as_ptr(),wide("Replacement taskbar").as_ptr(),
+            WS_POPUP|WS_VISIBLE,10000,10000,1000,48,std::ptr::null_mut(),std::ptr::null_mut(),GetModuleHandleW(std::ptr::null()),std::ptr::null());
+        let dock=Dock{taskbar:replacement as isize,..dock};
+        window.update(&snapshot,Some(&dock),false);
+        assert_ne!(IsWindowVisible(window.hwnd),0);assert_eq!(GetParent(window.hwnd),replacement);
+        drop(window);DestroyWindow(replacement);
     }}
     #[test]
     fn native_text_has_alpha_in_both_taskbar_themes() {
