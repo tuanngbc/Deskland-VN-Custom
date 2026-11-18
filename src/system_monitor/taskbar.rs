@@ -203,6 +203,10 @@ impl Window {
     }
     pub fn update(&mut self, snapshot: &Snapshot, dock: Option<&Dock>, suspended: bool) {
         unsafe {
+            // Explorer destroys its owned popups when the shell restarts.
+            if IsWindow(self.hwnd)==0 {
+                match Self::new(self._state.owner) {Ok(window)=>*self=window,Err(_)=>return,}
+            }
             let placement = dock.filter(|dock| !suspended && IsWindowVisible(dock.taskbar as HWND) != 0 && !fullscreen(dock.monitor, dock.taskbar as HWND))
                 .and_then(|dock| {
                     let mut bar: RECT = std::mem::zeroed();
@@ -426,6 +430,10 @@ mod tests {
         window.update(&snapshot,Some(&dock),true);assert!(!window.visible);
         window.update(&snapshot,Some(&dock),false);assert!(window.visible);
         assert_eq!(window.bitmap.as_ref().unwrap().dc,dc);
+        DestroyWindow(window.hwnd);
+        window.update(&snapshot,Some(&dock),false);
+        assert!(window.visible);assert_ne!(IsWindow(window.hwnd),0);
+        assert_eq!(GetWindow(window.hwnd,GW_OWNER),owner);
         drop(window);DestroyWindow(popup);DestroyWindow(owner);
     }}
     #[test]

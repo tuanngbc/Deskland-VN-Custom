@@ -865,6 +865,7 @@ struct Wallpaper {
     phys_h: i32,
     last_icons: Option<Vec<RECT>>,
     paused: bool,
+    paused_since: Option<f64>,
     needs_settle: bool,
     last_frame: f64,
 }
@@ -880,6 +881,17 @@ struct PanoramaSurface {
     scale: f32,
     world: RECT,
 }
+
+fn output_surface(gl:&glow::Context,width:i32,height:i32)->Result<(glow::Framebuffer,glow::Texture,glow::Buffer),String> {unsafe {
+    let texture=gl.create_texture()?;gl.bind_texture(glow::TEXTURE_2D,Some(texture));
+    gl.tex_image_2d(glow::TEXTURE_2D,0,glow::RGBA8 as i32,width,height,0,glow::RGBA,glow::UNSIGNED_BYTE,None);
+    let framebuffer=gl.create_framebuffer()?;gl.bind_framebuffer(glow::FRAMEBUFFER,Some(framebuffer));
+    gl.framebuffer_texture_2d(glow::FRAMEBUFFER,glow::COLOR_ATTACHMENT0,glow::TEXTURE_2D,Some(texture),0);
+    gl.bind_framebuffer(glow::FRAMEBUFFER,None);
+    let buffer=gl.create_buffer()?;gl.bind_buffer(glow::PIXEL_PACK_BUFFER,Some(buffer));
+    gl.buffer_data_size(glow::PIXEL_PACK_BUFFER,width*height*4,glow::STREAM_READ);gl.bind_buffer(glow::PIXEL_PACK_BUFFER,None);
+    Ok((framebuffer,texture,buffer))
+}}
 
 struct App {
     ctx: Option<wgl::GlContext>,
@@ -998,6 +1010,24 @@ impl App {
         for wp in &self.walls {
             ctx.make_current(wp.gl_dc);
             Self::present_gdi(&ctx.gl, wp);
+        }
+    }
+
+    fn release_hidden_outputs(&mut self,now:f64,hidden:bool) {
+        let Some(ctx)=self.ctx.as_ref() else {return};
+        for wp in &mut self.walls {
+            if !hidden && !wp.paused {wp.paused_since=None;continue;}
+            let since=*wp.paused_since.get_or_insert(now);
+            if now-since<10_000.0 || wp.out.is_none() {continue;}
+            ctx.make_current(wp.gl_dc);
+            // Drain the last pending readback once, retain the scene and the
+            // window's displayed pixels, then release full-size output buffers.
+            Self::present_gdi(&ctx.gl,wp);
+            if let Some((fbo,texture,buffer))=wp.out.take() {unsafe {
+                ctx.gl.delete_buffer(buffer);ctx.gl.delete_framebuffer(fbo);ctx.gl.delete_texture(texture);ctx.gl.flush();
+            }}
+            wp.pbo_ready=false;
+            log!("Giải phóng bộ đệm màn hình đang nghỉ [{},{}]",wp.screen.left,wp.screen.top);
         }
     }
 
@@ -1183,24 +1213,7 @@ impl App {
                 gl.bind_framebuffer(glow::FRAMEBUFFER, None);
                 (f, t)
             };
-            let out = if self.gdi {
-                unsafe {
-                    let t = gl.create_texture()?;
-                    gl.bind_texture(glow::TEXTURE_2D, Some(t));
-                    gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::RGBA8 as i32, pw, ph, 0, glow::RGBA, glow::UNSIGNED_BYTE, None);
-                    let f = gl.create_framebuffer()?;
-                    gl.bind_framebuffer(glow::FRAMEBUFFER, Some(f));
-                    gl.framebuffer_texture_2d(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(t), 0);
-                    gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-                    let b = gl.create_buffer()?;
-                    gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(b));
-                    gl.buffer_data_size(glow::PIXEL_PACK_BUFFER, pw * ph * 4, glow::STREAM_READ);
-                    gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
-                    Some((f, t, b))
-                }
-            } else {
-                None
-            };
+            let out = if self.gdi {Some(output_surface(gl,pw,ph)?)}else{None};
             // Ở panorama, mọi theme nhận cùng kích thước canvas ảo. Chỉ theme
             // của màn hình đầu tiên được vẽ; các cửa sổ còn lại nhận viewport
             // cắt từ canvas đó ở render().
@@ -1239,6 +1252,7 @@ impl App {
                 phys_h: ph,
                 last_icons: None,
                 paused: false,
+                paused_since: None,
                 needs_settle: false,
                 last_frame: 0.0,
             });
@@ -1570,6 +1584,11 @@ impl App {
             for wp in &mut self.walls {
                 if wp.paused {wp.pbo_ready=false;continue;}
                 ctx.make_current(wp.gl_dc);
+                if self.gdi && wp.out.is_none() {
+                    match output_surface(gl,wp.phys_w,wp.phys_h) {
+                        Ok(surface)=>wp.out=Some(surface),Err(error)=>{log!("Khôi phục bộ đệm lỗi: {error}");continue;}
+                    }
+                }
                 // GDI presentation is pipelined: display the previous PBO
                 // before rendering the next viewport. The panorama branch
                 // previously skipped this step, leaving every monitor black.
@@ -1607,6 +1626,11 @@ impl App {
             if wp.theme.is_none() {continue;}
             let settle=wp.needs_settle;
             ctx.make_current(wp.gl_dc);
+            if self.gdi && wp.out.is_none() {
+                match output_surface(gl,wp.phys_w,wp.phys_h) {
+                    Ok(surface)=>wp.out=Some(surface),Err(error)=>{log!("Khôi phục bộ đệm lỗi: {error}");continue;}
+                }
+            }
             // Chế độ gdi: hiện khung đã đọc về ở lượt trước (GPU xong từ lâu, map không phải chờ)
             Self::present_gdi(gl, wp);
             let theme=wp.theme.as_mut().unwrap();
@@ -2085,6 +2109,18 @@ fn main() {
         app.poll_icons();
     }
     app.render();
+    if headless && args.iter().any(|a|a=="--test-output-resume") {
+        let now=app.now();
+        for wp in &mut app.walls {wp.paused=true;wp.paused_since=Some(now-11_000.0);}
+        app.release_hidden_outputs(now,false);
+        assert!(app.walls.iter().all(|w|w.out.is_none()));
+        let frames=app.frames;app.render();assert_eq!(frames,app.frames);
+        let index=app.walls.len().saturating_sub(1);app.walls[index].paused=false;
+        app.render();assert!(app.walls[index].out.is_some() || !app.gdi);
+        for wp in &mut app.walls {wp.paused=false;}
+        app.render();assert!(app.walls.iter().all(|w|w.out.is_some() || !app.gdi));
+        log!("PASS: dừng hoàn toàn, giải phóng bộ đệm, tiếp tục màn phụ rồi toàn bộ màn hình");
+    }
     if open_settings && !saver {
         PENDING_CMD.with(|c| c.set(CMD_SETTINGS));
     }
@@ -2786,6 +2822,7 @@ fn main() {
                 }
             }
             next_fg = now + 500.0;
+            app.release_hidden_outputs(now,hidden);
             if let Some(monitor) = app.system_monitor.as_mut() { monitor.tick(hidden); }
             if let Some(w) = app.widget.as_mut() {
                 w.set_visible(!hidden && app.cfg.widget_enabled);
@@ -2859,7 +2896,7 @@ fn main() {
 
     if precise_timer {unsafe {timeEndPeriod(1);}}
     log!("Đang thoát");
-    save_config(&app.cfg);
+    if !headless {save_config(&app.cfg);}
     if !hook.is_null() {
         unsafe { UnhookWinEvent(hook) };
     }

@@ -32,6 +32,11 @@ float hash2(vec2 p) {
 float ss(float a, float b, float x) { float t = clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
 vec4 N(vec2 p, float scale) { return texture(uNoise, p / scale + uSeed * 0.013); }
 float fieldS(sampler2D t, vec2 p) { return texture(t, (p / uStep + 0.5) / uGrid).r; }
+float sceneField(vec2 p) {
+  // Once morphing ends, sample the current field only (the normal idle state).
+  if (uMix >= 1.0) return fieldS(uFB, p);
+  return mix(fieldS(uFA, p), fieldS(uFB, p), uMix);
+}
 
 vec3 seaRamp(float v) {
   v = clamp(v, 0.0, 1.0) * 4.0;
@@ -97,7 +102,7 @@ void main() {
   float g1 = hash2(gp + 0.5), g2 = hash2(gp + 7.3);
   float gAmt = uGrain;
 
-  float s0 = mix(fieldS(uFA, p), fieldS(uFB, p), uMix);
+  float s0 = sceneField(p);
   float s = s0 + (N(p, 700.0).r - 0.5) * 10.0;
 
   float wv = uWave;
@@ -108,12 +113,12 @@ void main() {
 
   vec2 gr = vec2(dFdx(s0), -dFdy(s0));
   vec2 nrm = length(gr) > 1e-4 ? normalize(gr) : vec2(0.0, 1.0);
-  float sIn = mix(fieldS(uFA, p - nrm * 45.0), fieldS(uFB, p - nrm * 45.0), uMix);
-  float sOut = mix(fieldS(uFA, p + nrm * 70.0), fieldS(uFB, p + nrm * 70.0), uMix);
+  float sIn = sceneField(p - nrm * 45.0);
+  float sOut = sceneField(p + nrm * 70.0);
   float energy = mix(ss(2.0, -18.0, sIn), 1.0, ss(15.0, 40.0, s)) * ss(25.0, 70.0, sOut);
   float shoreE = 0.0, sW = s;
   if (s < 4.0 && s > -uSigma * 0.78 - 12.0) {
-    #define SF(q) mix(fieldS(uFA, q), fieldS(uFB, q), uMix)
+    #define SF(q) sceneField(q)
     float fR = SF(p + vec2(10.0, 0.0)), fL = SF(p - vec2(10.0, 0.0)), fD = SF(p + vec2(0.0, 10.0)), fU = SF(p - vec2(0.0, 10.0));
     vec2 g10 = vec2(fR - fL, fD - fU);
     vec2 n10 = length(g10) > 1e-3 ? normalize(g10) : nrm;
