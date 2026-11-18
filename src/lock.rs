@@ -86,6 +86,43 @@ fn saver_path_old() -> std::path::PathBuf {
     data_dir().join("Deskland.scr")
 }
 
+fn saver_backup_path() -> std::path::PathBuf {
+    data_dir().join("saver-registry-backup.json")
+}
+
+fn save_saver_backup() {
+    if saver_backup_path().is_file() { return; }
+    let value = serde_json::json!({
+        "scrnsave": reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, "SCRNSAVE.EXE"),
+        "active": reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaveActive"),
+        "timeout": reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaveTimeOut"),
+        "secure": reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaverIsSecure"),
+        "marker": reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, SAVER_MARKER),
+    });
+    if let Ok(bytes) = serde_json::to_vec(&value) {
+        if let Err(e) = std::fs::write(saver_backup_path(), bytes) {
+            crate::log!("Không lưu được cài đặt saver cũ: {e}");
+        }
+    }
+}
+
+fn restore_saver_backup() -> bool {
+    let path = saver_backup_path();
+    let Ok(bytes) = std::fs::read(&path) else { return false; };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return false; };
+    let mut ok = true;
+    for (key, name) in [("scrnsave", "SCRNSAVE.EXE"), ("active", "ScreenSaveActive"),
+        ("timeout", "ScreenSaveTimeOut"), ("secure", "ScreenSaverIsSecure"), ("marker", SAVER_MARKER)] {
+        if let Some(v) = value.get(key).and_then(|v| v.as_str()) {
+            ok &= reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, name, v);
+        } else {
+            ok &= reg_delete_value(HKEY_CURRENT_USER, DESKTOP_KEY, name);
+        }
+    }
+    let _ = std::fs::remove_file(path);
+    ok
+}
+
 /// Trình bảo vệ màn hình hiện tại có phải của Deskland Rust không.
 pub fn saver_installed() -> bool {
     let cur = reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, "SCRNSAVE.EXE").unwrap_or_default();
@@ -100,6 +137,9 @@ pub fn install_saver(idle_mins: u32) -> Result<(), String> {
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dst = saver_path();
+    // Chỉ lưu cấu hình bên ngoài Deskland; nếu đang cập nhật saver của chính
+    // mình thì không được ghi đè bản sao gốc bằng đường dẫn Deskland.
+    if !saver_installed() { save_saver_backup(); }
     std::fs::copy(&exe, &dst).map_err(|e| format!("Chép {} lỗi: {e}", dst.display()))?;
     let secs = (idle_mins.max(1) * 60).to_string();
     let ok = reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "SCRNSAVE.EXE", &dst.to_string_lossy())
@@ -121,6 +161,16 @@ pub fn install_saver(idle_mins: u32) -> Result<(), String> {
 /// Trình bảo vệ màn hình hiện tại có bật "khi tiếp tục, hiện màn hình đăng nhập" không.
 pub fn saver_secure() -> bool {
     reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaverIsSecure").is_some_and(|v| v.trim() == "1")
+}
+
+/// Trình bảo vệ màn hình Deskland hiện vừa được cài vừa đang được Windows bật.
+/// `saver_installed()` chỉ nói về chủ sở hữu cấu hình; Windows có thể đang để
+/// `ScreenSaveActive=0` (ví dụ người dùng chọn Never). Không được coi trường
+/// hợp đó là tín hiệu để tự khóa phiên.
+pub fn saver_active() -> bool {
+    saver_installed()
+        && reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaveActive")
+            .is_some_and(|v| v.trim() == "1")
 }
 
 /// Windows có đang chạy trình bảo vệ màn hình (bất kỳ) không.
@@ -162,12 +212,16 @@ pub fn start_secure_saver(hwnd: HWND) {
 /// Gỡ: chỉ bỏ SCRNSAVE.EXE nếu đang trỏ vào Deskland (giữ nguyên ScreenSaverIsSecure).
 pub fn uninstall_saver() {
     if saver_installed() {
-        reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "SCRNSAVE.EXE", "");
-        // SPI_SETSCREENSAVEACTIVE không phải lúc nào cũng ghi ngược giá trị
-        // registry ngay (đặc biệt khi tắt từ WebView2), nên ghi rõ trạng thái 0.
-        reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaveActive", "0");
-        reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, SAVER_MARKER, "0");
-        unsafe { SystemParametersInfoW(SPI_SETSCREENSAVEACTIVE, 0, std::ptr::null_mut(), SPIF_SENDCHANGE) };
+        let restored = restore_saver_backup();
+        if !restored {
+            reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "SCRNSAVE.EXE", "");
+            // SPI_SETSCREENSAVEACTIVE không phải lúc nào cũng ghi ngược giá trị
+            // registry ngay (đặc biệt khi tắt từ WebView2), nên ghi rõ trạng thái 0.
+            reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaveActive", "0");
+            reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, SAVER_MARKER, "0");
+        }
+        let active = reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaveActive").is_some_and(|v| v.trim() == "1");
+        unsafe { SystemParametersInfoW(SPI_SETSCREENSAVEACTIVE, active as u32, std::ptr::null_mut(), SPIF_SENDCHANGE) };
         crate::log!("Đã gỡ trình bảo vệ màn hình Deskland-VN");
     }
 }

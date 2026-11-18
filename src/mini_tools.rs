@@ -72,7 +72,19 @@ pub fn register(hwnd:HWND, o:&Options)->[bool;2] {
         MAIN_WINDOW.store(hwnd as isize,std::sync::atomic::Ordering::Relaxed);
         for id in [CAPTURE_ID,RECORD_ID] { UnregisterHotKey(hwnd,id); }
         if !o.enabled { return [false;2]; }
-        [(CAPTURE_ID,o.capture_mods,o.capture_key),(RECORD_ID,o.record_mods,o.record_key)].map(|(id,m,k)| RegisterHotKey(hwnd,id,m,k)!=0)
+        [(CAPTURE_ID,o.capture_mods,o.capture_key,"Chụp"),(RECORD_ID,o.record_mods,o.record_key,"Quay")].map(|(id,m,k,name)| {
+            if m & (MOD_CONTROL | MOD_ALT | MOD_SHIFT) == 0 || !valid_key(k) {
+                crate::log!("Phím tắt {name}: tổ hợp không hợp lệ (mods={m}, vk={k})");
+                return false;
+            }
+            let ok = RegisterHotKey(hwnd,id,m,k)!=0;
+            if ok {
+                crate::log!("Phím tắt {name}: đã đăng ký {}", hotkey_text(m,k));
+            } else {
+                crate::log!("Phím tắt {name}: đăng ký thất bại {} (GetLastError={})", hotkey_text(m,k), GetLastError());
+            }
+            ok
+        })
     }
 }
 pub fn spawn(mode:&str, o:&Options) {

@@ -182,6 +182,25 @@ impl Widget {
     pub fn set_lines(&mut self, lines: [Line; 3]) { self.state.time = lines[0]; self.state.weekday = lines[1]; self.state.date = lines[2]; self.redraw(true); }
     pub fn locked(&self) -> bool { self.state.locked }
     pub fn rect(&self) -> RECT { self.rect }
+    /// Giữ đồng hồ dưới ứng dụng đang hoạt động. Widget là cửa sổ top-level để
+    /// kéo được trên màn hình, vì vậy nếu không cập nhật z-order thì một ứng
+    /// dụng khởi động sau Deskland (như Cockpit) sẽ bị đồng hồ phủ lên.
+    pub fn sync_z_order(&self) {
+        unsafe {
+            let foreground = GetForegroundWindow();
+            if foreground.is_null() || foreground == self.hwnd { return; }
+            let root = GetAncestor(foreground, GA_ROOT);
+            if root.is_null() || root == self.hwnd { return; }
+            let mut cls = [0u16; 64];
+            let n = GetClassNameW(root, cls.as_mut_ptr(), cls.len() as i32);
+            let class = String::from_utf16_lossy(&cls[..n.max(0) as usize]);
+            // Khi desktop là foreground, đưa đồng hồ lên lớp desktop để vẫn
+            // nhìn thấy; mọi cửa sổ ứng dụng khác nhận làm anchor và đồng hồ
+            // được đặt ngay phía sau anchor đó.
+            let after = if matches!(class.as_str(), "Progman" | "WorkerW") { HWND_TOP } else { root };
+            SetWindowPos(self.hwnd, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+    }
     pub fn reset(&mut self, screen: RECT) { let w = self.rect.right - self.rect.left; let x = screen.left + ((screen.right - screen.left) - w) / 2; let y = screen.top + 70; unsafe { SetWindowPos(self.hwnd, HWND_TOP, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW); GetWindowRect(self.hwnd, &mut self.rect); } }
     pub fn destroy(&mut self) { unsafe { DestroyWindow(self.hwnd); } }
 

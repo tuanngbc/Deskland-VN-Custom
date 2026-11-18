@@ -186,6 +186,36 @@ thread_local! {
     static WIDGET_LOCKED: Cell<bool> = const { Cell::new(true) };
 }
 
+fn normalize_hotkey(mods: u32, vk: u32) -> Option<u32> {
+    let modifiers = mods & (MOD_ALT | MOD_CONTROL | MOD_SHIFT);
+    let has_modifier = modifiers != 0;
+    let valid_key = vk == VK_SPACE as u32
+        || vk == VK_RETURN as u32
+        || vk == VK_TAB as u32
+        || (0x30..=0x39).contains(&vk)
+        || (0x41..=0x5A).contains(&vk)
+        || (0x60..=0x69).contains(&vk)
+        || (0x70..=0x7B).contains(&vk)
+        || [VK_LEFT as u32, VK_UP as u32, VK_RIGHT as u32, VK_DOWN as u32,
+            VK_HOME as u32, VK_END as u32, VK_PRIOR as u32, VK_NEXT as u32,
+            VK_INSERT as u32, VK_DELETE as u32].contains(&vk);
+    (has_modifier && valid_key).then_some(modifiers | MOD_NOREPEAT)
+}
+
+unsafe fn register_hotkey_logged(hwnd: HWND, id: i32, mods: u32, vk: u32, name: &str) -> bool {
+    if normalize_hotkey(mods, vk).is_none() {
+        log!("Phím tắt {name}: tổ hợp không hợp lệ (mods={mods}, vk={vk})");
+        return false;
+    }
+    let ok = RegisterHotKey(hwnd, id, mods, vk) != 0;
+    if ok {
+        log!("Phím tắt {name}: đã đăng ký {}", mini_tools::hotkey_text(mods, vk));
+    } else {
+        log!("Phím tắt {name}: đăng ký thất bại {} (GetLastError={})", mini_tools::hotkey_text(mods, vk), GetLastError());
+    }
+    ok
+}
+
 unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match m {
         WM_INPUT => {
@@ -596,8 +626,15 @@ fn load_config(cli_theme: Option<String>) -> Config {
             opacity: widget.and_then(|v| v.get(k)).and_then(|v| v.get("opacity")).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(1.0).clamp(0.0, 1.0),
             size: widget.and_then(|v| v.get(k)).and_then(|v| v.get("size")).and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(1.0).clamp(0.5, 2.0),
         }),
-        launcher_mods: root.get("launcherHotkey").and_then(|v| v.get("mods")).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(MOD_ALT | MOD_NOREPEAT),
-        launcher_vk: root.get("launcherHotkey").and_then(|v| v.get("vk")).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(VK_SPACE as u32),
+        launcher_mods: {
+            let mods = root.get("launcherHotkey").and_then(|v| v.get("mods")).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(MOD_ALT | MOD_NOREPEAT);
+            let vk = root.get("launcherHotkey").and_then(|v| v.get("vk")).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(VK_SPACE as u32);
+            normalize_hotkey(mods, vk).unwrap_or(MOD_ALT | MOD_NOREPEAT)
+        },
+        launcher_vk: {
+            let vk = root.get("launcherHotkey").and_then(|v| v.get("vk")).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(VK_SPACE as u32);
+            if normalize_hotkey(root.get("launcherHotkey").and_then(|v| v.get("mods")).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(MOD_ALT | MOD_NOREPEAT), vk).is_some() { vk } else { VK_SPACE as u32 }
+        },
         launcher_appearance: launcher::Appearance::from_json(&root["launcherAppearance"]),
         tools: mini_tools::Options::from_json(&root["miniTools"]),
         lock_idle_mins: root.get("lockIdleMins").and_then(|v| v.as_u64()).map(|v| v as u32).filter(|&v| v > 0).unwrap_or(5),
@@ -717,7 +754,7 @@ fn web_init(app: &App) -> serde_json::Value {
         },
         "lang": app.cfg.lang, "langEff": eff, "langSys": sys,
         "lockCfg": {
-            "idleMins": if lock::saver_installed() { app.cfg.lock_idle_mins } else { 0 },
+            "idleMins": if lock::saver_active() { app.cfg.lock_idle_mins } else { 0 },
             "syncWin": LOCK_SYNC.with(|c| c.get()),
         },
         "caps": {
@@ -753,7 +790,7 @@ fn web_init(app: &App) -> serde_json::Value {
 }
 
 fn away_state(app: &App, status: &str) -> serde_json::Value {
-    let enabled = lock::saver_installed();
+    let enabled = lock::saver_active();
     serde_json::json!({
         "t": "awayState",
         "enabled": enabled,
@@ -1389,6 +1426,9 @@ impl App {
                 log!("Màn hình [{},{}] {}", wp.screen.left, wp.screen.top, if p { "tạm dừng (bị che)" } else { "tiếp tục phát" });
             }
         }
+        if let Some(w) = self.widget.as_ref() {
+            w.sync_z_order();
+        }
     }
 
     fn post_process_texture(gl: &glow::Context, shared: &mut Shared, scene: glow::Texture, target: Option<glow::Framebuffer>, width: i32, height: i32, now: f64) {
@@ -1629,6 +1669,9 @@ impl App {
                 desktop::ensure_z_order(wp.hwnd, a);
             }
         }
+        if let Some(w) = self.widget.as_ref() {
+            w.sync_z_order();
+        }
     }
 
     fn any_interacting(&self, now: f64) -> bool {
@@ -1840,12 +1883,12 @@ fn main() {
             windows_sys::Win32::System::RemoteDesktop::WTSRegisterSessionNotification(msg_hwnd, 0);
             // Phím tắt riêng (RegisterHotKey, không hook bàn phím; Win+L để nguyên cho Windows)
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
-            let ok = RegisterHotKey(msg_hwnd, HOTKEY_SAVER, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, b'L' as u32) != 0;
+            let ok = register_hotkey_logged(msg_hwnd, HOTKEY_SAVER, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, b'L' as u32, "Khóa với cảnh động");
             HOTKEY_OK.with(|c| c.set(ok));
-            let launcher_ok = RegisterHotKey(msg_hwnd, HOTKEY_LAUNCHER, cfg.launcher_mods, cfg.launcher_vk) != 0;
+            let launcher_ok = register_hotkey_logged(msg_hwnd, HOTKEY_LAUNCHER, cfg.launcher_mods, cfg.launcher_vk, "Launcher");
             LAUNCHER_HOTKEY_OK.with(|c| c.set(launcher_ok));
             TOOL_HOTKEYS.with(|c|c.set(mini_tools::register(msg_hwnd,&cfg.tools)));
-            log!("Phím tắt Ctrl+Alt+L (khóa với cảnh động): {}", if ok { "đã đăng ký" } else { "đã bị ứng dụng khác dùng" });
+            log!("Phím tắt Ctrl+Alt+L (khóa với cảnh động): {}", if ok { "đã đăng ký" } else { "không đăng ký được" });
         }
         if lock::winl_disabled() {
             // Bản C# cũ để lại DisableLockWorkstation=1: Win+L của Windows đang bị tắt. Chỉ cảnh báo,
@@ -2056,6 +2099,7 @@ fn main() {
                 Action::SaverNow => PENDING_CMD.with(|c| c.set(CMD_SAVER_NOW)),
                 Action::Saver(on) => {
                     if !on {
+                        saver_check_at = None;
                         lock::uninstall_saver();
                     } else if let Err(e) = lock::install_saver(app.cfg.lock_idle_mins) {
                         log!("Đặt trình bảo vệ màn hình lỗi: {e}");
@@ -2218,8 +2262,9 @@ fn main() {
                     if let Some(mins) = m.get("idleMins").and_then(|v| v.as_u64()).map(|v| v as u32) {
                         let installed = lock::saver_installed();
                         if mins == 0 && installed {
+                            saver_check_at = None;
                             lock::uninstall_saver();
-                        } else if mins > 0 && (!installed || mins != app.cfg.lock_idle_mins) {
+                        } else if mins > 0 && (!lock::saver_active() || mins != app.cfg.lock_idle_mins) {
                             app.cfg.lock_idle_mins = mins;
                             if let Err(e) = lock::install_saver(mins) {
                                 log!("Đặt trình bảo vệ màn hình lỗi: {e}");
@@ -2245,6 +2290,7 @@ fn main() {
                     web_changed = true;
                 }
                 "awayDisable" => {
+                    saver_check_at = None;
                     lock::uninstall_saver();
                     web::post(&away_state(&app, "Đã tắt màn hình chờ Deskland").to_string());
                     web_changed = true;
@@ -2265,13 +2311,25 @@ fn main() {
                     web::post(&serde_json::json!({ "t": "autostart", "v": settings::autostart_enabled() }).to_string());
                 }
                 "launcherHotkey" => {
-                    let mods = m.get("mods").and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(MOD_ALT | MOD_NOREPEAT);
-                    let vk = m.get("vk").and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(VK_SPACE as u32);
+                    let requested_mods = m.get("mods").and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(MOD_ALT | MOD_NOREPEAT);
+                    let requested_vk = m.get("vk").and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(VK_SPACE as u32);
+                    let mods = normalize_hotkey(requested_mods, requested_vk).unwrap_or(MOD_ALT | MOD_NOREPEAT);
+                    let vk = requested_vk;
+                    let old_mods = app.cfg.launcher_mods;
+                    let old_vk = app.cfg.launcher_vk;
                     unsafe { UnregisterHotKey(msg_hwnd, HOTKEY_LAUNCHER); }
-                    let ok = unsafe { RegisterHotKey(msg_hwnd, HOTKEY_LAUNCHER, mods, vk) } != 0;
-                    if ok { app.cfg.launcher_mods = mods; app.cfg.launcher_vk = vk; }
+                    let ok = unsafe { register_hotkey_logged(msg_hwnd, HOTKEY_LAUNCHER, mods, vk, "Launcher") };
+                    if ok {
+                        app.cfg.launcher_mods = mods;
+                        app.cfg.launcher_vk = vk;
+                    } else {
+                        // Xung đột với ứng dụng khác không được làm mất phím đang chạy.
+                        let restored = unsafe { register_hotkey_logged(msg_hwnd, HOTKEY_LAUNCHER, old_mods, old_vk, "Launcher (khôi phục)") };
+                        log!("Launcher: giữ tổ hợp cũ sau khi đăng ký mới thất bại (khôi phục={restored})");
+                    }
                     LAUNCHER_HOTKEY_OK.with(|c| c.set(ok));
                     web::post(&web_init(&app).to_string());
+                    web::post(&serde_json::json!({"t":"hotkeyStatus","kind":"launcher","ok":ok,"message":if ok { "Đã lưu phím tắt" } else { "Phím tắt đang được ứng dụng khác sử dụng" }}).to_string());
                     web_changed = true;
                 }
                 "launcherAppearance" => {
@@ -2280,9 +2338,24 @@ fn main() {
                     web_changed = true;
                 }
                 "miniTools" => {
-                    app.cfg.tools=mini_tools::Options::from_json(&m);
-                    TOOL_HOTKEYS.with(|c|c.set(mini_tools::register(msg_hwnd,&app.cfg.tools)));
+                    let old_tools = app.cfg.tools.clone();
+                    let requested_tools = mini_tools::Options::from_json(&m);
+                    let statuses = mini_tools::register(msg_hwnd, &requested_tools);
+                    let accepted = !requested_tools.enabled || statuses.iter().all(|v| *v);
+                    let final_statuses;
+                    if accepted {
+                        app.cfg.tools = requested_tools;
+                        final_statuses = statuses;
+                    } else {
+                        // Một tiện ích xung đột thì hoàn nguyên cả cặp để không làm mất
+                        // tổ hợp đang hoạt động của tiện ích còn lại.
+                        let restored = mini_tools::register(msg_hwnd, &old_tools);
+                        final_statuses = restored;
+                        log!("Phím tắt tiện ích bị xung đột, giữ cấu hình cũ (khôi phục={restored:?})");
+                    }
+                    TOOL_HOTKEYS.with(|c| c.set(final_statuses));
                     web::post(&serde_json::json!({"t":"miniToolsState","miniTools":app.cfg.tools.json(),"miniToolsHotkeys":TOOL_HOTKEYS.with(|c|c.get())}).to_string());
+                    web::post(&serde_json::json!({"t":"hotkeyStatus","kind":"miniTools","ok":accepted,"message":if accepted { "Đã lưu phím tắt" } else { "Một phím tắt đang được ứng dụng khác sử dụng" }}).to_string());
                     web_changed=true;
                 }
                 "miniToolOpen" => {
@@ -2366,6 +2439,7 @@ fn main() {
                 CMD_RECORD => mini_tools::spawn("record",&app.cfg.tools),
                 CMD_LOCK => lock::lock_now(),
                 CMD_SAVER => {
+                    saver_check_at = None;
                     if lock::saver_installed() {
                         lock::uninstall_saver();
                     } else if let Err(e) = lock::install_saver(app.cfg.lock_idle_mins) {
@@ -2411,13 +2485,13 @@ fn main() {
                     log!("Đã đặt lại vị trí đồng hồ");
                 }
                 CMD_SAVER_NOW => {
-                    let mut ready = lock::saver_installed() && lock::saver_secure();
+                    let mut ready = lock::saver_active() && lock::saver_secure();
                     if !ready {
                         let q = "\"Khóa với cảnh động\" dùng trình bảo vệ màn hình của Windows, có bật \"khi quay lại, hiện màn hình đăng nhập\".\n\nĐặt Deskland-VN làm trình bảo vệ màn hình (có khóa) ngay bây giờ?";
                         let r = unsafe { MessageBoxW(msg_hwnd, wide(q).as_ptr(), wide("Deskland-VN").as_ptr(), MB_YESNO | MB_ICONQUESTION) };
                         if r == IDYES {
                             match lock::install_saver(app.cfg.lock_idle_mins) {
-                                Ok(()) => ready = true,
+                                Ok(()) => ready = lock::saver_active() && lock::saver_secure(),
                                 Err(e) => {
                                     log!("Đặt trình bảo vệ màn hình lỗi: {e}");
                                     unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("Deskland-VN").as_ptr(), MB_OK | MB_ICONWARNING) };
@@ -2444,12 +2518,12 @@ fn main() {
                 web::post(&serde_json::json!({ "t": "interactions", "v": app.interactions_enabled }).to_string());
             }
         }
-        // Nếu Windows không bật được trình bảo vệ màn hình thì vẫn khóa thật như người dùng muốn
+        // Chỉ chẩn đoán lỗi khởi chạy saver. Không được tự gọi LockWorkStation:
+        // người dùng có thể đã chọn Never hoặc đã tắt màn hình chờ trong Deskland.
         if saver_check_at.is_some_and(|t| app.now() >= t) {
             saver_check_at = None;
-            if !lock::saver_running() && !SESSION_LOCKED.with(|c| c.get()) {
-                log!("Trình bảo vệ màn hình không chạy sau 2,5 giây -> khóa bằng LockWorkStation()");
-                lock::lock_now();
+            if lock::saver_active() && lock::saver_secure() && !lock::saver_running() && !SESSION_LOCKED.with(|c| c.get()) {
+                log!("Windows chưa bật trình bảo vệ màn hình sau 2,5 giây; bỏ qua, không tự khóa phiên");
             }
         }
         if matches!(PENDING_THEME_SYNC.with(|c| c.replace(false)), true) && !saver && !headless {

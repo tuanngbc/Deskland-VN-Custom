@@ -951,8 +951,26 @@ function hotkeyLabel(mods, vk) {
   if ((mods & 2) !== 0) names.push('Ctrl');
   if ((mods & 1) !== 0) names.push('Alt');
   if ((mods & 4) !== 0) names.push('Shift');
-  const key = vk === 32 ? 'Space' : vk === 13 ? 'Enter' : vk >= 65 && vk <= 90 ? String.fromCharCode(vk) : vk >= 112 && vk <= 123 ? 'F' + (vk - 111) : String(vk);
+  const key = keyLabel(vk);
   return names.concat(key).join('+');
+}
+function keyLabel(vk) {
+  if (vk === 32) return 'Space';
+  if (vk === 13) return 'Enter';
+  if (vk === 9) return 'Tab';
+  if (vk >= 65 && vk <= 90) return String.fromCharCode(vk);
+  if (vk >= 48 && vk <= 57) return String.fromCharCode(vk);
+  if (vk >= 96 && vk <= 105) return 'Num' + (vk - 96);
+  if (vk >= 112 && vk <= 123) return 'F' + (vk - 111);
+  return ({37:'Left',38:'Up',39:'Right',40:'Down',35:'End',36:'Home',33:'PageUp',34:'PageDown',45:'Insert',46:'Delete',8:'Backspace'})[vk] || 'VK ' + vk;
+}
+function ensureKeyOption(select, vk) {
+  if (!select || select.querySelector(`option[value="${vk}"]`)) return;
+  select.add(new Option(keyLabel(vk), vk));
+}
+function setKeySelect(select, vk) {
+  ensureKeyOption(select, vk);
+  select.value = String(vk);
 }
 function setHotkeyButton(button, mods, vk) {
   if (button) button.textContent = hotkeyLabel(mods, vk) + ' · ' + t('customHotkey');
@@ -986,7 +1004,7 @@ function startHotkeyCapture(button, onValue, allowEnter = true) {
 }
 function bindHotkeyRecord(button, onValue, allowEnter = true) { button.addEventListener('click', () => startHotkeyCapture(button, onValue, allowEnter)); }
 bindHotkeyRecord($('launcherRecord'), (mods, vk) => {
-  $('launcherMods').value = String(mods); $('launcherKey').value = String(vk);
+  $('launcherMods').value = String(mods); setKeySelect($('launcherKey'), vk);
   setHotkeyButton($('launcherRecord'), mods, vk);
   send({ t: 'launcherHotkey', mods, vk });
 }, true);
@@ -1001,7 +1019,7 @@ for (const [name, label] of [['capture', 'miniToolsCapture'], ['record', 'miniTo
   row.appendChild(mods); row.appendChild(key); $('toolShortcuts').appendChild(row);
   const record = document.createElement('button'); record.type = 'button'; record.className = 'hotkey-record'; record.dataset.i18n = 'customHotkey'; record.dataset.hotkeyFor = name; record.textContent = t('customHotkey'); row.appendChild(record);
   bindHotkeyRecord(record, (newMods, newVk) => {
-    mods.value = String(newMods); key.value = String(newVk); setHotkeyButton(record, newMods, newVk); saveMiniTools();
+    mods.value = String(newMods); setKeySelect(key, newVk); setHotkeyButton(record, newMods, newVk); saveMiniTools();
   }, false);
   mods.addEventListener('change', saveMiniTools); key.addEventListener('change', saveMiniTools);
 }
@@ -1020,7 +1038,7 @@ function syncMiniTools(m) {
   $('toolsEnabled').checked = miniTools.enabled;
   $('toolsFps').value = String(miniTools.fps); $('toolsAudio').checked = miniTools.audio;
   for (const name of ['capture', 'record']) {
-    $('toolMods_' + name).value = String(miniTools[name].mods); $('toolKey_' + name).value = String(miniTools[name].vk);
+    $('toolMods_' + name).value = String(miniTools[name].mods); setKeySelect($('toolKey_' + name), miniTools[name].vk);
     setHotkeyButton(document.querySelector(`[data-hotkey-for="${name}"]`), miniTools[name].mods, miniTools[name].vk);
   }
   $('toolsHotkeyStatus').textContent = !miniTools.enabled ? t('miniToolsDisabled') : ['miniToolsCapture', 'miniToolsRecord'].map((label, i) => t(label) + ': ' + t(m.miniToolsHotkeys && m.miniToolsHotkeys[i] ? 'miniToolsReady' : 'miniToolsConflict')).join(' · ');
@@ -1227,7 +1245,7 @@ function applyInitMessage(m) {
   syncMiniTools(m);
   state.launcherHotkey = Object.assign(state.launcherHotkey, m.launcherHotkey || {});
       $('launcherMods').value = String(state.launcherHotkey.mods);
-      $('launcherKey').value = String(state.launcherHotkey.vk);
+      setKeySelect($('launcherKey'), state.launcherHotkey.vk);
       setHotkeyButton($('launcherRecord'), state.launcherHotkey.mods, state.launcherHotkey.vk);
   if (m.launcherAppearance) {
     $('launcherTheme').value = m.launcherAppearance.theme;
@@ -1273,6 +1291,14 @@ function onHost(m) {
     applyInitMessage(m);
   } else if (m.t === 'miniToolsState') {
     syncMiniTools(m);
+  } else if (m.t === 'hotkeyStatus') {
+    const text = String(m.message || (m.ok ? t('saved') : t('unknownReason')));
+    if (m.kind === 'miniTools') {
+      $('toolsHotkeyStatus').textContent = text;
+    } else {
+      $('launcherRecord').title = text;
+      $('launcherRecord').setAttribute('aria-label', text);
+    }
   } else if (m.t === 'themeChanged') {
     if (!themeById(m.id) || themeById(m.id).status !== 'ready') return;
     state.theme = m.id;
