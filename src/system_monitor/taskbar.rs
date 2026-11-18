@@ -247,7 +247,10 @@ impl Window {
             }
             if changed || self.rect!=Some(rect) || moved || !visible {
                 if let Some(bitmap)=self.bitmap.as_ref() {
-                    let destination = POINT { x:rect[0], y:rect[1] };
+                    // A layered child is positioned in its parent's client
+                    // coordinates; keep Dock/diagnostics in physical screen space.
+                    let mut destination = POINT { x:rect[0], y:rect[1] };
+                    ScreenToClient(dock.taskbar as HWND,&mut destination);
                     let size = SIZE { cx:bitmap.width, cy:bitmap.height };
                     let source = POINT { x:0, y:0 };
                     let blend = BLENDFUNCTION { BlendOp:AC_SRC_OVER as u8, BlendFlags:0, SourceConstantAlpha:255, AlphaFormat:AC_SRC_ALPHA as u8 };
