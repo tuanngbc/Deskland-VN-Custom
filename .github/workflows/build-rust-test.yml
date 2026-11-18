@@ -25,9 +25,9 @@ jobs:
           rustup default stable
           cargo test --release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # Tái tạo Registry=tắt / Winlogon=bật trên runner cách ly, kiểm tra
-          # tắt thật bằng SPI_GET thay vì chỉ đọc Registry.
-          cargo test --release lock::tests::saver_disable_repairs_stale_winlogon_state -- --ignored --exact
+          # Kiểm tra SPI_SET tắt + SPI_GET xác nhận trên Windows thật. Runner
+          # không có timer tương tác dùng trạng thái bật giả ở bước quyết định.
+          cargo test --release lock::tests::saver_disable_applies_and_verifies_live_windows_state -- --ignored --exact --nocapture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -156,6 +156,17 @@ fn needs_disabled_repair(path: &str, known_deskland: bool, stored_active: bool, 
     known_deskland && !stored_active && runtime_active && (path.trim().is_empty() || is_our_saver(path))
 }
 
+fn repair_disabled_state(
+    path: &str, known_deskland: bool, stored_active: bool, runtime_active: bool,
+    disable: impl FnOnce() -> Result<(), String>,
+) -> Result<bool, String> {
+    if !needs_disabled_repair(path, known_deskland, stored_active, runtime_active) { return Ok(false); }
+    crate::log!("Sửa lệch trạng thái saver: Registry=tắt nhưng Winlogon=bật");
+    disable()?;
+    crate::log!("Đã xác nhận timer màn hình chờ Windows tắt (SPI_GETSCREENSAVEACTIVE=0)");
+    Ok(true)
+}
+
 /// Sửa bản cũ đã ghi "tắt" trong Registry nhưng vẫn để timer Winlogon bật.
 /// Không bật saver khi khởi động, không đổi saver của phần mềm khác.
 pub fn reconcile_disabled_saver() -> Result<(), String> {
@@ -164,12 +175,8 @@ pub fn reconcile_disabled_saver() -> Result<(), String> {
     let marker = reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, SAVER_MARKER);
     let stored_off = reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaveActive").is_some_and(|v| v.trim() == "0");
     let known_deskland = marker.is_some_and(|v| v == "0" || v == "1") || is_our_saver(&path);
-    if needs_disabled_repair(&path, known_deskland, !stored_off, runtime_value(SPI_GETSCREENSAVEACTIVE)? != 0) {
-        crate::log!("Sửa lệch trạng thái saver: Registry=tắt nhưng Winlogon=bật");
-        set_saver_active(false)?;
-        crate::log!("Đã xác nhận timer màn hình chờ Windows tắt (SPI_GETSCREENSAVEACTIVE=0)");
-    }
-    Ok(())
+    repair_disabled_state(&path, known_deskland, !stored_off,
+        runtime_value(SPI_GETSCREENSAVEACTIVE)? != 0, || set_saver_active(false)).map(|_| ())
 }
 
 pub fn log_saver_state(reason: &str) {
@@ -395,11 +402,30 @@ mod tests {
         assert!(!needs_disabled_repair(r"C:\Windows\System32\Mystify.scr", true, false, true));
     }
 
+    #[test]
+    fn disabled_repair_disables_once_and_propagates_failure() {
+        let active = std::cell::Cell::new(true);
+        let calls = std::cell::Cell::new(0);
+        for _ in 0..2 {
+            repair_disabled_state("", true, false, active.get(), || {
+                calls.set(calls.get() + 1);
+                active.set(false);
+                Ok(())
+            }).unwrap();
+        }
+        assert_eq!(calls.get(), 1);
+        assert!(!active.get());
+        assert_eq!(repair_disabled_state("", true, false, true,
+            || Err("Windows refused change".into())), Err("Windows refused change".into()));
+        assert!(!repair_disabled_state(r"C:\Windows\System32\Mystify.scr", true, false, true,
+            || panic!("must not change another saver")).unwrap());
+    }
+
     // Chỉ chạy trong Windows runner dùng một lần. Không tự đổi thiết lập máy
     // cá nhân khi chạy cargo test thông thường.
     #[test]
     #[ignore = "requires an isolated Windows CI session"]
-    fn saver_disable_repairs_stale_winlogon_state() {
+    fn saver_disable_applies_and_verifies_live_windows_state() {
         assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
         struct Restore {
             active: u32,
@@ -422,28 +448,41 @@ mod tests {
 
         // Tái tạo dữ liệu thực tế: timer còn bật trong RAM, đường dẫn đã xóa,
         // marker=0 và ScreenSaveActive=0 khiến uninstall cũ bỏ qua hoàn toàn.
-        set_saver_active(true).unwrap();
+        // Hosted runners may expose no interactive saver timer: Windows can
+        // acknowledge SET(true) yet read back false. Keep the real SPI disable
+        // and readback test there, and exercise the stale-state decision with
+        // an injected active read. Interactive runners reproduce the full bug.
+        unsafe { SetLastError(0); }
+        assert_ne!(unsafe { SystemParametersInfoW(SPI_SETSCREENSAVEACTIVE, 1,
+            std::ptr::null_mut(), SPIF_UPDATEINIFILE | SPIF_SENDCHANGE) }, 0);
+        let can_enable = runtime_value(SPI_GETSCREENSAVEACTIVE).unwrap() != 0;
+        eprintln!("Windows runner exposes an active saver timer: {can_enable}");
         assert!(reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "SCRNSAVE.EXE", ""));
         assert!(reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, SAVER_MARKER, "0"));
         assert!(reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaveActive", "0"));
-        assert_eq!(runtime_value(SPI_GETSCREENSAVEACTIVE).unwrap(), 1);
         assert!(!saver_installed());
-        reconcile_disabled_saver().unwrap();
+        if can_enable {
+            assert_eq!(runtime_value(SPI_GETSCREENSAVEACTIVE).unwrap(), 1);
+            reconcile_disabled_saver().unwrap();
+        } else {
+            assert!(repair_disabled_state("", true, false, true, || set_saver_active(false)).unwrap());
+            reconcile_disabled_saver().unwrap();
+        }
         assert_eq!(runtime_value(SPI_GETSCREENSAVEACTIVE).unwrap(), 0);
         assert_eq!(reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaveActive").as_deref(), Some("0"));
 
-        set_saver_active(true).unwrap();
+        if can_enable { set_saver_active(true).unwrap(); }
         assert!(reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaveActive", "0"));
         uninstall_saver().unwrap();
         uninstall_saver().unwrap();
         assert_eq!(runtime_value(SPI_GETSCREENSAVEACTIVE).unwrap(), 0);
 
         // Marker Deskland cũ không cho phép chạm saver mới của ứng dụng khác.
-        set_saver_active(true).unwrap();
+        if can_enable { set_saver_active(true).unwrap(); }
         assert!(reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "ScreenSaveActive", "0"));
         assert!(reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "SCRNSAVE.EXE", r"C:\Windows\System32\Mystify.scr"));
         reconcile_disabled_saver().unwrap();
         assert!(!saver_installed());
-        assert_eq!(runtime_value(SPI_GETSCREENSAVEACTIVE).unwrap(), 1);
+        assert_eq!(runtime_value(SPI_GETSCREENSAVEACTIVE).unwrap(), can_enable as u32);
     }
 }
