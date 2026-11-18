@@ -1783,6 +1783,10 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if let Some(path) = arg_value(&args, "--clock-diagnostics") {
+        let _ = widget::write_diagnostics(std::path::Path::new(&path));
+        return;
+    }
     if mini_tools::dispatch(&args) { return; }
     // `--settings`: mở cửa sổ cài đặt của bản đang chạy (nếu có), không thì khởi động rồi mở
     let force_win32 = args.iter().any(|a| a == "--settings-win32");

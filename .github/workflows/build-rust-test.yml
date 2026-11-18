@@ -31,6 +31,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release shortcuts::tests::windows_conflict_restores_previous_registration -- --ignored --exact --nocapture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release widget::tests::windows_clock_stays_below_apps_across_monitors -- --ignored --exact --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release widget::tests::windows_clock_padding_preserves_position_when_resized_and_dragged -- --ignored --exact --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/renderer-contract.cjs
