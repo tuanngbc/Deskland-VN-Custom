@@ -125,7 +125,9 @@ pub struct Pod {
 
 impl Pod {
     pub fn new(want: usize, seed: u64) -> Self {
-        let mut rng=Rng::new(seed^0x43414c46);
+        // Mix adjacent scene seeds before taking the first random value. The
+        // shared generator reserves its low bit, so raw adjacent seeds collide.
+        let mut rng=Rng::new(seed.wrapping_mul(0xd6e8feb86659fd93)^0x43414c46);
         Self { whales: Vec::with_capacity(want.min(3)), calf:None, want: want.min(3), seed,
             family_wait:5.0+rng.next()*5.0,family_age:0.0,family_duration:0.0,
             family_parent:0,family_side:1.0,family_event:0,family_departing:false }
