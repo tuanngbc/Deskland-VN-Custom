@@ -880,6 +880,7 @@ struct Wallpaper {
 struct PanoramaSurface {
     fbo: glow::Framebuffer,
     tex: glow::Texture,
+    stencil: glow::Renderbuffer,
     buf_w: i32,
     buf_h: i32,
     scale: f32,
@@ -1317,14 +1318,30 @@ impl App {
                 engine::set_tex_params(gl, glow::LINEAR, glow::CLAMP_TO_EDGE);
                 t
             };
-            let fbo = unsafe {
+            let (fbo,stencil) = unsafe {
                 let f = gl.create_framebuffer()?;
                 gl.bind_framebuffer(glow::FRAMEBUFFER, Some(f));
                 gl.framebuffer_texture_2d(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(tex), 0);
+                // Panorama contains holes when monitors have different sizes
+                // or heights. Mask those once so the expensive scene shader
+                // never shades pixels that cannot appear on any monitor.
+                let stencil=gl.create_renderbuffer()?;
+                gl.bind_renderbuffer(glow::RENDERBUFFER,Some(stencil));
+                gl.renderbuffer_storage(glow::RENDERBUFFER,glow::STENCIL_INDEX8,bw,bh);
+                gl.framebuffer_renderbuffer(glow::FRAMEBUFFER,glow::STENCIL_ATTACHMENT,glow::RENDERBUFFER,Some(stencil));
+                if gl.check_framebuffer_status(glow::FRAMEBUFFER)!=glow::FRAMEBUFFER_COMPLETE{return Err("Không tạo được stencil panorama".into());}
+                gl.stencil_mask(0xff);gl.clear_stencil(0);gl.clear(glow::STENCIL_BUFFER_BIT);
+                gl.enable(glow::SCISSOR_TEST);gl.clear_stencil(1);
+                for monitor in &mons {
+                    let r=panorama_clip(monitor.rect,world,panorama_scale,bw,bh);
+                    // One guard texel for linear filtering at monitor edges.
+                    gl.scissor((r[0]-1).max(0),(r[1]-1).max(0),(r[0]+r[2]+1).min(bw)-(r[0]-1).max(0),(r[1]+r[3]+1).min(bh)-(r[1]-1).max(0));gl.clear(glow::STENCIL_BUFFER_BIT);
+                }
+                gl.disable(glow::SCISSOR_TEST);gl.stencil_mask(0);
                 gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-                f
+                (f,stencil)
             };
-            self.panorama = Some(PanoramaSurface { fbo, tex, buf_w: bw, buf_h: bh, scale: panorama_scale, world });
+            self.panorama = Some(PanoramaSurface { fbo, tex, stencil, buf_w: bw, buf_h: bh, scale: panorama_scale, world });
             log!("Panorama canvas: {}x{} -> bộ đệm {}x{}", ww, wh, bw, bh);
         }
         Ok(())
@@ -1334,7 +1351,7 @@ impl App {
         if let Some(p) = self.panorama.take() {
             if let Some(ctx) = self.ctx.as_ref() {
                 ctx.make_current(self.walls.first().map(|w| w.gl_dc).unwrap_or(std::ptr::null_mut()));
-                unsafe { ctx.gl.delete_framebuffer(p.fbo); ctx.gl.delete_texture(p.tex); }
+                unsafe { ctx.gl.delete_framebuffer(p.fbo); ctx.gl.delete_texture(p.tex);ctx.gl.delete_renderbuffer(p.stencil); }
             }
         }
         let walls = std::mem::take(&mut self.walls);
@@ -1656,6 +1673,7 @@ impl App {
                 gl.bind_framebuffer(glow::FRAMEBUFFER, Some(pan.fbo)); gl.viewport(0, 0, pan.buf_w, pan.buf_h);
                 let clip=panorama_clip(visible,pan.world,pan.scale,pan.buf_w,pan.buf_h);
                 gl.enable(glow::SCISSOR_TEST);gl.scissor(clip[0],clip[1],clip[2],clip[3]);
+                gl.enable(glow::STENCIL_TEST);gl.stencil_func(glow::EQUAL,1,0xff);gl.stencil_op(glow::KEEP,glow::KEEP,glow::KEEP);
             }
             {
                 let wp0 = &mut self.walls[0];
@@ -1666,7 +1684,7 @@ impl App {
                 theme.draw_overlay(gl, shared, now);
                 wp0.needs_settle=false;
             }
-            unsafe {gl.disable(glow::SCISSOR_TEST);}
+            unsafe {gl.disable(glow::SCISSOR_TEST);gl.disable(glow::STENCIL_TEST);}
             let (world, total_w, total_h, ptex) = (pan.world, (pan.world.right - pan.world.left) as f32 * pan.scale, (pan.world.bottom - pan.world.top) as f32 * pan.scale, pan.tex);
             for wp in &mut self.walls {
                 if wp.paused {wp.pbo_ready=false;continue;}
