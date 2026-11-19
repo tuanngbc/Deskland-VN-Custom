@@ -887,6 +887,25 @@ struct PanoramaSurface {
     world: RECT,
 }
 
+#[derive(Clone,Copy)]
+struct PostSource {
+    texture:glow::Texture,
+    rect:[f32;4],
+    size:[f32;2],
+    crop:bool,
+}
+impl PostSource {
+    fn full(texture:glow::Texture)->Self {Self{texture,rect:[0.0,0.0,1.0,1.0],size:[1.0,1.0],crop:false}}
+    fn panorama(pan:&PanoramaSurface,screen:RECT)->Self {
+        Self{texture:pan.tex,rect:[
+            (screen.left-pan.world.left) as f32*pan.scale,
+            (pan.world.bottom-screen.bottom) as f32*pan.scale,
+            (screen.right-screen.left) as f32*pan.scale,
+            (screen.bottom-screen.top) as f32*pan.scale,
+        ],size:[(pan.world.right-pan.world.left) as f32*pan.scale,(pan.world.bottom-pan.world.top) as f32*pan.scale],crop:true}
+    }
+}
+
 fn output_surface(gl:&glow::Context,width:i32,height:i32)->Result<(glow::Framebuffer,glow::Texture,glow::Buffer),String> {unsafe {
     let texture=gl.create_texture()?;gl.bind_texture(glow::TEXTURE_2D,Some(texture));
     gl.tex_image_2d(glow::TEXTURE_2D,0,glow::RGBA8 as i32,width,height,0,glow::RGBA,glow::UNSIGNED_BYTE,None);
@@ -932,6 +951,7 @@ struct App {
     prefer_gpu: bool,
     gpu_device: Option<std::rc::Rc<gpu_present::Device>>,
     gpu_attempted: bool,
+    legacy_panorama_post: bool,
 }
 
 impl App {
@@ -1563,13 +1583,13 @@ impl App {
         }
     }
 
-    fn post_process_texture(gl: &glow::Context, shared: &mut Shared, scene: glow::Texture, target: Option<glow::Framebuffer>, width: i32, height: i32, now: f64, flip_y: bool) {
+    fn post_process_texture(gl: &glow::Context, shared: &mut Shared, source: PostSource, target: Option<glow::Framebuffer>, width: i32, height: i32, now: f64, flip_y: bool) {
         unsafe {
             gl.bind_framebuffer(glow::FRAMEBUFFER, target);
             gl.viewport(0, 0, width, height);
             gl.disable(glow::BLEND);
             gl.active_texture(glow::TEXTURE0);
-            gl.bind_texture(glow::TEXTURE_2D, Some(scene));
+            gl.bind_texture(glow::TEXTURE_2D, Some(source.texture));
             gl.use_program(Some(shared.post.prog));
         }
         shared.post.i1(gl, "uScene", 0);
@@ -1578,14 +1598,13 @@ impl App {
         shared.post.f1(gl, "uDayPhase", shared.day_phase);
         shared.post.f1(gl, "uWeather", shared.weather);
         shared.post.i1(gl, "uFlipY", flip_y as i32);
+        shared.post.i1(gl, "uCropScene", source.crop as i32);
+        shared.post.f4v(gl, "uSrcRect", &source.rect);
+        shared.post.f2(gl, "uSrcSize", source.size[0],source.size[1]);
         unsafe {
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
             gl.use_program(None);
         }
-    }
-
-    fn post_process(gl: &glow::Context, shared: &mut Shared, wp: &Wallpaper, target: Option<glow::Framebuffer>, width: i32, height: i32, now: f64) {
-        Self::post_process_texture(gl, shared, wp.fbo_tex, target, width, height, now, false);
     }
 
     fn ensure_output(gl:&glow::Context,wp:&mut Wallpaper,gdi:bool)->bool {
@@ -1596,11 +1615,11 @@ impl App {
         }true
     }
 
-    fn present_output(gl:&glow::Context,shared:&mut Shared,wp:&mut Wallpaper,now:f64,gdi:bool) {
+    fn present_output(gl:&glow::Context,shared:&mut Shared,wp:&mut Wallpaper,source:PostSource,now:f64,gdi:bool) {
         if let Some(gpu)=wp.gpu.as_mut() {
             let result=(||->Result<(),String>{
                 let target=gpu.begin()?;
-                Self::post_process_texture(gl,shared,wp.fbo_tex,Some(target),wp.buf_w,wp.buf_h,now,true);
+                Self::post_process_texture(gl,shared,source,Some(target),wp.buf_w,wp.buf_h,now,true);
                 gpu.present(gl)
             })();
             if result.is_ok(){return;}
@@ -1609,7 +1628,7 @@ impl App {
             if !Self::ensure_output(gl,wp,gdi){return;}
         }
         if let Some((out_fbo,_,pbo))=wp.out {
-            Self::post_process(gl,shared,wp,Some(out_fbo),wp.buf_w,wp.buf_h,now);
+            Self::post_process_texture(gl,shared,source,Some(out_fbo),wp.buf_w,wp.buf_h,now,false);
             unsafe {
                 gl.bind_framebuffer(glow::READ_FRAMEBUFFER,Some(out_fbo));
                 gl.bind_buffer(glow::PIXEL_PACK_BUFFER,Some(pbo));gl.pixel_store_i32(glow::PACK_ALIGNMENT,4);
@@ -1618,7 +1637,7 @@ impl App {
             }
             wp.pbo_ready=true;
         } else {
-            Self::post_process(gl,shared,wp,None,wp.phys_w,wp.phys_h,now);
+            Self::post_process_texture(gl,shared,source,None,wp.phys_w,wp.phys_h,now,false);
             unsafe{SwapBuffers(wp.hdc);}
         }
     }
@@ -1685,17 +1704,16 @@ impl App {
                 wp0.needs_settle=false;
             }
             unsafe {gl.disable(glow::SCISSOR_TEST);gl.disable(glow::STENCIL_TEST);}
-            let (world, total_w, total_h, ptex) = (pan.world, (pan.world.right - pan.world.left) as f32 * pan.scale, (pan.world.bottom - pan.world.top) as f32 * pan.scale, pan.tex);
             for wp in &mut self.walls {
                 if wp.paused {wp.pbo_ready=false;continue;}
                 ctx.make_current(wp.gl_dc);
                 if !Self::ensure_output(gl,wp,self.gdi) {continue;}
-                let ox = (wp.screen.left - world.left) as f32 * pan.scale;
-                let oy = (world.bottom - wp.screen.bottom) as f32 * pan.scale;
-                let sw = (wp.screen.right - wp.screen.left) as f32 * pan.scale;
-                let sh = (wp.screen.bottom - wp.screen.top) as f32 * pan.scale;
-                Self::crop_panorama(gl, shared, ptex, wp.fbo, wp.buf_w, wp.buf_h, ox, oy, sw, sh, total_w, total_h);
-                Self::present_output(gl,shared,wp,now,self.gdi);
+                let source=PostSource::panorama(pan,wp.screen);
+                let source=if wp.gpu.is_none() || self.legacy_panorama_post {
+                    Self::crop_panorama(gl,shared,source.texture,wp.fbo,wp.buf_w,wp.buf_h,source.rect[0],source.rect[1],source.rect[2],source.rect[3],source.size[0],source.size[1]);
+                    PostSource::full(wp.fbo_tex)
+                } else {source};
+                Self::present_output(gl,shared,wp,source,now,self.gdi);
                 drew = true;
             }
             if drew { self.frames += 1; self.frame_cpu_ms += t0.elapsed().as_secs_f64() * 1000.0; }
@@ -1727,13 +1745,62 @@ impl App {
                 theme.frame(gl, shared, dt, now);
             }
             theme.draw_overlay(gl, shared, now);
-            Self::present_output(gl,shared,wp,now,self.gdi);
+            Self::present_output(gl,shared,wp,PostSource::full(wp.fbo_tex),now,self.gdi);
             drew = true;
         }
         if drew {
             self.frames += 1;
             self.frame_cpu_ms += t0.elapsed().as_secs_f64() * 1000.0;
         }
+    }
+
+    /// Compare GPU work on identical frozen pixels, alternating order to limit
+    /// clock/temperature drift. This diagnostic excludes scene and DWM costs.
+    /// No timing queries or scratch surfaces exist in the normal frame loop.
+    fn benchmark_panorama_post(&mut self,path:&str)->Result<(),String> {
+        let now=self.now();
+        let pan=self.panorama.as_ref().ok_or("Benchmark cần chế độ panorama")?;
+        let ctx=self.ctx.as_ref().unwrap();let gl=&ctx.gl;
+        ctx.make_current(self.walls[0].gl_dc);
+        let shared=self.shared.as_mut().unwrap();
+        let targets:Vec<_>=self.walls.iter().map(|w|output_surface(gl,w.buf_w,w.buf_h)).collect::<Result<_,_>>()?;
+        let mut draw=|legacy:bool| {
+            for(wp,target)in self.walls.iter().zip(&targets) {
+                let source=PostSource::panorama(pan,wp.screen);
+                let source=if legacy {
+                    Self::crop_panorama(gl,shared,source.texture,wp.fbo,wp.buf_w,wp.buf_h,source.rect[0],source.rect[1],source.rect[2],source.rect[3],source.size[0],source.size[1]);
+                    PostSource::full(wp.fbo_tex)
+                }else{source};
+                Self::post_process_texture(gl,shared,source,Some(target.0),wp.buf_w,wp.buf_h,now,true);
+            }
+        };
+        let mut samples=[Vec::new(),Vec::new()];
+        unsafe {
+            for _ in 0..8 {draw(true);draw(false);}gl.finish();
+            let query=gl.create_query()?;
+            for round in 0..8 {
+                for index in if round%2==0 {[0,1]}else{[1,0]} {
+                    gl.begin_query(glow::TIME_ELAPSED,query);
+                    for _ in 0..32 {draw(index==0);}
+                    gl.end_query(glow::TIME_ELAPSED);
+                    let ns=gl.get_query_parameter_u32(query,glow::QUERY_RESULT);
+                    if ns==0 {return Err("Driver không trả thời gian GPU".into());}
+                    samples[index].push(ns as f64/32.0/1_000_000.0);
+                }
+            }
+            gl.delete_query(query);
+            for(fbo,texture,pbo)in targets {gl.delete_framebuffer(fbo);gl.delete_texture(texture);gl.delete_buffer(pbo);}
+            if gl.get_error()!=glow::NO_ERROR {return Err("Lỗi OpenGL khi đo GPU".into());}
+        }
+        let mut medians=[0.0;2];
+        for(i,list)in samples.iter_mut().enumerate(){list.sort_by(f64::total_cmp);medians[i]=(list[3]+list[4])*0.5;}
+        let report=serde_json::json!({"scope":"GPU panorama crop + postprocessing only; scene and desktop composition excluded",
+            "theme":self.cfg.theme,"outputs":self.walls.len(),"iterationsPerRound":32,"rounds":8,
+            "legacyMs":medians[0],"fusedMs":medians[1],"reductionPercent":(1.0-medians[1]/medians[0])*100.0,
+            "legacySamplesMs":samples[0],"fusedSamplesMs":samples[1]});
+        std::fs::write(path,serde_json::to_vec_pretty(&report).unwrap()).map_err(|e|e.to_string())?;
+        log!("GPU crop/hậu kỳ: cũ {:.4} ms, gộp {:.4} ms (chỉ đo bước xuất panorama)",medians[0],medians[1]);
+        Ok(())
     }
 
     /// Đọc lại bộ đệm vẽ của từng màn hình từ GPU và lưu BMP (kiểm tra shader không cần chụp màn hình).
@@ -2130,6 +2197,7 @@ fn main() {
         prefer_gpu: !matches!(arg_value(&args,"--present").as_deref(),Some("gdi"|"gl")) && !args.iter().any(|a|a=="--benchmark-gdi"),
         gpu_device:None,
         gpu_attempted:false,
+        legacy_panorama_post:args.iter().any(|a|a=="--legacy-panorama-post"),
     };
     log!("Cách hiển thị: {}", if app.prefer_gpu {"GPU trực tiếp (GDI dự phòng)"} else if app.gdi { "GDI" } else { "OpenGL SwapBuffers" });
     // Khi chạy từ HKCU\...\Run, Windows có thể khởi động tiến trình trước khi
@@ -2189,26 +2257,39 @@ fn main() {
             ctx.make_current(wp.gl_dc);
             let gpu=wp.gpu.as_mut().expect("GPU presentation required for this diagnostic; GDI fallback is not a pass");
             let reference=output_surface(gl,wp.buf_w,wp.buf_h).unwrap();
-            App::post_process_texture(gl,shared,wp.fbo_tex,Some(reference.0),wp.buf_w,wp.buf_h,now,false);
-            let mut expected=vec![0u8;(wp.buf_w*wp.buf_h*4) as usize];
-            unsafe{
-                gl.bind_framebuffer(glow::READ_FRAMEBUFFER,Some(reference.0));
-                gl.read_pixels(0,0,wp.buf_w,wp.buf_h,glow::BGRA,glow::UNSIGNED_BYTE,glow::PixelPackData::Slice(&mut expected));
+            let source=app.panorama.as_ref().map_or(PostSource::full(wp.fbo_tex),|pan|PostSource::panorama(pan,wp.screen));
+            if source.crop {
+                App::crop_panorama(gl,shared,source.texture,wp.fbo,wp.buf_w,wp.buf_h,source.rect[0],source.rect[1],source.rect[2],source.rect[3],source.size[0],source.size[1]);
             }
-            let target=gpu.begin().unwrap();
-            App::post_process_texture(gl,shared,wp.fbo_tex,Some(target),wp.buf_w,wp.buf_h,now,true);
-            gpu.present(gl).unwrap();
-            let actual=gpu.read_bgra().unwrap();let stride=wp.buf_w as usize*4;
-            let mut error=0u64;let mut max_error=0u8;
-            for(y,row)in expected.chunks_exact(stride).rev().enumerate(){
-                for(a,b)in row.iter().zip(&actual[y*stride..(y+1)*stride]) {let d=a.abs_diff(*b);error+=d as u64;max_error=max_error.max(d);}
+            let lighting=(shared.day_phase,shared.weather);
+            for(day,weather)in [(0.1,0.0),(0.5,0.55),(0.9,1.0)] {
+                shared.day_phase=day;shared.weather=weather;
+                App::post_process_texture(gl,shared,PostSource::full(wp.fbo_tex),Some(reference.0),wp.buf_w,wp.buf_h,now,false);
+                let mut expected=vec![0u8;(wp.buf_w*wp.buf_h*4) as usize];
+                unsafe{
+                    gl.bind_framebuffer(glow::READ_FRAMEBUFFER,Some(reference.0));
+                    gl.read_pixels(0,0,wp.buf_w,wp.buf_h,glow::BGRA,glow::UNSIGNED_BYTE,glow::PixelPackData::Slice(&mut expected));
+                }
+                let target=gpu.begin().unwrap();
+                App::post_process_texture(gl,shared,source,Some(target),wp.buf_w,wp.buf_h,now,true);
+                gpu.present(gl).unwrap();
+                let actual=gpu.read_bgra().unwrap();let stride=wp.buf_w as usize*4;
+                let mut error=0u64;let mut max_error=0u8;
+                for(y,row)in expected.chunks_exact(stride).rev().enumerate(){
+                    for(a,b)in row.iter().zip(&actual[y*stride..(y+1)*stride]) {let d=a.abs_diff(*b);error+=d as u64;max_error=max_error.max(d);}
+                }
+                let mean=error as f64/actual.len() as f64;
+                assert!(actual.chunks_exact(4).any(|p|p[..3]!=[0,0,0]),"GPU output stayed black");
+                assert!(mean<0.05 && max_error<=8,"GPU output differs: mean={mean}, max={max_error}");
+                log!("PASS: GPU output [{},{}] ngày={day}, thời tiết={weather}: sai số trung bình {mean:.5}, lớn nhất {max_error}",wp.screen.left,wp.screen.top);
             }
-            let mean=error as f64/actual.len() as f64;
-            assert!(actual.chunks_exact(4).any(|p|p[..3]!=[0,0,0]),"GPU output stayed black");
-            assert!(mean<0.05 && max_error<=8,"GPU output differs: mean={mean}, max={max_error}");
+            shared.day_phase=lighting.0;shared.weather=lighting.1;
             unsafe{gl.delete_framebuffer(reference.0);gl.delete_texture(reference.1);gl.delete_buffer(reference.2);assert_eq!(gl.get_error(),glow::NO_ERROR);}
-            log!("PASS: GPU output [{},{}] BGRA/chiều dọc đúng, sai số trung bình {mean:.5}, lớn nhất {max_error}",wp.screen.left,wp.screen.top);
+
         }
+    }
+    if headless {
+        if let Some(path)=arg_value(&args,"--benchmark-panorama-post") {app.benchmark_panorama_post(&path).expect("GPU panorama benchmark failed");}
     }
     if app.benchmark_gdi && app.gdi && args.iter().any(|a|a=="--test-readback") {
         let ctx=app.ctx.as_ref().unwrap();

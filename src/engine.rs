@@ -579,6 +579,9 @@ uniform sampler2D uScene;
 uniform vec2 uRes;
 uniform float uTime, uDayPhase, uWeather;
 uniform bool uFlipY;
+uniform bool uCropScene;
+uniform vec4 uSrcRect;
+uniform vec2 uSrcSize;
 out vec4 o;
 
 float hash(vec2 p) {
@@ -596,7 +599,11 @@ float noise(vec2 p) {
 void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
   if (uFlipY) uv.y = 1.0 - uv.y;
-  vec4 src = texture(uScene, uv);
+  vec2 sourceUv = uCropScene ? (uSrcRect.xy + uv * uSrcRect.zw) / uSrcSize : uv;
+  vec4 src = texture(uScene, sourceUv);
+  // Preserve the RGBA8 rounding of the former separate crop pass. Weather
+  // still uses local monitor coordinates, not atlas coordinates.
+  if (uCropScene) src = floor(src * 255.0 + 0.5) / 255.0;
   float daylight = smoothstep(0.18, 0.38, uDayPhase) * (1.0 - smoothstep(0.62, 0.86, uDayPhase));
   float night = 1.0 - daylight;
   float dusk = 1.0 - abs(daylight * 2.0 - 1.0);

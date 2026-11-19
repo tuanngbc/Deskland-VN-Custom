@@ -34,8 +34,10 @@ Phiên bản viết lại hoàn toàn bằng **Rust native (Win32 + OpenGL 3.3 q
 
 - Mặc định thử chia sẻ texture OpenGL với D3D11 qua `WGL_NV_DX_interop`, rồi đưa lên desktop bằng DXGI / DirectComposition. Khung hình thông thường không đi qua RAM, GDI hay bộ mã hóa video. Cảnh, thời tiết, ánh sáng và tương tác vẫn được dựng trực tiếp ở 30 FPS.
 - Mỗi màn hình có một surface theo độ phân giải cảnh, Windows phóng lên kích thước vật lý. Màn bị che không nhận khung mới; khi mọi màn bị che hoặc phiên bị khóa thì dừng dựng hình. Surface cuối được giữ để tiếp tục hiển thị khi mở lại.
+- Panorama trên đường GPU gộp cắt viewport và hậu kỳ vào một lượt, giữ phép làm tròn màu RGBA8 của đường cũ. Thời tiết vẫn dùng tọa độ từng màn. Nhịp vẽ và độ phân giải cảnh giữ nguyên.
 - Nếu driver không hỗ trợ hoặc thiết bị lỗi, tự chuyển sang GDI và ghi lý do vào log. Không cài thêm engine hay thay cài đặt đồ họa toàn hệ thống.
 - `--present gpu` yêu cầu thử đường mới; `--present gdi` dùng đường cũ để đối chiếu. `--headless --test-gpu-output --test-output-resume --run-seconds 12` kiểm tra pixel, hướng ảnh, tạm dừng và tiếp tục trên GPU thật. Bài kiểm tra GPU báo lỗi nếu phải dùng GDI dự phòng. Kiểm tra này không thay thế việc đo tải khi hai desktop thật đang hiện.
+- `--legacy-panorama-post` bật lại cắt/hậu kỳ riêng để đối chiếu cùng một EXE. `--headless --mode panorama --benchmark-panorama-post <file.json> --run-seconds 1` đo thời gian GPU riêng bước cắt/hậu kỳ với cùng khung hình, luân phiên hai đường; số này không phải GPU tổng của ứng dụng hoặc DWM. Không tạo bộ đo hay buffer đo trong quá trình sử dụng bình thường.
 - Cơ chế cache video thử nghiệm đã được gỡ vì không cải thiện tải trên máy kiểm thử. Không tự tạo thêm video cache.
 
 ## Chụp màn hình và quay desktop
