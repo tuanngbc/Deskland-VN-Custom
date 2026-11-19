@@ -1,10 +1,6 @@
 {
   "name": "Tiếng Việt",
   "ui": {
-    "videoCacheTitle": "Hiệu suất hình nền",
-    "videoCacheLabel": "Phát cảnh bằng video phần cứng",
-    "videoCacheHint": "Tạo video khi cảnh ổn định, nghỉ dựng cảnh khi phát. Thời tiết và ánh sáng cập nhật lại mỗi 5 phút; đồng hồ vẫn chạy trực tiếp.",
-    "videoCacheDetail": "Lần đầu cần khoảng 20 giây khi đang hiện nền để tạo cache. Dùng tối đa 64 MB ổ đĩa, không cần cài thêm trình phát. Tự tạm dừng khi nền bị che hoặc khóa máy.",
     "systemMonitorTitle": "Thống kê trên taskbar",
     "systemMonitorDescription": "CPU, RAM, GPU và tốc độ tải xuống / tải lên ở bên trái khay hệ thống. Màu chữ theo Windows; nhấp đúp để mở Trình quản lý tác vụ.",
     "systemMonitorEnabled": "Hiện thống kê",

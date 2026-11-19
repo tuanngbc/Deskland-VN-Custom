@@ -1,10 +1,6 @@
 {
   "name": "English",
   "ui": {
-    "videoCacheTitle": "Wallpaper performance",
-    "videoCacheLabel": "Hardware video playback",
-    "videoCacheHint": "Cache a stable scene as video and let the renderer sleep during playback. Weather and lighting refresh every 5 minutes; the clock stays live.",
-    "videoCacheDetail": "The initial cache takes about 20 seconds with a wallpaper visible. Uses up to 64 MB of disk space; no additional player required. Pauses when covered or locked.",
     "systemMonitorTitle": "Taskbar monitor",
     "systemMonitorDescription": "CPU, RAM, GPU and download / upload speed beside the system tray. Follows the Windows theme; double-click to open Task Manager.",
     "systemMonitorEnabled": "Show statistics",
