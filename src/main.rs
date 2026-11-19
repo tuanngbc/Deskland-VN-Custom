@@ -2298,6 +2298,10 @@ fn main() {
     }
     if headless {
         if let Some(path)=arg_value(&args,"--benchmark-panorama-post") {app.benchmark_panorama_post(&path).expect("GPU panorama benchmark failed");}
+        if let Some(path)=arg_value(&args,"--benchmark-whales") {
+            let ctx=app.ctx.as_ref().unwrap();ctx.make_current(app.walls[0].gl_dc);
+            whale_mesh::benchmark(&ctx.gl,&path).expect("GPU whale benchmark failed");
+        }
     }
     if app.benchmark_gdi && app.gdi && args.iter().any(|a|a=="--test-readback") {
         let ctx=app.ctx.as_ref().unwrap();

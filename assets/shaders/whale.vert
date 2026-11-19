@@ -7,11 +7,13 @@ uniform vec4 uWhale;
 uniform vec4 uPose; // centre height, pitch, roll, arch
 uniform vec4 uStroke; // continuous tail phase, left/right fin angle, surface
 uniform vec2 uDetail; // visibility, juvenile proportions
+uniform float uEdgeAA;
 out vec3 vNormal;
 out vec3 vSkin;
 out float vHeight;
 out float vPart;
 out float vBelly;
+out float vFacing;
 
 mat2 rotation(float a) { float c=cos(a),s=sin(a);return mat2(c,s,-s,c); }
 void main() {
@@ -44,8 +46,14 @@ void main() {
     p.z+=uPose.x;
     vec2 planar=rotation(uWhale.z)*p.xy;
     vec2 scene=uWhale.xy+(planar-vec2(0.0,p.z*0.62))*uWhale.w;
-    gl_Position=vec4(scene.x/uRes.x*2.0-1.0,1.0-scene.y/uRes.y*2.0,0.0,1.0);
     n.xy=rotation(uWhale.z)*n.xy;
+    float facing=dot(normalize(n),normalize(vec3(0.0,0.62,1.0)));
+    // Subpixel silhouette fringe, local to the animal. It needs neither a
+    // multisample target nor a framebuffer resolve/copy per whale per frame.
+    vec2 outward=vec2(n.x,n.y-0.62*n.z);
+    scene+=outward/max(length(outward),0.001)*uEdgeAA*(1.0-smoothstep(0.0,0.45,abs(facing)));
+    gl_Position=vec4(scene.x/uRes.x*2.0-1.0,1.0-scene.y/uRes.y*2.0,0.0,1.0);
     vNormal=normalize(n);vSkin=aPosition;vHeight=p.z;vPart=aPart.x;
     vBelly=1.0-smoothstep(-0.55,0.05,aNormal.z);
+    vFacing=facing;
 }
