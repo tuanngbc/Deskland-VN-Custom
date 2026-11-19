@@ -597,8 +597,11 @@ float noise(vec2 p) {
 }
 
 void main() {
-  vec2 uv = gl_FragCoord.xy / uRes;
-  if (uFlipY) uv.y = 1.0 - uv.y;
+  // Flip exact half-pixel coordinates before division. Subtracting an already
+  // normalized UV adds rounding differences that can flip snow thresholds.
+  vec2 pixel = gl_FragCoord.xy;
+  if (uFlipY) pixel.y = uRes.y - pixel.y;
+  vec2 uv = pixel / uRes;
   vec2 sourceUv = uCropScene ? (uSrcRect.xy + uv * uSrcRect.zw) / uSrcSize : uv;
   vec4 src = texture(uScene, sourceUv);
   // Preserve the RGBA8 rounding of the former separate crop pass. Weather
