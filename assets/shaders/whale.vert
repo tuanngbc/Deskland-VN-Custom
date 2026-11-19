@@ -1,10 +1,47 @@
 #version 330 core
+layout(location=0) in vec3 aPosition;
+layout(location=1) in vec3 aNormal;
+layout(location=2) in vec2 aPart;
 uniform vec2 uRes;
-uniform vec4 uWhale; // scene x/y, heading, size
-out vec2 vLocal;
+uniform vec4 uWhale;
+uniform vec4 uPose; // centre height, pitch, roll, arch
+uniform vec4 uStroke; // continuous tail phase, left/right fin angle, surface
+out vec3 vNormal;
+out vec3 vSkin;
+out float vHeight;
+out float vPart;
+
+mat2 rotation(float a) { float c=cos(a),s=sin(a);return mat2(c,s,-s,c); }
 void main() {
-    vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
-    vLocal = mix(vec2(-110.0,-150.0), vec2(110.0,100.0), corner);
-    vec2 p = uWhale.xy + vLocal*uWhale.w;
-    gl_Position = vec4(p.x/uRes.x*2.0-1.0, 1.0-p.y/uRes.y*2.0, 0.0, 1.0);
+    vec3 p=aPosition,n=aNormal;
+    // Pectoral fins flex from their roots, with independent slow recovery.
+    if(aPart.x>0.5&&aPart.x<1.5) {
+        float reach=clamp((abs(p.y)-13.0)/39.0,0.0,1.0);
+        float angle=(aPart.y<0.0?uStroke.y:uStroke.z)*aPart.y;
+        p.yz-=vec2(aPart.y*13.0,-3.0);
+        p.yz=rotation(angle*(0.3+reach*0.7))*p.yz;
+        p.yz+=vec2(aPart.y*13.0,-3.0);
+        n.yz=rotation(angle*(0.3+reach*0.7))*n.yz;
+    }
+    // A travelling vertical bend grows along the peduncle. Flukes change pitch
+    // on each power/recovery stroke instead of sliding left and right.
+    float tail=1.0-smoothstep(-72.0,4.0,p.x);
+    float beat=sin(uStroke.x-tail*0.75);
+    if(aPart.x>1.5&&aPart.x<2.5) {
+        float fluke=sin(uStroke.x-0.9)*0.29;
+        p.x+=70.0;p.xz=rotation(fluke)*p.xz;p.x-=70.0;
+        n.xz=rotation(fluke)*n.xz;
+    }
+    p.z+=beat*tail*tail*11.0;
+    n.xz=rotation(beat*tail*0.20)*n.xz;
+    p.z+=uPose.w*sin(clamp((p.x+73.0)/138.0,0.0,1.0)*3.14159)*5.5;
+    // Pitch rotates head and tail together through the actual water plane.
+    p.yz=rotation(uPose.z)*p.yz;n.yz=rotation(uPose.z)*n.yz;
+    p.xz=rotation(uPose.y)*p.xz;n.xz=rotation(uPose.y)*n.xz;
+    p.z+=uPose.x;
+    vec2 planar=rotation(uWhale.z)*p.xy;
+    vec2 scene=uWhale.xy+(planar-vec2(0.0,p.z*0.62))*uWhale.w;
+    gl_Position=vec4(scene.x/uRes.x*2.0-1.0,1.0-scene.y/uRes.y*2.0,0.0,1.0);
+    n.xy=rotation(uWhale.z)*n.xy;
+    vNormal=normalize(n);vSkin=aPosition;vHeight=p.z;vPart=aPart.x;
 }

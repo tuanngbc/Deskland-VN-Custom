@@ -8,6 +8,7 @@ mod desktop;
 mod engine;
 mod palm_layout;
 mod whales;
+mod whale_mesh;
 mod solar;
 mod lock;
 mod settings;
@@ -2007,6 +2008,12 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if let Some(path)=arg_value(&args,"--export-whale-preview") {
+        if let Err(error)=whale_mesh::export_preview(std::path::Path::new(&path)) {
+            eprintln!("{error}");std::process::exit(1);
+        }
+        return;
+    }
     if let Some(path) = arg_value(&args, "--system-monitor-diagnostics") {
         let _ = system_monitor::diagnostics(std::path::Path::new(&path));
         return;

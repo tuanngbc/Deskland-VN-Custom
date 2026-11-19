@@ -41,7 +41,7 @@ impl Params {
             kayaks: g("kayaks", 2.0),
             birds: g("birds", 3.0),
             palms: g("palms", 4.0).clamp(0.0, 10.0),
-            whales: g("whales", 3.0).clamp(0.0, 3.0),
+            whales: g("whales", 0.0).clamp(0.0, 3.0),
         }
     }
 }
@@ -82,7 +82,7 @@ pub struct Beach {
     t0: f64,
     palms: Vec<PalmPlacement>,
     whales: crate::whales::Pod,
-    whale_program: Option<Prog>,
+    whale_renderer: Option<crate::whale_mesh::Renderer>,
     whale_preview_phase: Option<f32>,
 }
 
@@ -101,8 +101,8 @@ impl Beach {
             args.windows(2).find(|a| a[0] == "--whale-phase")
                 .and_then(|a| a[1].parse::<f32>().ok()).filter(|v| v.is_finite())
         }).flatten();
-        let whale_program = if count > 0 {
-            match Prog::from_parts(gl, crate::whales::VERT, crate::whales::FRAG) {
+        let whale_renderer = if count > 0 {
+            match crate::whale_mesh::Renderer::new(gl) {
                 Ok(program) => Some(program),
                 Err(error) => { crate::log!("Không thể vẽ cá voi: {error}"); None }
             }
@@ -118,8 +118,8 @@ impl Beach {
             kayak_target: None,
             t0: now,
             palms: Vec::new(),
-            whales: crate::whales::Pod::new(if whale_program.is_some() { count } else { 0 }, seed as u64 ^ 0x5748414c45),
-            whale_program,
+            whales: crate::whales::Pod::new(if whale_renderer.is_some() { count } else { 0 }, seed as u64 ^ 0x5748414c45),
+            whale_renderer,
             whale_preview_phase,
         };
         // startHostedMode(): icons = []; commit(true); syncBirds(false)
@@ -435,20 +435,13 @@ impl Theme for Beach {
     }
 
     fn draw_overlay(&mut self, gl: &glow::Context, sh: &mut Shared, now: f64) {
-        if let Some(program) = &mut self.whale_program {
-            unsafe { gl.enable(glow::BLEND); gl.blend_func(glow::ONE,glow::ONE_MINUS_SRC_ALPHA); gl.use_program(Some(program.prog)); }
-            program.f2(gl,"uRes",self.b.w,self.b.h);
+        if let Some(renderer) = &mut self.whale_renderer {
             for whale in &self.whales.whales {
                 let water = self.b.cur_s(whale.x,whale.y);
                 if water <= 65.0 { continue; }
                 let motion = self.whale_preview_phase.map_or_else(||whale.motion(),crate::whales::Motion::at);
-                if motion.body_depth >= 0.999 && motion.tail_depth >= 0.999 { continue; }
-                program.f4v(gl,"uWhale",&[whale.x,whale.y,whale.heading,whale.scale]);
-                program.f4v(gl,"uAnim",&[whale.age*1.35,motion.surface,motion.spray_age,water]);
-                program.f4v(gl,"uDive",&[motion.body_depth,motion.tail_depth,motion.tail_lift,motion.arch]);
-                unsafe { gl.draw_arrays(glow::TRIANGLE_STRIP,0,4); }
+                renderer.draw(gl,[self.b.w,self.b.h],[whale.x,whale.y,whale.heading,whale.scale],motion,water);
             }
-            unsafe { gl.use_program(None); gl.disable(glow::BLEND); }
         }
         for p in &self.palms { draw_palm(gl, sh, self.b.w, self.b.h, p.x, p.y, p.scale, p.variant, p.mirror, 1.0, now); }
     }
@@ -512,7 +505,7 @@ impl Theme for Beach {
     }
 
     fn destroy(&mut self, gl: &glow::Context) {
-        if let Some(program) = self.whale_program.take() { unsafe { gl.delete_program(program.prog); } }
+        if let Some(renderer) = self.whale_renderer.take() { renderer.destroy(gl); }
         self.b.destroy(gl);
     }
 

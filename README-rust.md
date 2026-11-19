@@ -42,10 +42,11 @@ Phiên bản viết lại hoàn toàn bằng **Rust native (Win32 + OpenGL 3.3 q
 
 ## Cá voi trong bộ Bãi biển
 
-- Mặc định có 3 cá voi bơi ở vùng nước ngoài khơi, nổi/lặn và phun nước lệch nhịp. Dáng thân, vây và đuôi dùng đường cong, màu xanh xám có hạt đồng bộ với biển. Khi lặn: cong lưng, đầu chìm trước, nâng đuôi rồi chìm hẳn và để lại gợn nước. Chỉnh **Bãi biển → Chi tiết → Cá voi** từ 0–3; đặt 0 để tắt.
+- Cá voi đang **tắt mặc định và chờ duyệt hình/chuyển động**. Chỉnh **Bãi biển → Chi tiết → Cá voi** từ 0–3 sau khi duyệt.
 - Cá voi tránh bờ và khoảng trống giữa các màn hình, giữ vị trí khi click desktop. Hoạt ảnh dùng chung nhịp 30 FPS và tự dừng cùng hình nền khi bị che/khóa.
-- Chỉ vẽ tối đa 3 quad nhỏ, không thêm vòng lặp vào shader toàn màn, texture, bộ đệm hình, tiến trình hay timer riêng. `--no-whales` tắt tạm trong một lần chạy để đo đối chiếu, không ghi đè thiết lập đã lưu.
-- `--headless --whale-phase <giây>` giữ tư thế cá voi tại một thời điểm trong chu kỳ 30 giây để kiểm tra hình: 6 nổi/phun nước, 12 cong lưng, 15.5 đầu/lưng đã chìm và đuôi nhô lên, 22 chìm hoàn toàn. Cờ này không có tác dụng khi chạy desktop bình thường.
+- Dùng lưới da nhỏ nạp một lần: thân uốn theo trục đứng, đuôi có nhịp đạp/recovery, hai vây khác pha. Cú lặn xoay đầu và đuôi qua mặt nước; phần dưới nước được nhuộm màu và mờ theo độ sâu. Không có vòng lặp toàn màn, ảnh động, bộ đệm hình, tiến trình hay timer riêng cho cá voi. `--no-whales` tắt tạm trong một lần chạy, không ghi đè thiết lập đã lưu.
+- `--export-whale-preview <file.json>` xuất lưới, shader và 36 giây dữ liệu mô phỏng dùng để dựng ảnh/clip trên GitHub Actions, không mở desktop và không đọc cấu hình cá nhân. Commit có nhãn `[whale-preview]` tạo artifact `whale-motion-preview` riêng để duyệt trước khi tải/cài EXE.
+- `--headless --whale-phase <giây>` giữ tư thế kiểm tra tại một thời điểm. Cờ này không có tác dụng khi chạy desktop bình thường.
 
 ## Chụp màn hình và quay desktop
 

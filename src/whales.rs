@@ -1,34 +1,68 @@
-//! A small, deterministic pod. Only three bounded quads are shaded; no full-screen
-//! whale loop, textures, particles, timers or extra render targets are needed.
+//! Deterministic offshore routes and continuous, vertically articulated motion.
 use crate::engine::{sstep, Rng, TASKBAR};
 use crate::palm_layout::Viewport;
 use std::f32::consts::PI;
 
-pub const VERT: &str = include_str!("../assets/shaders/whale.vert");
-pub const FRAG: &str = include_str!("../assets/shaders/whale.frag");
-
 #[derive(Clone, Copy, Debug)]
 pub struct Motion {
     pub surface: f32,
-    pub body_depth: f32,
-    pub tail_depth: f32,
-    pub tail_lift: f32,
+    pub depth: f32,
+    pub pitch: f32,
+    pub roll: f32,
     pub arch: f32,
+    pub stroke: f32,
+    pub fin_left: f32,
+    pub fin_right: f32,
     pub spray_age: f32,
+    pub entry_age: f32,
 }
 
 impl Motion {
     pub fn at(age: f32) -> Self {
-        let phase = age.rem_euclid(30.0);
-        let rising = 1.0 - sstep(0.4, 3.8, phase);
-        let body_depth = rising.max(sstep(11.4, 16.0, phase));
-        let tail_depth = rising.max(sstep(16.1, 19.0, phase));
+        Self::for_whale(age,0.0)
+    }
+
+    pub fn for_whale(age:f32,variant:f32)->Self {
+        let t=(age/(1.0+variant*0.035)).rem_euclid(36.0);
+        // Continuous cubic curves for centre depth and pitch. The animal really
+        // rotates through the water plane: head first, raised flukes last.
+        const KEYS:[[f32;3];12]=[
+            [0.0,-48.0,0.12],[2.0,-24.0,0.20],[4.0,-8.0,0.08],
+            [7.0,-7.0,0.01],[10.0,-8.0,-0.03],[12.0,-7.0,-0.13],
+            [14.0,-8.0,-0.42],[16.0,-15.0,-0.79],[18.0,-36.0,-0.82],
+            [21.0,-72.0,-0.28],[28.0,-88.0,0.04],[33.0,-72.0,0.16],
+        ];
+        let index=KEYS.iter().rposition(|k|k[0]<=t).unwrap_or(0);
+        let get=|offset:isize|{
+            let n=index as isize+offset;
+            let mut k=KEYS[n.rem_euclid(KEYS.len() as isize) as usize];
+            k[0]+=n.div_euclid(KEYS.len() as isize) as f32*36.0;
+            k
+        };
+        let (a,b,c,d)=(get(-1),get(0),get(1),get(2));
+        let span=c[0]-b[0];let u=(t-b[0])/span;
+        let curve=|axis:usize|{
+            let m0=(c[axis]-a[axis])/(c[0]-a[0])*span;
+            let m1=(d[axis]-b[axis])/(d[0]-b[0])*span;
+            (2.0*u*u*u-3.0*u*u+1.0)*b[axis]+(u*u*u-2.0*u*u+u)*m0
+                +(-2.0*u*u*u+3.0*u*u)*c[axis]+(u*u*u-u*u)*m1
+        };
+        let depth=curve(1).min(-5.0);
         Self {
-            surface: 1.0 - body_depth, body_depth, tail_depth,
-            tail_lift: sstep(12.5, 14.5, phase) * (1.0 - sstep(16.0, 17.6, phase)),
-            arch: sstep(10.0, 12.2, phase) * (1.0 - sstep(13.0, 15.0, phase)),
-            spray_age: (phase - 5.0) / 3.0,
+            surface:1.0-sstep(9.0,30.0,-depth),depth,pitch:curve(2),
+            roll:(age*0.39+variant*1.7).sin()*0.035,
+            arch:sstep(10.0,13.0,t)*(1.0-sstep(15.0,18.0,t)),
+            stroke:age*(1.42-variant*0.08)+variant*1.8,
+            fin_left:(age*0.54+0.7+variant).sin()*0.13,
+            fin_right:(age*0.47+2.3+variant).sin()*0.12,
+            spray_age:(t-5.0)/2.8,entry_age:(t-17.2)/5.0,
         }
+    }
+
+    pub fn uniforms(&self)->([f32;4],[f32;4],[f32;4]) {
+        ([self.depth,self.pitch,self.roll,self.arch],
+         [self.stroke,self.fin_left,self.fin_right,self.surface],
+         [self.spray_age,self.entry_age,self.surface,0.0])
     }
 }
 
@@ -39,6 +73,8 @@ pub struct Whale {
     pub heading: f32,
     pub scale: f32,
     pub age: f32,
+    pub variant: f32,
+    turn_rate: f32,
     speed: f32,
     output: Viewport,
 }
@@ -48,7 +84,7 @@ impl Whale {
         self.motion().surface
     }
 
-    pub fn motion(&self) -> Motion { Motion::at(self.age) }
+    pub fn motion(&self) -> Motion { Motion::for_whale(self.age,self.variant) }
 
     fn fits(&self, x: f32, y: f32) -> bool {
         let [ox, oy, w, h] = self.output;
@@ -83,7 +119,8 @@ impl Pod {
                     x: output[0] + rng.next() * output[2],
                     y: output[1] + rng.next() * output[3],
                     heading: rng.next() * 2.0 * PI,
-                    scale, age: 2.0 + n as f32 * 10.0,
+                    scale, age: 2.0 + n as f32 * 11.0,
+                    variant:n as f32,turn_rate:0.0,
                     speed: 10.0 + n as f32 * 1.6, output,
                 };
                 if !whale.fits(whale.x, whale.y) || sample(whale.x, whale.y) < 150.0 * scale { continue; }
@@ -119,8 +156,10 @@ impl Pod {
                 whale.heading + (whale.age*0.13+i as f32*2.1).sin()*0.12
             };
             let d = target-whale.heading;
-            whale.heading += d.sin().atan2(d.cos()).clamp(-0.55*dt, 0.55*dt);
-            let speed = whale.speed * (0.7 + 0.3*whale.surface());
+            let target_rate=(d.sin().atan2(d.cos())*0.65).clamp(-0.17,0.17);
+            whale.turn_rate+=(target_rate-whale.turn_rate)*(1.0-(-dt*1.3).exp());
+            whale.heading+=whale.turn_rate*dt;
+            let speed = whale.speed * (0.73 + 0.12*whale.motion().stroke.sin() + 0.15*whale.surface());
             let (nx, ny) = (whale.x+whale.heading.cos()*speed*dt, whale.y+whale.heading.sin()*speed*dt);
             if whale.fits(nx, ny) && sample(nx, ny) > 105.0*whale.scale {
                 whale.x = nx; whale.y = ny;
@@ -175,7 +214,7 @@ mod tests {
         let mut pod = Pod::new(3,9);
         pod.populate(&[[0.0,0.0,2560.0,1080.0]], |_,_|999.0);
         let mut breaths = [0usize;3];
-        for _ in 0..900 {
+        for _ in 0..1200 {
             pod.step(1.0/30.0, |_,_|999.0);
             let mut active = 0;
             for (i,w) in pod.whales.iter().enumerate() {
@@ -184,7 +223,7 @@ mod tests {
             }
             assert!(active<=1);
         }
-        assert!(breaths.iter().all(|&n| n>=89 && n<=91));
+        assert!(breaths.iter().all(|&n| n>=80 && n<=175));
         let frozen = pod.whales.clone();
         pod.step(0.0, |_,_|999.0);
         assert_eq!(pod.whales,frozen);
@@ -193,24 +232,34 @@ mod tests {
     #[test]
     fn dive_submerges_head_and_back_before_the_raised_flukes() {
         let afloat = Motion::at(6.0);
-        assert_eq!(afloat.body_depth,0.0);
-        assert_eq!(afloat.tail_depth,0.0);
+        assert!(afloat.depth>-9.0 && afloat.depth<0.0);
         assert!((0.0..1.0).contains(&afloat.spray_age));
-        assert!(Motion::at(12.2).arch>0.95);
-        let diving = Motion::at(15.5);
-        assert!(diving.body_depth>0.95);
-        assert!(diving.tail_depth<0.01 && diving.tail_lift>0.99);
-        let deep = Motion::at(22.0);
-        assert_eq!(deep.body_depth,1.0);
-        assert_eq!(deep.tail_depth,1.0);
-        assert_eq!(deep.tail_lift,0.0);
+        let diving=Motion::at(16.0);
+        let height=|x:f32,z:f32|diving.depth+diving.pitch.sin()*x+diving.pitch.cos()*z;
+        assert!(height(45.0,8.0) < -30.0,"head must actually pass under water");
+        assert!(height(-72.0,0.0)>25.0,"flukes must physically lift above water");
+        assert!(Motion::at(25.0).depth < -80.0);
         let mut previous=Motion::at(0.0);
-        for n in 1..=3000 {
+        for n in 1..=3600 {
             let current=Motion::at(n as f32/100.0);
-            for (a,b) in [(previous.body_depth,current.body_depth),(previous.tail_depth,current.tail_depth),(previous.arch,current.arch),(previous.tail_lift,current.tail_lift)] {
-                assert!((a-b).abs()<0.02,"motion jumps across a phase boundary");
-            }
+            assert!((previous.depth-current.depth).abs()<0.30,"depth jumps");
+            assert!((previous.pitch-current.pitch).abs()<0.01,"pitch jumps");
+            assert!((previous.fin_left-current.fin_left).abs()<0.01,"fin jumps");
             previous=current;
+        }
+    }
+
+    #[test]
+    fn course_changes_have_inertia_instead_of_pivoting_on_the_spot() {
+        let mut pod=Pod::new(1,17);
+        pod.populate(&[[0.0,0.0,1280.0,800.0]],|_,_|999.0);
+        let mut previous=pod.whales[0].clone();
+        for _ in 0..3600 {
+            pod.step(1.0/30.0,|_,_|999.0);
+            let current=&pod.whales[0];
+            assert!((current.turn_rate-previous.turn_rate).abs()<0.015);
+            assert!((current.heading-previous.heading).abs()<0.006);
+            previous=current.clone();
         }
     }
 }

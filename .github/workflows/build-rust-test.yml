@@ -44,6 +44,31 @@ jobs:
           node tests/shortcuts-contract.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Render whale preview for approval
+        if: contains(github.event.head_commit.message, '[whale-preview]')
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tools = Join-Path $env:RUNNER_TEMP 'whale-preview-tools'
+          $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $env:RUNNER_TEMP 'whale-preview-browsers'
+          npm install --prefix $tools --no-audit --no-fund playwright@1.56.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$tools\node_modules\.bin\playwright.cmd" install chromium
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:NODE_PATH = Join-Path $tools 'node_modules'
+          $data = Join-Path $env:RUNNER_TEMP 'whale-preview-data.json'
+          $process = Start-Process -FilePath target\release\tuanpc-desk.exe -ArgumentList @('--export-whale-preview', $data) -Wait -PassThru
+          if ($process.ExitCode -ne 0) { exit $process.ExitCode }
+          node tools/render-whale-preview.cjs $data preview-output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload whale preview only
+        if: contains(github.event.head_commit.message, '[whale-preview]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: whale-motion-preview
+          path: preview-output/
+          retention-days: 7
+
       - name: Package Rust native build
         run: |
           $short = '${{ github.sha }}'.Substring(0, 7)

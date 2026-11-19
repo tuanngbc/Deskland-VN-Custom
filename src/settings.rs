@@ -70,7 +70,7 @@ pub static BEACH: [ParamDef; 7] = [
     p("shallow", "Độ rộng vùng nông", 120.0, 700.0, 1.0, 260.0, "px", Fmt::Num),
     p("kayaks", "Thuyền kayak", 0.0, 4.0, 1.0, 2.0, "chiếc", Fmt::Num),
     p("birds", "Hải âu", 0.0, 8.0, 1.0, 3.0, "con", Fmt::Num),
-    p("whales", "Cá voi", 0.0, 3.0, 1.0, 3.0, "con", Fmt::Num),
+    p("whales", "Cá voi", 0.0, 3.0, 1.0, 0.0, "con", Fmt::Num),
 ];
 pub static MALDIVES: [ParamDef; 8] = [
     p("sigma", "Bán kính bãi cát", 40.0, 200.0, 1.0, 85.0, "px", Fmt::Num),
