@@ -89,23 +89,23 @@ fs.writeFileSync(htmlPath,html.replace('__DATA__',JSON.stringify(data).replaceAl
   const ffmpegDir=fs.readdirSync(browsersRoot).find(name=>name.startsWith('ffmpeg-'));
   assert(ffmpegDir,'Playwright video encoder missing');
   const ffmpeg=path.join(browsersRoot,ffmpegDir,process.platform==='win32'?'ffmpeg-win64.exe':'ffmpeg-linux');
-  const encoder=spawn(ffmpeg,['-loglevel','error','-y','-f','image2pipe','-r',String(D.fps),'-i','pipe:0','-c:v','vp8','-b:v','1000k',path.join(output,'whale-motion.webm')],{stdio:['pipe','ignore','pipe']});
+  const encoder=spawn(ffmpeg,['-loglevel','error','-y','-f','image2pipe','-r',String(data.fps),'-i','pipe:0','-c:v','vp8','-b:v','1000k',path.join(output,'whale-motion.webm')],{stdio:['pipe','ignore','pipe']});
   let encoderError='';encoder.stderr.on('data',chunk=>encoderError+=chunk.toString());
   const encoderDone=once(encoder,'close');
-  const uniqueActiveFrames=new Set(),frameCount=D.duration*D.fps;
+  const uniqueActiveFrames=new Set(),frameCount=data.duration*data.fps;
   for(let frame=0;frame<frameCount;frame++) {
-   const t=frame/D.fps;
+   const t=frame/data.fps;
    const url=await page.evaluate(t=>{window.renderAt(t);return document.getElementById('scene').toDataURL('image/jpeg',0.94);},t);
    const jpeg=Buffer.from(url.split(',')[1],'base64');
    if(t>=3&&t<19)uniqueActiveFrames.add(crypto.createHash('sha256').update(jpeg).digest('hex'));
    if(!encoder.stdin.write(jpeg))await once(encoder.stdin,'drain');
-   if(frame%D.fps===0)console.log('Captured exact preview second',t);
+   if(frame%data.fps===0)console.log('Captured exact preview second',t);
   }
   encoder.stdin.end();const [exitCode]=await encoderDone;
   assert.equal(exitCode,0,encoderError);assert(uniqueActiveFrames.size>300,'Motion frames were repeated or skipped');
   await context.close();
   assert.deepEqual(errors,[]);assert(fs.statSync(path.join(output,'whale-motion.webm')).size>20_000);
-  const manifest={commit:process.env.GITHUB_SHA||null,...readiness,meshSha256:crypto.createHash('sha256').update(JSON.stringify(data.mesh)).digest('hex'),images:6,seconds:36,fps:D.fps,frames:frameCount,uniqueActiveFrames:uniqueActiveFrames.size,errors};
+  const manifest={commit:process.env.GITHUB_SHA||null,...readiness,meshSha256:crypto.createHash('sha256').update(JSON.stringify(data.mesh)).digest('hex'),images:6,seconds:36,fps:data.fps,frames:frameCount,uniqueActiveFrames:uniqueActiveFrames.size,errors};
   fs.writeFileSync(path.join(output,'preview-manifest.json'),JSON.stringify(manifest,null,2));
   console.log('PASS native mesh/shaders exported; six screenshots and full motion cycle captured',JSON.stringify(manifest));
  }finally{await browser.close();}
