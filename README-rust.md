@@ -7,14 +7,14 @@ Phiên bản viết lại hoàn toàn bằng **Rust native (Win32 + OpenGL 3.3 q
 ## Điểm nổi bật của bản Rust Native
 
 1. **Tiến trình nền gọn, tiện ích chạy khi cần:**
-   - Không nuôi trình duyệt ngầm khi chạy hình nền: chỉ **1 tiến trình** (~65–98 MB Private RAM tùy độ phân giải & số màn hình), giảm **~6–8 lần RAM** so với bản C# + WebView2 (~11 tiến trình, ~620–790 MB RAM).
+   - Không nuôi trình duyệt ngầm khi chạy hình nền: một tiến trình native. RAM và tải GPU thực tế phụ thuộc chủ đề, độ phân giải, số màn hình và driver.
    - Một ngữ cảnh OpenGL 3.3 dùng chung cho mọi màn hình; biên dịch shader & khởi tạo khung hình đầu tiên chỉ mất **~350–480 ms**.
 2. **Đầy đủ 16 chủ đề thích ứng biểu tượng + Tương tác Click chuột riêng biệt:**
    - Tự động đọc vị trí biểu tượng màn hình nền (`SysListView32`), dựng trường khoảng cách (SDF) trên CPU và uốn lượn bờ biển, đồng cỏ, rạn cát, tán rừng, hàng rào sân vận động... ôm quanh các nhóm icon theo thời gian thực.
    - Mỗi chủ đề đều có phản hồi vật lý / hoạt ảnh riêng khi người dùng click chuột trái vào vùng trống trên màn hình nền.
-3. **Bắt chuột thông minh & Adaptive FPS (`20 -> 50 FPS`):**
+3. **Bắt chuột thông minh & Adaptive FPS (`30 -> 50 FPS`):**
    - Sử dụng `WM_INPUT` (`RIDEV_INPUTSINK`) không chiếm quyền chuột của Windows, chỉ kích hoạt khi click gọn vào đúng vùng trống Desktop (`Progman` / `WorkerW` / `SysListView32`) và **tự động bỏ qua khi bấm vào biểu tượng (icon)** hoặc cửa sổ ứng dụng khác.
-   - Bình thường giữ nhịp tiết kiệm **20 FPS**; ngay khi có tương tác hoặc hiệu ứng động (bóng lăn, phao câu giật, cánh hoa bay...), bộ điều phối tự động tăng tốc lên **50 FPS** mượt mà rồi hạ về **20 FPS** khi hiệu ứng lắng xuống.
+   - Bình thường giữ nhịp **30 FPS**; khi có tương tác hoặc hiệu ứng động, tăng tạm thời lên **50 FPS** rồi trở về **30 FPS** khi hiệu ứng lắng xuống.
 4. **Cửa sổ Cài đặt Kép (WebView2 On-Demand + Win32 Native Fallback):**
    - Mở chính giao diện `prototype/settings.html` giàu trực quan qua WebView2 **chỉ khi cửa sổ Cài đặt đang mở**; đóng cửa sổ là giải phóng toàn bộ tiến trình `msedgewebview2.exe`.
    - Nếu máy không có WebView2 Runtime hoặc chạy độc lập một file `.exe` không kèm thư mục `prototype/`, ứng dụng tự động chuyển sang **cửa sổ Cài đặt Win32 thuần** (`src/settings.rs`) có đầy đủ chọn chủ đề, thanh trượt tham số và tùy chọn khóa màn hình.
@@ -22,13 +22,21 @@ Phiên bản viết lại hoàn toàn bằng **Rust native (Win32 + OpenGL 3.3 q
    - Không hook bàn phím mức thấp, không chặn `Win+L`, không lưu/kiểm mã PIN tự chế.
    - Hỗ trợ khóa ngay (`LockWorkStation()`), trình bảo vệ màn hình cảnh động bảo mật (`tuanpc-desk.scr` với `ScreenSaverIsSecure=1`), phím tắt `Ctrl+Alt+L` và tự động đồng bộ cảnh hiện tại làm ảnh nền màn khóa Windows.
    - Tự động phát hiện và cho phép khôi phục lại `Win+L` nếu bản C# cũ từng ghi `DisableLockWorkstation=1`.
-6. **Tiết kiệm năng lượng tuyệt đối (`0% CPU` khi khuất hoặc khóa máy):**
+6. **Dừng dựng hình khi khuất hoặc khóa máy:**
    - Tự động tạm ngừng vẽ khi có cửa sổ phóng to / toàn màn hình che khuất màn hình nền, khi phiên Windows đang khóa (`WTSRegisterSessionNotification`), ở màn hình `Winlogon` / UAC, hoặc khi trình bảo vệ màn hình đang chạy.
 7. **Biểu tượng ứng dụng nhúng sẵn & Menu Khay hệ thống tinh gọn:**
    - Nhúng trực tiếp icon đa độ phân giải (`16×16` đến `256×256`) và `VERSIONINFO` vào `tuanpc-desk.exe` qua `app.rc` + `build.rs` (hiển thị đồng bộ trên Explorer, Taskbar, Khay hệ thống và thanh tiêu đề Cài đặt).
    - Menu chuột phải ở khay hệ thống gọn gàng: chỉ hiển thị chủ đề đang chọn (`✓ Chủ đề: <Tên chủ đề>`) cùng các tác vụ nhanh, việc đổi chủ đề và tinh chỉnh chuyên sâu tập trung tại cửa sổ **Cài đặt…**.
 
 ---
+
+## Xuất hình trực tiếp trên GPU
+
+- Mặc định thử chia sẻ texture OpenGL với D3D11 qua `WGL_NV_DX_interop`, rồi đưa lên desktop bằng DXGI / DirectComposition. Khung hình thông thường không đi qua RAM, GDI hay bộ mã hóa video. Cảnh, thời tiết, ánh sáng và tương tác vẫn được dựng trực tiếp ở 30 FPS.
+- Mỗi màn hình có một surface theo độ phân giải cảnh, Windows phóng lên kích thước vật lý. Màn bị che không nhận khung mới; khi mọi màn bị che hoặc phiên bị khóa thì dừng dựng hình. Surface cuối được giữ để tiếp tục hiển thị khi mở lại.
+- Nếu driver không hỗ trợ hoặc thiết bị lỗi, tự chuyển sang GDI và ghi lý do vào log. Không cài thêm engine hay thay cài đặt đồ họa toàn hệ thống.
+- `--present gpu` yêu cầu thử đường mới; `--present gdi` dùng đường cũ để đối chiếu. `--headless --test-gpu-output --test-output-resume --run-seconds 12` kiểm tra pixel, hướng ảnh, tạm dừng và tiếp tục trên GPU thật. Bài kiểm tra GPU báo lỗi nếu phải dùng GDI dự phòng. Kiểm tra này không thay thế việc đo tải khi hai desktop thật đang hiện.
+- Cơ chế cache video thử nghiệm đã được gỡ vì không cải thiện tải trên máy kiểm thử. Không tự tạo thêm video cache.
 
 ## Chụp màn hình và quay desktop
 
@@ -113,7 +121,7 @@ cargo build --release
 | `--exit-after-snapshot` | Tự động thoát ngay sau khi chụp xong `--snapshot` (dùng cho kiểm thử tự động). |
 | `--test-click` | Tự động mô phỏng thao tác click trên cảnh để kiểm thử hiệu ứng tương tác. |
 | `--headless` | Dựng cảnh ẩn ngoài màn hình (không gắn vào `Progman`/`WorkerW`, không tạo icon khay). |
-| `--present gdi\|gl` | Chọn phương thức đẩy hình lên cửa sổ nền (`gl` mặc định; dùng `gdi` nếu driver/DWM cũ cần dự phòng). |
+| `--present gpu\|gdi\|gl` | Mặc định thử GPU trực tiếp và dự phòng bằng GDI. `gdi` ép đường cũ; `gl` dùng SwapBuffers trên máy có driver tương thích. |
 | `--webview-debug` | Mở cổng Remote Debugging `9222` cho cửa sổ cài đặt WebView2. |
 
 - **Tệp cấu hình:** Lưu độc lập tại `~/.deskland-rs/settings.json` (lần chạy đầu tiên nếu chưa có sẽ tự kế thừa cấu hình từ `%LOCALAPPDATA%\DesklandPreview\settings.json` của bản C# mà không ghi đè dữ liệu cũ).

@@ -36,6 +36,7 @@ mod wgl;
 mod widget;
 mod system_monitor;
 mod presentation;
+mod gpu_present;
 
 use desktop::wide;
 use engine::{IconBox, Prog, Shared, Theme};
@@ -852,6 +853,7 @@ struct Wallpaper {
     /// Khung N được đọc vào PBO, đầu khung N+1 (sau ~50 ms, GPU đã xong) mới map và vẽ ra cửa sổ.
     out: Option<(glow::Framebuffer, glow::Texture, glow::Buffer)>,
     pbo_ready: bool,
+    gpu: Option<gpu_present::Output>,
     benchmark_target: Option<presentation::MemoryTarget>,
     screen: RECT,
     dpr: f32,
@@ -926,6 +928,9 @@ struct App {
     staging: RefCell<Vec<u8>>,
     benchmark_gdi: bool,
     benchmark_direct_readback: bool,
+    prefer_gpu: bool,
+    gpu_device: Option<std::rc::Rc<gpu_present::Device>>,
+    gpu_attempted: bool,
 }
 
 impl App {
@@ -1029,6 +1034,7 @@ impl App {
         }
         let Some(ctx) = self.ctx.as_ref() else { return };
         for wp in &self.walls {
+            if wp.gpu.is_some() { continue; } // DComp retains the last frame.
             ctx.make_current(wp.gl_dc);
             Self::present_gdi(&ctx.gl, wp,&self.staging,self.benchmark_direct_readback);
         }
@@ -1222,6 +1228,13 @@ impl App {
             }
             let ctx = self.ctx.as_ref().unwrap();
             ctx.make_current(gl_dc);
+            if self.prefer_gpu && !self.gpu_attempted {
+                self.gpu_attempted=true;
+                match gpu_present::Device::new() {
+                    Ok(device)=>self.gpu_device=Some(device),
+                    Err(e)=>log!("GPU trực tiếp không khả dụng, dùng GDI dự phòng: {e}"),
+                }
+            }
             // Giống bản JS: canvas = kích thước CSS * min(dpr, 0.72), trình duyệt phóng lên toàn màn hình
             let (w, h) = (pw as f32 / m.dpr, ph as f32 / m.dpr);
             let scale = m.dpr.min(0.72);
@@ -1238,7 +1251,12 @@ impl App {
                 gl.bind_framebuffer(glow::FRAMEBUFFER, None);
                 (f, t)
             };
-            let out = if self.gdi {Some(output_surface(gl,buf_w,buf_h)?)}else{None};
+            let gpu=if let Some(device)=&self.gpu_device {
+                match gpu_present::Output::new(device.clone(),gl,hwnd,buf_w,buf_h,pw,ph) {
+                    Ok(output)=>Some(output),Err(e)=>{log!("Màn hình {idx} dùng GDI dự phòng: {e}");None}
+                }
+            } else {None};
+            let out = if self.gdi && gpu.is_none() {Some(output_surface(gl,buf_w,buf_h)?)}else{None};
             // Ở panorama, mọi theme nhận cùng kích thước canvas ảo. Chỉ theme
             // của màn hình đầu tiên được vẽ; các cửa sổ còn lại nhận viewport
             // cắt từ canvas đó ở render().
@@ -1265,6 +1283,7 @@ impl App {
                 gl_dc,
                 out,
                 pbo_ready: false,
+                gpu,
                 benchmark_target:if self.benchmark_gdi {Some(presentation::MemoryTarget::new(pw,ph)?)}else{None},
                 screen: m.rect,
                 dpr: m.dpr,
@@ -1322,6 +1341,7 @@ impl App {
         for mut wp in walls {
             if let Some(ctx) = self.ctx.as_ref() {
                 ctx.make_current(wp.gl_dc);
+                if let Some(mut gpu)=wp.gpu.take(){gpu.destroy(&ctx.gl);}
                 if let Some(theme)=wp.theme.as_mut() { theme.destroy(&ctx.gl); }
                 unsafe {
                     ctx.gl.delete_framebuffer(wp.fbo);
@@ -1526,7 +1546,7 @@ impl App {
         }
     }
 
-    fn post_process_texture(gl: &glow::Context, shared: &mut Shared, scene: glow::Texture, target: Option<glow::Framebuffer>, width: i32, height: i32, now: f64) {
+    fn post_process_texture(gl: &glow::Context, shared: &mut Shared, scene: glow::Texture, target: Option<glow::Framebuffer>, width: i32, height: i32, now: f64, flip_y: bool) {
         unsafe {
             gl.bind_framebuffer(glow::FRAMEBUFFER, target);
             gl.viewport(0, 0, width, height);
@@ -1540,6 +1560,7 @@ impl App {
         shared.post.f1(gl, "uTime", (now / 1000.0) as f32);
         shared.post.f1(gl, "uDayPhase", shared.day_phase);
         shared.post.f1(gl, "uWeather", shared.weather);
+        shared.post.i1(gl, "uFlipY", flip_y as i32);
         unsafe {
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
             gl.use_program(None);
@@ -1547,7 +1568,42 @@ impl App {
     }
 
     fn post_process(gl: &glow::Context, shared: &mut Shared, wp: &Wallpaper, target: Option<glow::Framebuffer>, width: i32, height: i32, now: f64) {
-        Self::post_process_texture(gl, shared, wp.fbo_tex, target, width, height, now);
+        Self::post_process_texture(gl, shared, wp.fbo_tex, target, width, height, now, false);
+    }
+
+    fn ensure_output(gl:&glow::Context,wp:&mut Wallpaper,gdi:bool)->bool {
+        if gdi && wp.gpu.is_none() && wp.out.is_none() {
+            match output_surface(gl,wp.buf_w,wp.buf_h) {
+                Ok(surface)=>wp.out=Some(surface),Err(e)=>{log!("Khôi phục bộ đệm lỗi: {e}");return false;}
+            }
+        }true
+    }
+
+    fn present_output(gl:&glow::Context,shared:&mut Shared,wp:&mut Wallpaper,now:f64,gdi:bool) {
+        if let Some(gpu)=wp.gpu.as_mut() {
+            let result=(||->Result<(),String>{
+                let target=gpu.begin()?;
+                Self::post_process_texture(gl,shared,wp.fbo_tex,Some(target),wp.buf_w,wp.buf_h,now,true);
+                gpu.present(gl)
+            })();
+            if result.is_ok(){return;}
+            log!("Lỗi GPU trực tiếp, trở về GDI: {}",result.unwrap_err());
+            if let Some(mut gpu)=wp.gpu.take(){gpu.destroy(gl);}
+            if !Self::ensure_output(gl,wp,gdi){return;}
+        }
+        if let Some((out_fbo,_,pbo))=wp.out {
+            Self::post_process(gl,shared,wp,Some(out_fbo),wp.buf_w,wp.buf_h,now);
+            unsafe {
+                gl.bind_framebuffer(glow::READ_FRAMEBUFFER,Some(out_fbo));
+                gl.bind_buffer(glow::PIXEL_PACK_BUFFER,Some(pbo));gl.pixel_store_i32(glow::PACK_ALIGNMENT,4);
+                gl.read_pixels(0,0,wp.buf_w,wp.buf_h,glow::BGRA,glow::UNSIGNED_BYTE,glow::PixelPackData::BufferOffset(0));
+                gl.bind_buffer(glow::PIXEL_PACK_BUFFER,None);gl.bind_framebuffer(glow::FRAMEBUFFER,None);gl.flush();
+            }
+            wp.pbo_ready=true;
+        } else {
+            Self::post_process(gl,shared,wp,None,wp.phys_w,wp.phys_h,now);
+            unsafe{SwapBuffers(wp.hdc);}
+        }
     }
 
     fn crop_panorama(gl: &glow::Context, shared: &mut Shared, scene: glow::Texture, target: glow::Framebuffer, dst_w: i32, dst_h: i32, src_x: f32, src_y: f32, src_w: f32, src_h: f32, src_total_w: f32, src_total_h: f32) {
@@ -1615,30 +1671,13 @@ impl App {
             for wp in &mut self.walls {
                 if wp.paused {wp.pbo_ready=false;continue;}
                 ctx.make_current(wp.gl_dc);
-                if self.gdi && wp.out.is_none() {
-                    match output_surface(gl,wp.buf_w,wp.buf_h) {
-                        Ok(surface)=>wp.out=Some(surface),Err(error)=>{log!("Khôi phục bộ đệm lỗi: {error}");continue;}
-                    }
-                }
+                if !Self::ensure_output(gl,wp,self.gdi) {continue;}
                 let ox = (wp.screen.left - world.left) as f32 * pan.scale;
                 let oy = (world.bottom - wp.screen.bottom) as f32 * pan.scale;
                 let sw = (wp.screen.right - wp.screen.left) as f32 * pan.scale;
                 let sh = (wp.screen.bottom - wp.screen.top) as f32 * pan.scale;
                 Self::crop_panorama(gl, shared, ptex, wp.fbo, wp.buf_w, wp.buf_h, ox, oy, sw, sh, total_w, total_h);
-                if let Some((out_fbo, _, pbo)) = wp.out {
-                    Self::post_process(gl, shared, wp, Some(out_fbo), wp.buf_w, wp.buf_h, now);
-                    unsafe {
-                        gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(out_fbo));
-                        gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(pbo));
-                        gl.pixel_store_i32(glow::PACK_ALIGNMENT, 4);
-                        gl.read_pixels(0, 0, wp.buf_w, wp.buf_h, glow::BGRA, glow::UNSIGNED_BYTE, glow::PixelPackData::BufferOffset(0));
-                        gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None); gl.bind_framebuffer(glow::FRAMEBUFFER, None); gl.flush();
-                    }
-                    wp.pbo_ready = true;
-                } else {
-                    Self::post_process(gl, shared, wp, None, wp.phys_w, wp.phys_h, now);
-                    unsafe { SwapBuffers(wp.hdc); }
-                }
+                Self::present_output(gl,shared,wp,now,self.gdi);
                 drew = true;
             }
             if drew { self.frames += 1; self.frame_cpu_ms += t0.elapsed().as_secs_f64() * 1000.0; }
@@ -1653,11 +1692,7 @@ impl App {
             if wp.theme.is_none() {continue;}
             let settle=wp.needs_settle;
             ctx.make_current(wp.gl_dc);
-            if self.gdi && wp.out.is_none() {
-                match output_surface(gl,wp.buf_w,wp.buf_h) {
-                    Ok(surface)=>wp.out=Some(surface),Err(error)=>{log!("Khôi phục bộ đệm lỗi: {error}");continue;}
-                }
-            }
+            if !Self::ensure_output(gl,wp,self.gdi) {continue;}
             // Chế độ gdi: hiện khung đã đọc về ở lượt trước (GPU xong từ lâu, map không phải chờ)
             Self::present_gdi(gl, wp,&self.staging,self.benchmark_direct_readback);
             let theme=wp.theme.as_mut().unwrap();
@@ -1674,26 +1709,7 @@ impl App {
                 theme.frame(gl, shared, dt, now);
             }
             theme.draw_overlay(gl, shared, now);
-            if let Some((out_fbo, _, pbo)) = wp.out {
-                unsafe {
-                    // Hậu kỳ đồng thời phóng hình lên độ phân giải vật lý.
-                    gl.bind_framebuffer(glow::FRAMEBUFFER, Some(out_fbo));
-                }
-                Self::post_process(gl, shared, wp, Some(out_fbo), wp.buf_w, wp.buf_h, now);
-                unsafe {
-                    gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(out_fbo));
-                    gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(pbo));
-                    gl.pixel_store_i32(glow::PACK_ALIGNMENT, 4);
-                    gl.read_pixels(0, 0, wp.buf_w, wp.buf_h, glow::BGRA, glow::UNSIGNED_BYTE, glow::PixelPackData::BufferOffset(0));
-                    gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
-                    gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-                    gl.flush();
-                }
-                wp.pbo_ready = true;
-            } else {
-                Self::post_process(gl, shared, wp, None, wp.phys_w, wp.phys_h, now);
-                unsafe { SwapBuffers(wp.hdc); }
-            }
+            Self::present_output(gl,shared,wp,now,self.gdi);
             drew = true;
         }
         if drew {
@@ -1737,13 +1753,17 @@ impl App {
             Some((f, _, _)) => (f, wp.buf_w as usize, wp.buf_h as usize),
             None => (wp.fbo, wp.buf_w as usize, wp.buf_h as usize),
         };
+        let gpu_pixels=wp.gpu.as_ref().and_then(|gpu|gpu.read_bgra().map_err(|e|log!("Đọc ảnh GPU lỗi: {e}")).ok());
         let mut px = vec![0u8; w * h * 4];
-        unsafe {
+        if let Some(top_down)=gpu_pixels {
+            let stride=w*4;
+            for(y,row)in px.chunks_exact_mut(stride).enumerate(){row.copy_from_slice(&top_down[(h-1-y)*stride..(h-y)*stride]);}
+        } else { unsafe {
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(fbo));
             gl.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
             gl.read_pixels(0, 0, w as i32, h as i32, glow::BGRA, glow::UNSIGNED_BYTE, glow::PixelPackData::Slice(&mut px));
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-        }
+        }}
         // BMP 32-bit, hàng dưới lên trên (trùng thứ tự của OpenGL); kênh alpha đặt 255
         for p in px.chunks_exact_mut(4) {
             p[3] = 255;
@@ -1958,12 +1978,6 @@ fn main() {
         return; // "/p": không vẽ khung xem trước nhỏ
     }
 
-    let log_name = if saver { "tuanpc-desk-saver.log" } else { "tuanpc-desk.log" };
-    let log_dir = if is_scr { Some(lock::data_dir()) } else { std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) };
-    let log_path = log_dir.map(|d| d.join(log_name)).unwrap_or_else(|| log_name.into());
-    *LOG.lock().unwrap() = File::create(&log_path).ok();
-    std::panic::set_hook(Box::new(|info| log!("PANIC: {info}")));
-
     unsafe {
         let name = wide(if saver { "TuanpcDesk_Saver" } else { "TuanpcDesk_Singleton" });
         CreateMutexW(std::ptr::null(), 1, name.as_ptr());
@@ -1973,6 +1987,13 @@ fn main() {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         timeBeginPeriod(1);
     }
+
+    let log_name = if saver { "tuanpc-desk-saver.log" } else { "tuanpc-desk.log" };
+    let log_dir = if is_scr { Some(lock::data_dir()) } else { std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) };
+    let log_path = log_dir.map(|d| d.join(log_name)).unwrap_or_else(|| log_name.into());
+    *LOG.lock().unwrap() = File::create(&log_path).ok();
+    std::panic::set_hook(Box::new(|info| log!("PANIC: {info}")));
+
 
     // 30 FPS là nhịp mục tiêu của bản native. Cảnh vẫn giảm tải khi bị che,
     // còn lúc mở Settings/đang tương tác có thể tăng tạm thời để không giật.
@@ -2088,8 +2109,11 @@ fn main() {
         staging:RefCell::new(Vec::new()),
         benchmark_gdi:headless && args.iter().any(|a|a=="--benchmark-gdi"),
         benchmark_direct_readback:headless && args.iter().any(|a|a=="--benchmark-direct-readback"),
+        prefer_gpu: !matches!(arg_value(&args,"--present").as_deref(),Some("gdi"|"gl")) && !args.iter().any(|a|a=="--benchmark-gdi"),
+        gpu_device:None,
+        gpu_attempted:false,
     };
-    log!("Cách hiển thị: {}", if app.gdi { "gdi (FBO -> đọc về -> StretchDIBits)" } else { "gl (SwapBuffers trực tiếp)" });
+    log!("Cách hiển thị: {}", if app.prefer_gpu {"GPU trực tiếp (GDI dự phòng)"} else if app.gdi { "GDI" } else { "OpenGL SwapBuffers" });
     // Khi chạy từ HKCU\...\Run, Windows có thể khởi động tiến trình trước khi
     // Explorer dựng xong Progman/WorkerW. Chờ và thử lại để tuanpc-desk tự chạy
     // ổn định sau đăng nhập thay vì thoát ngay ở lần gắn hình nền đầu tiên.
@@ -2104,6 +2128,7 @@ fn main() {
                 log!("Khởi động/gắn hình nền lần {} thất bại: {e}", attempt + 1);
                 app.destroy_walls();
                 app.drop_shared();
+                app.gpu_device=None;app.gpu_attempted=false;
                 app.ctx = None;
                 app.vao = None;
                 if attempt < 11 {
@@ -2139,6 +2164,34 @@ fn main() {
         app.poll_icons();
     }
     app.render();
+    if headless && args.iter().any(|a|a=="--test-gpu-output") {
+        let now=app.now();
+        let ctx=app.ctx.as_ref().unwrap();let gl=&ctx.gl;let shared=app.shared.as_mut().unwrap();
+        for wp in &mut app.walls {
+            ctx.make_current(wp.gl_dc);
+            let gpu=wp.gpu.as_mut().expect("GPU presentation required for this diagnostic; GDI fallback is not a pass");
+            let reference=output_surface(gl,wp.buf_w,wp.buf_h).unwrap();
+            App::post_process_texture(gl,shared,wp.fbo_tex,Some(reference.0),wp.buf_w,wp.buf_h,now,false);
+            let mut expected=vec![0u8;(wp.buf_w*wp.buf_h*4) as usize];
+            unsafe{
+                gl.bind_framebuffer(glow::READ_FRAMEBUFFER,Some(reference.0));
+                gl.read_pixels(0,0,wp.buf_w,wp.buf_h,glow::BGRA,glow::UNSIGNED_BYTE,glow::PixelPackData::Slice(&mut expected));
+            }
+            let target=gpu.begin().unwrap();
+            App::post_process_texture(gl,shared,wp.fbo_tex,Some(target),wp.buf_w,wp.buf_h,now,true);
+            gpu.present(gl).unwrap();
+            let actual=gpu.read_bgra().unwrap();let stride=wp.buf_w as usize*4;
+            let mut error=0u64;let mut max_error=0u8;
+            for(y,row)in expected.chunks_exact(stride).rev().enumerate(){
+                for(a,b)in row.iter().zip(&actual[y*stride..(y+1)*stride]) {let d=a.abs_diff(*b);error+=d as u64;max_error=max_error.max(d);}
+            }
+            let mean=error as f64/actual.len() as f64;
+            assert!(actual.chunks_exact(4).any(|p|p[..3]!=[0,0,0]),"GPU output stayed black");
+            assert!(mean<0.05 && max_error<=8,"GPU output differs: mean={mean}, max={max_error}");
+            unsafe{gl.delete_framebuffer(reference.0);gl.delete_texture(reference.1);gl.delete_buffer(reference.2);assert_eq!(gl.get_error(),glow::NO_ERROR);}
+            log!("PASS: GPU output [{},{}] BGRA/chiều dọc đúng, sai số trung bình {mean:.5}, lớn nhất {max_error}",wp.screen.left,wp.screen.top);
+        }
+    }
     if app.benchmark_gdi && app.gdi && args.iter().any(|a|a=="--test-readback") {
         let ctx=app.ctx.as_ref().unwrap();
         for wp in &app.walls {
@@ -2158,11 +2211,14 @@ fn main() {
         for wp in &mut app.walls {wp.paused=true;wp.paused_since=Some(now-11_000.0);}
         app.release_hidden_outputs(now,false);
         assert!(app.walls.iter().all(|w|w.out.is_none()));
+        let presents:Vec<_>=app.walls.iter().map(|w|w.gpu.as_ref().map_or(0,|g|g.presents)).collect();
         let frames=app.frames;app.render();assert_eq!(frames,app.frames);
+        assert_eq!(presents,app.walls.iter().map(|w|w.gpu.as_ref().map_or(0,|g|g.presents)).collect::<Vec<_>>(),"Covered outputs submitted GPU presents");
         let index=app.walls.len().saturating_sub(1);app.walls[index].paused=false;
-        app.render();assert!(app.walls[index].out.is_some() || !app.gdi);
+        app.render();assert!(app.walls[index].gpu.is_some() || app.walls[index].out.is_some() || !app.gdi);
+        for(i,w)in app.walls.iter().enumerate(){if let Some(gpu)=&w.gpu{assert_eq!(gpu.presents,presents[i]+u64::from(i==index));}}
         for wp in &mut app.walls {wp.paused=false;}
-        app.render();assert!(app.walls.iter().all(|w|w.out.is_some() || !app.gdi));
+        app.render();assert!(app.walls.iter().all(|w|w.gpu.is_some() || w.out.is_some() || !app.gdi));
         log!("PASS: dừng hoàn toàn, giải phóng bộ đệm, tiếp tục màn phụ rồi toàn bộ màn hình");
     }
     if open_settings && !saver {
@@ -2242,7 +2298,7 @@ fn main() {
         if benchmark_until.is_some_and(|t|app.now()>=t) {break 'outer;}
         let click = PENDING_CLICK.with(|c| c.take());
         if let Some((x, y)) = click {
-            if !saver && INTERACTIONS_ENABLED.with(|c| c.get()) && app.handle_click(x, y) {
+            if !saver && !headless && INTERACTIONS_ENABLED.with(|c| c.get()) && app.handle_click(x, y) {
                 next_frame = app.now();
             }
         }
@@ -2849,7 +2905,7 @@ fn main() {
             next_icons = now + 400.0;
         }
         if now >= next_fg {
-            if !saver && snapshot_dir.is_none() {
+            if !saver && !headless && snapshot_dir.is_none() {
                 if SAVER_RECONCILE_PENDING.with(|c| c.replace(false)) {
                     if let Err(e) = lock::reconcile_disabled_saver() { log!("Đồng bộ saver sau mở khóa lỗi: {e}"); }
                     lock::log_saver_state("sau mở khóa");
@@ -2951,6 +3007,7 @@ fn main() {
     app.system_monitor = None;
     app.destroy_walls();
     app.drop_shared();
+    app.gpu_device=None;
     app.ctx = None;
     unsafe {
         if let Some((h, dc)) = app.dummy.take() {

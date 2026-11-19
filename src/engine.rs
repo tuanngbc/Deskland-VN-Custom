@@ -578,6 +578,7 @@ precision highp float;
 uniform sampler2D uScene;
 uniform vec2 uRes;
 uniform float uTime, uDayPhase, uWeather;
+uniform bool uFlipY;
 out vec4 o;
 
 float hash(vec2 p) {
@@ -594,6 +595,7 @@ float noise(vec2 p) {
 
 void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
+  if (uFlipY) uv.y = 1.0 - uv.y;
   vec4 src = texture(uScene, uv);
   float daylight = smoothstep(0.18, 0.38, uDayPhase) * (1.0 - smoothstep(0.62, 0.86, uDayPhase));
   float night = 1.0 - daylight;
