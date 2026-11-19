@@ -42,9 +42,10 @@ Phiên bản viết lại hoàn toàn bằng **Rust native (Win32 + OpenGL 3.3 q
 
 ## Cá voi trong bộ Bãi biển
 
-- Mặc định có 3 cá voi bơi ở vùng nước ngoài khơi, nổi/lặn và phun nước lệch nhịp. Chỉnh **Bãi biển → Chi tiết → Cá voi** từ 0–3; đặt 0 để tắt.
+- Mặc định có 3 cá voi bơi ở vùng nước ngoài khơi, nổi/lặn và phun nước lệch nhịp. Dáng thân, vây và đuôi dùng đường cong, màu xanh xám có hạt đồng bộ với biển. Khi lặn: cong lưng, đầu chìm trước, nâng đuôi rồi chìm hẳn và để lại gợn nước. Chỉnh **Bãi biển → Chi tiết → Cá voi** từ 0–3; đặt 0 để tắt.
 - Cá voi tránh bờ và khoảng trống giữa các màn hình, giữ vị trí khi click desktop. Hoạt ảnh dùng chung nhịp 30 FPS và tự dừng cùng hình nền khi bị che/khóa.
 - Chỉ vẽ tối đa 3 quad nhỏ, không thêm vòng lặp vào shader toàn màn, texture, bộ đệm hình, tiến trình hay timer riêng. `--no-whales` tắt tạm trong một lần chạy để đo đối chiếu, không ghi đè thiết lập đã lưu.
+- `--headless --whale-phase <giây>` giữ tư thế cá voi tại một thời điểm trong chu kỳ 30 giây để kiểm tra hình: 6 nổi/phun nước, 12 cong lưng, 15.5 đầu/lưng đã chìm và đuôi nhô lên, 22 chìm hoàn toàn. Cờ này không có tác dụng khi chạy desktop bình thường.
 
 ## Chụp màn hình và quay desktop
 

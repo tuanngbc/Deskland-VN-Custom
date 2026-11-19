@@ -7,6 +7,31 @@ use std::f32::consts::PI;
 pub const VERT: &str = include_str!("../assets/shaders/whale.vert");
 pub const FRAG: &str = include_str!("../assets/shaders/whale.frag");
 
+#[derive(Clone, Copy, Debug)]
+pub struct Motion {
+    pub surface: f32,
+    pub body_depth: f32,
+    pub tail_depth: f32,
+    pub tail_lift: f32,
+    pub arch: f32,
+    pub spray_age: f32,
+}
+
+impl Motion {
+    pub fn at(age: f32) -> Self {
+        let phase = age.rem_euclid(30.0);
+        let rising = 1.0 - sstep(0.4, 3.8, phase);
+        let body_depth = rising.max(sstep(11.4, 16.0, phase));
+        let tail_depth = rising.max(sstep(16.1, 19.0, phase));
+        Self {
+            surface: 1.0 - body_depth, body_depth, tail_depth,
+            tail_lift: sstep(12.5, 14.5, phase) * (1.0 - sstep(16.0, 17.6, phase)),
+            arch: sstep(10.0, 12.2, phase) * (1.0 - sstep(13.0, 15.0, phase)),
+            spray_age: (phase - 5.0) / 3.0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Whale {
     pub x: f32,
@@ -20,12 +45,10 @@ pub struct Whale {
 
 impl Whale {
     pub fn surface(&self) -> f32 {
-        let phase = self.age.rem_euclid(27.0);
-        sstep(1.0, 3.5, phase) * (1.0 - sstep(11.5, 15.0, phase))
+        self.motion().surface
     }
 
-    /// One short breath per surface cycle; zero outside this interval.
-    pub fn spray_age(&self) -> f32 { (self.age.rem_euclid(27.0) - 5.0) / 3.4 }
+    pub fn motion(&self) -> Motion { Motion::at(self.age) }
 
     fn fits(&self, x: f32, y: f32) -> bool {
         let [ox, oy, w, h] = self.output;
@@ -60,7 +83,7 @@ impl Pod {
                     x: output[0] + rng.next() * output[2],
                     y: output[1] + rng.next() * output[3],
                     heading: rng.next() * 2.0 * PI,
-                    scale, age: 2.0 + n as f32 * 8.3,
+                    scale, age: 2.0 + n as f32 * 10.0,
                     speed: 10.0 + n as f32 * 1.6, output,
                 };
                 if !whale.fits(whale.x, whale.y) || sample(whale.x, whale.y) < 150.0 * scale { continue; }
@@ -152,18 +175,42 @@ mod tests {
         let mut pod = Pod::new(3,9);
         pod.populate(&[[0.0,0.0,2560.0,1080.0]], |_,_|999.0);
         let mut breaths = [0usize;3];
-        for _ in 0..810 {
+        for _ in 0..900 {
             pod.step(1.0/30.0, |_,_|999.0);
             let mut active = 0;
             for (i,w) in pod.whales.iter().enumerate() {
-                if (0.0..1.0).contains(&w.spray_age()) { breaths[i]+=1; active+=1; }
+                if (0.0..1.0).contains(&w.motion().spray_age) { breaths[i]+=1; active+=1; }
                 assert!((0.0..=1.0).contains(&w.surface()));
             }
             assert!(active<=1);
         }
-        assert!(breaths.iter().all(|&n| n>90 && n<115));
+        assert!(breaths.iter().all(|&n| n>=89 && n<=91));
         let frozen = pod.whales.clone();
         pod.step(0.0, |_,_|999.0);
         assert_eq!(pod.whales,frozen);
+    }
+
+    #[test]
+    fn dive_submerges_head_and_back_before_the_raised_flukes() {
+        let afloat = Motion::at(6.0);
+        assert_eq!(afloat.body_depth,0.0);
+        assert_eq!(afloat.tail_depth,0.0);
+        assert!((0.0..1.0).contains(&afloat.spray_age));
+        assert!(Motion::at(12.2).arch>0.95);
+        let diving = Motion::at(15.5);
+        assert!(diving.body_depth>0.95);
+        assert!(diving.tail_depth<0.01 && diving.tail_lift>0.99);
+        let deep = Motion::at(22.0);
+        assert_eq!(deep.body_depth,1.0);
+        assert_eq!(deep.tail_depth,1.0);
+        assert_eq!(deep.tail_lift,0.0);
+        let mut previous=Motion::at(0.0);
+        for n in 1..=3000 {
+            let current=Motion::at(n as f32/100.0);
+            for (a,b) in [(previous.body_depth,current.body_depth),(previous.tail_depth,current.tail_depth),(previous.arch,current.arch),(previous.tail_lift,current.tail_lift)] {
+                assert!((a-b).abs()<0.02,"motion jumps across a phase boundary");
+            }
+            previous=current;
+        }
     }
 }
