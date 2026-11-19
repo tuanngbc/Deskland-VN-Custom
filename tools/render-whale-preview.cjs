@@ -3,6 +3,8 @@
 // simulation frames exported by the Rust binary; never installs the application.
 const fs=require('node:fs'),path=require('node:path'),{pathToFileURL}=require('node:url');
 const assert=require('node:assert/strict'),crypto=require('node:crypto');
+const {spawn}=require('node:child_process');
+const {once}=require('node:events');
 const {chromium}=require('playwright');
 const [input,output]=process.argv.slice(2);
 assert(input&&output,'Usage: render-whale-preview data.json output-directory');
@@ -48,7 +50,7 @@ gl.viewport(0,0,D.width,D.height);gl.useProgram(beach);
 for(const [name,value] of Object.entries({uRes:[D.width,D.height],uGrid:[D.fieldWidth,D.fieldHeight],uScale:1,uSeed:(71%997)*0.37,uStep:5,uMix:1,uTime:6,uSpeed:22,uRunup:120,uShallow:260,uShoal:110,uGrain:1,uDebug:0,uWave:1.6,uSigma:85,uSpacing:70,uWaves:1,uKayN:0,uBirdN:0,uShadowOffset:[0,0],uShadowAlpha:0}))uniform(beach,name,value);
 uniform(beach,'uNoise',0,true);uniform(beach,'uFA',1,true);uniform(beach,'uFB',1,true);gl.drawArrays(gl.TRIANGLES,0,3);
 gl.bindFramebuffer(gl.FRAMEBUFFER,null);
-const backdropProgram=program(fullscreen,'#version 300 es\nprecision highp float;uniform sampler2D uImage;out vec4 o;void main(){o=texture(uImage,gl_FragCoord.xy/vec2(1280.0,800.0));}');
+const backdropProgram=program(fullscreen,'#version 300 es\nprecision highp float;uniform sampler2D uImage;uniform vec2 uOutput;out vec4 o;void main(){o=texture(uImage,gl_FragCoord.xy/uOutput);}');
 const mesh=gl.createVertexArray();gl.bindVertexArray(mesh);const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(D.mesh),gl.STATIC_DRAW);
 for(const [index,size,offset] of [[0,3,0],[1,3,12],[2,2,24]]){gl.enableVertexAttribArray(index);gl.vertexAttribPointer(index,size,gl.FLOAT,false,32,offset);}
 const count=D.mesh.length/8;
@@ -59,7 +61,7 @@ function actor(row){const whale=row.slice(0,4),pose=row.slice(4,8),stroke=row.sl
  gl.bindVertexArray(empty);gl.useProgram(water);uniform(water,'uRes',[D.width,D.height]);uniform(water,'uWhale',whale);uniform(water,'uPose',pose);uniform(water,'uEffect',effect);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
  gl.bindVertexArray(mesh);gl.useProgram(skin);uniform(skin,'uRes',[D.width,D.height]);uniform(skin,'uWhale',whale);uniform(skin,'uPose',pose);uniform(skin,'uStroke',stroke);gl.enable(gl.CULL_FACE);gl.frontFace(gl.CW);gl.drawArrays(gl.TRIANGLES,0,count);gl.frontFace(gl.CCW);gl.disable(gl.CULL_FACE);
 }
-window.renderAt=function(t){position=Math.min(36,Math.max(0,t));gl.bindVertexArray(empty);gl.disable(gl.BLEND);gl.useProgram(backdropProgram);uniform(backdropProgram,'uImage',2,true);gl.drawArrays(gl.TRIANGLES,0,3);gl.enable(gl.BLEND);gl.blendFunc(gl.ONE,gl.ONE_MINUS_SRC_ALPHA);const rows=detail?[rowAt(position,D.detail)]:frameAt(position);for(const row of rows)actor(row);gl.disable(gl.BLEND);const error=gl.getError();if(error!==gl.NO_ERROR)throw Error('WebGL error '+error);document.getElementById('seek').value=position;document.getElementById('time').textContent='0:'+Math.floor(position).toString().padStart(2,'0');document.getElementById('stage').textContent=detail?(position<4?'Nổi lên':position<8?'Nổi và phun nước':position<12?'Lướt và lấy đà':position<16?'Cong lưng, chúi xuống':position<20?'Nâng đuôi, lặn sâu':position<29?'Bơi dưới mặt nước':'Trở lên mặt nước'):'Ba con bơi lệch nhịp';return rows;};
+window.renderAt=function(t){position=Math.min(36,Math.max(0,t));gl.viewport(0,0,canvas.width,canvas.height);gl.bindVertexArray(empty);gl.disable(gl.BLEND);gl.useProgram(backdropProgram);uniform(backdropProgram,'uImage',2,true);uniform(backdropProgram,'uOutput',[canvas.width,canvas.height]);gl.drawArrays(gl.TRIANGLES,0,3);gl.enable(gl.BLEND);gl.blendFunc(gl.ONE,gl.ONE_MINUS_SRC_ALPHA);const rows=detail?[rowAt(position,D.detail)]:frameAt(position);for(const row of rows)actor(row);gl.disable(gl.BLEND);const error=gl.getError();if(error!==gl.NO_ERROR)throw Error('WebGL error '+error);document.getElementById('seek').value=position;document.getElementById('time').textContent='0:'+Math.floor(position).toString().padStart(2,'0');document.getElementById('stage').textContent=detail?(position<4?'Nổi lên':position<8?'Nổi và phun nước':position<12?'Lướt và lấy đà':position<16?'Cong lưng, chúi xuống':position<20?'Nâng đuôi, lặn sâu':position<29?'Bơi dưới mặt nước':'Trở lên mặt nước'):'Ba con bơi lệch nhịp';return rows;};
 window.setView=function(view){detail=view==='detail';document.getElementById('detail').setAttribute('aria-pressed',detail);document.getElementById('wide').setAttribute('aria-pressed',!detail);window.renderAt(position);};
 window.pausePreview=function(){playing=false;document.getElementById('play').textContent='Phát';};
 window.playPreview=function(){start=performance.now()-position*1000;playing=true;document.getElementById('play').textContent='Tạm dừng';};
@@ -82,15 +84,28 @@ fs.writeFileSync(htmlPath,html.replace('__DATA__',JSON.stringify(data).replaceAl
    await page.evaluate(t=>window.renderAt(t),time);await page.screenshot({path:path.join(output,'whale-'+label+'.png')});
   }
   await page.evaluate(()=>{window.setView('wide');window.renderAt(5);});await page.screenshot({path:path.join(output,'whale-scene.png')});
+  await page.evaluate(()=>{window.pausePreview();window.setView('detail');document.getElementById('scene').width=800;document.getElementById('scene').height=500;});
+  const browsersRoot=process.env.PLAYWRIGHT_BROWSERS_PATH;
+  const ffmpegDir=fs.readdirSync(browsersRoot).find(name=>name.startsWith('ffmpeg-'));
+  assert(ffmpegDir,'Playwright video encoder missing');
+  const ffmpeg=path.join(browsersRoot,ffmpegDir,process.platform==='win32'?'ffmpeg-win64.exe':'ffmpeg-linux');
+  const encoder=spawn(ffmpeg,['-loglevel','error','-y','-f','image2pipe','-r',String(D.fps),'-i','pipe:0','-c:v','vp8','-b:v','1000k',path.join(output,'whale-motion.webm')],{stdio:['pipe','ignore','pipe']});
+  let encoderError='';encoder.stderr.on('data',chunk=>encoderError+=chunk.toString());
+  const encoderDone=once(encoder,'close');
+  const uniqueActiveFrames=new Set(),frameCount=D.duration*D.fps;
+  for(let frame=0;frame<frameCount;frame++) {
+   const t=frame/D.fps;
+   const url=await page.evaluate(t=>{window.renderAt(t);return document.getElementById('scene').toDataURL('image/jpeg',0.94);},t);
+   const jpeg=Buffer.from(url.split(',')[1],'base64');
+   if(t>=3&&t<19)uniqueActiveFrames.add(crypto.createHash('sha256').update(jpeg).digest('hex'));
+   if(!encoder.stdin.write(jpeg))await once(encoder.stdin,'drain');
+   if(frame%D.fps===0)console.log('Captured exact preview second',t);
+  }
+  encoder.stdin.end();const [exitCode]=await encoderDone;
+  assert.equal(exitCode,0,encoderError);assert(uniqueActiveFrames.size>300,'Motion frames were repeated or skipped');
   await context.close();
-  const recording=await browser.newContext({viewport:{width:1024,height:768},deviceScaleFactor:1,recordVideo:{dir:output,size:{width:1024,height:768}}});
-  const videoPage=await recording.newPage();videoPage.on('pageerror',e=>errors.push(String(e)));
-  await videoPage.goto(pathToFileURL(htmlPath).href);await videoPage.waitForFunction(()=>window.previewReady);
-  await videoPage.evaluate(()=>{window.pausePreview();window.setView('detail');window.renderAt(0);window.playPreview();});
-  await videoPage.waitForTimeout(36_500);await recording.close();
-  const recorded=await videoPage.video().path();fs.renameSync(recorded,path.join(output,'whale-motion.webm'));
   assert.deepEqual(errors,[]);assert(fs.statSync(path.join(output,'whale-motion.webm')).size>20_000);
-  const manifest={commit:process.env.GITHUB_SHA||null,...readiness,meshSha256:crypto.createHash('sha256').update(JSON.stringify(data.mesh)).digest('hex'),images:6,seconds:36,errors};
+  const manifest={commit:process.env.GITHUB_SHA||null,...readiness,meshSha256:crypto.createHash('sha256').update(JSON.stringify(data.mesh)).digest('hex'),images:6,seconds:36,fps:D.fps,frames:frameCount,uniqueActiveFrames:uniqueActiveFrames.size,errors};
   fs.writeFileSync(path.join(output,'preview-manifest.json'),JSON.stringify(manifest,null,2));
   console.log('PASS native mesh/shaders exported; six screenshots and full motion cycle captured',JSON.stringify(manifest));
  }finally{await browser.close();}
