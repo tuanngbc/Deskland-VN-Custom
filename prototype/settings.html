@@ -127,6 +127,7 @@
       <button class="ghost-btn update-action" id="updateProgram" data-i18n="updateProgram">立即更新</button>
     </div>
     <div class="warn" id="autostartWarn" hidden role="alert"><p><b data-i18n="autostartBlocked">开机自动启动可能被拦截了</b><br><span id="autostartWarnText"></span></p><button id="autostartWarnOk" data-i18n="gotIt">知道了</button></div>
+    <section class="setting-card" id="videoCachePanel"><h3 data-i18n="videoCacheTitle">Hiệu suất hình nền</h3><div class="setting-row"><div><b data-i18n="videoCacheLabel">Phát cảnh bằng video phần cứng</b><small data-i18n="videoCacheHint">Tạo video khi cảnh ổn định, nghỉ dựng cảnh khi phát. Thời tiết và ánh sáng cập nhật lại mỗi 5 phút; đồng hồ vẫn chạy trực tiếp.</small></div><label class="switch-row"><input id="videoCacheEnabled" type="checkbox" aria-label="Phát cảnh bằng video phần cứng"><i class="switch"></i></label></div><p class="monitor-detail" data-i18n="videoCacheDetail">Cần khoảng 20 giây hiện đủ các màn hình để tạo cache lần đầu. Dùng tối đa 64 MB ổ đĩa, không cần cài thêm trình phát. Tự tạm dừng khi nền bị che hoặc khóa máy.</p></section>
     <section class="setting-card" id="systemMonitorPanel"><h3 data-i18n="systemMonitorTitle">Thống kê trên taskbar</h3><p class="monitor-detail" data-i18n="systemMonitorDescription">CPU, RAM, GPU và tốc độ tải xuống / tải lên ở bên trái khay hệ thống. Màu chữ theo Windows; nhấp đúp để mở Trình quản lý tác vụ.</p><div class="setting-row"><div><b data-i18n="systemMonitorEnabled">Hiện thống kê</b><small data-i18n="systemMonitorHint">Chạy native, ngừng lấy mẫu khi khóa máy. GPU không hỗ trợ sẽ hiện --.</small></div><label class="switch-row"><input id="systemMonitorEnabled" type="checkbox" checked aria-label="Hiện thống kê trên taskbar"><i class="switch"></i></label></div><div class="setting-row"><div><b data-i18n="systemMonitorInterval">Chu kỳ cập nhật</b><small data-i18n="systemMonitorIntervalHint">Tốc độ mạng tính bằng KB/s hoặc MB/s, theo lưu lượng thực tế.</small></div><select id="systemMonitorInterval" aria-label="Chu kỳ cập nhật thống kê"><option value="1" data-i18n="systemMonitorEvery1">Mỗi giây</option><option value="2" data-i18n="systemMonitorEvery2">Mỗi 2 giây</option><option value="5" data-i18n="systemMonitorEvery5">Mỗi 5 giây</option></select></div><p class="monitor-detail" data-i18n="systemMonitorSpace">Tự ẩn khi toàn màn hình, taskbar tự ẩn hoặc không đủ khoảng trống, để không che các nút ứng dụng. Có thể bật/tắt nhanh trong menu khay hệ thống.</p></section>
     <section class="setting-card"><h3 data-i18n="generalTitle">Thiết lập chung</h3><div class="setting-row"><div><b data-i18n="startupTitle">Khởi động cùng Windows</b><small data-i18n="startupHint">Tự mở nền và tiện ích sau khi anh đăng nhập.</small></div><label class="switch-row" data-i18n-title="autostartTitle" title="开机后自动运行 tuanpc-desk">
       <span data-i18n="autostart">开机自动启动</span><input type="checkbox" id="autostart"><i class="switch"></i>
@@ -609,6 +610,7 @@ function flashSaved() {
 }
 
 $('autostart').addEventListener('change', e => send({ t: 'autostart', v: e.target.checked }));
+$('videoCacheEnabled').addEventListener('change',e=>send({t:'videoCache',v:e.target.checked}));
 let miniTools = { enabled: true, fps: 30, audio: true, capture: { mods: 16390, vk: 83 }, record: { mods: 16390, vk: 82 } };
 let miniToolsHotkeys = null;
 let shortcutSession = null;
@@ -898,6 +900,7 @@ function applyInitMessage(m) {
   state.world = m.world || null;
   state.selectedMonitor = state.monitors[0] && state.monitors[0].id;
   $('autostart').checked = !!m.autostart;
+  $('videoCacheEnabled').checked = !!m.videoCache;
   syncMiniTools(m);
   syncSystemMonitor(m);
   state.launcherHotkey = Object.assign(state.launcherHotkey, m.launcherHotkey || {});
@@ -952,6 +955,8 @@ function onHost(m) {
     syncMiniTools(m);
   } else if (m.t === 'systemMonitorState') {
     syncSystemMonitor(m);
+  } else if (m.t === 'videoCacheState') {
+    $('videoCacheEnabled').checked = !!m.v;
   } else if (m.t === 'shortcutCaptureState') {
     if (!shortcutSession) return;
     if (!m.active) { closeShortcutEditor(false); return; }

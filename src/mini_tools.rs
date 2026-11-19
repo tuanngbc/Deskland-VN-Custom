@@ -1,7 +1,7 @@
 //! On-demand native screenshot and desktop recorder tools.
 mod screen;
 mod editor;
-mod recorder;
+pub(crate) mod recorder;
 
 use crate::desktop::wide;
 use std::os::windows::process::CommandExt;

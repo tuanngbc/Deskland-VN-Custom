@@ -55,7 +55,7 @@ unsafe fn sample(bytes:&[u8],time:i64,duration:i64)->windows::core::Result<IMFSa
     let buffer=MFCreateMemoryBuffer(bytes.len()as u32)?;let mut ptr=std::ptr::null_mut();buffer.Lock(&mut ptr,None,None)?;std::ptr::copy_nonoverlapping(bytes.as_ptr(),ptr,bytes.len());buffer.Unlock()?;buffer.SetCurrentLength(bytes.len()as u32)?;let s=MFCreateSample()?;s.AddBuffer(&buffer)?;s.SetSampleTime(time)?;s.SetSampleDuration(duration)?;Ok(s)
 }
 // SDR BT.709 limited-range, top-down NV12. No bitmap orientation ambiguity.
-fn nv12(bgra:&[u8],width:usize,height:usize,out:&mut[u8]){
+pub(crate) fn nv12(bgra:&[u8],width:usize,height:usize,out:&mut[u8]){
     let plane=width*height;
     for y in 0..height{for x in 0..width{let i=(y*width+x)*4;let(b,g,r)=(bgra[i]as i32,bgra[i+1]as i32,bgra[i+2]as i32);out[y*width+x]=(((47*r+157*g+16*b+128)>>8)+16).clamp(16,235)as u8;}}
     for y in (0..height).step_by(2){for x in (0..width).step_by(2){let(mut r,mut g,mut b)=(0,0,0);for yy in y..y+2{for xx in x..x+2{let i=(yy*width+xx)*4;b+=bgra[i]as i32;g+=bgra[i+1]as i32;r+=bgra[i+2]as i32;}}r/=4;g/=4;b/=4;let i=plane+y/2*width+x;out[i]=(((-26*r-87*g+113*b+128)>>8)+128).clamp(16,240)as u8;out[i+1]=(((112*r-102*g-10*b+128)>>8)+128).clamp(16,240)as u8;}}

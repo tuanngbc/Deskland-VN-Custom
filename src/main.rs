@@ -36,6 +36,7 @@ mod wgl;
 mod widget;
 mod system_monitor;
 mod presentation;
+mod video_wallpaper;
 
 use desktop::wide;
 use engine::{IconBox, Prog, Shared, Theme};
@@ -560,6 +561,7 @@ struct Config {
     lang: String,
     /// Bật/tắt tương tác chuột trên màn hình nền
     interactions_enabled: bool,
+    video_cache: bool,
     widget_enabled: bool,
     widget_locked: bool,
     widget_x: i32,
@@ -623,6 +625,7 @@ fn load_config(cli_theme: Option<String>) -> Config {
         lock_sync: root.get("lockSyncWin").and_then(|v| v.as_bool()).unwrap_or(true),
         lang,
         interactions_enabled,
+        video_cache:root.get("videoCache").and_then(|v|v.as_bool()).unwrap_or(false),
         widget_enabled: widget.and_then(|v| v.get("enabled")).and_then(|v| v.as_bool()).unwrap_or(true),
         widget_locked: widget.and_then(|v| v.get("locked")).and_then(|v| v.as_bool()).unwrap_or(true),
         widget_x: widget.and_then(|v| v.get("x")).and_then(|v| v.as_i64()).map(|v| v as i32).unwrap_or(-1),
@@ -688,6 +691,7 @@ fn save_config(cfg: &Config) {
         "lockIdleMins": cfg.lock_idle_mins,
         "lang": cfg.lang,
         "interactionsEnabled": INTERACTIONS_ENABLED.with(|c| c.get()),
+        "videoCache": cfg.video_cache,
         "widget": {
             "enabled": WIDGET_ENABLED.with(|c| c.get()),
             "locked": WIDGET_LOCKED.with(|c| c.get()),
@@ -775,6 +779,7 @@ fn web_init(app: &App) -> serde_json::Value {
         "miniToolsHotkeys": TOOL_HOTKEYS.with(|c|c.get()),
         "autostartWarn": false,
         "interactions": app.interactions_enabled,
+        "videoCache": app.cfg.video_cache,
         "widget": {
             "enabled": app.cfg.widget_enabled,
             "locked": app.cfg.widget_locked,
@@ -926,9 +931,50 @@ struct App {
     staging: RefCell<Vec<u8>>,
     benchmark_gdi: bool,
     benchmark_direct_readback: bool,
+    video: video_wallpaper::Cache,
 }
 
 impl App {
+    fn video_key(&self)->String{
+        use std::hash::{Hash,Hasher};
+        let utc=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+        let live=self.live_weather.lock().ok().and_then(|v|*v);
+        let weather=live_weather_amount(&self.environment,live).unwrap_or_else(||self.environment.weather_amount(self.now()));
+        let outputs:Vec<_>=self.walls.iter().map(|w|serde_json::json!({
+            "screen":[w.screen.left,w.screen.top,w.screen.right,w.screen.bottom],"dpi":w.dpr,
+            "icons":w.last_icons.as_ref().map(|icons|icons.iter().map(|r|[r.left,r.top,r.right,r.bottom]).collect::<Vec<_>>()),
+        })).collect();
+        let value=serde_json::json!({"format":1,"theme":self.cfg.theme,"params":self.cfg.params.get(&self.cfg.theme),"mode":self.cfg.mode,
+            "environment":{"time":self.environment.time_enabled,"weather":self.environment.weather_enabled,"source":self.environment.source,"preset":self.environment.preset,"location":self.environment.location},
+            "solar":if self.environment.time_enabled{utc/300}else{0},"weather":(weather*20.0).round()as i32,"outputs":outputs});
+        let mut hash=std::collections::hash_map::DefaultHasher::new();value.to_string().hash(&mut hash);format!("{:016x}",hash.finish())
+    }
+
+    fn video_tick(&mut self,hidden:bool)->bool{
+        let enabled=self.cfg.video_cache&&!self.saver&&self.gdi;
+        if !enabled{self.video.reset();return false;}
+        self.maybe_fetch_live_weather(self.now());
+        let Some(layout)=video_wallpaper::Layout::new(self.walls.iter().map(|w|w.screen))else{return false};
+        let all_visible=self.walls.iter().all(|w|!w.paused);
+        let interacting=self.any_interacting(self.now());
+        let key=self.video_key();let hidden=hidden||self.walls.iter().all(|w|w.paused);let now=self.now();
+        self.video.tick(key,layout,enabled,hidden,all_visible,interacting,self.headless,now)
+    }
+
+    fn capture_video_frame(&mut self,now:f64){
+        let Some(bake)=self.video.bake.as_mut()else{return};
+        if !bake.due(now)||self.walls.iter().any(|w|w.paused){return;}
+        let Some(ctx)=self.ctx.as_ref()else{return};
+        let mut frame=bake.buffer();let mut pixels=self.staging.borrow_mut();
+        for wp in &self.walls{
+            let Some((_,_,pbo))=wp.out else{return};if !wp.pbo_ready{return;}
+            ctx.make_current(wp.gl_dc);let n=(wp.buf_w*wp.buf_h*4)as usize;if pixels.len()<n{pixels.resize(n,0);}
+            unsafe{ctx.gl.bind_buffer(glow::PIXEL_PACK_BUFFER,Some(pbo));ctx.gl.get_buffer_sub_data(glow::PIXEL_PACK_BUFFER,0,&mut pixels[..n]);ctx.gl.bind_buffer(glow::PIXEL_PACK_BUFFER,None);}
+            bake.layout.copy_output(&mut frame,wp.screen,wp.buf_w as usize,wp.buf_h as usize,&pixels[..n]);
+        }
+        bake.submit(frame,now);
+    }
+
     fn configure_system_monitor(&mut self, owner: HWND) {
         if self.saver || self.headless || !self.cfg.system_monitor.enabled {
             self.system_monitor = None;
@@ -1312,6 +1358,7 @@ impl App {
     }
 
     fn destroy_walls(&mut self) {
+        self.video.reset();
         if let Some(p) = self.panorama.take() {
             if let Some(ctx) = self.ctx.as_ref() {
                 ctx.make_current(self.walls.first().map(|w| w.gl_dc).unwrap_or(std::ptr::null_mut()));
@@ -1414,6 +1461,7 @@ impl App {
 
     /// Dựng lại cảnh của chủ đề hiện tại (đổi chủ đề / thông số / seed).
     fn rebuild_theme(&mut self) {
+        self.video.reset();
         let now = self.now();
         self.drop_shared();
         if let Err(e) = self.build_shared() {
@@ -1831,6 +1879,7 @@ impl App {
             ctx.make_current(wp0.gl_dc);
             if let Some(theme)=wp0.theme.as_mut() { theme.handle_click(&ctx.gl, (pt.x - pan.world.left) as f32, (pt.y - pan.world.top) as f32, now); }
             self.boost_until = now + 3_500.0;
+            self.video.reset();
             return true;
         }
         for wp in &mut self.walls {
@@ -1845,6 +1894,7 @@ impl App {
                 let (cx, cy) = ((pt.x - wp.screen.left) as f32 / wp.dpr, (pt.y - wp.screen.top) as f32 / wp.dpr);
                 if let Some(theme)=wp.theme.as_mut() { theme.handle_click(&ctx.gl, cx, cy, now); }
                 self.boost_until = now + 3_500.0;
+                self.video.reset();
                 return true;
             }
         }
@@ -1901,6 +1951,11 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if let Some(path)=arg_value(&args,"--video-engine-probe"){
+        let result=video_wallpaper::probe();let ok=result.is_ok();
+        let value=result.unwrap_or_else(|e|serde_json::json!({"pass":false,"error":e}));
+        let _=std::fs::write(path,value.to_string());if !ok{std::process::exit(1);}return;
+    }
     if let Some(path) = arg_value(&args, "--system-monitor-diagnostics") {
         let _ = system_monitor::diagnostics(std::path::Path::new(&path));
         return;
@@ -1979,6 +2034,8 @@ fn main() {
     let fps: f64 = arg_value(&args, "--fps").and_then(|s| s.parse().ok()).unwrap_or(30.0);
     let interval = 1000.0 / fps.max(1.0);
     let mut cfg = load_config(arg_value(&args, "--theme"));
+    if args.iter().any(|a|a=="--video-cache"){cfg.video_cache=true;}
+    if args.iter().any(|a|a=="--no-video-cache"){cfg.video_cache=false;}
     if let Some(mode) = arg_value(&args, "--mode") {
         if matches!(mode.as_str(), "mirror" | "independent" | "panorama") {
             cfg.mode = mode;
@@ -2088,6 +2145,7 @@ fn main() {
         staging:RefCell::new(Vec::new()),
         benchmark_gdi:headless && args.iter().any(|a|a=="--benchmark-gdi"),
         benchmark_direct_readback:headless && args.iter().any(|a|a=="--benchmark-direct-readback"),
+        video:video_wallpaper::Cache::new(),
     };
     log!("Cách hiển thị: {}", if app.gdi { "gdi (FBO -> đọc về -> StretchDIBits)" } else { "gl (SwapBuffers trực tiếp)" });
     // Khi chạy từ HKCU\...\Run, Windows có thể khởi động tiến trình trước khi
@@ -2609,6 +2667,12 @@ fn main() {
                     web::post(&serde_json::json!({"t":"systemMonitorState","systemMonitor":app.cfg.system_monitor.json()}).to_string());
                     web_changed = true;
                 }
+                "videoCache" => {
+                    app.cfg.video_cache=m.get("v").and_then(|v|v.as_bool()).unwrap_or(false);
+                    app.video.reset();
+                    web::post(&serde_json::json!({"t":"videoCacheState","v":app.cfg.video_cache}).to_string());
+                    web_changed=true;
+                }
                 "miniTools" => {
                     let old_tools = app.cfg.tools.clone();
                     let requested_tools = mini_tools::Options::from_json(&m);
@@ -2849,7 +2913,7 @@ fn main() {
             next_icons = now + 400.0;
         }
         if now >= next_fg {
-            if !saver && snapshot_dir.is_none() {
+            if !saver && !headless && snapshot_dir.is_none() {
                 if SAVER_RECONCILE_PENDING.with(|c| c.replace(false)) {
                     if let Err(e) = lock::reconcile_disabled_saver() { log!("Đồng bộ saver sau mở khóa lỗi: {e}"); }
                     lock::log_saver_state("sau mở khóa");
@@ -2869,7 +2933,7 @@ fn main() {
                 }
             }
             next_fg = now + 500.0;
-            app.release_hidden_outputs(now,hidden);
+            app.release_hidden_outputs(now,hidden||app.video.active()&&app.video.bake.is_none());
             if let Some(monitor) = app.system_monitor.as_mut() { monitor.tick(hidden); }
             if let Some(w) = app.widget.as_mut() {
                 w.set_visible(!hidden && app.cfg.widget_enabled);
@@ -2883,18 +2947,20 @@ fn main() {
             }
         }
         let scene_visible=app.walls.iter().any(|w|!w.paused);
-        let animate=!hidden && scene_visible;
+        let video_playing=app.video_tick(hidden);
+        let animate=!hidden && scene_visible&&!video_playing;
         if animate!=precise_timer {
             unsafe {if animate {timeBeginPeriod(1);}else{timeEndPeriod(1);}}
             precise_timer=animate;
         }
-        if hidden || !scene_visible {
+        if hidden || !scene_visible || video_playing {
             // Chỉ thức dậy theo nhịp kiểm tra 500 ms, không vẽ, không đọc biểu tượng
             next_frame = next_fg;
             next_icons = next_fg;
             for wp in &mut app.walls {wp.last_frame=0.0;}
         } else if now >= next_frame {
             app.render();
+            app.capture_video_frame(now);
             let cur_interval = if !saver && app.any_interacting(now) {
                 interval.min(20.0) // Adaptive FPS: 50 khung/giây mượt mà khi đang tương tác
             } else {
