@@ -42,5 +42,5 @@ void main() {
             over(color,vec3(0.87,0.96,0.93),coverage(ellipse(p-drop,vec2(0.65,1.2)))*0.33*fade*grow);
         }
     }
-    o=color;
+    o=color*uEffect.w;
 }

@@ -42,9 +42,10 @@ Phiên bản viết lại hoàn toàn bằng **Rust native (Win32 + OpenGL 3.3 q
 
 ## Cá voi trong bộ Bãi biển
 
-- Cá voi đang **tắt mặc định và chờ duyệt hình/chuyển động**. Chỉnh **Bãi biển → Chi tiết → Cá voi** từ 0–3 sau khi duyệt.
+- Cá voi tắt mặc định; chỉnh **Bãi biển → Chi tiết → Cá voi** từ 0–3 con trưởng thành. Khi đang bật, thỉnh thoảng có thêm một cá con bơi sát mẹ, kích cỡ khoảng 40–46% mẹ; cá con nổi/lặn và thở khác nhịp. Không xuất hiện khi số cá voi bằng 0.
 - Cá voi tránh bờ và khoảng trống giữa các màn hình, giữ vị trí khi click desktop. Hoạt ảnh dùng chung nhịp 30 FPS và tự dừng cùng hình nền khi bị che/khóa.
-- Dùng lưới da nhỏ nạp một lần: thân uốn theo trục đứng, đuôi có nhịp đạp/recovery, hai vây khác pha. Cú lặn xoay đầu và đuôi qua mặt nước; phần dưới nước được nhuộm màu và mờ theo độ sâu. Không có vòng lặp toàn màn, ảnh động, bộ đệm hình, tiến trình hay timer riêng cho cá voi. `--no-whales` tắt tạm trong một lần chạy, không ghi đè thiết lập đã lưu.
+- Mô hình cá voi lưng gù có đầu rộng, cuống đuôi thu nhỏ, vây ngực dài khoảng 30% thân, đuôi bản rộng, lưng xám đen và mảng trắng ở bụng/vây. Đối chiếu [NOAA](https://www.fisheries.noaa.gov/species/humpback-whale) và [Alaska Fish and Game](https://www.adfg.alaska.gov/index.cfm?adfg=humpbackwhale.printerfriendly); đây là mô phỏng cách điệu, không phải bản quét giải phẫu.
+- Lưới da dưới 18.000 đỉnh nạp một lần, thân/đuôi/vây uốn trên GPU. Khử răng cưa MSAA tối đa 4x chỉ trong vùng quanh từng con, tái sử dụng một bộ đệm 512×512 (khoảng 5 MiB ở 4x); không tăng độ phân giải toàn nền. Không có video cache, tiến trình hay timer riêng. `--no-whales` tắt tạm trong một lần chạy, không ghi đè thiết lập đã lưu.
 - `--export-whale-preview <file.json>` xuất lưới, shader và 36 giây dữ liệu mô phỏng dùng để dựng ảnh/clip trên GitHub Actions, không mở desktop và không đọc cấu hình cá nhân. Commit có nhãn `[whale-preview]` tạo artifact `whale-motion-preview` riêng để duyệt trước khi tải/cài EXE.
 - `--headless --whale-phase <giây>` giữ tư thế kiểm tra tại một thời điểm. Cờ này không có tác dụng khi chạy desktop bình thường.
 

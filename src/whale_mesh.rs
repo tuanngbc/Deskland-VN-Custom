@@ -28,8 +28,12 @@ fn surface(out:&mut Vec<f32>,rows:usize,cols:usize,point:impl Fn(usize,usize)->V
     }}
 }
 fn profile(x:f32)->(f32,f32) {
-    const KEYS:[[f32;3];10]=[[-73.0,0.8,0.7],[-61.0,3.0,2.2],[-46.0,5.7,4.0],[-25.0,12.4,7.7],
-        [0.0,17.7,10.4],[22.0,16.6,9.8],[40.0,12.8,7.4],[53.0,8.6,4.8],[61.0,3.8,2.3],[65.0,0.25,0.4]];
+    // Humpback: a robust thorax, broad rounded rostrum and slender peduncle.
+    // The anterior head is flattened vertically, never a pointed fish snout.
+    const KEYS:[[f32;3];13]=[[-73.0,1.1,0.9],[-64.0,2.3,1.9],[-49.0,4.4,3.5],
+        [-31.0,8.2,6.9],[-12.0,13.8,10.6],[8.0,16.5,11.7],[25.0,16.0,10.4],
+        [40.0,13.8,7.6],[52.0,11.3,4.9],[60.0,8.7,3.6],[65.0,5.8,2.9],
+        [68.0,2.9,1.9],[69.0,0.25,0.4]];
     let i=KEYS.windows(2).position(|k|x<=k[1][0]).unwrap_or(KEYS.len()-2);
     let u=((x-KEYS[i][0])/(KEYS[i+1][0]-KEYS[i][0])).clamp(0.0,1.0);
     let blend=|axis:usize|{
@@ -41,47 +45,109 @@ fn profile(x:f32)->(f32,f32) {
 }
 
 pub fn mesh()->Vec<f32> {
-    let mut out=Vec::with_capacity(32_000);
+    let mut out=Vec::with_capacity(140_000);
     // Fins are drawn below the body; winding/culling selects the visible skin.
     for side in [-1.0f32,1.0] {
         for part in [1.0f32,2.0] {
-            surface(&mut out,14,8,|i,j|{
-                let t=i as f32/14.0;let a=j as f32/8.0*2.0*PI;
+            surface(&mut out,20,12,|i,j|{
+                let t=i as f32/20.0;let a=j as f32/12.0*2.0*PI;
                 let (x,y,chord,z)=if part==1.0 {
-                    let x=(1.0-t).powi(2)*13.0+2.0*(1.0-t)*t*1.0+t*t*(-25.0);
-                    let y=(1.0-t).powi(2)*13.0+2.0*(1.0-t)*t*39.0+t*t*52.0;
-                    (x,y,3.6*(1.0-t)+4.0*(PI*t).sin().max(0.0).sqrt()+0.2,-3.0-t*1.5)
+                    // Root-to-tip length ~30% of total length; long rounded
+                    // flippers with a mild sweep instead of hooked sickles.
+                    let x=23.0-7.0*t-11.0*t*t;
+                    let y=13.5+42.0*t;
+                    let bumps=(t*PI*12.0).cos().max(0.0)*0.30*(PI*t).sin();
+                    (x,y,(4.7*(1.0-t)+4.0*(PI*t).sin()).max(0.15)+bumps,-3.0-t)
                 } else {
-                    (-70.0-18.0*t+8.0*(PI*t).sin(),32.0*t,
-                     2.8*(1.0-t)+6.5*(PI*t).sin().max(0.0).sqrt()+0.2,0.0)
+                    // Broad paired flukes: concave trailing margin, a central
+                    // notch and pointed tips, rather than two leaf shapes.
+                    let leading=-66.5-12.5*t.powf(1.15);
+                    let trailing=-76.0-12.0*(PI*t).sin().max(0.0).powf(0.65)-3.0*t;
+                    ((leading+trailing)*0.5,28.5*t,((leading-trailing)*0.5).max(0.12),0.0)
                 };
                 Vertex{p:[x+a.cos()*chord,y*side,z+a.sin()*0.65],
                     n:normal([a.cos()*0.65/chord,side*0.06,a.sin()]),part,side}
             });
         }
     }
-    surface(&mut out,42,16,|i,j|{
-        let x=-73.0+i as f32/42.0*138.0;let a=j as f32/16.0*2.0*PI;
+    surface(&mut out,64,24,|i,j|{
+        let x=-73.0+i as f32/64.0*142.0;let a=j as f32/24.0*2.0*PI;
         let (w,h)=profile(x);let (w0,h0)=profile(x-0.2);let (w1,h1)=profile(x+0.2);
         let dx=-(a.cos().powi(2)*(w1-w0)/w+a.sin().powi(2)*(h1-h0)/h)/0.4;
         Vertex{p:[x,a.cos()*w,a.sin()*h],n:normal([dx,a.cos()/w,a.sin()/h]),part:0.0,side:0.0}
     });
-    // A small swept dorsal fin rooted in the curved back.
-    let p=[[-29.0,0.0,8.0],[-17.0,0.0,10.0],[-25.0,0.0,17.0],[-31.0,0.0,11.0]];
+    // Low, broad-based dorsal nubbin on the hump, not a tall shark fin.
+    let p=[[-36.0,0.0,6.0],[-15.0,0.0,9.8],[-21.0,0.0,11.0],
+        [-26.0,0.0,14.3],[-28.0,0.0,14.8],[-28.7,0.0,12.6],[-32.0,0.0,9.0]];
     for side in [-1.0f32,1.0] {
         let v=|i:usize|Vertex{p:[p[i][0],side*0.5,p[i][2]],n:[0.0,side,0.1],part:3.0,side};
-        triangle(&mut out,v(0),v(1),v(2));triangle(&mut out,v(0),v(2),v(3));
+        for i in 1..p.len()-1 {triangle(&mut out,v(0),v(i),v(i+1));}
+    }
+    // Discrete head tubercles identify the species without a noisy skin texture.
+    for (x,y) in [(40.0,0.0),(47.0,0.0),(54.0,0.0),(60.0,0.0),
+        (39.0,-9.0),(48.0,-7.0),(57.0,-4.5),(39.0,9.0),(48.0,7.0),(57.0,4.5)] {
+        let (w,h)=profile(x);let z=h*(1.0-(y/w).powi(2)).max(0.0).sqrt();
+        surface(&mut out,4,8,|i,j|{
+            let a=i as f32/4.0*PI;let b=j as f32/8.0*2.0*PI;
+            let n=[a.sin()*b.cos(),a.sin()*b.sin(),a.cos()];
+            Vertex{p:[x+n[0]*0.85,y+n[1]*0.85,z+n[2]*0.65],n,part:0.0,side:0.0}
+        });
     }
     out
 }
 
-pub struct Renderer { skin:Prog,water:Prog,vao:glow::VertexArray,vbo:glow::Buffer,count:i32 }
+const AA_SIZE:i32=512;
+fn fbo(id:i32)->Option<glow::Framebuffer> {std::num::NonZeroU32::new(id as u32).map(glow::NativeFramebuffer)}
+fn texture(id:i32)->Option<glow::Texture> {std::num::NonZeroU32::new(id as u32).map(glow::NativeTexture)}
+
+struct Antialias {
+    multisample:glow::Framebuffer,resolve:glow::Framebuffer,
+    color:glow::Renderbuffer,image:glow::Texture,composite:Prog,
+}
+impl Antialias {
+    fn new(gl:&glow::Context)->Result<Self,String> {unsafe {
+        let composite=Prog::from_parts(gl,include_str!("../assets/shaders/whale-composite.vert"),include_str!("../assets/shaders/whale-composite.frag"))?;
+        let draw=gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING);
+        let read=gl.get_parameter_i32(glow::READ_FRAMEBUFFER_BINDING);
+        let old_color=gl.get_parameter_i32(glow::RENDERBUFFER_BINDING);
+        let old_image=gl.get_parameter_i32(glow::TEXTURE_BINDING_2D);
+        let multisample=gl.create_framebuffer()?;let resolve=gl.create_framebuffer()?;
+        let color=gl.create_renderbuffer()?;let image=gl.create_texture()?;
+        let samples=gl.get_parameter_i32(glow::MAX_SAMPLES).clamp(1,4);
+        gl.bind_framebuffer(glow::FRAMEBUFFER,Some(multisample));
+        gl.bind_renderbuffer(glow::RENDERBUFFER,Some(color));
+        gl.renderbuffer_storage_multisample(glow::RENDERBUFFER,samples,glow::RGBA8,AA_SIZE,AA_SIZE);
+        gl.framebuffer_renderbuffer(glow::FRAMEBUFFER,glow::COLOR_ATTACHMENT0,glow::RENDERBUFFER,Some(color));
+        let valid_ms=gl.check_framebuffer_status(glow::FRAMEBUFFER)==glow::FRAMEBUFFER_COMPLETE;
+        gl.bind_texture(glow::TEXTURE_2D,Some(image));
+        gl.tex_image_2d(glow::TEXTURE_2D,0,glow::RGBA8 as i32,AA_SIZE,AA_SIZE,0,glow::RGBA,glow::UNSIGNED_BYTE,None);
+        for p in [glow::TEXTURE_MIN_FILTER,glow::TEXTURE_MAG_FILTER] {gl.tex_parameter_i32(glow::TEXTURE_2D,p,glow::LINEAR as i32);}
+        for p in [glow::TEXTURE_WRAP_S,glow::TEXTURE_WRAP_T] {gl.tex_parameter_i32(glow::TEXTURE_2D,p,glow::CLAMP_TO_EDGE as i32);}
+        gl.bind_framebuffer(glow::FRAMEBUFFER,Some(resolve));
+        gl.framebuffer_texture_2d(glow::FRAMEBUFFER,glow::COLOR_ATTACHMENT0,glow::TEXTURE_2D,Some(image),0);
+        let valid_resolve=gl.check_framebuffer_status(glow::FRAMEBUFFER)==glow::FRAMEBUFFER_COMPLETE;
+        gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER,fbo(draw));gl.bind_framebuffer(glow::READ_FRAMEBUFFER,fbo(read));
+        gl.bind_renderbuffer(glow::RENDERBUFFER,std::num::NonZeroU32::new(old_color as u32).map(glow::NativeRenderbuffer));
+        gl.bind_texture(glow::TEXTURE_2D,texture(old_image));
+        let target=Self{multisample,resolve,color,image,composite};
+        if !valid_ms||!valid_resolve {target.destroy(gl);return Err("Bộ đệm khử răng cưa cá voi chưa hoàn chỉnh".into());}
+        crate::log!("Cá voi: khử răng cưa MSAA {samples}x, bộ đệm cục bộ {AA_SIZE}×{AA_SIZE}");
+        Ok(target)
+    }}
+    fn destroy(self,gl:&glow::Context) {unsafe {
+        gl.delete_framebuffer(self.multisample);gl.delete_framebuffer(self.resolve);
+        gl.delete_renderbuffer(self.color);gl.delete_texture(self.image);gl.delete_program(self.composite.prog);
+    }}
+}
+
+pub struct Renderer { skin:Prog,water:Prog,vao:glow::VertexArray,vbo:glow::Buffer,count:i32,aa:Antialias }
 impl Renderer {
     pub fn new(gl:&glow::Context)->Result<Self,String> {
         let skin=Prog::from_parts(gl,VERT,FRAG)?;
         let water=match Prog::from_parts(gl,WATER_VERT,WATER_FRAG) {
             Ok(p)=>p,Err(e)=>{unsafe{gl.delete_program(skin.prog)};return Err(e)}
         };
+        let aa=Antialias::new(gl)?;
         let values=mesh();
         let mut bytes=Vec::with_capacity(values.len()*4);
         for v in &values {bytes.extend(v.to_ne_bytes());}
@@ -98,34 +164,77 @@ impl Renderer {
             // empty VAO because the remaining shaders use gl_VertexID.
             let old=std::num::NonZeroU32::new(previous as u32).map(glow::NativeVertexArray);
             gl.bind_vertex_array(old);gl.bind_buffer(glow::ARRAY_BUFFER,None);
-            Ok(Self{skin,water,vao,vbo,count:(values.len()/STRIDE) as i32})
+            Ok(Self{skin,water,vao,vbo,count:(values.len()/STRIDE) as i32,aa})
         }
     }
 
     pub fn draw(&mut self,gl:&glow::Context,res:[f32;2],whale:[f32;4],motion:Motion,water:f32) {
-        if water<65.0 || motion.depth < -92.0 {return;}
+        if water<65.0 || motion.depth < -92.0 || motion.visibility<0.002 {return;}
         let (pose,stroke,fx)=motion.uniforms();
         unsafe {
             let previous=gl.get_parameter_i32(glow::VERTEX_ARRAY_BINDING);
+            let draw=gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING);
+            let read=gl.get_parameter_i32(glow::READ_FRAMEBUFFER_BINDING);
+            let mut viewport=[0;4];gl.get_parameter_i32_slice(glow::VIEWPORT,&mut viewport);
+            let mut scissor=[0;4];gl.get_parameter_i32_slice(glow::SCISSOR_BOX,&mut scissor);
+            let scissoring=gl.is_enabled(glow::SCISSOR_TEST);
+            let stencil=gl.is_enabled(glow::STENCIL_TEST);
+            let multisampling=gl.is_enabled(glow::MULTISAMPLE);
+            let mut clear=[0.0;4];gl.get_parameter_f32_slice(glow::COLOR_CLEAR_VALUE,&mut clear);
+            let side=330.0*whale[3];
+            let rect=[whale[0]-side*0.5,whale[1]-side*0.5,side,side];
+            let physical=[viewport[0] as f32+rect[0]/res[0]*viewport[2] as f32,
+                viewport[1] as f32+(1.0-(rect[1]+side)/res[1])*viewport[3] as f32,
+                side/res[0]*viewport[2] as f32,side/res[1]*viewport[3] as f32];
+            if scissoring && (physical[0]+physical[2]<=scissor[0] as f32 || physical[0]>= (scissor[0]+scissor[2]) as f32
+                || physical[1]+physical[3]<=scissor[1] as f32 || physical[1]>= (scissor[1]+scissor[3]) as f32) {return;}
+            let width=(physical[2].ceil() as i32).clamp(2,AA_SIZE);
+            let height=(physical[3].ceil() as i32).clamp(2,AA_SIZE);
+            let local=[side*0.5,side*0.5,whale[2],whale[3]];
+            gl.bind_framebuffer(glow::FRAMEBUFFER,Some(self.aa.multisample));
+            gl.viewport(0,0,width,height);gl.enable(glow::SCISSOR_TEST);gl.scissor(0,0,width,height);
+            gl.disable(glow::STENCIL_TEST);gl.enable(glow::MULTISAMPLE);
+            gl.clear_color(0.0,0.0,0.0,0.0);gl.clear(glow::COLOR_BUFFER_BIT);
             gl.enable(glow::BLEND);gl.blend_func(glow::ONE,glow::ONE_MINUS_SRC_ALPHA);
             gl.use_program(Some(self.water.prog));
-            self.water.f2(gl,"uRes",res[0],res[1]);self.water.f4v(gl,"uWhale",&whale);
+            self.water.f2(gl,"uRes",side,side);self.water.f4v(gl,"uWhale",&local);
             self.water.f4v(gl,"uPose",&pose);self.water.f4v(gl,"uEffect",&fx);
             gl.draw_arrays(glow::TRIANGLE_STRIP,0,4);
             gl.bind_vertex_array(Some(self.vao));gl.use_program(Some(self.skin.prog));
-            self.skin.f2(gl,"uRes",res[0],res[1]);self.skin.f4v(gl,"uWhale",&whale);
+            self.skin.f2(gl,"uRes",side,side);self.skin.f4v(gl,"uWhale",&local);
             self.skin.f4v(gl,"uPose",&pose);self.skin.f4v(gl,"uStroke",&stroke);
+            self.skin.f2(gl,"uDetail",motion.visibility,motion.juvenile);
             gl.enable(glow::CULL_FACE);gl.front_face(glow::CW);
             gl.draw_arrays(glow::TRIANGLES,0,self.count);
             gl.front_face(glow::CCW);gl.disable(glow::CULL_FACE);
+            gl.disable(glow::SCISSOR_TEST);
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER,Some(self.aa.multisample));
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER,Some(self.aa.resolve));
+            gl.blit_framebuffer(0,0,width,height,0,0,width,height,glow::COLOR_BUFFER_BIT,glow::NEAREST);
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER,fbo(draw));gl.bind_framebuffer(glow::READ_FRAMEBUFFER,fbo(read));
+            gl.viewport(viewport[0],viewport[1],viewport[2],viewport[3]);
+            gl.scissor(scissor[0],scissor[1],scissor[2],scissor[3]);
+            if scissoring {gl.enable(glow::SCISSOR_TEST);}
+            if stencil {gl.enable(glow::STENCIL_TEST);}
+            if !multisampling {gl.disable(glow::MULTISAMPLE);}
+            gl.clear_color(clear[0],clear[1],clear[2],clear[3]);
             let old=std::num::NonZeroU32::new(previous as u32).map(glow::NativeVertexArray);
-            gl.bind_vertex_array(old);gl.disable(glow::BLEND);gl.use_program(None);
+            gl.bind_vertex_array(old);
+            let active=gl.get_parameter_i32(glow::ACTIVE_TEXTURE) as u32;
+            gl.active_texture(glow::TEXTURE7);let old_image=gl.get_parameter_i32(glow::TEXTURE_BINDING_2D);
+            gl.bind_texture(glow::TEXTURE_2D,Some(self.aa.image));gl.use_program(Some(self.aa.composite.prog));
+            self.aa.composite.f2(gl,"uRes",res[0],res[1]);self.aa.composite.f4v(gl,"uRect",&rect);
+            self.aa.composite.f2(gl,"uUvSize",width as f32/AA_SIZE as f32,height as f32/AA_SIZE as f32);
+            self.aa.composite.i1(gl,"uImage",7);gl.draw_arrays(glow::TRIANGLE_STRIP,0,4);
+            gl.bind_texture(glow::TEXTURE_2D,texture(old_image));gl.active_texture(active);
+            gl.disable(glow::BLEND);gl.use_program(None);
         }
     }
 
     pub fn destroy(self,gl:&glow::Context) {unsafe {
         gl.delete_program(self.skin.prog);gl.delete_program(self.water.prog);
         gl.delete_buffer(self.vbo);gl.delete_vertex_array(self.vao);
+        self.aa.destroy(gl);
     }}
 }
 
@@ -146,14 +255,15 @@ pub fn export_preview(path:&std::path::Path)->Result<(),String> {
         frames.push(pod.whales.iter().map(|whale|{
             let (pose,stroke,fx)=whale.motion().uniforms();
             let mut row=vec![whale.x,whale.y,whale.heading,whale.scale];
-            row.extend(pose);row.extend(stroke);row.extend(fx);row
+            row.extend(pose);row.extend(stroke);row.extend(fx);
+            let motion=whale.motion();row.extend([motion.visibility,motion.juvenile]);row
         }).collect::<Vec<_>>());
         pod.step(1.0/fps as f32,|x,y|field.sample(&values,x,y));
     }
     let detail:Vec<_>=(0..=36*fps).map(|frame|{
         let pose=Motion::at(frame as f32/fps as f32);
         let (p,s,f)=pose.uniforms();let mut row=vec![width*0.5,height*0.56,-0.75,2.5];
-        row.extend(p);row.extend(s);row.extend(f);row
+        row.extend(p);row.extend(s);row.extend(f);row.extend([pose.visibility,pose.juvenile]);row
     }).collect();
     let (noise_size,noise_rgba)=noise.make_noise_image();
     let data=serde_json::json!({"width":width,"height":height,"fps":fps,"duration":36,
@@ -170,7 +280,7 @@ mod tests {
     use super::*;
     #[test]
     fn mesh_is_small_finite_and_has_outward_winding() {
-        let data=mesh();assert!(data.len()/STRIDE<7000);assert_eq!(data.len()%(STRIDE*3),0);
+        let data=mesh();assert!(data.len()/STRIDE<18000);assert_eq!(data.len()%(STRIDE*3),0);
         assert!(data.iter().all(|n|n.is_finite()));
         for v in data.chunks_exact(STRIDE) {
             let n=v[3..6].iter().map(|n|n*n).sum::<f32>().sqrt();assert!(n>0.95&&n<1.05);
@@ -182,5 +292,21 @@ mod tests {
             let cross=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
             assert!((0..3).map(|i|cross[i]*(a[i+3]+b[i+3]+c[i+3])).sum::<f32>()>=-0.001);
         }
+    }
+
+    #[test]
+    fn humpback_has_long_flippers_broad_flukes_and_a_rounded_head() {
+        let data=mesh();
+        let min_x=data.chunks_exact(STRIDE).map(|v|v[0]).fold(f32::INFINITY,f32::min);
+        let max_x=data.chunks_exact(STRIDE).map(|v|v[0]).fold(f32::NEG_INFINITY,f32::max);
+        let length=max_x-min_x;
+        let fin_tip=data.chunks_exact(STRIDE).filter(|v|v[6]==1.0&&v[1]>0.0)
+            .max_by(|a,b|a[1].total_cmp(&b[1])).unwrap();
+        let fin_length=(fin_tip[0]-23.0).hypot(fin_tip[1]-13.5);
+        assert!((0.25..0.33).contains(&(fin_length/length)));
+        let span=data.chunks_exact(STRIDE).filter(|v|v[6]==2.0).map(|v|v[1].abs()).fold(0.0,f32::max)*2.0;
+        assert!((0.32..0.40).contains(&(span/length)));
+        assert!(profile(60.0).0>profile(-49.0).0*1.6,"head became a pointed fish snout");
+        assert!(profile(8.0).0>profile(-64.0).0*5.0,"peduncle must be slender");
     }
 }

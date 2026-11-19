@@ -436,7 +436,7 @@ impl Theme for Beach {
 
     fn draw_overlay(&mut self, gl: &glow::Context, sh: &mut Shared, now: f64) {
         if let Some(renderer) = &mut self.whale_renderer {
-            for whale in &self.whales.whales {
+            for whale in self.whales.whales.iter().chain(self.whales.calf.iter()) {
                 let water = self.b.cur_s(whale.x,whale.y);
                 if water <= 65.0 { continue; }
                 let motion = self.whale_preview_phase.map_or_else(||whale.motion(),crate::whales::Motion::at);

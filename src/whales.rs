@@ -15,6 +15,8 @@ pub struct Motion {
     pub fin_right: f32,
     pub spray_age: f32,
     pub entry_age: f32,
+    pub visibility: f32,
+    pub juvenile: f32,
 }
 
 impl Motion {
@@ -56,13 +58,14 @@ impl Motion {
             fin_left:(age*0.54+0.7+variant).sin()*0.13,
             fin_right:(age*0.47+2.3+variant).sin()*0.12,
             spray_age:(t-5.0)/2.8,entry_age:(t-17.2)/5.0,
+            visibility:1.0,juvenile:0.0,
         }
     }
 
     pub fn uniforms(&self)->([f32;4],[f32;4],[f32;4]) {
         ([self.depth,self.pitch,self.roll,self.arch],
          [self.stroke,self.fin_left,self.fin_right,self.surface],
-         [self.spray_age,self.entry_age,self.surface,0.0])
+         [self.spray_age,self.entry_age,self.surface,self.visibility])
     }
 }
 
@@ -77,6 +80,8 @@ pub struct Whale {
     turn_rate: f32,
     speed: f32,
     output: Viewport,
+    juvenile: bool,
+    visibility: f32,
 }
 
 impl Whale {
@@ -84,25 +89,46 @@ impl Whale {
         self.motion().surface
     }
 
-    pub fn motion(&self) -> Motion { Motion::for_whale(self.age,self.variant) }
+    pub fn motion(&self) -> Motion {
+        // Nursing calves surface more often and make shallower dives. They do
+        // not share a rigid, frame-identical pose with the accompanying mother.
+        let mut motion=Motion::for_whale(self.age*if self.juvenile {1.32}else{1.0},self.variant);
+        if self.juvenile {motion.depth*=0.62;motion.pitch*=0.72;motion.juvenile=1.0;}
+        motion.visibility=self.visibility;
+        motion
+    }
 
     fn fits(&self, x: f32, y: f32) -> bool {
         let [ox, oy, w, h] = self.output;
         // Include the upright spray, tail and wake, and leave the taskbar clear.
-        x > ox + 110.0 * self.scale && x < ox + w - 110.0 * self.scale
-            && y > oy + 150.0 * self.scale && y < oy + h - TASKBAR - 100.0 * self.scale
+        // Adults reserve room for a calf on either side before turning ashore.
+        let side=if self.juvenile {110.0}else{130.0};
+        let bottom=if self.juvenile {100.0}else{120.0};
+        x > ox + side * self.scale && x < ox + w - side * self.scale
+            && y > oy + 150.0 * self.scale && y < oy + h - TASKBAR - bottom * self.scale
     }
 }
 
 pub struct Pod {
     pub whales: Vec<Whale>,
+    pub calf: Option<Whale>,
     want: usize,
     seed: u64,
+    family_wait: f32,
+    family_age: f32,
+    family_duration: f32,
+    family_parent: usize,
+    family_side: f32,
+    family_event: u64,
+    family_departing: bool,
 }
 
 impl Pod {
     pub fn new(want: usize, seed: u64) -> Self {
-        Self { whales: Vec::with_capacity(want.min(3)), want: want.min(3), seed }
+        let mut rng=Rng::new(seed^0x43414c46);
+        Self { whales: Vec::with_capacity(want.min(3)), calf:None, want: want.min(3), seed,
+            family_wait:5.0+rng.next()*5.0,family_age:0.0,family_duration:0.0,
+            family_parent:0,family_side:1.0,family_event:0,family_departing:false }
     }
 
     /// Called on shoreline commits, not on every frame. Existing positions stay
@@ -121,7 +147,7 @@ impl Pod {
                     heading: rng.next() * 2.0 * PI,
                     scale, age: 2.0 + n as f32 * 11.0,
                     variant:n as f32,turn_rate:0.0,
-                    speed: 10.0 + n as f32 * 1.6, output,
+                    speed: 10.0 + n as f32 * 1.6, output,juvenile:false,visibility:1.0,
                 };
                 if !whale.fits(whale.x, whale.y) || sample(whale.x, whale.y) < 150.0 * scale { continue; }
                 if self.whales.iter().any(|w| (w.x-whale.x).hypot(w.y-whale.y) < 240.0) { continue; }
@@ -138,6 +164,7 @@ impl Pod {
 
     pub fn step(&mut self, dt: f32, sample: impl Fn(f32, f32) -> f32) {
         let dt = dt.clamp(0.0, 0.1);
+        if dt==0.0 {return;}
         for (i, whale) in self.whales.iter_mut().enumerate() {
             // Advance only with the theme's simulation. A paused wallpaper never
             // advances an independent whale/spray clock or starts an FPS boost.
@@ -165,6 +192,70 @@ impl Pod {
                 whale.x = nx; whale.y = ny;
             }
         }
+        self.step_family(dt,&sample);
+    }
+
+    fn family_position(mother:&Whale,side:f32,age:f32)->(f32,f32) {
+        let behind=(-28.0+(age*0.27).sin()*4.0)*mother.scale;
+        let beside=(62.0+(age*0.19).sin()*3.0)*mother.scale*side;
+        (mother.x+mother.heading.cos()*behind-mother.heading.sin()*beside,
+         mother.y+mother.heading.sin()*behind+mother.heading.cos()*beside)
+    }
+
+    fn step_family(&mut self,dt:f32,sample:&impl Fn(f32,f32)->f32) {
+        if self.whales.is_empty() {return;}
+        if self.calf.is_none() {
+            self.family_wait-=dt;
+            if self.family_wait>0.0 {return;}
+            self.family_event+=1;
+            let mut rng=Rng::new(self.seed^self.family_event.wrapping_mul(0x9e3779b97f4a7c15));
+            self.family_wait=12.0; // Retry offshore if the selected coast is narrow.
+            let first=(rng.next()*self.whales.len() as f32) as usize%self.whales.len();
+            for offset in 0..self.whales.len() {
+                let parent=(first+offset)%self.whales.len();
+                let mother=&self.whales[parent];
+                let side=if rng.next()<0.5 {-1.0}else{1.0};
+                for side in [side,-side] {
+                    let (x,y)=Self::family_position(mother,side,0.0);
+                    let mut calf=mother.clone();
+                    calf.x=x;calf.y=y;calf.scale=mother.scale*(0.40+rng.next()*0.06);
+                    calf.age=0.0;calf.variant=mother.variant+0.4;
+                    calf.juvenile=true;calf.visibility=0.0;
+                    if calf.fits(x,y)&&sample(x,y)>110.0*calf.scale {
+                        self.calf=Some(calf);self.family_parent=parent;self.family_side=side;
+                        self.family_age=0.0;self.family_duration=85.0+rng.next()*55.0;
+                        self.family_departing=false;
+                        crate::log!("Bãi biển: cặp cá voi mẹ–con xuất hiện, cá con {:.0}% kích cỡ mẹ",self.calf.as_ref().unwrap().scale/mother.scale*100.0);
+                        return;
+                    }
+                }
+            }
+            return;
+        }
+        self.family_age+=dt;
+        if !self.family_departing && self.family_age>=self.family_duration
+            && self.calf.as_ref().unwrap().motion().depth < -35.0 {
+            self.family_departing=true;self.family_duration=self.family_age+6.0;
+        }
+        if self.family_departing && self.family_age>=self.family_duration {
+            self.calf=None;
+            let mut rng=Rng::new(self.seed^self.family_event.wrapping_mul(0x517cc1b727220a95));
+            self.family_wait=75.0+rng.next()*105.0;
+            return;
+        }
+        let mother=&self.whales[self.family_parent];
+        let (tx,ty)=Self::family_position(mother,self.family_side,self.family_age);
+        let calf=self.calf.as_mut().unwrap();
+        let blend=1.0-(-dt*1.15).exp();
+        let (nx,ny)=(calf.x+(tx-calf.x)*blend,calf.y+(ty-calf.y)*blend);
+        if calf.fits(nx,ny)&&sample(nx,ny)>105.0*calf.scale {calf.x=nx;calf.y=ny;}
+        let angle=mother.heading-calf.heading;
+        calf.heading+=angle.sin().atan2(angle.cos())*(1.0-(-dt*1.4).exp());
+        calf.age+=dt;
+        let separation=(calf.x-tx).hypot(calf.y-ty);
+        calf.visibility=sstep(0.0,4.0,self.family_age)
+            *if self.family_departing {1.0-sstep(self.family_duration-6.0,self.family_duration,self.family_age)}else{1.0}
+            *(1.0-sstep(45.0,100.0,separation));
     }
 }
 
@@ -185,6 +276,10 @@ mod tests {
             for whale in &pod.whales {
                 assert!(whale.fits(whale.x,whale.y));
                 assert!(sea(whale.x,whale.y)>105.0*whale.scale);
+            }
+            if let Some(calf)=&pod.calf {
+                assert!(calf.fits(calf.x,calf.y));
+                assert!(sea(calf.x,calf.y)>105.0*calf.scale);
             }
         }
     }
@@ -261,5 +356,53 @@ mod tests {
             assert!((current.heading-previous.heading).abs()<0.006);
             previous=current.clone();
         }
+    }
+
+    #[test]
+    fn calf_follows_a_mother_with_smooth_appearances_and_freezes_when_paused() {
+        let mut pod=Pod::new(3,12345);
+        pod.populate(&[[0.0,0.0,2560.0,1440.0]],|_,_|999.0);
+        let mut previous:Option<(u64,Whale)>=None;
+        let mut visible=0;
+        for _ in 0..12_000 {
+            pod.step(1.0/30.0,|_,_|999.0);
+            if let Some(calf)=&pod.calf {
+                let mother=&pod.whales[pod.family_parent];
+                assert!((0.39..0.47).contains(&(calf.scale/mother.scale)));
+                assert!((calf.x-mother.x).hypot(calf.y-mother.y)<120.0*mother.scale);
+                assert!(calf.fits(calf.x,calf.y));
+                assert!(calf.motion().juvenile==1.0);
+                assert!(calf.motion().depth>=-60.0);
+                if calf.visibility>0.9 {visible+=1;}
+                if let Some((event,old))=&previous {
+                    if *event==pod.family_event {
+                        assert!((calf.x-old.x).hypot(calf.y-old.y)<3.0,"calf teleported");
+                        assert!((calf.visibility-old.visibility).abs()<0.03,"calf popped in/out");
+                    }
+                }
+                previous=Some((pod.family_event,calf.clone()));
+            } else {previous=None;}
+        }
+        assert!(visible>500);assert!(pod.family_event>=2);
+        let frozen=(pod.whales.clone(),pod.calf.clone(),pod.family_age,pod.family_wait);
+        pod.step(0.0,|_,_|999.0);
+        assert_eq!(frozen,(pod.whales.clone(),pod.calf.clone(),pod.family_age,pod.family_wait));
+        let mut empty=Pod::new(0,17);
+        for _ in 0..1000 {empty.step(0.1,|_,_|999.0);}
+        assert!(empty.calf.is_none());
+    }
+
+    #[test]
+    fn mother_selection_and_appearance_timing_vary_with_scene_seed() {
+        let mut parents=std::collections::BTreeSet::new();
+        let mut times=std::collections::BTreeSet::new();
+        for seed in 1..20 {
+            let mut pod=Pod::new(3,seed);
+            pod.populate(&[[0.0,0.0,2560.0,1440.0]],|_,_|999.0);
+            times.insert((pod.family_wait*10.0) as u32);
+            for _ in 0..150 {pod.step(0.1,|_,_|999.0);}
+            assert!(pod.calf.is_some());parents.insert(pod.family_parent);
+        }
+        assert!(parents.len()>=2);assert!(times.len()>=10);
     }
 }

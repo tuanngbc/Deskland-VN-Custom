@@ -59,7 +59,7 @@ function rowAt(t,rows){const f=Math.max(0,Math.min(t*D.fps,rows.length-1));const
 function frameAt(t){const f=Math.max(0,Math.min(t*D.fps,D.frames.length-1));const i=Math.floor(f),j=Math.min(i+1,D.frames.length-1),u=f-i;return D.frames[i].map((row,n)=>row.map((v,k)=>v+(D.frames[j][n][k]-v)*u));}
 function actor(row){const whale=row.slice(0,4),pose=row.slice(4,8),stroke=row.slice(8,12),effect=row.slice(12,16);
  gl.bindVertexArray(empty);gl.useProgram(water);uniform(water,'uRes',[D.width,D.height]);uniform(water,'uWhale',whale);uniform(water,'uPose',pose);uniform(water,'uEffect',effect);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
- gl.bindVertexArray(mesh);gl.useProgram(skin);uniform(skin,'uRes',[D.width,D.height]);uniform(skin,'uWhale',whale);uniform(skin,'uPose',pose);uniform(skin,'uStroke',stroke);gl.enable(gl.CULL_FACE);gl.frontFace(gl.CW);gl.drawArrays(gl.TRIANGLES,0,count);gl.frontFace(gl.CCW);gl.disable(gl.CULL_FACE);
+ gl.bindVertexArray(mesh);gl.useProgram(skin);uniform(skin,'uRes',[D.width,D.height]);uniform(skin,'uWhale',whale);uniform(skin,'uPose',pose);uniform(skin,'uStroke',stroke);uniform(skin,'uDetail',row.slice(16,18));gl.enable(gl.CULL_FACE);gl.frontFace(gl.CW);gl.drawArrays(gl.TRIANGLES,0,count);gl.frontFace(gl.CCW);gl.disable(gl.CULL_FACE);
 }
 window.renderAt=function(t){position=Math.min(36,Math.max(0,t));gl.viewport(0,0,canvas.width,canvas.height);gl.bindVertexArray(empty);gl.disable(gl.BLEND);gl.useProgram(backdropProgram);uniform(backdropProgram,'uImage',2,true);uniform(backdropProgram,'uOutput',[canvas.width,canvas.height]);gl.drawArrays(gl.TRIANGLES,0,3);gl.enable(gl.BLEND);gl.blendFunc(gl.ONE,gl.ONE_MINUS_SRC_ALPHA);const rows=detail?[rowAt(position,D.detail)]:frameAt(position);for(const row of rows)actor(row);gl.disable(gl.BLEND);const error=gl.getError();if(error!==gl.NO_ERROR)throw Error('WebGL error '+error);document.getElementById('seek').value=position;document.getElementById('time').textContent='0:'+Math.floor(position).toString().padStart(2,'0');document.getElementById('stage').textContent=detail?(position<4?'Nổi lên':position<8?'Nổi và phun nước':position<12?'Lướt và lấy đà':position<16?'Cong lưng, chúi xuống':position<20?'Nâng đuôi, lặn sâu':position<29?'Bơi dưới mặt nước':'Trở lên mặt nước'):'Ba con bơi lệch nhịp';return rows;};
 window.setView=function(view){detail=view==='detail';document.getElementById('detail').setAttribute('aria-pressed',detail);document.getElementById('wide').setAttribute('aria-pressed',!detail);window.renderAt(position);};
@@ -79,7 +79,7 @@ fs.writeFileSync(htmlPath,html.replace('__DATA__',JSON.stringify(data).replaceAl
   const page=await context.newPage();page.on('pageerror',e=>errors.push(String(e)));
   await page.goto(pathToFileURL(htmlPath).href);await page.waitForFunction(()=>window.previewReady);
   await page.evaluate(()=>window.pausePreview());
-  const readiness=await page.evaluate(()=>window.previewReady);assert.equal(readiness.actors,3);assert(readiness.vertices<7000);
+  const readiness=await page.evaluate(()=>window.previewReady);assert.equal(readiness.actors,3);assert(readiness.vertices<18000);
   for(const [label,time] of [['surface',6],['arch',12.8],['flukes',16.5],['entry',19.4],['deep',25]]){
    await page.evaluate(t=>window.renderAt(t),time);await page.screenshot({path:path.join(output,'whale-'+label+'.png')});
   }
