@@ -21,6 +21,7 @@ pub struct Params {
     pub kayaks: f32,
     pub birds: f32,
     pub palms: f32,
+    pub whales: f32,
 }
 
 impl Params {
@@ -40,6 +41,7 @@ impl Params {
             kayaks: g("kayaks", 2.0),
             birds: g("birds", 3.0),
             palms: g("palms", 4.0).clamp(0.0, 10.0),
+            whales: g("whales", 3.0).clamp(0.0, 3.0),
         }
     }
 }
@@ -79,6 +81,8 @@ pub struct Beach {
     kayak_target: Option<(f32, f32, f32)>,
     t0: f64,
     palms: Vec<PalmPlacement>,
+    whales: crate::whales::Pod,
+    whale_program: Option<Prog>,
 }
 
 fn turn_toward(h: f32, target: f32, rate: f32) -> f32 {
@@ -89,6 +93,14 @@ fn turn_toward(h: f32, target: f32, rate: f32) -> f32 {
 
 impl Beach {
     pub fn new(gl: &glow::Context, w: f32, h: f32, buf_w: i32, buf_h: i32, scale: f32, seed: i32, p: Params, rng_seed: u64, now: f64) -> Self {
+        // Runtime A/B switch does not change or save the user's whale setting.
+        let count = if std::env::args().any(|a| a == "--no-whales") { 0 } else { p.whales.round() as usize };
+        let whale_program = if count > 0 {
+            match Prog::from_parts(gl, crate::whales::VERT, crate::whales::FRAG) {
+                Ok(program) => Some(program),
+                Err(error) => { crate::log!("Không thể vẽ cá voi: {error}"); None }
+            }
+        } else { None };
         let mut s = Beach {
             b: Base::new(gl, w, h, buf_w, buf_h, scale, seed),
             p,
@@ -100,6 +112,8 @@ impl Beach {
             kayak_target: None,
             t0: now,
             palms: Vec::new(),
+            whales: crate::whales::Pod::new(if whale_program.is_some() { count } else { 0 }, seed as u64 ^ 0x5748414c45),
+            whale_program,
         };
         // startHostedMode(): icons = []; commit(true); syncBirds(false)
         s.commit(gl, true, now);
@@ -408,9 +422,24 @@ impl Theme for Beach {
             self.b.cur_mix = 0.0;
         }
         self.sync_palms();
+        let b = &self.b;
+        self.whales.populate(&b.viewports, |x,y| b.target_s(x,y));
+        if first { crate::log!("Bãi biển: {} cá voi trên vùng biển nhìn thấy", self.whales.whales.len()); }
     }
 
     fn draw_overlay(&mut self, gl: &glow::Context, sh: &mut Shared, now: f64) {
+        if let Some(program) = &mut self.whale_program {
+            unsafe { gl.enable(glow::BLEND); gl.blend_func(glow::ONE,glow::ONE_MINUS_SRC_ALPHA); gl.use_program(Some(program.prog)); }
+            program.f2(gl,"uRes",self.b.w,self.b.h);
+            for whale in &self.whales.whales {
+                let water = self.b.cur_s(whale.x,whale.y);
+                if water <= 65.0 { continue; }
+                program.f4v(gl,"uWhale",&[whale.x,whale.y,whale.heading,whale.scale]);
+                program.f4v(gl,"uAnim",&[whale.age*1.6,whale.surface(),whale.spray_age(),water]);
+                unsafe { gl.draw_arrays(glow::TRIANGLE_STRIP,0,4); }
+            }
+            unsafe { gl.use_program(None); gl.disable(glow::BLEND); }
+        }
         for p in &self.palms { draw_palm(gl, sh, self.b.w, self.b.h, p.x, p.y, p.scale, p.variant, p.mirror, 1.0, now); }
     }
 
@@ -432,6 +461,8 @@ impl Theme for Beach {
         }
         self.step_kayaks(dt);
         self.step_birds(dt);
+        let b = &self.b;
+        self.whales.step(dt, |x,y| b.cur_s(x,y));
         self.draw(gl, sh, now);
     }
 
@@ -471,6 +502,7 @@ impl Theme for Beach {
     }
 
     fn destroy(&mut self, gl: &glow::Context) {
+        if let Some(program) = self.whale_program.take() { unsafe { gl.delete_program(program.prog); } }
         self.b.destroy(gl);
     }
 

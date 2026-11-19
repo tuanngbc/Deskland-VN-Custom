@@ -402,6 +402,11 @@
           "label": "Chim biển",
           "hint": "Những chú hải âu chao liệng trên bầu trời biển",
           "unit": "con"
+        },
+        "whales": {
+          "label": "Cá voi",
+          "hint": "Bơi ngoài khơi, nổi lên và phun nước luân phiên; đặt 0 để tắt",
+          "unit": "con"
         }
       }
     },

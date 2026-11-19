@@ -40,6 +40,12 @@ Phiên bản viết lại hoàn toàn bằng **Rust native (Win32 + OpenGL 3.3 q
 - `--legacy-panorama-post` bật lại cắt/hậu kỳ riêng để đối chiếu cùng một EXE. `--headless --mode panorama --benchmark-panorama-post <file.json> --run-seconds 1` đo thời gian GPU riêng bước cắt/hậu kỳ với cùng khung hình, luân phiên hai đường; số này không phải GPU tổng của ứng dụng hoặc DWM. Không tạo bộ đo hay buffer đo trong quá trình sử dụng bình thường.
 - Cơ chế cache video thử nghiệm đã được gỡ vì không cải thiện tải trên máy kiểm thử. Không tự tạo thêm video cache.
 
+## Cá voi trong bộ Bãi biển
+
+- Mặc định có 3 cá voi bơi ở vùng nước ngoài khơi, nổi/lặn và phun nước lệch nhịp. Chỉnh **Bãi biển → Chi tiết → Cá voi** từ 0–3; đặt 0 để tắt.
+- Cá voi tránh bờ và khoảng trống giữa các màn hình, giữ vị trí khi click desktop. Hoạt ảnh dùng chung nhịp 30 FPS và tự dừng cùng hình nền khi bị che/khóa.
+- Chỉ vẽ tối đa 3 quad nhỏ, không thêm vòng lặp vào shader toàn màn, texture, bộ đệm hình, tiến trình hay timer riêng. `--no-whales` tắt tạm trong một lần chạy để đo đối chiếu, không ghi đè thiết lập đã lưu.
+
 ## Chụp màn hình và quay desktop
 
 - **Ctrl+Shift+S:** kéo chọn vùng chụp; Space chọn cả màn hình đang trỏ chuột; Esc hủy. Sau khi chọn, trình sửa ảnh mở ngay: cắt, mũi tên, khung, bút, chữ, số bước, pixel và tô kín. Enter copy rồi đóng; Ctrl+C copy, Ctrl+S lưu PNG/JPG, Ctrl+Z/Y hoàn tác/làm lại. Có nút ghim trên cùng.

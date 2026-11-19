@@ -7,6 +7,7 @@
 mod desktop;
 mod engine;
 mod palm_layout;
+mod whales;
 mod solar;
 mod lock;
 mod settings;
