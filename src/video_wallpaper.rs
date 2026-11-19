@@ -93,7 +93,8 @@ impl Player {
             let base=factory.CreateInstance(MF_MEDIA_ENGINE_FORCEMUTE.0 as u32,&attrs)?;
             let engine:IMFMediaEngineEx=base.cast()?;
             engine.SetLoop(true)?;engine.SetMuted(true)?;engine.SetAutoPlay(false)?;
-            let device:IDCompositionDevice=DCompositionCreateDevice(None::<&windows::Win32::Graphics::Dxgi::IDXGIDevice>)?;
+            let dxgi:windows::Win32::Graphics::Dxgi::IDXGIDevice=gpu.cast()?;
+            let device:IDCompositionDevice=DCompositionCreateDevice(&dxgi)?;
             let target=device.CreateTargetForHwnd(windows::Win32::Foundation::HWND(hwnd),true)?;
             engine.SetSource(&BSTR::from(path.to_string_lossy().as_ref()))?;
             Ok((engine,device,target,loaded,error))
@@ -151,7 +152,7 @@ unsafe fn sample(bytes:&[u8],index:usize)->windows::core::Result<IMFSample>{
 fn nv12(bgra:&[u8],layout:Layout,out:&mut[u8]){crate::mini_tools::recorder::nv12(bgra,layout.width,layout.height,out);}
 
 pub struct Bake {
-    pub key:String,pub layout:Layout,pub captured:usize,pub next:f64,
+    pub key:String,pub layout:Layout,pub captured:usize,pub next:f64,pub start:f64,
     input:Option<mpsc::SyncSender<Vec<u8>>>,recycle:mpsc::Receiver<Vec<u8>>,
     result:mpsc::Receiver<Result<PathBuf,String>>,cancel:Arc<AtomicBool>,pub path:PathBuf,
 }
@@ -163,7 +164,7 @@ impl Bake {
                 .unwrap_or_else(|_|Err("Bộ tạo video nền dừng đột ngột".into()));
             if result.is_err(){let _=std::fs::remove_file(&file);}let _=done_tx.send(result.map(|_|file));
         });
-        Self{key,layout,captured:0,next:now,input:Some(tx),recycle:back_rx,result:done_rx,cancel,path}
+        Self{key,layout,captured:0,next:now,start:now,input:Some(tx),recycle:back_rx,result:done_rx,cancel,path}
     }
     pub fn buffer(&self)->Vec<u8>{self.recycle.try_recv().unwrap_or_else(|_|vec![0;self.layout.bytes()])}
     pub fn submit(&mut self,frame:Vec<u8>,now:f64){
@@ -232,11 +233,11 @@ impl Cache {
         self.key.clear();self.player_key.clear();self.tried_disk=true;self.failed=false;
     }
     pub fn active(&self)->bool{self.player.as_ref().is_some_and(Player::ready)}
-    pub fn tick(&mut self,key:String,layout:Layout,enabled:bool,hidden:bool,all_visible:bool,interacting:bool,headless:bool,now:f64)->bool{
+    pub fn tick(&mut self,key:String,layout:Layout,enabled:bool,hidden:bool,any_visible:bool,interacting:bool,headless:bool,now:f64)->bool{
         if !enabled||interacting {
             self.reset();self.stable_at=now+2000.0;
         }else if key!=self.key {
-            self.key=key;self.stable_at=now+2000.0;self.failed=false;
+            self.key=key;self.stable_at=now+2000.0;
             if let Some(b)=self.bake.as_mut(){if b.key!=self.key{b.cancel();}}
         }
         // A cancelled worker retains its filename until it actually exits.
@@ -270,10 +271,10 @@ impl Cache {
         if let Some(p)=self.player.as_mut(){
             if let Err(e)=p.tick(hidden,headless){crate::log!("Video nền, khôi phục dựng cảnh: {e}");self.player=None;self.failed=true;}
         }
-        // Only bake while all monitors are visible: no waking a covered output
-        // or filling half a panorama with uninitialised pixels. A valid existing
-        // clip remains usable with one covered monitor.
-        if enabled&&!hidden&&all_visible&&!interacting&&!self.failed&&now>=self.stable_at&&self.bake.is_none(){
+        // The brief bake renders all outputs into the atlas, even when an app
+        // covers one monitor. It samples only our own FBOs. If no wallpaper is
+        // visible the producer sleeps and the bounded encoder queue blocks.
+        if enabled&&!hidden&&any_visible&&!interacting&&!self.failed&&now>=self.stable_at&&self.bake.is_none(){
             let cached=self.player.is_some()&&self.player_key==self.key;
             if !cached {
                 if let Err(e)=std::fs::create_dir_all(&self.dir){crate::log!("Thư mục video nền: {e}");self.failed=true;}else{

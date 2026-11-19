@@ -7,7 +7,7 @@ Phiên bản viết lại hoàn toàn bằng **Rust native (Win32 + OpenGL 3.3 q
 ## Điểm nổi bật của bản Rust Native
 
 1. **Tiến trình nền gọn, tiện ích chạy khi cần:**
-   - Không nuôi trình duyệt ngầm khi chạy hình nền: chỉ **1 tiến trình** (~65–98 MB Private RAM tùy độ phân giải & số màn hình), giảm **~6–8 lần RAM** so với bản C# + WebView2 (~11 tiến trình, ~620–790 MB RAM).
+   - Không nuôi trình duyệt ngầm khi chạy hình nền: một tiến trình native. RAM thực tế phụ thuộc chủ đề, số màn hình, driver và chế độ phát video; không áp dụng một mức RAM cố định cho mọi máy.
    - Một ngữ cảnh OpenGL 3.3 dùng chung cho mọi màn hình; biên dịch shader & khởi tạo khung hình đầu tiên chỉ mất **~350–480 ms**.
 2. **Đầy đủ 16 chủ đề thích ứng biểu tượng + Tương tác Click chuột riêng biệt:**
    - Tự động đọc vị trí biểu tượng màn hình nền (`SysListView32`), dựng trường khoảng cách (SDF) trên CPU và uốn lượn bờ biển, đồng cỏ, rạn cát, tán rừng, hàng rào sân vận động... ôm quanh các nhóm icon theo thời gian thực.
@@ -22,13 +22,22 @@ Phiên bản viết lại hoàn toàn bằng **Rust native (Win32 + OpenGL 3.3 q
    - Không hook bàn phím mức thấp, không chặn `Win+L`, không lưu/kiểm mã PIN tự chế.
    - Hỗ trợ khóa ngay (`LockWorkStation()`), trình bảo vệ màn hình cảnh động bảo mật (`tuanpc-desk.scr` với `ScreenSaverIsSecure=1`), phím tắt `Ctrl+Alt+L` và tự động đồng bộ cảnh hiện tại làm ảnh nền màn khóa Windows.
    - Tự động phát hiện và cho phép khôi phục lại `Win+L` nếu bản C# cũ từng ghi `DisableLockWorkstation=1`.
-6. **Tiết kiệm năng lượng tuyệt đối (`0% CPU` khi khuất hoặc khóa máy):**
+6. **Giảm tải khi nền bị che hoặc khóa máy:**
    - Tự động tạm ngừng vẽ khi có cửa sổ phóng to / toàn màn hình che khuất màn hình nền, khi phiên Windows đang khóa (`WTSRegisterSessionNotification`), ở màn hình `Winlogon` / UAC, hoặc khi trình bảo vệ màn hình đang chạy.
 7. **Biểu tượng ứng dụng nhúng sẵn & Menu Khay hệ thống tinh gọn:**
    - Nhúng trực tiếp icon đa độ phân giải (`16×16` đến `256×256`) và `VERSIONINFO` vào `tuanpc-desk.exe` qua `app.rc` + `build.rs` (hiển thị đồng bộ trên Explorer, Taskbar, Khay hệ thống và thanh tiêu đề Cài đặt).
    - Menu chuột phải ở khay hệ thống gọn gàng: chỉ hiển thị chủ đề đang chọn (`✓ Chủ đề: <Tên chủ đề>`) cùng các tác vụ nhanh, việc đổi chủ đề và tinh chỉnh chuyên sâu tập trung tại cửa sổ **Cài đặt…**.
 
 ---
+
+## Phát cảnh bằng video phần cứng
+
+- Bật tại **Cài đặt → Hệ thống → Hiệu suất hình nền**. Cảnh ổn định được tạo thành một video H.264 khoảng 12 giây, 24 FPS, rồi phát vòng bằng Media Foundation / D3D11 / DirectComposition có sẵn trên Windows. Khi phát, ngừng toàn bộ đường dựng OpenGL và đọc khung về RAM. Không cần mpv, codec ngoài hoặc tiến trình trình duyệt.
+- Một video bao gồm bố cục thật của các màn hình; panorama dùng chung một timeline. Đồng hồ và thống kê taskbar tiếp tục cập nhật trực tiếp. Đổi chủ đề/thông số/bố cục icon hoặc thời tiết sẽ tạo lại cache; ánh sáng và bóng theo giờ cập nhật theo nhịp 5 phút. Tương tác chuột trở về dựng trực tiếp và tạo lại video sau khi tương tác kết thúc.
+- Cache chỉ lấy ảnh từ framebuffer của hình nền, không quay các ứng dụng hoặc nội dung desktop. Tạo lần đầu mất khoảng 20 giây khi nền đang hiển thị; lần khởi động sau có thể dùng lại cache còn phù hợp. Trong lúc tạo cache, CPU/GPU/RAM tăng tạm thời. Cuối clip có đoạn trộn ngắn để nối vòng.
+- Hai tệp `scene-0.mp4`, `scene-1.mp4` tại `%USERPROFILE%\.deskland-rs\video-cache`, tối đa 32 MB/tệp (64 MB tổng). Hàng đợi mã hóa chỉ giữ một khung; phần trộn vòng tạm giữ tối đa 48 MB. Không tạo thêm các bản build.
+- Khi cả hai nền bị che hoặc phiên bị khóa, video tạm dừng. Nếu phần phát video gặp lỗi, ứng dụng tiếp tục dựng trực tiếp. GPU tổng trên taskbar gồm cả DWM và ứng dụng khác; hãy đo riêng tiến trình khi so sánh.
+- Chẩn đoán không sửa cài đặt: `--video-engine-probe <file.json>` kiểm tra mã hóa, giải mã bằng thiết bị phần cứng, phát lặp và tạm dừng. `--video-cache` / `--no-video-cache` có thể dùng để đối chiếu hai chế độ.
 
 ## Chụp màn hình và quay desktop
 

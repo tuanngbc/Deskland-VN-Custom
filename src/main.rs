@@ -625,7 +625,7 @@ fn load_config(cli_theme: Option<String>) -> Config {
         lock_sync: root.get("lockSyncWin").and_then(|v| v.as_bool()).unwrap_or(true),
         lang,
         interactions_enabled,
-        video_cache:root.get("videoCache").and_then(|v|v.as_bool()).unwrap_or(false),
+        video_cache:root.get("videoCache").and_then(|v|v.as_bool()).unwrap_or(true),
         widget_enabled: widget.and_then(|v| v.get("enabled")).and_then(|v| v.as_bool()).unwrap_or(true),
         widget_locked: widget.and_then(|v| v.get("locked")).and_then(|v| v.as_bool()).unwrap_or(true),
         widget_x: widget.and_then(|v| v.get("x")).and_then(|v| v.as_i64()).map(|v| v as i32).unwrap_or(-1),
@@ -955,10 +955,10 @@ impl App {
         if !enabled{self.video.reset();return false;}
         self.maybe_fetch_live_weather(self.now());
         let Some(layout)=video_wallpaper::Layout::new(self.walls.iter().map(|w|w.screen))else{return false};
-        let all_visible=self.walls.iter().all(|w|!w.paused);
+        let any_visible=self.walls.iter().any(|w|!w.paused);
         let interacting=self.any_interacting(self.now());
         let key=self.video_key();let hidden=hidden||self.walls.iter().all(|w|w.paused);let now=self.now();
-        self.video.tick(key,layout,enabled,hidden,all_visible,interacting,self.headless,now)
+        self.video.tick(key,layout,enabled,hidden,any_visible,interacting,self.headless,now)
     }
 
     fn capture_video_frame(&mut self,now:f64){
@@ -1620,8 +1620,10 @@ impl App {
             for wp in &mut self.walls {wp.last_frame=0.0;}
             return;
         };
-        let now = self.now();
-        self.maybe_fetch_live_weather(now);
+        // Encode a fixed simulation cadence even if the encoder temporarily
+        // applies backpressure. A slow bake must not produce sped-up playback.
+        let now = self.video.bake.as_ref().map_or_else(||self.now(),|b|b.start+b.captured as f64*1000.0/video_wallpaper::FPS as f64);
+        self.maybe_fetch_live_weather(self.now());
         let t0 = Instant::now();
         // Solar angles and weather change slowly; don't recalculate 30 times/s.
         if now >= self.environment_update_at {
@@ -2300,7 +2302,7 @@ fn main() {
         if benchmark_until.is_some_and(|t|app.now()>=t) {break 'outer;}
         let click = PENDING_CLICK.with(|c| c.take());
         if let Some((x, y)) = click {
-            if !saver && INTERACTIONS_ENABLED.with(|c| c.get()) && app.handle_click(x, y) {
+            if !saver && !headless && INTERACTIONS_ENABLED.with(|c| c.get()) && app.handle_click(x, y) {
                 next_frame = app.now();
             }
         }
@@ -2933,7 +2935,7 @@ fn main() {
                 }
             }
             next_fg = now + 500.0;
-            app.release_hidden_outputs(now,hidden||app.video.active()&&app.video.bake.is_none());
+            if hidden||app.video.bake.is_none(){app.release_hidden_outputs(now,hidden||app.video.active());}
             if let Some(monitor) = app.system_monitor.as_mut() { monitor.tick(hidden); }
             if let Some(w) = app.widget.as_mut() {
                 w.set_visible(!hidden && app.cfg.widget_enabled);
@@ -2959,8 +2961,11 @@ fn main() {
             next_icons = next_fg;
             for wp in &mut app.walls {wp.last_frame=0.0;}
         } else if now >= next_frame {
+            let saved_pause=app.video.bake.as_ref().map(|_|app.walls.iter().map(|w|w.paused).collect::<Vec<_>>());
+            if saved_pause.is_some(){for wp in &mut app.walls{wp.paused=false;}}
             app.render();
             app.capture_video_frame(now);
+            if let Some(flags)=saved_pause{for(wp,paused)in app.walls.iter_mut().zip(flags){wp.paused=paused;}}
             let cur_interval = if !saver && app.any_interacting(now) {
                 interval.min(20.0) // Adaptive FPS: 50 khung/giây mượt mà khi đang tương tác
             } else {
