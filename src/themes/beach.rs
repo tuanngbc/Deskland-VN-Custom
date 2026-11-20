@@ -21,7 +21,6 @@ pub struct Params {
     pub kayaks: f32,
     pub birds: f32,
     pub palms: f32,
-    pub whales: f32,
 }
 
 impl Params {
@@ -41,7 +40,6 @@ impl Params {
             kayaks: g("kayaks", 2.0),
             birds: g("birds", 3.0),
             palms: g("palms", 4.0).clamp(0.0, 10.0),
-            whales: g("whales", 0.0).clamp(0.0, 3.0),
         }
     }
 }
@@ -81,9 +79,6 @@ pub struct Beach {
     kayak_target: Option<(f32, f32, f32)>,
     t0: f64,
     palms: Vec<PalmPlacement>,
-    whales: crate::whales::Pod,
-    whale_renderer: Option<crate::whale_mesh::Renderer>,
-    whale_preview_phase: Option<f32>,
 }
 
 fn turn_toward(h: f32, target: f32, rate: f32) -> f32 {
@@ -94,19 +89,6 @@ fn turn_toward(h: f32, target: f32, rate: f32) -> f32 {
 
 impl Beach {
     pub fn new(gl: &glow::Context, w: f32, h: f32, buf_w: i32, buf_h: i32, scale: f32, seed: i32, p: Params, rng_seed: u64, now: f64) -> Self {
-        // Runtime A/B switch does not change or save the user's whale setting.
-        let count = if std::env::args().any(|a| a == "--no-whales") { 0 } else { p.whales.round() as usize };
-        let args: Vec<String> = std::env::args().collect();
-        let whale_preview_phase = args.iter().any(|a| a == "--headless").then(|| {
-            args.windows(2).find(|a| a[0] == "--whale-phase")
-                .and_then(|a| a[1].parse::<f32>().ok()).filter(|v| v.is_finite())
-        }).flatten();
-        let whale_renderer = if count > 0 {
-            match crate::whale_mesh::Renderer::new(gl) {
-                Ok(program) => Some(program),
-                Err(error) => { crate::log!("Không thể vẽ cá voi: {error}"); None }
-            }
-        } else { None };
         let mut s = Beach {
             b: Base::new(gl, w, h, buf_w, buf_h, scale, seed),
             p,
@@ -118,9 +100,6 @@ impl Beach {
             kayak_target: None,
             t0: now,
             palms: Vec::new(),
-            whales: crate::whales::Pod::new(if whale_renderer.is_some() { count } else { 0 }, seed as u64 ^ 0x5748414c45),
-            whale_renderer,
-            whale_preview_phase,
         };
         // startHostedMode(): icons = []; commit(true); syncBirds(false)
         s.commit(gl, true, now);
@@ -429,20 +408,9 @@ impl Theme for Beach {
             self.b.cur_mix = 0.0;
         }
         self.sync_palms();
-        let b = &self.b;
-        self.whales.populate(&b.viewports, |x,y| b.target_s(x,y));
-        if first { crate::log!("Bãi biển: {} cá voi trên vùng biển nhìn thấy", self.whales.whales.len()); }
     }
 
     fn draw_overlay(&mut self, gl: &glow::Context, sh: &mut Shared, now: f64) {
-        if let Some(renderer) = &mut self.whale_renderer {
-            for whale in self.whales.whales.iter().chain(self.whales.calf.iter()) {
-                let water = self.b.cur_s(whale.x,whale.y);
-                if water <= 65.0 { continue; }
-                let motion = self.whale_preview_phase.map_or_else(||whale.motion(),crate::whales::Motion::at);
-                renderer.draw(gl,[self.b.w,self.b.h],[whale.x,whale.y,whale.heading,whale.scale],motion,water);
-            }
-        }
         for p in &self.palms { draw_palm(gl, sh, self.b.w, self.b.h, p.x, p.y, p.scale, p.variant, p.mirror, 1.0, now); }
     }
 
@@ -464,8 +432,6 @@ impl Theme for Beach {
         }
         self.step_kayaks(dt);
         self.step_birds(dt);
-        let b = &self.b;
-        self.whales.step(dt, |x,y| b.cur_s(x,y));
         self.draw(gl, sh, now);
     }
 
@@ -505,7 +471,6 @@ impl Theme for Beach {
     }
 
     fn destroy(&mut self, gl: &glow::Context) {
-        if let Some(renderer) = self.whale_renderer.take() { renderer.destroy(gl); }
         self.b.destroy(gl);
     }
 

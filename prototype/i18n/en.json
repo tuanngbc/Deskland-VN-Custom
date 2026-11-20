@@ -402,11 +402,6 @@
           "label": "Seabirds",
           "hint": "Gulls gliding and circling overhead",
           "unit": ""
-        },
-        "whales": {
-          "label": "Whales",
-          "hint": "Swim offshore, surface and breathe in turn; set to 0 to disable",
-          "unit": ""
         }
       }
     },

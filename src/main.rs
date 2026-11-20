@@ -7,8 +7,6 @@
 mod desktop;
 mod engine;
 mod palm_layout;
-mod whales;
-mod whale_mesh;
 mod solar;
 mod lock;
 mod settings;
@@ -2008,12 +2006,6 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if let Some(path)=arg_value(&args,"--export-whale-preview") {
-        if let Err(error)=whale_mesh::export_preview(std::path::Path::new(&path)) {
-            eprintln!("{error}");std::process::exit(1);
-        }
-        return;
-    }
     if let Some(path) = arg_value(&args, "--system-monitor-diagnostics") {
         let _ = system_monitor::diagnostics(std::path::Path::new(&path));
         return;
@@ -2298,10 +2290,6 @@ fn main() {
     }
     if headless {
         if let Some(path)=arg_value(&args,"--benchmark-panorama-post") {app.benchmark_panorama_post(&path).expect("GPU panorama benchmark failed");}
-        if let Some(path)=arg_value(&args,"--benchmark-whales") {
-            let ctx=app.ctx.as_ref().unwrap();ctx.make_current(app.walls[0].gl_dc);
-            whale_mesh::benchmark(&ctx.gl,&path).expect("GPU whale benchmark failed");
-        }
     }
     if app.benchmark_gdi && app.gdi && args.iter().any(|a|a=="--test-readback") {
         let ctx=app.ctx.as_ref().unwrap();

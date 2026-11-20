@@ -40,16 +40,6 @@ Phiên bản viết lại hoàn toàn bằng **Rust native (Win32 + OpenGL 3.3 q
 - `--legacy-panorama-post` bật lại cắt/hậu kỳ riêng để đối chiếu cùng một EXE. `--headless --mode panorama --benchmark-panorama-post <file.json> --run-seconds 1` đo thời gian GPU riêng bước cắt/hậu kỳ với cùng khung hình, luân phiên hai đường; số này không phải GPU tổng của ứng dụng hoặc DWM. Không tạo bộ đo hay buffer đo trong quá trình sử dụng bình thường.
 - Cơ chế cache video thử nghiệm đã được gỡ vì không cải thiện tải trên máy kiểm thử. Không tự tạo thêm video cache.
 
-## Cá voi trong bộ Bãi biển
-
-- Cá voi tắt mặc định; chỉnh **Bãi biển → Chi tiết → Cá voi** từ 0–3 con trưởng thành. Khi đang bật, thỉnh thoảng có thêm một cá con bơi sát mẹ, kích cỡ khoảng 40–46% mẹ; cá con nổi/lặn và thở khác nhịp. Không xuất hiện khi số cá voi bằng 0.
-- Cá voi tránh bờ và khoảng trống giữa các màn hình, giữ vị trí khi click desktop. Hoạt ảnh dùng chung nhịp 30 FPS và tự dừng cùng hình nền khi bị che/khóa.
-- Mô hình cá voi lưng gù có đầu rộng, cuống đuôi thu nhỏ, vây ngực dài khoảng 30% thân, đuôi bản rộng, lưng xám đen và mảng trắng ở bụng/vây. Đối chiếu [NOAA](https://www.fisheries.noaa.gov/species/humpback-whale) và [Alaska Fish and Game](https://www.adfg.alaska.gov/index.cfm?adfg=humpbackwhale.printerfriendly); đây là mô phỏng cách điệu, không phải bản quét giải phẫu.
-- Lưới da được đánh chỉ số để dùng chung đỉnh, thân/đuôi/vây uốn trên GPU. Vẽ trực tiếp vào cảnh, viền mềm theo pháp tuyến và đạo hàm tại pixel; không cấp phát bộ đệm MSAA, không resolve/chép ảnh cho từng con ở đường vẽ mặc định. Không tăng độ phân giải toàn nền, không có video cache, tiến trình hay timer riêng. `--no-whales` tắt tạm trong một lần chạy, không ghi đè thiết lập đã lưu.
-- `--headless --benchmark-whales <file.json> --run-seconds 1` đo riêng GPU của lớp cá voi ở cùng tư thế/kích thước, luân phiên không vẽ, vẽ trực tiếp và MSAA cũ. Đây không phải GPU tổng; `--legacy-whale-aa` chỉ dùng đối chiếu đường MSAA. Bộ đệm MSAA và bộ đo chỉ được tạo khi yêu cầu rõ các cờ kiểm tra này.
-- `--export-whale-preview <file.json>` xuất lưới, shader và 36 giây dữ liệu mô phỏng dùng để dựng ảnh/clip trên GitHub Actions, không mở desktop và không đọc cấu hình cá nhân. Commit có nhãn `[whale-preview]` tạo artifact `whale-motion-preview` riêng để duyệt trước khi tải/cài EXE.
-- `--headless --whale-phase <giây>` giữ tư thế kiểm tra tại một thời điểm. Cờ này không có tác dụng khi chạy desktop bình thường.
-
 ## Chụp màn hình và quay desktop
 
 - **Ctrl+Shift+S:** kéo chọn vùng chụp; Space chọn cả màn hình đang trỏ chuột; Esc hủy. Sau khi chọn, trình sửa ảnh mở ngay: cắt, mũi tên, khung, bút, chữ, số bước, pixel và tô kín. Enter copy rồi đóng; Ctrl+C copy, Ctrl+S lưu PNG/JPG, Ctrl+Z/Y hoàn tác/làm lại. Có nút ghim trên cùng.

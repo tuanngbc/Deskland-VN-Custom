@@ -63,14 +63,13 @@ const fn p(key: &'static str, label: &'static str, min: f64, max: f64, step: f64
 }
 
 // Khoảng giá trị giống bảng điều khiển của bản web (prototype/themes.json)
-pub static BEACH: [ParamDef; 7] = [
+pub static BEACH: [ParamDef; 6] = [
     p("sigma", "Khoảng cách bờ", 40.0, 200.0, 1.0, 85.0, "px", Fmt::Num),
     p("warp", "Độ uốn bờ biển", 0.0, 80.0, 1.0, 34.0, "", Fmt::Num),
     p("shoal", "Bãi nông trong", 0.0, 300.0, 1.0, 110.0, "px", Fmt::Num),
     p("shallow", "Độ rộng vùng nông", 120.0, 700.0, 1.0, 260.0, "px", Fmt::Num),
     p("kayaks", "Thuyền kayak", 0.0, 4.0, 1.0, 2.0, "chiếc", Fmt::Num),
     p("birds", "Hải âu", 0.0, 8.0, 1.0, 3.0, "con", Fmt::Num),
-    p("whales", "Cá voi", 0.0, 3.0, 1.0, 0.0, "con", Fmt::Num),
 ];
 pub static MALDIVES: [ParamDef; 8] = [
     p("sigma", "Bán kính bãi cát", 40.0, 200.0, 1.0, 85.0, "px", Fmt::Num),
