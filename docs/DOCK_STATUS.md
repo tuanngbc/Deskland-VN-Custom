@@ -39,3 +39,9 @@ Latest deployment should be read from GitHub Actions at `https://github.com/tuan
 - Confirmed green GitHub Actions on commits `bfa120ac` (run [44814061528](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44814061528)) and `83f112e1` (run [44814088369](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44814088369)); these are **CI PASS**, not native feature acceptance.
 - Commit `a8bc2e6d` aligns Stage application filtering and same-executable window counts with Dock's local-monitor/all-monitors setting; adds regression test for negative-coordinate secondary monitor and case-insensitive app grouping.
 - This Stage filtering increment requires its own CI result. Native two-monitor, DWM thumbnail, taskbar parity, fullscreen game behavior remain **PENDING**. No Explorer replacement or merge.
+
+### 2026-11-21 pinned app monitor-scope fix
+- Verified previous Stage follow-up CI PASS: [44826611244](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44826611244) and [44826625961](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44826625961).
+- Commit `a015a42fa22599593e0924d7b29d501ba0cea2cc` fixes pinned app activation on multi-monitor: prefer the HWND on the current screen, avoid switching to an off-screen window in local mode, count only local running windows, deduplicate case-insensitive pinned paths. A pinned executable without local window remains launchable.
+- The right-side placeholder formerly labeled `Tray` is now honestly labeled `Taskbar`, because it opens Windows taskbar settings and does **not** host third-party notification icons.
+- Added Rust regression test `pinned_app_respects_local_monitor_and_deduplicates`. **CI for this new commit is pending until its workflow finishes**. Native owner tests remain PENDING. No taskbar replacement, baseline modification or merge.
