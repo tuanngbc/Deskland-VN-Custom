@@ -45,3 +45,9 @@ Latest deployment should be read from GitHub Actions at `https://github.com/tuan
 - Commit `a015a42fa22599593e0924d7b29d501ba0cea2cc` fixes pinned app activation on multi-monitor: prefer the HWND on the current screen, avoid switching to an off-screen window in local mode, count only local running windows, deduplicate case-insensitive pinned paths. A pinned executable without local window remains launchable.
 - The right-side placeholder formerly labeled `Tray` is now honestly labeled `Taskbar`, because it opens Windows taskbar settings and does **not** host third-party notification icons.
 - Added Rust regression test `pinned_app_respects_local_monitor_and_deduplicates`. **CI for this new commit is pending until its workflow finishes**. Native owner tests remain PENDING. No taskbar replacement, baseline modification or merge.
+
+### 2026-11-21 Stage global-mode activation locality
+- Verified previous pinned-app CI green: [44829967553](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44829967553) and [44829981171](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44829981171).
+- Commit `7ec9267f4c9ee4fe88227005f19bc929499f64f0` corrects Stage Manager's global-mode selection: when the same executable has windows on multiple displays, clicking the Stage item prefers a window intersecting the current monitor, while keeping the total cross-monitor count. The previous implementation picked the first enumerated HWND, potentially switching focus to another monitor.
+- Adds `global_stage_prefers_local_window_for_activation` Rust regression covering negative-coordinate secondary screen, case-insensitive path matching, local/global counts, and fallback to an app only running on another display.
+- This commit requires its own CI gate; no native Windows two-monitor owner acceptance. No change to taskbar replacement, main, or baseline.
