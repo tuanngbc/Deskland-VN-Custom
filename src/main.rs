@@ -2010,7 +2010,7 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--dock") { dock::start();return; }
-    if args.iter().any(|a| a == "--dock-stop") { dock::toggle();return; }
+    if args.iter().any(|a| a == "--dock-stop") { dock::stop();return; }
     if let Some(path) = arg_value(&args, "--system-monitor-diagnostics") {
         let _ = system_monitor::diagnostics(std::path::Path::new(&path));
         return;
