@@ -136,6 +136,15 @@ fn item_list(all:&[AppWindow],screen:RECT,prefs:&Preferences)->Vec<Item>{
     }
     result.truncate(MAX_ITEMS);result
 }
+// Stage follows the same per-monitor visibility preference as Dock; deduplicate by executable.
+fn stage_item_list(all:&[AppWindow],screen:RECT,all_windows:bool)->Vec<Item>{
+    let mut seen=HashSet::<String>::new();
+    all.iter().filter(|w|all_windows || rect_intersects(screen,w.rect))
+        .filter(|w|seen.insert(w.path.to_lowercase()))
+        .take(5).map(|w|Item{path:w.path.clone(),title:w.title.clone(),hwnd:w.hwnd,
+            count:all.iter().filter(|a|a.path.eq_ignore_ascii_case(&w.path)
+                && (all_windows || rect_intersects(screen,a.rect))).count(),pinned:false}).collect()
+}
 fn stage_rect(screen:&Screen,side:&str)->RECT {
     let width=120.min(((screen.work.right-screen.work.left)/5).max(56));
     let edge=if side=="right"{screen.work.right-width-8}else{screen.work.left+8};
@@ -204,11 +213,7 @@ unsafe fn refresh(state:&mut State) {
         InvalidateRect(b.hwnd,ptr::null(),0);
     }
     for stage in &mut state.stages {
-        let mut seen=HashSet::new();
-        stage.items=state.windows.iter().filter(|w|rect_intersects(stage.bounds,w.rect))
-            .filter(|w|seen.insert(w.path.to_lowercase()))
-            .take(5).map(|w|Item{path:w.path.clone(),title:w.title.clone(),hwnd:w.hwnd,
-                count:state.windows.iter().filter(|a|a.path.eq_ignore_ascii_case(&w.path)).count(),pinned:false}).collect();
+        stage.items=stage_item_list(&state.windows,stage.bounds,state.prefs.all_windows);
         let hide=state.bars.iter().find(|b|same_rect(b.bounds,stage.bounds)).is_some_and(|b|b.hidden);
         if hide!=stage.hidden{ShowWindow(stage.hwnd,if hide{SW_HIDE}else{SW_SHOWNOACTIVATE});stage.hidden=hide;}
         InvalidateRect(stage.hwnd,ptr::null(),0);
@@ -466,6 +471,18 @@ mod tests{
         let left=stage_rect(&sc,"left");let right=stage_rect(&sc,"right");
         assert!(left.left<right.left && left.left>=sc.work.left && right.right<=sc.work.right);
         assert!(left.top>=sc.work.top && left.bottom<=sc.work.bottom);
+    }
+    #[test] fn stage_respects_monitor_filter_and_counts(){
+        let make=|hwnd:usize,path:&str,r:[i32;4]|AppWindow{
+            hwnd:hwnd as HWND,title:path.into(),path:path.into(),rect:rect(r)};
+        let windows=vec![
+            make(1,"C:\\\\Apps\\\\alpha.exe",[-1800,0,-100,900]),
+            make(2,"c:\\\\apps\\\\ALPHA.EXE",[100,0,700,900]),
+            make(3,"C:\\\\Apps\\\\beta.exe",[100,0,700,900])];
+        let local=stage_item_list(&windows,rect([-1920,0,0,1080]),false);
+        assert_eq!(local.len(),1);assert_eq!(local[0].count,1);
+        let global=stage_item_list(&windows,rect([-1920,0,0,1080]),true);
+        assert_eq!(global.len(),2);assert_eq!(global[0].count,2);
     }
     #[test] fn settings_serialization(){let p=Preferences{pinned:vec!["C:\\A\\foo.exe".into()],all_windows:true,stage_side:"right".into()};let v=serde_json::json!({"pinned":p.pinned,"allWindows":p.all_windows});assert_eq!(v["allWindows"],true);}
 }
