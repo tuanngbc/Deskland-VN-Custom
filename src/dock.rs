@@ -25,33 +25,44 @@ const MENU_BLUETOOTH:usize=507;
 const MENU_SOUND:usize=508;
 const MENU_NOTIFICATIONS:usize=509;
 const MENU_EXPLORER:usize=510;
+const MENU_STAGE_LEFT:usize=511;
+const MENU_STAGE_RIGHT:usize=512;
+const MENU_STAGE_OFF:usize=513;
+const MENU_MINIMIZE:usize=514;
+const MENU_MAXIMIZE:usize=515;
+const MENU_RESTORE:usize=516;
+const MENU_SNAP_LEFT:usize=517;
+const MENU_SNAP_RIGHT:usize=518;
+const MENU_FULLSCREEN:usize=519;
 
 #[derive(Clone)]
 struct Screen { bounds:RECT, work:RECT, primary:bool }
 #[derive(Clone)]
 struct AppWindow { hwnd:HWND, title:String, path:String, rect:RECT }
 #[derive(Clone,Debug,Default)]
-struct Preferences { pinned:Vec<String>, all_windows:bool }
+struct Preferences { pinned:Vec<String>, all_windows:bool, stage_side:String }
 impl Preferences {
     fn load()->Self {
         let path=crate::lock::data_dir().join("dock.json");
-        let Ok(content)=std::fs::read_to_string(path) else{return Self {pinned:Vec::new(),all_windows:false}};
+        let Ok(content)=std::fs::read_to_string(path) else{return Self {pinned:Vec::new(),all_windows:false,stage_side:"left".into()}};
         let Ok(v)=serde_json::from_str::<serde_json::Value>(&content) else{return Self{pinned:Vec::new(),all_windows:false}};
         Self { pinned:v["pinned"].as_array().map(|a|a.iter().filter_map(|x|x.as_str().map(String::from)).take(32).collect()).unwrap_or_default(),
-            all_windows:v["allWindows"].as_bool().unwrap_or(false) }
+            all_windows:v["allWindows"].as_bool().unwrap_or(false),stage_side:match v["stageSide"].as_str().unwrap_or("left") { "left"|"right"|"off"=>v["stageSide"].as_str().unwrap_or("left").to_owned(),_=>"left".into()} }
     }
     fn save(&self) {
         let path=crate::lock::data_dir().join("dock.json");
         let _=std::fs::create_dir_all(path.parent().unwrap());
-        let _=std::fs::write(path,serde_json::json!({"pinned":self.pinned,"allWindows":self.all_windows}).to_string());
+        let _=std::fs::write(path,serde_json::json!({"pinned":self.pinned,"allWindows":self.all_windows,"stageSide":self.stage_side}).to_string());
     }
 }
 #[derive(Clone,Debug)]
 struct Item { path:String, title:String, hwnd:HWND, count:usize, pinned:bool }
 #[derive(Clone)]
 struct Bar { hwnd:HWND, bounds:RECT, items:Vec<Item>, hovered:i32, hidden:bool }
+#[derive(Clone)]
+struct Stage { hwnd:HWND, bounds:RECT, items:Vec<Item>, hidden:bool }
 #[derive(Default)]
-struct State { bars:Vec<Bar>, windows:Vec<AppWindow>, prefs:Preferences, context:(usize,usize) }
+struct State { bars:Vec<Bar>, stages:Vec<Stage>, windows:Vec<AppWindow>, prefs:Preferences, context:(usize,usize) }
 thread_local! {static STATE:RefCell<State>=RefCell::new(State::default());}
 
 unsafe extern "system" fn monitor_cb(hmon:HMONITOR,_hdc:HDC,_rect:*mut RECT,param:LPARAM)->i32 {
@@ -125,6 +136,13 @@ fn item_list(all:&[AppWindow],screen:RECT,prefs:&Preferences)->Vec<Item>{
     }
     result.truncate(MAX_ITEMS);result
 }
+fn stage_rect(screen:&Screen,side:&str)->RECT {
+    let width=120.min(((screen.work.right-screen.work.left)/5).max(56));
+    let edge=if side=="right"{screen.work.right-width-8}else{screen.work.left+8};
+    let top=screen.work.top+((screen.work.bottom-screen.work.top)/6).min(160);
+    let height=((screen.work.bottom-screen.work.top)-200).clamp(90,560);
+    RECT{left:edge,top,right:edge+width,bottom:(top+height).min(screen.work.bottom-8)}
+}
 fn bar_rect(screen:&Screen,items:usize)->RECT {
     let width=(items.min(MAX_ITEMS) as i32*ITEM_WIDTH+220).clamp(296,(screen.bounds.right-screen.bounds.left-24).max(296));
     let x=screen.bounds.left+(screen.bounds.right-screen.bounds.left-width)/2;
@@ -136,6 +154,7 @@ unsafe fn recreate(state:&mut State) {
     let screens=monitors();
     if screens.len()==state.bars.len() && screens.iter().zip(&state.bars).all(|(s,b)|same_rect(s.bounds,b.bounds)){return;}
     for b in state.bars.drain(..){DestroyWindow(b.hwnd);}
+    for s in state.stages.drain(..){DestroyWindow(s.hwnd);}
     let class=wide(CLASS);
     for screen in screens {
         let items=item_list(&state.windows,screen.bounds,&state.prefs);
@@ -148,6 +167,17 @@ unsafe fn recreate(state:&mut State) {
         ShowWindow(hwnd,SW_SHOWNOACTIVATE);
         SetTimer(hwnd,1,850,None);
         state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:false});
+        if state.prefs.stage_side!="off" {
+            let r=stage_rect(&screen,&state.prefs.stage_side);
+            let stage_hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,
+                class.as_ptr(),wide("tuanpc-desk Stage Manager").as_ptr(),WS_POPUP,
+                r.left,r.top,r.right-r.left,r.bottom-r.top,
+                ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
+            if !stage_hwnd.is_null(){
+                ShowWindow(stage_hwnd,SW_SHOWNOACTIVATE);
+                state.stages.push(Stage{hwnd:stage_hwnd,bounds:screen.bounds,items:Vec::new(),hidden:false});
+            }
+        }
     }
 }
 unsafe fn refresh(state:&mut State) {
@@ -173,6 +203,16 @@ unsafe fn refresh(state:&mut State) {
         if b.hidden!=fullscreen { ShowWindow(b.hwnd,if fullscreen{SW_HIDE}else{SW_SHOWNOACTIVATE});b.hidden=fullscreen; }
         InvalidateRect(b.hwnd,ptr::null(),0);
     }
+    for stage in &mut state.stages {
+        let mut seen=HashSet::new();
+        stage.items=state.windows.iter().filter(|w|rect_intersects(stage.bounds,w.rect))
+            .filter(|w|seen.insert(w.path.to_lowercase()))
+            .take(5).map(|w|Item{path:w.path.clone(),title:w.title.clone(),hwnd:w.hwnd,
+                count:state.windows.iter().filter(|a|a.path.eq_ignore_ascii_case(&w.path)).count(),pinned:false}).collect();
+        let hide=state.bars.iter().find(|b|same_rect(b.bounds,stage.bounds)).is_some_and(|b|b.hidden);
+        if hide!=stage.hidden{ShowWindow(stage.hwnd,if hide{SW_HIDE}else{SW_SHOWNOACTIVATE});stage.hidden=hide;}
+        InvalidateRect(stage.hwnd,ptr::null(),0);
+    }
 }
 unsafe fn fill(hdc:HDC,r:RECT,color:u32) {
     let brush=CreateSolidBrush(color);FillRect(hdc,&r,brush);DeleteObject(brush as HGDIOBJ);
@@ -190,6 +230,29 @@ unsafe fn paint(hwnd:HWND){
     let mut ps:PAINTSTRUCT=mem::zeroed();let dc=BeginPaint(hwnd,&mut ps);
     let mut area:RECT=mem::zeroed();GetClientRect(hwnd,&mut area);
     fill(dc,area,0x00201b18);
+    STATE.with(|cell|{
+        let state=cell.borrow();
+        if let Some(stage)=state.stages.iter().find(|stage|stage.hwnd==hwnd) {
+            let foreground=GetForegroundWindow();
+            let slot=((area.bottom-28)/5).clamp(24,95);
+            label(dc,6,7,area.right-12,"STAGE",0x00eeeeee);
+            for (i,item) in stage.items.iter().enumerate() {
+                let y=34+i as i32*slot;
+                fill(dc,RECT{left:7,top:y,right:area.right-7,bottom:y+slot-5},
+                    if item.hwnd==foreground {0x007d655a}else{0x00332d28});
+                let mut file:SHFILEINFOW=mem::zeroed();
+                let got=SHGetFileInfoW(wide(&item.path).as_ptr(),0,&mut file,
+                    mem::size_of::<SHFILEINFOW>() as u32,SHGFI_ICON|SHGFI_SMALLICON);
+                if got!=0&&!file.hIcon.is_null(){
+                    DrawIconEx(dc,13,y+5,file.hIcon,20,20,0,ptr::null_mut(),DI_NORMAL);DestroyIcon(file.hIcon);
+                }
+                let n=basename(&item.path);
+                label(dc,7,y+29,area.right-14,&n,0x00eeeeee);
+                if item.count>1{label(dc,area.right-29,y+3,22,&item.count.to_string(),0x00ffffff);}
+            }
+            return;
+        }
+    });
     STATE.with(|cell|{
         let state=cell.borrow();
         let Some(bar)=state.bars.iter().find(|b|b.hwnd==hwnd)else{return};
@@ -239,10 +302,24 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     let selected=STATE.with(|s|s.borrow().bars.get(bar_index).and_then(|b|b.items.get(item_index)).cloned());
     if let Some(item)=selected.as_ref(){
         AppendMenuW(menu,MF_STRING,if item.pinned{MENU_UNPIN}else{MENU_PIN},wide(if item.pinned{"Bỏ ghim"}else{"Ghim ứng dụng"}).as_ptr());
+        if !item.hwnd.is_null() {
+            AppendMenuW(menu,MF_STRING,MENU_MINIMIZE,wide("Thu nhỏ cửa sổ").as_ptr());
+            AppendMenuW(menu,MF_STRING,MENU_MAXIMIZE,wide("Phóng to").as_ptr());
+            AppendMenuW(menu,MF_STRING,MENU_RESTORE,wide("Khôi phục kích thước").as_ptr());
+            AppendMenuW(menu,MF_STRING,MENU_SNAP_LEFT,wide("Chia nửa trái").as_ptr());
+            AppendMenuW(menu,MF_STRING,MENU_SNAP_RIGHT,wide("Chia nửa phải").as_ptr());
+            AppendMenuW(menu,MF_STRING,MENU_FULLSCREEN,wide("Đầy màn hình (borderless thử nghiệm)").as_ptr());
+        }
         AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
     }
     AppendMenuW(menu,MF_STRING|if prefs.all_windows{MF_CHECKED}else{0},MENU_ALL,wide("Hiện ứng dụng từ mọi màn hình").as_ptr());
     AppendMenuW(menu,MF_STRING|if !prefs.all_windows{MF_CHECKED}else{0},MENU_LOCAL,wide("Chỉ ứng dụng trên màn hình này").as_ptr());
+    AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
+    for (id,text) in [(MENU_STAGE_LEFT,"Stage Manager bên trái"),(MENU_STAGE_RIGHT,"Stage Manager bên phải"),(MENU_STAGE_OFF,"Tắt Stage Manager")] {
+        AppendMenuW(menu,MF_STRING|if (id==MENU_STAGE_LEFT && prefs.stage_side=="left")||
+            (id==MENU_STAGE_RIGHT && prefs.stage_side=="right")||(id==MENU_STAGE_OFF && prefs.stage_side=="off"){MF_CHECKED}else{0},
+            id,wide(text).as_ptr());
+    }
     AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
     for (id,title) in [(MENU_WIFI,"Cài đặt Wi-Fi"),(MENU_BLUETOOTH,"Bluetooth"),(MENU_SOUND,"Âm thanh"),
       (MENU_NOTIFICATIONS,"Thông báo"),(MENU_EXPLORER,"Mở File Explorer")] {
@@ -262,6 +339,37 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
             }else{a.prefs.pinned.retain(|p|!p.eq_ignore_ascii_case(&item.path));}
             a.prefs.save();refresh(&mut a);});
         },
+        MENU_STAGE_LEFT|MENU_STAGE_RIGHT|MENU_STAGE_OFF=>STATE.with(|s|{
+            let mut a=s.borrow_mut();a.prefs.stage_side=match cmd{MENU_STAGE_LEFT=>"left",MENU_STAGE_RIGHT=>"right",_=>"off"}.into();
+            a.prefs.save();
+            for b in a.bars.drain(..){DestroyWindow(b.hwnd);}
+            for b in a.stages.drain(..){DestroyWindow(b.hwnd);}
+            refresh(&mut a);
+        }),
+        MENU_MINIMIZE|MENU_MAXIMIZE|MENU_RESTORE|MENU_SNAP_LEFT|MENU_SNAP_RIGHT|MENU_FULLSCREEN=>if let Some(item)=selected{
+            if !item.hwnd.is_null()&&IsWindow(item.hwnd)!=0 {
+                match cmd {
+                    MENU_MINIMIZE=>{ShowWindow(item.hwnd,SW_MINIMIZE);}
+                    MENU_MAXIMIZE=>{ShowWindow(item.hwnd,SW_MAXIMIZE);}
+                    MENU_RESTORE=>{ShowWindow(item.hwnd,SW_RESTORE);}
+                    MENU_SNAP_LEFT|MENU_SNAP_RIGHT|MENU_FULLSCREEN=>{
+                        let screen=monitors().into_iter().find(|s|{
+                            let mut r:RECT=mem::zeroed();GetWindowRect(item.hwnd,&mut r)!=0&&rect_intersects(r,s.bounds)
+                        });
+                        if let Some(screen)=screen {
+                            ShowWindow(item.hwnd,SW_RESTORE);
+                            let mut r=if cmd==MENU_FULLSCREEN{screen.bounds}else{screen.work};
+                            if cmd!=MENU_FULLSCREEN{
+                                let middle=r.left+(r.right-r.left)/2;
+                                if cmd==MENU_SNAP_LEFT{r.right=middle;}else{r.left=middle;}
+                            }
+                            SetWindowPos(item.hwnd,HWND_TOP,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_SHOWWINDOW);
+                        }
+                    }
+                    _=>{}
+                }
+            }
+        },
         MENU_WIFI=>open("ms-settings:network-wifi"),
         MENU_BLUETOOTH=>open("ms-settings:bluetooth"),
         MENU_SOUND=>open("ms-settings:sound"),
@@ -277,7 +385,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_PAINT=>{paint(hwnd);0},
         WM_MOUSEACTIVATE=>MA_NOACTIVATE as LRESULT,
         WM_TIMER=>{if w==1{STATE.with(|s|refresh(&mut s.borrow_mut()));}0},
-        WM_DISPLAYCHANGE=>{STATE.with(|s|{let mut a=s.borrow_mut();for b in a.bars.drain(..){DestroyWindow(b.hwnd);}refresh(&mut a);});0},
+        WM_DISPLAYCHANGE=>{STATE.with(|s|{let mut a=s.borrow_mut();for b in a.bars.drain(..){DestroyWindow(b.hwnd);}for b in a.stages.drain(..){DestroyWindow(b.hwnd);}refresh(&mut a);});0},
         WM_MOUSEMOVE=>{
             let x=(l as u32&0xffff) as i16 as i32;
             STATE.with(|s|{let mut a=s.borrow_mut();if let Some(b)=a.bars.iter_mut().find(|b|b.hwnd==hwnd){
@@ -286,6 +394,16 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             }});0
         }
         WM_LBUTTONUP=>{
+            let y=((l as u32>>16)&0xffff) as i16 as i32;
+            let stage_item=STATE.with(|s|{
+                let a=s.borrow();a.stages.iter().find(|stage|stage.hwnd==hwnd).and_then(|stage|{
+                    let slot=unsafe{let mut r:RECT=mem::zeroed();GetClientRect(hwnd,&mut r);((r.bottom-28)/5).clamp(24,95)};
+                    if y<34 {None}else{stage.items.get(((y-34)/slot) as usize).cloned()}
+                })
+            });
+            if let Some(item)=stage_item {activate(&item);return 0;}
+            let is_stage=STATE.with(|s|s.borrow().stages.iter().any(|stage|stage.hwnd==hwnd));
+            if is_stage{return 0;}
             let x=(l as u32&0xffff) as i16 as i32;
             let selected=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd).and_then(|b|b.items.get(((x-12).max(0)/ITEM_WIDTH) as usize)).cloned());
             let max=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd).map(|b|b.items.len()).unwrap_or(0));
@@ -301,6 +419,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         }
         WM_RBUTTONUP=>{
+            if STATE.with(|s|s.borrow().stages.iter().any(|stage|stage.hwnd==hwnd)){return 0;}
             let x=(l as u32&0xffff) as i16 as i32;
             let (bar,index)=STATE.with(|s|{let a=s.borrow();let i=a.bars.iter().position(|b|b.hwnd==hwnd).unwrap_or(0);
               (i,if x>=12{((x-12)/ITEM_WIDTH) as usize}else{usize::MAX})});
@@ -322,7 +441,7 @@ pub fn start() {
         STATE.with(|s|{let mut a=s.borrow_mut();a.prefs=Preferences::load();refresh(&mut a);});
         let mut msg:MSG=mem::zeroed();
         while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0{TranslateMessage(&msg);DispatchMessageW(&msg);}
-        STATE.with(|s|{for b in s.borrow_mut().bars.drain(..){DestroyWindow(b.hwnd);}});
+        STATE.with(|s|{let mut a=s.borrow_mut();for b in a.bars.drain(..){DestroyWindow(b.hwnd);}for b in a.stages.drain(..){DestroyWindow(b.hwnd);}});
     }
 }
 pub fn stop() {
@@ -342,5 +461,11 @@ mod tests{
     fn rect(a:[i32;4])->RECT{RECT{left:a[0],top:a[1],right:a[2],bottom:a[3]}}
     #[test] fn mixed_coordinate_overlap(){assert!(rect_intersects(rect([-1200,-200,0,900]),rect([-100,0,100,100])));assert!(!rect_intersects(rect([-1200,-200,0,900]),rect([0,0,100,100])));}
     #[test] fn distinct_monitor_geometry(){let s=Screen{bounds:rect([-1920,0,0,1080]),work:rect([-1920,0,0,1040]),primary:false};let r=bar_rect(&s,5);assert!(r.left<0 && r.right<=0 && r.bottom<=1040);}
-    #[test] fn settings_serialization(){let p=Preferences{pinned:vec!["C:\\A\\foo.exe".into()],all_windows:true};let v=serde_json::json!({"pinned":p.pinned,"allWindows":p.all_windows});assert_eq!(v["allWindows"],true);}
+    #[test] fn stage_geometry_on_negative_monitor(){
+        let sc=Screen{bounds:rect([-1920,-120,0,1080]),work:rect([-1920,-120,0,1040]),primary:false};
+        let left=stage_rect(&sc,"left");let right=stage_rect(&sc,"right");
+        assert!(left.left<right.left && left.left>=sc.work.left && right.right<=sc.work.right);
+        assert!(left.top>=sc.work.top && left.bottom<=sc.work.bottom);
+    }
+    #[test] fn settings_serialization(){let p=Preferences{pinned:vec!["C:\\A\\foo.exe".into()],all_windows:true,stage_side:"right".into()};let v=serde_json::json!({"pinned":p.pinned,"allWindows":p.all_windows});assert_eq!(v["allWindows"],true);}
 }
