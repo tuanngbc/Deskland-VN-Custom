@@ -146,6 +146,7 @@ unsafe fn recreate(state:&mut State) {
             ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
         if hwnd.is_null(){continue;}
         ShowWindow(hwnd,SW_SHOWNOACTIVATE);
+        SetTimer(hwnd,1,850,None);
         state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:false});
     }
 }
@@ -318,13 +319,15 @@ pub fn start() {
         wc.hInstance=GetModuleHandleW(ptr::null());wc.lpszClassName=class.as_ptr();
         wc.hCursor=LoadCursorW(ptr::null_mut(),IDC_ARROW);
         if RegisterClassExW(&wc)==0 && GetLastError()!=ERROR_CLASS_ALREADY_EXISTS{return;}
-        STATE.with(|s|{let mut a=s.borrow_mut();a.prefs=Preferences::load();refresh(&mut a);
-            if let Some(b)=a.bars.first(){SetTimer(b.hwnd,1,850,None);}
-        });
+        STATE.with(|s|{let mut a=s.borrow_mut();a.prefs=Preferences::load();refresh(&mut a);});
         let mut msg:MSG=mem::zeroed();
         while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0{TranslateMessage(&msg);DispatchMessageW(&msg);}
         STATE.with(|s|{for b in s.borrow_mut().bars.drain(..){DestroyWindow(b.hwnd);}});
     }
+}
+pub fn stop() {
+    unsafe {let cls=wide(CLASS);let hwnd=FindWindowW(cls.as_ptr(),ptr::null());
+        if !hwnd.is_null(){PostMessageW(hwnd,WM_CLOSE,0,0);}}
 }
 pub fn toggle() {
     unsafe {
