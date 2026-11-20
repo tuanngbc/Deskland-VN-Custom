@@ -45,7 +45,7 @@ impl Preferences {
     fn load()->Self {
         let path=crate::lock::data_dir().join("dock.json");
         let Ok(content)=std::fs::read_to_string(path) else{return Self {pinned:Vec::new(),all_windows:false,stage_side:"left".into()}};
-        let Ok(v)=serde_json::from_str::<serde_json::Value>(&content) else{return Self{pinned:Vec::new(),all_windows:false}};
+        let Ok(v)=serde_json::from_str::<serde_json::Value>(&content) else{return Self{pinned:Vec::new(),all_windows:false,stage_side:"left".into()}};
         Self { pinned:v["pinned"].as_array().map(|a|a.iter().filter_map(|x|x.as_str().map(String::from)).take(32).collect()).unwrap_or_default(),
             all_windows:v["allWindows"].as_bool().unwrap_or(false),stage_side:match v["stageSide"].as_str().unwrap_or("left") { "left"|"right"|"off"=>v["stageSide"].as_str().unwrap_or("left").to_owned(),_=>"left".into()} }
     }
