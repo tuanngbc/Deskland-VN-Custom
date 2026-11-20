@@ -7,7 +7,7 @@ use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::{OpenProcess,QueryFullProcessImageNameW,PROCESS_QUERY_LIMITED_INFORMATION};
-use windows_sys::Win32::UI::Shell::ShellExecuteW;
+use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 const CLASS:&str="TuanpcDeskNativeDock";
@@ -198,8 +198,16 @@ unsafe fn paint(hwnd:HWND){
             let box_rect=RECT{left:left+zoom/2,top:9-zoom/2,right:left+48+zoom,bottom:50+zoom/2};
             fill(dc,box_rect,color(&item.path));
             let title=basename(&item.path);
-            let initial=title.chars().take(2).collect::<String>().to_uppercase();
-            label(dc,left,18,54,&initial,0x00ffffff);
+            let mut file:SHFILEINFOW=mem::zeroed();
+            let got=SHGetFileInfoW(wide(&item.path).as_ptr(),0,&mut file,
+                mem::size_of::<SHFILEINFOW>() as u32,SHGFI_ICON|SHGFI_LARGEICON);
+            if got!=0 && !file.hIcon.is_null() {
+                DrawIconEx(dc,left+7,11,file.hIcon,34,34,0,ptr::null_mut(),DI_NORMAL);
+                DestroyIcon(file.hIcon);
+            } else {
+                let initial=title.chars().take(2).collect::<String>().to_uppercase();
+                label(dc,left,18,54,&initial,0x00ffffff);
+            }
             if item.count>0 {
                 fill(dc,RECT{left:left+23,top:56,right:left+29,bottom:60},0x00ffffff);
             }
