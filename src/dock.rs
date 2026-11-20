@@ -118,14 +118,18 @@ unsafe extern "system" fn enumerate(hwnd:HWND,param:LPARAM)->i32 {
 fn windows()->Vec<AppWindow>{
     let mut v=Vec::new();unsafe {EnumWindows(Some(enumerate),&mut v as *mut _ as LPARAM)};v
 }
+// Prefer a window on this monitor for pinned apps, and keep counts consistent with
+// the selected local/all-monitors scope. An off-screen pinned app stays launchable.
 fn item_list(all:&[AppWindow],screen:RECT,prefs:&Preferences)->Vec<Item>{
     let mut result=Vec::<Item>::new();let mut seen=HashSet::<String>::new();
     for path in &prefs.pinned {
-        let current=all.iter().find(|w|w.path.eq_ignore_ascii_case(path));
+        if !seen.insert(path.to_lowercase()){continue;}
+        let matching=all.iter().filter(|w|w.path.eq_ignore_ascii_case(path));
+        let current=matching.clone().find(|w|rect_intersects(screen,w.rect))
+            .or_else(||if prefs.all_windows{matching.clone().next()}else{None});
+        let count=matching.filter(|w|prefs.all_windows||rect_intersects(screen,w.rect)).count();
         result.push(Item{path:path.clone(),title:current.map(|w|w.title.clone()).unwrap_or_else(||basename(path)),
-            hwnd:current.map(|w|w.hwnd).unwrap_or(ptr::null_mut()),
-            count:all.iter().filter(|w|w.path.eq_ignore_ascii_case(path)).count(),pinned:true});
-        seen.insert(path.to_lowercase());
+            hwnd:current.map(|w|w.hwnd).unwrap_or(ptr::null_mut()),count,pinned:true});
     }
     for w in all {
         if !prefs.all_windows && !rect_intersects(screen,w.rect){continue;}
@@ -288,7 +292,7 @@ unsafe fn paint(hwnd:HWND){
         label(dc,x,20,42,"Wi-Fi",0x00ffffff);
         label(dc,x+46,20,40,"BT",0x00ffffff);
         label(dc,x+90,20,45,"Âm",0x00ffffff);
-        label(dc,x+142,20,62,"Tray",0x00ffffff);
+        label(dc,x+142,20,62,"Taskbar",0x00ffffff);
     });
     EndPaint(hwnd,&ps);
 }
@@ -483,6 +487,18 @@ mod tests{
         assert_eq!(local.len(),1);assert_eq!(local[0].count,1);
         let global=stage_item_list(&windows,rect([-1920,0,0,1080]),true);
         assert_eq!(global.len(),2);assert_eq!(global[0].count,2);
+    }
+    #[test] fn pinned_app_respects_local_monitor_and_deduplicates(){
+        let make=|hwnd:usize,r:[i32;4]|AppWindow{hwnd:hwnd as HWND,title:format!("window {hwnd}"),path:"C:\\\\Apps\\\\alpha.exe".into(),rect:rect(r)};
+        let windows=vec![make(1,[100,0,700,900]),make(2,[-1800,0,-100,900])];
+        let mut prefs=Preferences{pinned:vec!["c:\\\\apps\\\\ALPHA.EXE".into(),"C:\\\\Apps\\\\alpha.exe".into()],all_windows:false,stage_side:"left".into()};
+        let local=item_list(&windows,rect([-1920,0,0,1080]),&prefs);
+        assert_eq!(local.len(),1);assert_eq!(local[0].hwnd,2 as HWND);assert_eq!(local[0].count,1);
+        let empty=item_list(&windows,rect([2000,0,3000,1080]),&prefs);
+        assert_eq!(empty.len(),1);assert!(empty[0].hwnd.is_null());assert_eq!(empty[0].count,0);
+        prefs.all_windows=true;
+        let global=item_list(&windows,rect([-1920,0,0,1080]),&prefs);
+        assert_eq!(global.len(),1);assert_eq!(global[0].hwnd,2 as HWND);assert_eq!(global[0].count,2);
     }
     #[test] fn settings_serialization(){let p=Preferences{pinned:vec!["C:\\A\\foo.exe".into()],all_windows:true,stage_side:"right".into()};let v=serde_json::json!({"pinned":p.pinned,"allWindows":p.all_windows});assert_eq!(v["allWindows"],true);}
 }
