@@ -26,7 +26,7 @@ const MENU_SOUND:usize=508;
 const MENU_NOTIFICATIONS:usize=509;
 const MENU_EXPLORER:usize=510;
 
-#[derive(Clone,Debug,PartialEq,Eq)]
+#[derive(Clone,Debug)]
 struct Screen { bounds:RECT, work:RECT, primary:bool }
 #[derive(Clone,Debug)]
 struct AppWindow { hwnd:HWND, title:String, path:String, rect:RECT }
@@ -54,12 +54,10 @@ struct Bar { hwnd:HWND, bounds:RECT, items:Vec<Item>, hovered:i32, hidden:bool }
 struct State { bars:Vec<Bar>, windows:Vec<AppWindow>, prefs:Preferences, context:(usize,usize) }
 thread_local! {static STATE:RefCell<State>=RefCell::new(State::default());}
 
-unsafe extern "system" fn monitor_cb(_:HMONITOR,_:HDC,_:*mut RECT,param:LPARAM)->i32 {
+unsafe extern "system" fn monitor_cb(hmon:HMONITOR,_hdc:HDC,_rect:*mut RECT,param:LPARAM)->i32 {
     let out=&mut *(param as *mut Vec<Screen>);
     let mut info:MONITORINFO=mem::zeroed();info.cbSize=mem::size_of::<MONITORINFO>() as u32;
-    let hmon=MonitorFromPoint(POINT{x:0,y:0},MONITOR_DEFAULTTOPRIMARY);
-    let _=hmon; // do not infer primary from origin: rotated/negative desktops exist.
-    if GetMonitorInfoW(_,&mut info)!=0 {
+    if GetMonitorInfoW(hmon,&mut info)!=0 {
         out.push(Screen{bounds:info.rcMonitor,work:info.rcWork,primary:info.dwFlags&1!=0});
     }
     1
@@ -70,6 +68,7 @@ fn monitors()->Vec<Screen> {
     v.sort_by_key(|s|(!s.primary,s.bounds.left,s.bounds.top));
     v
 }
+fn same_rect(a:RECT,b:RECT)->bool { a.left==b.left&&a.right==b.right&&a.top==b.top&&a.bottom==b.bottom }
 fn rect_intersects(a:RECT,b:RECT)->bool {
     a.left<b.right && b.left<a.right && a.top<b.bottom && b.top<a.bottom
 }
@@ -135,7 +134,7 @@ fn bar_rect(screen:&Screen,items:usize)->RECT {
 }
 unsafe fn recreate(state:&mut State) {
     let screens=monitors();
-    if screens.len()==state.bars.len() && screens.iter().zip(&state.bars).all(|(s,b)|s.bounds==b.bounds){return;}
+    if screens.len()==state.bars.len() && screens.iter().zip(&state.bars).all(|(s,b)|same_rect(s.bounds,b.bounds)){return;}
     for b in state.bars.drain(..){DestroyWindow(b.hwnd);}
     let class=wide(CLASS);
     for screen in screens {
@@ -156,7 +155,7 @@ unsafe fn refresh(state:&mut State) {
     for b in &mut state.bars {
         let items=item_list(&state.windows,b.bounds,&state.prefs);
         b.items=items;
-        let screen=monitors().into_iter().find(|s|s.bounds==b.bounds);
+        let screen=monitors().into_iter().find(|s|same_rect(s.bounds,b.bounds));
         if let Some(screen)=screen {
             let r=bar_rect(&screen,b.items.len());
             SetWindowPos(b.hwnd,HWND_TOPMOST,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE);
