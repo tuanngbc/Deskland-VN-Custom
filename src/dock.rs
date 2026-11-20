@@ -26,9 +26,9 @@ const MENU_SOUND:usize=508;
 const MENU_NOTIFICATIONS:usize=509;
 const MENU_EXPLORER:usize=510;
 
-#[derive(Clone,Debug)]
+#[derive(Clone)]
 struct Screen { bounds:RECT, work:RECT, primary:bool }
-#[derive(Clone,Debug)]
+#[derive(Clone)]
 struct AppWindow { hwnd:HWND, title:String, path:String, rect:RECT }
 #[derive(Clone,Debug,Default)]
 struct Preferences { pinned:Vec<String>, all_windows:bool }
@@ -48,7 +48,7 @@ impl Preferences {
 }
 #[derive(Clone,Debug)]
 struct Item { path:String, title:String, hwnd:HWND, count:usize, pinned:bool }
-#[derive(Clone,Debug)]
+#[derive(Clone)]
 struct Bar { hwnd:HWND, bounds:RECT, items:Vec<Item>, hovered:i32, hidden:bool }
 #[derive(Default)]
 struct State { bars:Vec<Bar>, windows:Vec<AppWindow>, prefs:Preferences, context:(usize,usize) }
@@ -63,7 +63,7 @@ unsafe extern "system" fn monitor_cb(hmon:HMONITOR,_hdc:HDC,_rect:*mut RECT,para
     1
 }
 fn monitors()->Vec<Screen> {
-    let mut v=Vec::new();
+    let mut v:Vec<Screen>=Vec::new();
     unsafe {EnumDisplayMonitors(ptr::null_mut(),ptr::null(),Some(monitor_cb),&mut v as *mut _ as LPARAM);}
     v.sort_by_key(|s|(!s.primary,s.bounds.left,s.bounds.top));
     v
@@ -252,7 +252,7 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     AppendMenuW(menu,MF_STRING,MENU_QUIT,wide("Đóng Dock (giữ hình nền)").as_ptr());
     let mut point:POINT=mem::zeroed();GetCursorPos(&mut point);
     SetForegroundWindow(hwnd);
-    let cmd=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,hwnd,ptr::null());
+    let cmd=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,hwnd,ptr::null()) as usize;
     DestroyMenu(menu);
     match cmd {
         MENU_ALL|MENU_LOCAL => STATE.with(|s|{let mut a=s.borrow_mut();a.prefs.all_windows=cmd==MENU_ALL;a.prefs.save();refresh(&mut a)}),
