@@ -2,7 +2,7 @@ name: Build tuanpc-desk Rust
 
 on:
   push:
-    branches: [main, codex/rust-test]
+    branches: [main, codex/rust-test, codex/rust-dock]
   workflow_dispatch:
 
 permissions:
@@ -24,6 +24,8 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
           cargo test --release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::tests -- --nocapture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # Kiểm tra SPI_SET tắt + SPI_GET xác nhận trên Windows thật. Runner
           # không có timer tương tác dùng trạng thái bật giả ở bước quyết định.

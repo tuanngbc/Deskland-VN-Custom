@@ -11,6 +11,7 @@ mod solar;
 mod lock;
 mod settings;
 mod launcher;
+mod dock;
 mod mini_tools;
 mod web;
 mod shortcuts;
@@ -97,6 +98,7 @@ const CMD_LAUNCHER: usize = 130;
 const CMD_CAPTURE: usize = 131;
 const CMD_RECORD: usize = 132;
 const CMD_SYSTEM_MONITOR: usize = 133;
+const CMD_DOCK: usize = 134;
 const WM_OPEN_SETTINGS: u32 = WM_APP + 2;
 const WM_OPEN_LAUNCHER: u32 = WM_APP + 3;
 const CMD_EXIT: usize = 199;
@@ -299,6 +301,7 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
                 let menu_cfg = load_config(None);
                 let launcher_label = format!("Mở Launcher\t{}", launcher::hotkey_text(menu_cfg.launcher_mods, menu_cfg.launcher_vk));
                 AppendMenuW(menu, MF_STRING, CMD_LAUNCHER, wide(&launcher_label).as_ptr());
+                AppendMenuW(menu, MF_STRING, CMD_DOCK, wide("Bật / tắt Dock Rust (thử nghiệm)").as_ptr());
                 AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
                 let capture_label = format!("Chụp vùng và chỉnh sửa…\t{}", mini_tools::hotkey_text(menu_cfg.tools.capture_mods, menu_cfg.tools.capture_key));
                 let record_label = format!("Quay vùng / dừng và lưu…\t{}", mini_tools::hotkey_text(menu_cfg.tools.record_mods, menu_cfg.tools.record_key));
@@ -2006,6 +2009,8 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--dock") { dock::start();return; }
+    if args.iter().any(|a| a == "--dock-stop") { dock::toggle();return; }
     if let Some(path) = arg_value(&args, "--system-monitor-diagnostics") {
         let _ = system_monitor::diagnostics(std::path::Path::new(&path));
         return;
@@ -2858,6 +2863,7 @@ fn main() {
         } else {
             match cmd {
                 CMD_EXIT => break,
+                CMD_DOCK => dock::toggle(),
                 CMD_LAUNCHER => {
                     launcher::configure(app.cfg.launcher_appearance.clone());
                     launcher::toggle(msg_hwnd);
