@@ -142,12 +142,23 @@ fn item_list(all:&[AppWindow],screen:RECT,prefs:&Preferences)->Vec<Item>{
 }
 // Stage follows the same per-monitor visibility preference as Dock; deduplicate by executable.
 fn stage_item_list(all:&[AppWindow],screen:RECT,all_windows:bool)->Vec<Item>{
+    // In global mode an application may have windows on multiple monitors.
+    // Prefer the local HWND for this Stage's click target, just as Dock does.
+    // Keep the first-seen executable ordering stable while selecting that target.
     let mut seen=HashSet::<String>::new();
-    all.iter().filter(|w|all_windows || rect_intersects(screen,w.rect))
-        .filter(|w|seen.insert(w.path.to_lowercase()))
-        .take(5).map(|w|Item{path:w.path.clone(),title:w.title.clone(),hwnd:w.hwnd,
-            count:all.iter().filter(|a|a.path.eq_ignore_ascii_case(&w.path)
-                && (all_windows || rect_intersects(screen,a.rect))).count(),pinned:false}).collect()
+    let mut result=Vec::new();
+    for w in all.iter().filter(|w|all_windows || rect_intersects(screen,w.rect)) {
+        if !seen.insert(w.path.to_lowercase()){continue;}
+        let local=all.iter().find(|a|a.path.eq_ignore_ascii_case(&w.path)
+            && rect_intersects(screen,a.rect));
+        let selected=local.unwrap_or(w);
+        let count=all.iter().filter(|a|a.path.eq_ignore_ascii_case(&w.path)
+            && (all_windows || rect_intersects(screen,a.rect))).count();
+        result.push(Item{path:selected.path.clone(),title:selected.title.clone(),
+            hwnd:selected.hwnd,count,pinned:false});
+        if result.len()==5{break;}
+    }
+    result
 }
 fn stage_rect(screen:&Screen,side:&str)->RECT {
     let width=120.min(((screen.work.right-screen.work.left)/5).max(56));
@@ -487,6 +498,24 @@ mod tests{
         assert_eq!(local.len(),1);assert_eq!(local[0].count,1);
         let global=stage_item_list(&windows,rect([-1920,0,0,1080]),true);
         assert_eq!(global.len(),2);assert_eq!(global[0].count,2);
+    }
+    #[test] fn global_stage_prefers_local_window_for_activation(){
+        let make=|hwnd:usize,path:&str,r:[i32;4]|AppWindow{
+            hwnd:hwnd as HWND,title:format!("window {hwnd}"),path:path.into(),rect:rect(r)};
+        let windows=vec![
+            make(1,"C:\\Apps\\alpha.exe",[100,0,700,900]),
+            make(2,"c:\\apps\\ALPHA.EXE",[-1800,0,-100,900]),
+            make(3,"C:\\Apps\\beta.exe",[100,0,700,900])];
+        let secondary=rect([-1920,0,0,1080]);
+        let global=stage_item_list(&windows,secondary,true);
+        assert_eq!(global.len(),2);
+        assert_eq!(global[0].hwnd,2 as HWND);
+        assert_eq!(global[0].count,2);
+        assert_eq!(global[1].hwnd,3 as HWND);
+        let local=stage_item_list(&windows,secondary,false);
+        assert_eq!(local.len(),1);
+        assert_eq!(local[0].hwnd,2 as HWND);
+        assert_eq!(local[0].count,1);
     }
     #[test] fn pinned_app_respects_local_monitor_and_deduplicates(){
         let make=|hwnd:usize,r:[i32;4]|AppWindow{hwnd:hwnd as HWND,title:format!("window {hwnd}"),path:"C:\\\\Apps\\\\alpha.exe".into(),rect:rect(r)};
