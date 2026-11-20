@@ -29,3 +29,8 @@ Baseline: accepted Rust `a604519` on `codex/rust-test`; development only on `cod
 
 ## CI and evidence
 Latest deployment should be read from GitHub Actions at `https://github.com/tuanngbc/Deskland-VN-Custom/actions/workflows/build-rust-test.yml`; this document records feature scope, not a claimed CI PASS for unchecked commits.
+
+### 2026-11-21 CI recovery
+- GitHub Actions runs `44807055187` and `44807093091` failed at **Build Rust native app** for Stage increment (`e2c0efb`, `375b044`). Logs were not accessible through the connected GitHub text endpoint; do not assert this was the sole compiler failure.
+- Static source review identified a missing `stage_side` field in the malformed-JSON `Preferences::load` fallback after extending the struct. Fixed in commit `bfa120ac41be5ea852ba54c297439c262549662a`.
+- **CI verification pending** for that fix until its own workflow run completes; prior green `57b9d44` does not validate Stage changes. No native owner validation or merge.
