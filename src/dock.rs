@@ -380,7 +380,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
     ATLAS.with(|a|{
         let mut worker=a.borrow_mut();
         if state.bars.is_empty(){worker.take();}
-        else if worker.is_none(){*worker=icon_atlas::Worker::new(CONTROL.with(Cell::get));}
+        else if worker.is_none(){*worker=Some(icon_atlas::Worker::new(CONTROL.with(Cell::get)));}
     });
     let foreground=GetForegroundWindow() as isize;let active_changed=foreground!=state.foreground;state.foreground=foreground;
     for b in &mut state.bars {
