@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory)][string]$Evidence,
     [ValidateRange(0,8)][int]$Cards = 0,
     [ValidateSet('none','primary','secondary')][string]$Fullscreen = 'none',
+    [ValidateSet('primary','secondary')][string[]]$BackgroundCovered = @(),
     [ValidateRange(30,900)][int]$TimeoutSeconds = 180
 )
 $ErrorActionPreference = 'Stop'
@@ -59,9 +60,11 @@ try {
     $ready = Join-Path $Evidence 'fixture-ready.json'
     $expected = ($screens | Sort-Object {$_.Bounds.Left}, {$_.Bounds.Top} | ForEach-Object {
         $b = $_.Bounds
-        '{0},{1},{2},{3}:{4}' -f $b.Left,$b.Top,$b.Right,$b.Bottom,[int]($Fullscreen -ne 'none' -and $_.DeviceName -eq $screen.DeviceName)
+        $side = if ($_.Primary) { 'primary' } else { 'secondary' }
+        $covered = ($side -eq $Fullscreen) -or ($side -in $BackgroundCovered)
+        '{0},{1},{2},{3}:{4}' -f $b.Left,$b.Top,$b.Right,$b.Bottom,[int]$covered
     }) -join ';'
-    [ordered]@{PID=$PID;Hwnd=$control.Handle.ToInt64();Cards=$Cards;Coverage=$expected;Fullscreen=$Fullscreen} |
+    [ordered]@{PID=$PID;Hwnd=$control.Handle.ToInt64();Cards=$Cards;Coverage=$expected;Fullscreen=$Fullscreen;BackgroundCovered=$BackgroundCovered} |
         ConvertTo-Json | Set-Content -LiteralPath $next
     Move-Item -LiteralPath $next -Destination $ready
     while ($clock.Elapsed.TotalSeconds -lt $TimeoutSeconds -and !(Test-Path -LiteralPath $stop) -and !$control.IsDisposed) {

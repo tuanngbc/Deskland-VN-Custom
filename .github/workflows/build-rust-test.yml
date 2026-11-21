@@ -36,6 +36,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::runtime::tests::native_appbar_fatal_exit_restores_work_area -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::appbar::tests::native_keeps_dock_when_stage_changes_edges_and_rebinds -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::runtime::tests::native_display_targets_filter_hwnds_and_keep_other_module -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::runtime::tests::native_startup_never_synchronously_reads_own_settings_title -- --ignored --exact --nocapture --test-threads=1

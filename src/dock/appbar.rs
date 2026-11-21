@@ -163,6 +163,61 @@ impl Bars {
 mod tests{
     use super::*;
     #[test]
+    #[ignore = "real work area on the disposable Windows Actions desktop"]
+    fn native_keeps_dock_when_stage_changes_edges_and_rebinds(){
+        use std::{thread, time::{Duration,Instant}};
+        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(),Ok("true"),"isolated runner only");
+        let shell=shell_owner();
+        if shell.0==0{
+            eprintln!("SKIP live AppBar edge lifecycle: Explorer taskbar missing on runner");
+            return;
+        }
+        let primary=||super::super::displays().into_iter().find(|d|d.primary).expect("primary display");
+        unsafe {
+            let class=super::super::wide(super::super::CLASS);
+            let mut wc:WNDCLASSW=mem::zeroed();
+            wc.lpfnWndProc=Some(DefWindowProcW);
+            wc.hInstance=super::super::GetModuleHandleW(ptr::null());
+            wc.lpszClassName=class.as_ptr();
+            assert_ne!(RegisterClassW(&wc),0);
+            let before=primary();
+            let request=|stage,side,depth|Request{display:before.id.clone(),stage,side,depth,monitor:before.bounds};
+            let mut bars=Bars::default();
+            let expect=|name:&str, left:i32, right:i32, bottom:i32|{
+                let expected=RECT{left:before.work.left+left,right:before.work.right-right,bottom:before.work.bottom-bottom,..before.work};
+                let until=Instant::now()+Duration::from_secs(4);
+                loop{
+                    let mut msg:MSG=mem::zeroed();
+                    while PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)!=0{DispatchMessageW(&msg);}
+                    let d=primary();
+                    if d.id==before.id&&same_rect(d.work,expected){break;}
+                    let coordinates=|r:RECT|[r.left,r.top,r.right,r.bottom];
+                    assert!(Instant::now()<until,"{name}: expected {:?}, observed {:?}",coordinates(expected),coordinates(d.work));
+                    thread::sleep(Duration::from_millis(25));
+                }
+                assert_eq!(shell_owner(),shell,"the test must preserve the Windows taskbar owner");
+            };
+            let dock=request(false,DockSide::Bottom,70);
+            let left=request(true,DockSide::Left,68);
+            let right=request(true,DockSide::Right,91);
+            assert!(bars.sync(vec![dock.clone(),left],false,false).healthy);
+            expect("Dock + Stage left",68,0,70);
+            let dock_hwnd=bars.bars.iter().find(|b|!b.request.stage).unwrap().window;
+            assert!(bars.sync(vec![dock.clone(),right.clone()],false,false).healthy);
+            expect("Dock + Stage right",0,91,70);
+            assert_eq!(bars.bars.iter().find(|b|!b.request.stage).unwrap().window,dock_hwnd);
+            assert!(bars.sync(vec![dock.clone(),right.clone()],true,true).healthy);
+            expect("explicit shell recovery signal",0,91,70);
+            assert_eq!(IsWindow(dock_hwnd),0,"recovery must destroy old reservation HWNDs");
+            assert!(bars.sync(vec![right],false,false).healthy);
+            expect("Dock OFF",0,91,0);
+            bars.clear();
+            expect("all reservations removed",0,0,0);
+            eprintln!("Live AppBar left/right, independent removal and registration replay verified (no Explorer restart)");
+        }
+    }
+
+    #[test]
     fn shell_strip_keeps_negative_coordinates_and_the_taskbar_inset(){
         let available=RECT{left:-1080,top:-731,right:0,bottom:1141};
         assert!(same_rect(trim(available,DockSide::Bottom,80).unwrap(),RECT{top:1061,..available}));

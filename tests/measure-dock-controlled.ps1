@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)][string]$BuildSha,
     [Parameter(Mandatory)][int]$CandidateId,
     [ValidateRange(15,600)][int]$Warmup = 15,
-    [ValidateRange(125,600)][int]$Samples = 125
+    [Alias('Samples')][ValidateRange(125,600)][int]$RequestedSamples = 125
 )
 $ErrorActionPreference = 'Stop'
 if ($BuildSha -cnotmatch '^[a-f0-9]{40}$') { throw 'Use the complete GitHub build commit' }
@@ -113,7 +113,7 @@ try {
     if (!$display) { $reasons.Add('two-display-geometry-or-dpi-unavailable') }
     AssertCoverage $started $started
     if (!$reasons.Count) {
-        Get-Counter -Counter $counter -SampleInterval 1 -MaxSamples $Samples -ErrorAction Continue -ErrorVariable +counterErrors | ForEach-Object {
+        Get-Counter -Counter $counter -SampleInterval 1 -MaxSamples $RequestedSamples -ErrorAction SilentlyContinue -ErrorVariable +counterErrors | ForEach-Object {
             $pdh = $_.CounterSamples
             $utc = [DateTimeOffset]$_.Timestamp
             $epoch = $utc.ToUnixTimeMilliseconds() / 1000.0
@@ -144,7 +144,7 @@ try {
             }
         }
     }
-    if ($samples.Count -lt $Samples -or $samples[-1].Epoch-$samples[0].Epoch -lt 120) { $reasons.Add('less-than-120-continuous-seconds') }
+    if ($samples.Count -lt $RequestedSamples -or $samples[-1].Epoch-$samples[0].Epoch -lt 120) { $reasons.Add('less-than-120-continuous-seconds') }
     if ($samples.Count) {
         AssertCoverage $started $samples[-1].Epoch
         $deactivated = Join-Path $Evidence 'fixture-deactivated.log'
@@ -157,7 +157,7 @@ try {
     }
     if ((Get-FileHash -LiteralPath $settings -Algorithm SHA256).Hash -cne $settingsHash) { $reasons.Add('trial-settings-changed') }
     foreach ($role in 'Deskland','DWM') {
-        $valid = @($engines | Where-Object {$_.Role -eq $role -and $_.Status -eq 0} | Group-Object Engine | Where-Object Count -eq $Samples)
+        $valid = @($engines | Where-Object {$_.Role -eq $role -and $_.Status -eq 0} | Group-Object Engine | Where-Object Count -eq $RequestedSamples)
         if (!$valid.Count) { $reasons.Add("no-complete-GPU-series:$role") }
     }
 } catch {
@@ -168,7 +168,7 @@ try {
     $engines | Export-Csv -LiteralPath (Join-Path $Evidence 'controlled-engines.csv') -NoTypeInformation
     [ordered]@{
         State=if($reasons.Count){'INVALID'}else{'VALID_INTERVAL'};Reasons=@($reasons.ToArray());Build=$BuildSha;
-        WarmupSeconds=$Warmup;Requested=$Samples;Actual=$samples.Count;LogicalCpus=$logical;Adapters=$adapters;
+        WarmupSeconds=$Warmup;Requested=$RequestedSamples;Actual=$samples.Count;LogicalCpus=$logical;Adapters=$adapters;
         Display=$display;Coverage=$expected;Theme=$cfg.theme;Mode=$cfg.mode;PreviewFixtureCards=$fixture.Cards;
         DockEnabled=[bool]$cfg.dock.enabled;StageEnabled=[bool]$cfg.dock.stageEnabled;SessionWebViewCount=if($web){($web -split ',').Count}else{0};
         CounterWarnings=@($counterErrors).Count
