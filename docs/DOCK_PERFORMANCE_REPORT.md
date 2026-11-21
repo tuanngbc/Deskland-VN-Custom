@@ -21,3 +21,7 @@ The split run measured 208→325 during the first controller-only block (both mo
 ## Floating Stage checkpoint
 
 [d2ba9e5](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44877602926): Windows CI reported controller-only 325→325, Stage-only 325→325, Dock-only 325→327, combined 327→327, and 100 full controller restarts 286→286. Cold modules-off calibration 236→325 is reported separately. This verifies the short regression threshold for that executable; no live preview/DWM GPU budget or four-hour conclusion follows. The utility worker is shared and only runs on user request. A matched wallpaper-only/Dock/Stage/Utilities comparison, CPU/private bytes/GPU/DWM/FPS and soak remain open.
+
+[099a4eb combined build](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44879715526) stayed within the existing CI handle threshold: controller-only 338→338, Stage-only 338→340, Dock-only 340→340, combined 340→342, and full controller restarts 299→299 (100 cycles per block). These are CI process handles, not a device-intensive utility soak.
+
+An uncontrolled 20.59-second owner-host diagnostic with two visible Docks and Stage, fixtures and native Settings interactions measured 0.86% Deskland CPU normalized to logical CPUs, 118.74 MiB working set and 253.05 MiB private bytes. No usable app 3D counter in this sample; no GPU/DWM reduction or wallpaper FPS comparison can be inferred. Keep raw evidence private; use matched measurements and the four-hour run before sign-off.
