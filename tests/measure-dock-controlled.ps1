@@ -163,6 +163,7 @@ $preflightCounterErrors = $null
 $observedCoverage = $null
 $observedStagePreviews = $null
 $stageSourceGeometry = $null
+$lostFixtureFocus = $false
 $observedSeed = if ($cfg.params -and $cfg.theme) { $cfg.params.PSObject.Properties[$cfg.theme].Value.seed }
 try {
     if (!$cfg.wallpaperEnabled -or $null -eq $observedSeed -or $observedSeed -ne $SceneSeed -or
@@ -230,7 +231,11 @@ try {
             if ($AbortMarker -and (Test-Path -LiteralPath $AbortMarker -PathType Leaf)) { throw [OperationCanceledException]::new('Controlled test canceled') }
             if ($app.HasExited) { $reasons.Add("candidate-exited:$i"); return }
             $app.Refresh()
-            if ([DeskPerfCounters]::GetForegroundWindow() -ne $fixtureHwnd) { $reasons.Add("foreground-changed:$i") }
+            if ([DeskPerfCounters]::GetForegroundWindow() -ne $fixtureHwnd) {
+                $reasons.Add("foreground-changed:$i")
+                $lostFixtureFocus = $true
+                throw [OperationCanceledException]::new('Fixture lost foreground; this interval cannot qualify')
+            }
             [DeskPerfCounters+Rect]$now = [DeskPerfCounters+Rect]::new()
             if (![DeskPerfCounters]::PhysicalWindowRect($fixtureHwnd,[ref]$now) -or $now.ToString() -cne $anchor.ToString()) { $reasons.Add("fixture-geometry-changed:$i") }
             if ([DeskPerfCounters]::SettingsVisible($CandidateId)) { $reasons.Add("candidate-settings-opened:$i") }
@@ -279,8 +284,10 @@ try {
         if (!$valid.Count) { $reasons.Add("no-complete-GPU-series:$role") }
     }
 } catch {
-    $reasons.Add("sampler-error:$($_.Exception.GetType().Name)")
-    throw
+    if (!$lostFixtureFocus) {
+        $reasons.Add("sampler-error:$($_.Exception.GetType().Name)")
+        throw
+    }
 } finally {
     $samples | Export-Csv -LiteralPath (Join-Path $Evidence 'controlled-process.csv') -NoTypeInformation
     $engines | Export-Csv -LiteralPath (Join-Path $Evidence 'controlled-engines.csv') -NoTypeInformation
