@@ -306,7 +306,7 @@ unsafe fn window_fullscreen(hwnd:HWND,screen:RECT)->bool {
 }
 unsafe fn display_fullscreen(screen:RECT,windows:&[AppWindow])->bool{
     window_fullscreen(GetForegroundWindow(),screen)||
-        windows.iter().find(|w|IsIconic(w.hwnd)==0&&stage_window_is_local(w.hwnd,screen))
+        windows.iter().find(|w|rect_intersects(w.rect,screen)&&IsIconic(w.hwnd)==0&&stage_window_is_local(w.hwnd,screen))
             .is_some_and(|w|window_fullscreen(w.hwnd,screen))
 }
 // GetApplicationUserModelId is a local process query, so packaged apps retain
@@ -413,7 +413,6 @@ fn stage_depth(screen:&Screen,style:StageStyle)->i32{
 unsafe fn sync_appbars(state:&mut State,topology:bool){
     let notify=APPBAR_DIRTY.with(|flag|flag.replace(false));
     let reset=SHELL_RESTARTED.with(|flag|flag.replace(false));
-    if reset{state.appbars.clear();}
     let mut requests=Vec::new();
     for screen in &state.screens {
         let policy=state.prefs.window_policy(&screen.id);
@@ -423,18 +422,19 @@ unsafe fn sync_appbars(state:&mut State,topology:bool){
         }
         if policy.stage==WindowMode::Reserve&&state.stages.iter().any(|p|p.display==screen.id){
             let (cards,_)=state.workspaces.cards(&screen.id,screen.bounds,&state.windows,state.prefs.all_windows);
-            if !cards.is_empty() || state.suspended {
+            if !cards.is_empty() || (state.suspended&&state.appbars.contains(&screen.id,true)) {
                 let style=state.prefs.stage_style(&screen.id);
                 requests.push(appbar::Request{display:screen.id.clone(),stage:true,monitor:screen.bounds,
                     side:if style.right==Some(true){DockSide::Right}else{DockSide::Left},depth:stage_depth(screen,style)});
             }
         }
     }
-    let ok=state.appbars.sync(requests,notify||reset||topology);
-    if !ok&&!state.reservation_failed{
+    let outcome=state.appbars.sync(requests,notify||topology,reset);
+    if !outcome.healthy&&!state.reservation_failed{
         emit(Event::Error("Windows không cấp được vùng dành riêng cho Dock hoặc Stage; tạm dùng chế độ nổi.".into()));
     }
-    state.reservation_failed=!ok;
+    state.reservation_failed=!outcome.healthy;
+    if !outcome.work_changed&&!notify&&!reset{return;}
     // rcWork must come from Explorer after registration/removal, not before.
     for screen in &mut state.screens{
         let monitor=MonitorFromRect(&screen.bounds,MONITOR_DEFAULTTONULL);
