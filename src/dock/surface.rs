@@ -4,7 +4,7 @@ use super::{appearance::Theme, geometry::{Layout,Rect}, glass_probe::Layer};
 use std::{collections::{HashMap,VecDeque}, sync::{Arc,Weak}};
 use windows_sys::Win32::Foundation::HWND;
 use crate::launcher::IconPixels;
-use super::UtilityWidget;
+use super::{FeedbackKind,UtilityWidget};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Material { pub dark:bool, pub transparency:u32, pub reduced_motion:bool }
@@ -33,17 +33,11 @@ impl Surface {
     pub unsafe fn rail(&mut self,hwnd:HWND,layout:&Layout)->bool{
         let (w,h)=self.layer.size;
         let data=self.layer.pixels();data.fill(0);
-        let scale=layout.scale;
-        let area=layout.glass;
-        let rail=match layout.side{
-            super::DockSide::Bottom=>Rect{x:area.x+area.w*0.19,y:area.y+area.h-4.0*scale,w:area.w*0.62,h:4.0*scale},
-            super::DockSide::Left=>Rect{x:area.x,y:area.y+area.h*0.19,w:4.0*scale,h:area.h*0.62},
-            super::DockSide::Right=>Rect{x:area.x+area.w-4.0*scale,y:area.y+area.h*0.19,w:4.0*scale,h:area.h*0.62},
-        };
-        rounded(data,w,h,rail,rail.w.min(rail.h)*0.5,if self.material.dark{[232,236,244]}else{[31,43,51]},90);
+        paint_rail(data,w,h,layout,self.material.dark,1.0);
         self.layer.present(hwnd)
     }
-    pub unsafe fn paint(&mut self,hwnd:HWND,layout:&Layout,items:&[super::Item],atlas:&Atlas,active:isize,hover:Option<usize>)->bool{
+    pub unsafe fn paint(&mut self,hwnd:HWND,layout:&Layout,items:&[super::Item],atlas:&Atlas,active:Option<usize>,minimized:u16,
+        hover:Option<usize>,drop_target:Option<usize>,openness:f32,feedback:Option<(usize,FeedbackKind,f32)>)->bool{
         let (w,h)=self.layer.size;
         let scale=layout.scale;
         if self.glass!=layout.glass||self.static_pixels.is_empty() {
@@ -56,34 +50,51 @@ impl Surface {
                 let x=(i%w as usize) as f32+0.5;
                 let y=(i/w as usize) as f32+0.5;
                 let d=distance(rect,radius,x,y);
-                let coverage=(0.5-d).clamp(0.0,1.0);
-                let shadow=if tint.reduced_motion{0.0}else{(1.0-(d/(6.5*scale)).max(0.0)).clamp(0.0,1.0).powi(2)*0.22*(1.0-coverage)};
-                let edge=(1.2+d/scale).clamp(0.0,1.0)*0.28;
-                let reflection=(1.0-((y-rect.y)/rect.h).clamp(0.0,1.0)).powi(5)*0.25;
-                let opacity=((100-tint.transparency) as f32*0.01+edge+reflection).clamp(0.0,0.96);
-                let tone=if tint.dark{(29.0+124.0*(edge+reflection)).min(255.0)}else{(224.0+46.0*(edge+reflection)).min(255.0)};
-                let premul=tone*coverage*opacity;
-                p[0]=(premul*1.04).round().clamp(0.0,255.0) as u8;
-                p[1]=premul.round() as u8;p[2]=(premul*0.97).round() as u8;
-                p[3]=((coverage*opacity+shadow)*255.0).round() as u8;
-                for c in 0..3{p[c]=p[c].min(p[3]);}
+                p.copy_from_slice(&glass_pixel(tint,rect,radius,x,y,scale,d));
             }
         }
         let data=self.layer.pixels();
         data.copy_from_slice(&self.static_pixels);
         for (i,(slot,item)) in layout.slots.iter().zip(items).enumerate(){
-            let front=item.hwnd as isize==active && active!=0;
+            let front=active==Some(i);
+            let asleep=(minimized & (1<<i))!=0;
             let tint=if self.material.dark{[245,248,252]}else{[58,69,78]};
-            if front||hover==Some(i){rounded(data,w,h,*slot,slot.w*0.22,tint,if front{54}else{32});}
+            if front||hover==Some(i){rounded(data,w,h,*slot,slot.w*0.25,tint,if front{38}else{29});}
+            if drop_target==Some(i){
+                let ink=if self.material.dark{[244,219,180]}else{[171,106,44]};
+                draw(data,w,h,*slot,|x,y|{
+                    let d=distance(*slot,slot.w*0.25,x,y);
+                    Some((ink,(0.5-d).clamp(0.0,1.0)*(d+2.0*scale).clamp(0.0,1.0)*240.0))
+                });
+            }
             if let Some(Some(icon))=atlas.get(&item.path){
                 self.icons.paint(data,w,h,*slot,icon);
             }else{
                 fallback_icon(data,w,h,*slot,tint);
             }
             let (x,y)=layout.indicators[i];
-            if front || item.count>0 || item.pinned {
-                let k=if front{3.5}else if item.count>0{2.4}else{1.6}*scale;
-                rounded(data,w,h,Rect{x:x-k,y:y-k,w:k*2.0,h:k*2.0},k,tint,if item.count>0{248}else{104});
+            if item.count>0 {
+                let (a,b)=if front {(4.0,1.65)}else{(1.65,1.65)};
+                let (kx,ky)=if layout.side==super::DockSide::Bottom{(a*scale,b*scale)}else{(b*scale,a*scale)};
+                let r=Rect{x:x-kx,y:y-ky,w:kx*2.0,h:ky*2.0};
+                if asleep {
+                    draw(data,w,h,r,|x,y|{
+                        let t=(distance(r,kx.min(ky),x,y)+0.5*scale).abs();
+                        Some((tint,(0.8*scale-t).clamp(0.0,1.0)*200.0))
+                    });
+                }else{rounded(data,w,h,r,kx.min(ky),tint,if front{239}else{187});}
+            }
+            if let Some((_,kind,t))=feedback.filter(|(index,_,_)|*index==i) {
+                let strength=((1.0-t).max(0.0).powf(0.75)*if matches!(kind,FeedbackKind::Failed){220.0}else{160.0}) as f32;
+                let ring=match kind {
+                    FeedbackKind::Failed=>[135,150,255],
+                    FeedbackKind::Minimize=>tint,
+                    _=>if self.material.dark{[244,218,173]}else{[170,103,42]},
+                };
+                draw(data,w,h,*slot,|x,y|{
+                    let d=distance(*slot,slot.w*0.26,x,y);
+                    Some((ring,(0.5-d).clamp(0.0,1.0)*(d+2.0*scale).clamp(0.0,1.0)*strength))
+                });
             }
         }
         let scan=layout.scan;
@@ -119,7 +130,70 @@ impl Surface {
             status_on(data,w,h,slot,scale,tint,Some(widget));
         }
         status_on(data,w,h,utility,scale,tint,None);
+        if openness<1.0 {
+            let alpha=(openness.clamp(0.0,1.0)*255.0).round() as u16;
+            for value in data.iter_mut(){*value=((*value as u16*alpha+127)/255) as u8;}
+            paint_rail(data,w,h,layout,self.material.dark,1.0-openness);
+        }
         self.layer.present(hwnd)
+    }
+}
+
+fn paint_rail(data:&mut[u8],w:i32,h:i32,layout:&Layout,dark:bool,strength:f32) {
+    let scale=layout.scale;
+    let area=layout.glass;
+    let rail=match layout.side{
+        super::DockSide::Bottom=>Rect{x:area.x+area.w*0.25,y:area.y+area.h-4.0*scale,w:area.w*0.50,h:4.0*scale},
+        super::DockSide::Left=>Rect{x:area.x,y:area.y+area.h*0.25,w:4.0*scale,h:area.h*0.50},
+        super::DockSide::Right=>Rect{x:area.x+area.w-4.0*scale,y:area.y+area.h*0.25,w:4.0*scale,h:area.h*0.50},
+    };
+    rounded(data,w,h,rail,rail.w.min(rail.h)*0.5,if dark{[241,246,255]}else{[26,34,48]},(126.0*strength.clamp(0.0,1.0)).round() as u8);
+}
+
+fn glass_pixel(tint:Material,rect:Rect,radius:f32,x:f32,y:f32,scale:f32,d:f32)->[u8;4]{
+    if d>7.8*scale{return [0;4];}
+    let coverage=(0.5-d).clamp(0.0,1.0);
+    let shadow=if coverage<1.0 {
+        let shadow_distance=distance(rect,radius,x,y-1.8*scale);
+        (1.0-(shadow_distance/(6.0*scale)).max(0.0)).clamp(0.0,1.0).powi(2)*0.25*(1.0-coverage)
+    }else{0.0};
+    let v=((y-rect.y)/rect.h).clamp(0.0,1.0);
+    let lip=(1.2+d/scale).clamp(0.0,1.0);
+    let shine=(1.0-v).powi(5);
+    let opacity=((100-tint.transparency) as f32*0.01 + 0.10*lip+0.09*shine).clamp(0.0,0.99);
+    let alpha=coverage*opacity;
+    let (base,reflection)=if tint.dark{([34.0,27.0,23.0],63.0)}else{([242.0,236.0,231.0],24.0)};
+    let mut pixel=[0;4];
+    for c in 0..3{
+        let rim=if tint.dark{(1.0-0.5*v)*lip*48.0}else{(0.8-v)*lip*26.0};
+        pixel[c]=((base[c]+shine*reflection+rim).clamp(0.0,255.0)*alpha).round() as u8;
+    }
+    pixel[3]=((alpha+shadow)*255.0).round() as u8;
+    pixel
+}
+
+#[cfg(test)]
+mod material_tests {
+    use super::*;
+
+    #[test]
+    fn capsule_has_clear_corners_a_soft_shadow_and_premultiplied_edges_at_both_dpis() {
+        for scale in [1.0,2.0] {
+            let r=Rect{x:8.0*scale,y:8.0*scale,w:150.0*scale,h:58.0*scale};
+            let radius=r.h/2.0;
+            for dark in [false,true] {
+                let paint=|x,y,t|glass_pixel(Material{dark,transparency:t,reduced_motion:false},r,radius,x,y,scale,distance(r,radius,x,y));
+                assert_eq!(paint(r.x,r.y,35),[0;4]);
+                let (x,y)=(r.x+r.w/2.0,r.y+r.h/2.0);
+                assert!(paint(x,y,18)[3]>paint(x,y,64)[3]);
+                let shadow=paint(x,r.y+r.h+3.0*scale,35);
+                assert!(shadow[3]>0 && shadow[3]<64);
+                for i in 0..32 {
+                    let p=paint(x,r.y+(i as f32/4.0-4.0)*scale,35);
+                    assert!(p[..3].iter().all(|&component|component<=p[3]));
+                }
+            }
+        }
     }
 }
 

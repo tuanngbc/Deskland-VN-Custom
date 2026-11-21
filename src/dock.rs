@@ -12,13 +12,14 @@ use windows_sys::Win32::System::Threading::{OpenProcess,QueryFullProcessImageNam
 use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::Win32::UI::Accessibility::*;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent,TRACKMOUSEEVENT,TME_LEAVE,SetFocus,VK_LEFT,VK_RIGHT,VK_UP,VK_DOWN,VK_RETURN,VK_ESCAPE,VK_HOME,VK_END,VK_APPS,VK_F10,VK_SHIFT,GetKeyState};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent,TRACKMOUSEEVENT,TME_LEAVE,SetFocus,SetCapture,GetCapture,ReleaseCapture,VK_LEFT,VK_RIGHT,VK_UP,VK_DOWN,VK_RETURN,VK_ESCAPE,VK_HOME,VK_END,VK_APPS,VK_F10,VK_SHIFT,GetKeyState};
 
 mod options;
 mod runtime;
 mod glass_probe;
 mod appearance;
 mod geometry;
+mod motion;
 mod surface;
 mod icon_atlas;
 mod previews;
@@ -46,6 +47,7 @@ const HIDE_TIMER:usize=5;
 const WORKSPACE_TIMER:usize=6;
 const STAGE_MOTION_TIMER:usize=7;
 const STATUS_TIP_TIMER:usize=8;
+const FEEDBACK_TIMER:usize=9;
 const WM_DOCK_MOUSELEAVE:u32=0x02A3;
 const ITEM_WIDTH:i32=66;
 const HEIGHT:i32=70;
@@ -86,25 +88,51 @@ struct Bar {
     hwnd:HWND, bounds:RECT, items:Vec<Item>, hovered:i32, hidden:bool,
     layout:Option<geometry::Layout>, pinned_widgets:Vec<UtilityWidget>, motion:Motion, collapsed:bool, auto_hide:bool,
     status_hover:Option<Option<UtilityWidget>>, pressed:Option<(String,i32,i32)>, keyboard:Option<usize>, previous_focus:isize, pointer:Option<(f32,f32)>,
+    reveal:motion::Spring, feedback:Option<Feedback>, active:Option<usize>, minimized:u16,
 }
+#[derive(Clone, Copy)]
+enum FeedbackKind { Launch, Restore, Minimize, Failed }
+#[derive(Clone)]
+struct Feedback { path:String, kind:FeedbackKind, start:std::time::Instant }
 #[derive(Clone,Default)]
 struct Motion {
-    focus:Option<f32>, target:Option<f32>, amount:f32, at:Option<std::time::Instant>, scheduled:bool,
+    focus:Option<motion::Spring>, target:Option<f32>, zoom:motion::Spring, at:Option<std::time::Instant>, scheduled:bool,
 }
 impl Motion {
-    fn tick(&mut self, speed:u32)->bool{
-        let now=std::time::Instant::now();
+    fn focus_value(&self)->Option<f32>{self.focus.map(|f|f.value)}
+    fn tick(&mut self, now:std::time::Instant, speed:u32, reveal:&mut motion::Spring, shown:bool)->bool{
         let dt=self.at.replace(now).map_or(0.016,|t|now.duration_since(t).as_secs_f32().clamp(0.001,0.045));
-        let gain=1.0-(-dt*18.0*speed as f32/100.0).exp();
+        let speed=speed as f32/100.0;
         let goal=if self.target.is_some(){1.0}else{0.0};
-        self.amount+=(goal-self.amount)*gain;
+        let mut unsettled=self.zoom.advance(goal,dt,25.0*speed,0.0025);
         if let Some(target)=self.target{
-            let current=self.focus.unwrap_or(target);
-            self.focus=Some(current+(target-current)*gain);
+            let focus=self.focus.get_or_insert_with(||motion::Spring::rest(target));
+            unsettled|=focus.advance(target,dt,33.0*speed,0.28);
         }
-        let unsettled=(goal-self.amount).abs()>0.005||matches!((self.focus,self.target),(Some(a),Some(b)) if (a-b).abs()>0.3);
-        if !unsettled{self.amount=goal;self.focus=self.target;self.at=None;self.scheduled=false;}
+        if self.target.is_none() && self.zoom.value==0.0 { self.focus=None; }
+        unsettled|=reveal.advance(if shown{1.0}else{0.0},dt,28.0*speed,0.003);
         unsettled
+    }
+}
+impl Bar {
+    fn drop_target(&self)->Option<usize>{
+        let (path,sx,sy)=self.pressed.as_ref()?;
+        let (x,y)=self.pointer?;
+        if (x-*sx as f32).abs()+(y-*sy as f32).abs()<=9.0
+            || !self.items.iter().any(|item|item.pinned&&item.path==*path){return None;}
+        self.layout.as_ref()?.hit(x,y)
+            .filter(|&i|self.items.get(i).is_some_and(|item|item.pinned&&item.path!=*path))
+    }
+    fn schedule(&mut self)->bool{
+        let start=!self.motion.scheduled;
+        self.motion.scheduled=true;
+        start
+    }
+    fn collapse(&mut self, collapsed:bool, reduced:bool)->bool {
+        if self.collapsed==collapsed{return false;}
+        self.collapsed=collapsed;
+        if reduced {self.reveal=motion::Spring::rest(if collapsed{0.0}else{1.0});false}
+        else {self.schedule()}
     }
 }
 #[derive(Default)]
@@ -495,7 +523,9 @@ unsafe fn recreate(state:&mut State) {
             r.left,r.top,r.right-r.left,r.bottom-r.top,
             ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
         if !hwnd.is_null(){
-        state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:true,layout:Some(layout),pinned_widgets,motion:Motion::default(),collapsed:state.prefs.dock_auto_hide(&screen.id),auto_hide:state.prefs.dock_auto_hide(&screen.id),status_hover:None,pressed:None,keyboard:None,previous_focus:0,pointer:None});
+        let auto_hide=state.prefs.dock_auto_hide(&screen.id);
+        state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:true,layout:Some(layout),pinned_widgets,motion:Motion::default(),collapsed:auto_hide,auto_hide,status_hover:None,pressed:None,keyboard:None,previous_focus:0,pointer:None,
+            reveal:motion::Spring::rest(if auto_hide{0.0}else{1.0}),feedback:None,active:None,minimized:0});
         }else{emit(Event::Error(format!("Create Dock window: {}",GetLastError())));}
         }
         if stage_targets.contains(&i) && !state.stages.iter().any(|s|same_rect(s.bounds,screen.bounds)) {
@@ -538,17 +568,27 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let items=item_list(&state.windows,b.bounds,&state.prefs);
         let mut changed=b.items!=items || active_changed || material_changed;
         b.items=items;
+        let active_path=state.windows.iter().find(|w|w.hwnd as isize==foreground
+            &&(state.prefs.all_windows||rect_intersects(b.bounds,w.rect))).map(|w|w.path.as_str());
+        let active=b.items.iter().position(|i|active_path.is_some_and(|p|p.eq_ignore_ascii_case(&i.path)));
+        let minimized=b.items.iter().enumerate().fold(0u16,|mask,(i,item)|{
+            if item.count!=0&&!state.windows.iter().any(|w|w.path.eq_ignore_ascii_case(&item.path)
+                &&(state.prefs.all_windows||rect_intersects(b.bounds,w.rect))&&IsIconic(w.hwnd)==0){mask|(1<<i)}else{mask}
+        });
+        changed|=b.active!=active||b.minimized!=minimized;
+        b.active=active;b.minimized=minimized;
         let screen=state.screens.iter().find(|s|same_rect(s.bounds,b.bounds));
         if let Some(screen)=screen {
             let (placed,_)=state.appbars.placement(screen,false);
             let auto=state.prefs.dock_auto_hide(&screen.id);
             if auto!=b.auto_hide{
                 KillTimer(b.hwnd,HIDE_TIMER);
-                b.auto_hide=auto;b.collapsed=auto&&b.layout.is_some();changed=true;
+                b.auto_hide=auto;b.collapsed=auto&&b.layout.is_some();
+                b.reveal=motion::Spring::rest(if b.collapsed{0.0}else{1.0});changed=true;
             }
             let r=if b.layout.is_some(){
                 b.pinned_widgets=state.prefs.utility_profiles.get(&screen.id).map_or_else(Vec::new,UtilityProfile::pinned);
-                let layout=geometry::measure_widgets(&placed,&state.prefs.appearance,b.items.len(),b.motion.focus,b.motion.amount,
+                let layout=geometry::measure_widgets(&placed,&state.prefs.appearance,b.items.len(),b.motion.focus_value(),b.motion.zoom.value,
                     state.prefs.utility_position(&screen.id),&b.pinned_widgets,state.prefs.utility_cell(&screen.id));
                 changed|=b.layout.as_ref().is_some_and(|old|old.glass!=layout.glass||old.slots!=layout.slots||old.utility!=layout.utility||old.inline!=layout.inline);
                 let r=layout.window;b.layout=Some(layout);r
@@ -562,7 +602,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let fullscreen=state.suspended || screen.is_some_and(|s|fullscreen_outputs.contains(&s.id));
         if b.hidden!=fullscreen {
             ShowWindow(b.hwnd,if fullscreen{SW_HIDE}else{SW_SHOWNOACTIVATE});b.hidden=fullscreen;
-            if fullscreen{close_status_tip(b.hwnd);KillTimer(b.hwnd,STATUS_TIP_TIMER);b.status_hover=None;KillTimer(b.hwnd,MOTION_TIMER);KillTimer(b.hwnd,HIDE_TIMER);b.motion=Motion::default();b.hovered=-1;b.keyboard=None;b.pressed=None;b.pointer=None;b.collapsed=b.auto_hide;}
+            if fullscreen{close_status_tip(b.hwnd);KillTimer(b.hwnd,STATUS_TIP_TIMER);b.status_hover=None;KillTimer(b.hwnd,MOTION_TIMER);KillTimer(b.hwnd,HIDE_TIMER);KillTimer(b.hwnd,FEEDBACK_TIMER);b.motion=Motion::default();b.hovered=-1;b.keyboard=None;b.pressed=None;b.pointer=None;b.collapsed=b.auto_hide;b.reveal=motion::Spring::rest(if b.collapsed{0.0}else{1.0});b.feedback=None;}
             changed=true;
         }
         if changed{InvalidateRect(b.hwnd,ptr::null(),0);}
@@ -774,10 +814,12 @@ unsafe fn paint(hwnd:HWND){
     let layered=STATE.with(|s|{
         let state=s.borrow();
         let bar=state.bars.iter().find(|b|b.hwnd==hwnd)?;
-        Some((bar.layout.clone()?,bar.items.clone(),bar.hovered,bar.collapsed,bar.keyboard,state.material?,state.foreground,bar.motion.at))
+        let feedback=bar.feedback.as_ref().and_then(|f|bar.items.iter().position(|i|i.path.eq_ignore_ascii_case(&f.path))
+            .map(|i|(i,f.kind,if state.prefs.appearance.reduced_motion{0.2}else{f.start.elapsed().as_secs_f32()/0.42})));
+        Some((bar.layout.clone()?,bar.items.clone(),bar.hovered,bar.keyboard,state.material?,bar.active,bar.minimized,bar.drop_target(),bar.reveal.value.clamp(0.0,1.0),feedback,bar.motion.at))
     });
     let mut ps:PAINTSTRUCT=mem::zeroed();let dc=BeginPaint(hwnd,&mut ps);
-    if let Some((layout,items,hovered,collapsed,keyboard,material,active,animation_tick))=layered{
+    if let Some((layout,items,hovered,keyboard,material,active,minimized,drop_target,openness,feedback,animation_tick))=layered{
         EndPaint(hwnd,&ps);
         let key=hwnd as usize;
         let paint=animation_tick.filter(|_|perf::active()).map(|tick|(tick,std::time::Instant::now()));
@@ -792,7 +834,7 @@ unsafe fn paint(hwnd:HWND){
                 let mut a=a.borrow_mut();
                 a.as_mut().map(|atlas|atlas.request(&items)).unwrap_or_default()
             });
-            let applied=if collapsed {canvas.rail(hwnd,&layout)} else {canvas.paint(hwnd,&layout,&items,&atlas,active,keyboard.or_else(||usize::try_from(hovered).ok()))};
+            let applied=if openness<=0.003 {canvas.rail(hwnd,&layout)} else {canvas.paint(hwnd,&layout,&items,&atlas,active,minimized,keyboard.or_else(||usize::try_from(hovered).ok()),drop_target,openness,feedback)};
             if applied{
                 if let Some((tick,paint))=paint{perf::submitted(key,tick,paint);}
                 SURFACES.with(|s|s.borrow_mut().insert(key,canvas));
@@ -948,11 +990,28 @@ unsafe fn open_launcher(){
 unsafe fn open(uri:&str) {
     ShellExecuteW(ptr::null_mut(),wide("open").as_ptr(),wide(uri).as_ptr(),ptr::null(),ptr::null(),SW_SHOWNORMAL);
 }
-unsafe fn activate(item:&Item) {
+unsafe fn show_feedback(hwnd:HWND,item:&Item,kind:FeedbackKind){
+    let (start,reduced)=STATE.with(|s|{
+        let mut s=s.borrow_mut();
+        let reduced=s.prefs.appearance.reduced_motion;
+        let Some(bar)=s.bars.iter_mut().find(|b|b.hwnd==hwnd&&!b.hidden&&b.layout.is_some())else{return(false,reduced);};
+        bar.feedback=Some(Feedback{path:item.path.clone(),kind,start:std::time::Instant::now()});
+        (if reduced{true}else{bar.schedule()},reduced)
+    });
+    if start {SetTimer(hwnd,if reduced{FEEDBACK_TIMER}else{MOTION_TIMER},if reduced{420}else{16},None);}
+    InvalidateRect(hwnd,ptr::null(),0);
+}
+unsafe fn activate(hwnd:HWND,item:&Item) {
     if !item.hwnd.is_null() && IsWindow(item.hwnd)!=0 {
-        if IsIconic(item.hwnd)!=0{ShowWindowAsync(item.hwnd,SW_RESTORE);}
+        if IsIconic(item.hwnd)!=0{
+            let restored=ShowWindowAsync(item.hwnd,SW_RESTORE)!=0;
+            show_feedback(hwnd,item,if restored{FeedbackKind::Restore}else{FeedbackKind::Failed});
+        }
         SetForegroundWindow(item.hwnd);
-    } else {open(&item.path);}
+    } else {
+        let result=ShellExecuteW(ptr::null_mut(),wide("open").as_ptr(),wide(&item.path).as_ptr(),ptr::null(),ptr::null(),SW_SHOWNORMAL) as isize;
+        show_feedback(hwnd,item,if result>32{FeedbackKind::Launch}else{FeedbackKind::Failed});
+    }
 }
 unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     let menu=CreatePopupMenu();if menu.is_null(){return;}
@@ -1007,9 +1066,9 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
         MENU_MINIMIZE|MENU_MAXIMIZE|MENU_RESTORE|MENU_SNAP_LEFT|MENU_SNAP_RIGHT|MENU_EXPAND=>if let Some(item)=selected{
             if !item.hwnd.is_null()&&IsWindow(item.hwnd)!=0 {
                 match cmd {
-                    MENU_MINIMIZE=>{ShowWindowAsync(item.hwnd,SW_MINIMIZE);}
+                    MENU_MINIMIZE=>{let ok=ShowWindowAsync(item.hwnd,SW_MINIMIZE)!=0;show_feedback(hwnd,&item,if ok{FeedbackKind::Minimize}else{FeedbackKind::Failed});}
                     MENU_MAXIMIZE=>{ShowWindowAsync(item.hwnd,SW_MAXIMIZE);}
-                    MENU_RESTORE=>{ShowWindowAsync(item.hwnd,SW_RESTORE);}
+                    MENU_RESTORE=>{let ok=ShowWindowAsync(item.hwnd,SW_RESTORE)!=0;show_feedback(hwnd,&item,if ok{FeedbackKind::Restore}else{FeedbackKind::Failed});}
                     MENU_SNAP_LEFT|MENU_SNAP_RIGHT|MENU_EXPAND=>{
                         let screen=displays().into_iter().find(|s|stage_window_is_local(item.hwnd,s.bounds));
                         if let Some(screen)=screen {
@@ -1104,7 +1163,7 @@ unsafe fn activate_stage(hwnd:HWND,i:usize){
             let mut focus=None;
             update_state(|state|{focus=state.workspaces.switch(&display,id);refresh(state,false);});
             if let Some(hwnd)=focus{SetForegroundWindow(hwnd);}
-        }else{activate(&item);}
+        }else{activate(hwnd,&item);}
     }
 }
 unsafe fn turn_stage_page(hwnd:HWND,forward:bool)->bool{
@@ -1163,11 +1222,12 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let mut state=s.borrow_mut();
                 let animate=!state.prefs.appearance.reduced_motion;
                 if let Some(b)=state.bars.iter_mut().find(|b|b.hwnd==hwnd){
-                    b.hovered=-1;b.status_hover=None;b.motion.target=None;b.pressed=None;b.pointer=None;
+                    b.hovered=-1;b.status_hover=None;b.motion.target=None;b.pointer=None;
+                    if GetCapture()!=hwnd{b.pressed=None;}
                     if !animate{b.motion=Motion::default();}
-                    let start=animate&&b.layout.is_some()&&!b.motion.scheduled&&b.motion.amount>0.001;
+                    let start=animate&&b.layout.is_some()&&!b.motion.scheduled&&b.motion.zoom.value>0.001;
                     b.motion.scheduled|=start;
-                    (true,start,b.auto_hide&&b.layout.is_some()&&b.keyboard.is_none())
+                    (true,start,b.auto_hide&&b.layout.is_some()&&b.keyboard.is_none()&&b.pressed.is_none())
                 }else{(false,false,false)}
             });
             if tracked.1{SetTimer(hwnd,MOTION_TIMER,16,None);}
@@ -1190,6 +1250,11 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_TIMER if w==STATUS_TIP_TIMER=>{KillTimer(hwnd,STATUS_TIP_TIMER);show_status_tip(hwnd);0},
+        WM_TIMER if w==FEEDBACK_TIMER=>{
+            KillTimer(hwnd,FEEDBACK_TIMER);
+            STATE.with(|s|{if let Some(bar)=s.borrow_mut().bars.iter_mut().find(|b|b.hwnd==hwnd){bar.feedback=None;}});
+            InvalidateRect(hwnd,ptr::null(),0);0
+        },
         WM_TIMER if w==HIDE_TIMER=>{
             KillTimer(hwnd,HIDE_TIMER);
             let stage=STATE.with(|state|state.borrow().stages.iter().any(|p|p.hwnd==hwnd&&p.auto_hide&&p.keyboard.is_none()));
@@ -1200,10 +1265,13 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 update_state(|s|{if let Some(p)=s.stages.iter_mut().find(|p|p.hwnd==hwnd){p.collapsed=true;}refresh(s,false);});
                 return 0;
             }
-            STATE.with(|state|{
+            let start=STATE.with(|state|{
                 let mut state=state.borrow_mut();
-                if let Some(b)=state.bars.iter_mut().find(|b|b.hwnd==hwnd&&b.auto_hide&&b.layout.is_some()&&b.keyboard.is_none()){b.collapsed=true;}
+                let reduced=state.prefs.appearance.reduced_motion;
+                state.bars.iter_mut().find(|b|b.hwnd==hwnd&&b.auto_hide&&b.layout.is_some()&&b.keyboard.is_none())
+                    .is_some_and(|b|b.collapse(true,reduced))
             });
+            if start{SetTimer(hwnd,MOTION_TIMER,16,None);}
             InvalidateRect(hwnd,ptr::null(),0);
             0
         },
@@ -1214,11 +1282,19 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let b=bars.iter_mut().find(|b|b.hwnd==hwnd)?;
                 if b.hidden || b.layout.is_none(){return None;}
                 let display=screens.iter().find(|d|same_rect(d.bounds,b.bounds))?;
-                let again=b.motion.tick(prefs.appearance.animation_speed);
-                let (placement,_)=appbars.placement(display,false);
-                let layout=geometry::measure_widgets(&placement,&prefs.appearance,b.items.len(),b.motion.focus,b.motion.amount,prefs.utility_position(&display.id),&b.pinned_widgets,prefs.utility_cell(&display.id));
-                b.hovered=b.pointer.and_then(|(x,y)|layout.hot(x,y)).map_or(-1,|i|i as i32);
-                b.layout=Some(layout);
+                let now=std::time::Instant::now();
+                let old_zoom=b.motion.zoom.value;
+                let old_focus=b.motion.focus_value();
+                let mut again=b.motion.tick(now,prefs.appearance.animation_speed,&mut b.reveal,!b.collapsed);
+                if old_zoom!=b.motion.zoom.value||old_focus!=b.motion.focus_value(){
+                    let (placement,_)=appbars.placement(display,false);
+                    let layout=geometry::measure_widgets(&placement,&prefs.appearance,b.items.len(),b.motion.focus_value(),b.motion.zoom.value,prefs.utility_position(&display.id),&b.pinned_widgets,prefs.utility_cell(&display.id));
+                    b.hovered=b.pointer.and_then(|(x,y)|layout.hot(x,y)).map_or(-1,|i|i as i32);
+                    b.layout=Some(layout);
+                }
+                if b.feedback.as_ref().is_some_and(|f|now.duration_since(f.start).as_millis()>=420){b.feedback=None;}
+                again|=b.feedback.is_some();
+                if !again{b.motion.at=None;b.motion.scheduled=false;}
                 Some(again)
             });
             if motion.is_some(){InvalidateRect(hwnd,ptr::null(),0);}
@@ -1258,17 +1334,21 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             }
             let (changed,animate,track)=STATE.with(|s|{
                 let mut state=s.borrow_mut();
-                let reduced=state.prefs.appearance.reduced_motion||state.prefs.appearance.magnification==0;
+                let reduced=state.prefs.appearance.reduced_motion;
+                let magnify=!reduced&&state.prefs.appearance.magnification!=0;
                 let Some(b)=state.bars.iter_mut().find(|b|b.hwnd==hwnd) else{return (false,false,false)};
                 let prev=b.hovered;
+                let prev_drop=b.drop_target();
                 b.pointer=Some((x as f32,y as f32));
-                let reveal=std::mem::replace(&mut b.collapsed,false);
+                let reveal=b.collapsed;
+                let start_reveal=b.collapse(false,reduced);
                 if let Some(layout)=b.layout.as_ref(){
                     b.hovered=layout.hot(x as f32,y as f32).map_or(-1,|i|i as i32);
-                    let desired=if !reduced&&(layout.glass.contains(x as f32,y as f32)||b.hovered>=0){Some(layout.axis(x as f32,y as f32))}else{None};
-                    let start=desired!=b.motion.target&&!b.motion.scheduled&&!reduced;
-                    b.motion.target=desired;b.motion.scheduled|=start;
-                    (reveal||prev!=b.hovered,start,true)
+                    let desired=if magnify&&(layout.glass.contains(x as f32,y as f32)||b.hovered>=0){Some(layout.axis(x as f32,y as f32))}else{None};
+                    let changed=desired!=b.motion.target;
+                    b.motion.target=desired;
+                    let start=start_reveal||(changed&&b.schedule());
+                    (reveal||prev!=b.hovered||prev_drop!=b.drop_target(),start,true)
                 }else{
                     b.hovered=if x>=12&&(x-12)/ITEM_WIDTH<b.items.len() as i32{(x-12)/ITEM_WIDTH}else{-1};
                     (prev!=b.hovered,false,true)
@@ -1300,14 +1380,22 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_LBUTTONDOWN=>{
             KillTimer(hwnd,STATUS_TIP_TIMER);close_status_tip(hwnd);
             let (x,y)=(l as i16 as i32,(l>>16) as i16 as i32);
-            STATE.with(|s|{
+            let capture=STATE.with(|s|{
                 let mut state=s.borrow_mut();
-                if let Some(bar)=state.bars.iter_mut().find(|b|b.hwnd==hwnd&&!b.collapsed){
-                    bar.pressed=bar.layout.as_ref().and_then(|layout|layout.hit(x as f32,y as f32))
-                        .and_then(|i|bar.items.get(i)).map(|it|(it.path.clone(),x,y));
-                }
+                let Some(bar)=state.bars.iter_mut().find(|b|b.hwnd==hwnd&&!b.collapsed)else{return false;};
+                let item=bar.layout.as_ref().and_then(|layout|layout.hit(x as f32,y as f32)).and_then(|i|bar.items.get(i));
+                let capture=item.is_some_and(|it|it.pinned);
+                bar.pressed=item.map(|it|(it.path.clone(),x,y));
+                capture
             });
+            if capture{SetCapture(hwnd);}
             0
+        },
+        WM_CAPTURECHANGED|WM_CANCELMODE=>{
+            let redraw=STATE.with(|s|s.borrow_mut().bars.iter_mut().find(|b|b.hwnd==hwnd).is_some_and(|b|b.pressed.take().is_some()));
+            if msg==WM_CANCELMODE&&GetCapture()==hwnd{ReleaseCapture();}
+            if redraw{InvalidateRect(hwnd,ptr::null(),0);}
+            if msg==WM_CANCELMODE{DefWindowProcW(hwnd,msg,w,l)}else{0}
         },
         WM_KILLFOCUS=>{
             let stage_auto=STATE.with(|s|s.borrow_mut().stages.iter_mut().find(|p|p.hwnd==hwnd)
@@ -1378,7 +1466,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 Some((None,false,false,None,0))
             });
             if let Some((item,search,utilities,widget,previous))=action{
-                if let Some(item)=item{activate(&item);}
+                if let Some(item)=item{activate(hwnd,&item);}
                 if search {open_launcher();}
                 if utilities||widget.is_some(){request_utilities(hwnd,widget);}
                 if previous!=0 && IsWindow(previous as _)!=0{SetForegroundWindow(previous as _);}
@@ -1410,17 +1498,21 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 Some((item,layout.is_launch_button(x as f32,y as f32),layout.is_utility_button(x as f32,y as f32),layout.inline_at(x as f32,y as f32),bar.pressed.take(),bar.collapsed))
             });
             if let Some((item,search,utilities,widget,pressed,collapsed))=rendered{
+                if GetCapture()==hwnd{ReleaseCapture();}
+                if pressed.is_some(){InvalidateRect(hwnd,ptr::null(),0);}
                 if collapsed{return 0;}
                 if let Some((start,sx,sy))=pressed {
                     if (x-sx).abs()+(y-sy).abs()>9 {
-                        if let Some(item)=item{if item.pinned {emit(Event::Edit(Edit::MovePin(start,item.path)));}}
-                    }else if let Some(item)=item{if item.path==start{activate(&item);}}
+                        if let Some(item)=item{if item.pinned&&item.path!=start {emit(Event::Edit(Edit::MovePin(start,item.path)));}}
+                        let hide=STATE.with(|s|s.borrow().bars.iter().any(|b|b.hwnd==hwnd&&b.pointer.is_none()&&b.auto_hide&&b.keyboard.is_none()));
+                        if hide{SetTimer(hwnd,HIDE_TIMER,650,None);}
+                    }else if let Some(item)=item{if item.path==start{activate(hwnd,&item);}}
                 }else if search{open_launcher();}else if utilities||widget.is_some(){request_utilities(hwnd,widget);}
                 return 0;
             }
             let selected=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd).and_then(|b|b.items.get(((x-12).max(0)/ITEM_WIDTH) as usize)).cloned());
             let max=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd).map(|b|b.items.len()).unwrap_or(0));
-            if x>=12 && (x-12)/ITEM_WIDTH <max as i32 {if let Some(item)=selected{activate(&item);}}
+            if x>=12 && (x-12)/ITEM_WIDTH <max as i32 {if let Some(item)=selected{activate(hwnd,&item);}}
             else {
                 let mut area:RECT=mem::zeroed();GetClientRect(hwnd,&mut area);
                 if x>=area.right-52{request_utilities(hwnd,None);}
@@ -1494,7 +1586,8 @@ unsafe fn drain_commands() {
                 let repaint=state.prefs.appearance!=options.appearance;
                 if repaint{state.material=None;}
                 if repaint { for b in &mut state.bars{
-                    KillTimer(b.hwnd,MOTION_TIMER);KillTimer(b.hwnd,HIDE_TIMER);b.motion=Motion::default();
+                    KillTimer(b.hwnd,MOTION_TIMER);KillTimer(b.hwnd,HIDE_TIMER);KillTimer(b.hwnd,FEEDBACK_TIMER);
+                    b.motion=Motion::default();b.feedback=None;b.reveal=motion::Spring::rest(if b.collapsed{0.0}else{1.0});
                 } }
                 state.prefs=options;refresh(state,false);
                 if repaint{for b in &state.bars{InvalidateRect(b.hwnd,ptr::null(),0);}}
@@ -1527,7 +1620,7 @@ unsafe fn focus_dock(){
         let idx=state.bars.iter().position(|bar|!bar.hidden&&pos.x>=bar.bounds.left&&pos.x<bar.bounds.right&&pos.y>=bar.bounds.top&&pos.y<bar.bounds.bottom)
             .or_else(||state.bars.iter().position(|b|!b.hidden))?;
         let bar=&mut state.bars[idx];
-        bar.collapsed=false;bar.keyboard=Some(bar.layout.as_ref().map_or(0,|l|l.key_order()[0]));bar.previous_focus=foreground as isize;
+        bar.collapse(false,true);bar.keyboard=Some(bar.layout.as_ref().map_or(0,|l|l.key_order()[0]));bar.previous_focus=foreground as isize;
         Some(bar.hwnd)
     });
     if let Some(hwnd)=target{
