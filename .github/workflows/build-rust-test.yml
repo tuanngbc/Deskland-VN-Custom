@@ -42,6 +42,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_surface::tests::native_stage_surface_submits_premultiplied_cards_with_desktop_gaps -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::utilities::tests::native_on_demand_provider_completes_without_an_assumed_device -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           foreach ($attempt in 1..3) {
             cargo test --release dock::workspaces::tests::native_stage_switch_restores_placement_and_ignores_unmanaged_windows -- --ignored --exact --nocapture --test-threads=1
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

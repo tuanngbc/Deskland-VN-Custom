@@ -2528,6 +2528,14 @@ fn main() {
         let mut dock_edited=false;
         for event in dock_events {match event {
             dock::Event::Edit(edit)=>{edit.apply(&mut app.cfg.dock);dock_edited=true;}
+            dock::Event::Utility(action)=>{
+                use dock::HostAction::*;
+                let command=match action {
+                    Settings=>CMD_SETTINGS,Capture=>CMD_CAPTURE,Record=>CMD_RECORD,
+                    SystemMonitor=>CMD_SYSTEM_MONITOR,Wallpaper=>CMD_WALLPAPER,Stage=>CMD_STAGE,Launcher=>CMD_LAUNCHER,
+                };
+                PENDING_CMD.with(|c|c.set(command));
+            }
             dock::Event::Error(error)=>{log!("Dock & Stage: {error}");app.dock_error=Some(error);app.post_dock_state();}
         }}
         if dock_edited {app.configure_dock();save_config(&app.cfg);settings::sync(&app.settings_state());}

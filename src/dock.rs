@@ -25,6 +25,8 @@ mod previews;
 mod workspaces;
 mod perf;
 mod stage_surface;
+mod utilities;
+pub use utilities::HostAction;
 pub use glass_probe::probe as glass_probe;
 pub use appearance::{Appearance,DockSide};
 pub use options::{Options,Edit,DisplayMode,DisplayTarget,StageStyle};
@@ -37,6 +39,7 @@ const PREVIEW_CLASS:&str="TuanpcDeskStagePreview";
 const WM_TICK:u32=WM_APP+50;
 const WM_CONFIG:u32=WM_APP+51;
 const WM_ICON_CHANGED:u32=WM_APP+52;
+const WM_UTILITY_READY:u32=WM_APP+53;
 const MOTION_TIMER:usize=4;
 const HIDE_TIMER:usize=5;
 const WORKSPACE_TIMER:usize=6;
@@ -147,6 +150,8 @@ thread_local! {
     static EVENTS:RefCell<Option<mpsc::Sender<Event>>>=const{RefCell::new(None)};
     static SURFACES:RefCell<HashMap<usize,surface::Surface>>=RefCell::new(HashMap::new());
     static STAGE_SURFACES:RefCell<HashMap<usize,stage_surface::Panel>>=RefCell::new(HashMap::new());
+    static UTILITIES:RefCell<Option<utilities::Provider>>=const{RefCell::new(None)};
+    static UTILITY_ANCHOR:Cell<Option<(usize,POINT)>>=const{Cell::new(None)};
     static ATLAS:RefCell<Option<icon_atlas::Worker>>=const{RefCell::new(None)};
 }
 
@@ -454,6 +459,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         }
         if changed{InvalidateRect(b.hwnd,ptr::null(),0);}
     }
+    if state.bars.is_empty()||state.suspended{UTILITY_ANCHOR.with(|a|a.set(None));UTILITIES.with(|u|u.borrow_mut().take());}
     state.workspaces.prune();
     for stage in &mut state.stages {
         let mut placement_changed=false;
@@ -660,13 +666,42 @@ unsafe fn paint(hwnd:HWND){
                 fill(dc,RECT{left:left+24,top:56,right:left+28,bottom:60},0x00888888);
             }
         }
-        let x=area.right-210;
-        label(dc,x,20,42,"Wi-Fi",0x00ffffff);
-        label(dc,x+46,20,40,"BT",0x00ffffff);
-        label(dc,x+90,20,45,"Âm",0x00ffffff);
-        label(dc,x+142,20,62,"Taskbar",0x00ffffff);
+        label(dc,area.right-52,20,42,"⋯",0x00ffffff);
     }
     EndPaint(hwnd,&ps);
+}
+unsafe fn request_utilities(hwnd:HWND){
+    let mut point=POINT{x:0,y:0};
+    let location=STATE.with(|s|{
+        let state=s.borrow();
+        let bar=state.bars.iter().find(|b|b.hwnd==hwnd&&!b.hidden)?;
+        bar.layout.as_ref().map(|l|(l.utility.x as i32,l.utility.y as i32-4))
+    });
+    if let Some((x,y))=location{
+        point.x=x;point.y=y;
+        ClientToScreen(hwnd,&mut point);
+    }else{GetCursorPos(&mut point);}
+    let control=CONTROL.with(Cell::get);
+    let submitted=UTILITIES.with(|u|u.borrow_mut().get_or_insert_with(utilities::Provider::new).read(control));
+    if submitted{UTILITY_ANCHOR.with(|a|a.set(Some((hwnd as usize,point))));}
+}
+unsafe fn show_utilities(){
+    let snapshot=UTILITIES.with(|u|u.borrow().as_ref().and_then(utilities::Provider::take));
+    let target=UTILITY_ANCHOR.with(|a|a.take());
+    let (Some(snapshot),Some((bar,point)))=(snapshot,target) else{return;};
+    let hwnd=bar as HWND;
+    if !STATE.with(|s|s.borrow().bars.iter().any(|b|b.hwnd==hwnd&&!b.hidden)){return;}
+    if let Some(action)=utilities::menu(hwnd,point,&snapshot){
+        match action{
+            utilities::Action::Host(action)=>emit(Event::Utility(action)),
+            utilities::Action::SetVolume(_)|utilities::Action::Mute=>{
+                UTILITIES.with(|u|{
+                    if let Some(provider)=u.borrow().as_ref(){provider.apply(CONTROL.with(Cell::get),action);}
+                });
+            }
+            _=>utilities::delegated(action),
+        }
+    }
 }
 unsafe fn open_launcher(){
     let owner=OWNER.with(Cell::get);
@@ -844,6 +879,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     match msg {
         WM_CONFIG=>{drain_commands();0},
         WM_TICK=>{SetTimer(hwnd,2,60,None);0},
+        WM_UTILITY_READY=>{show_utilities();0},
         WM_ICON_CHANGED=>{
             let changed=ATLAS.with(|a|a.borrow_mut().as_mut().is_some_and(|worker|worker.receive()));
             if changed{for h in STATE.with(|s|{let state=s.borrow();state.bars.iter().filter(|b|!b.hidden).map(|b|b.hwnd)
@@ -922,7 +958,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let display=screens.iter().find(|d|same_rect(d.bounds,b.bounds))?;
                 let again=b.motion.tick(prefs.appearance.animation_speed);
                 let layout=geometry::measure(display,&prefs.appearance,b.items.len(),b.motion.focus,b.motion.amount);
-                b.hovered=b.pointer.and_then(|(x,y)|layout.hit(x,y)).map_or(-1,|i|i as i32);
+                b.hovered=b.pointer.and_then(|(x,y)|layout.hot(x,y)).map_or(-1,|i|i as i32);
                 b.layout=Some(layout);
                 Some(again)
             });
@@ -968,7 +1004,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 b.pointer=Some((x as f32,y as f32));
                 let reveal=std::mem::replace(&mut b.collapsed,false);
                 if let Some(layout)=b.layout.as_ref(){
-                    b.hovered=layout.hit(x as f32,y as f32).map_or(-1,|i|i as i32);
+                    b.hovered=layout.hot(x as f32,y as f32).map_or(-1,|i|i as i32);
                     let desired=if !reduced&&(layout.glass.contains(x as f32,y as f32)||b.hovered>=0){Some(layout.axis(x as f32,y as f32))}else{None};
                     let start=desired!=b.motion.target&&!b.motion.scheduled&&!reduced;
                     b.motion.target=desired;b.motion.scheduled|=start;
@@ -1043,20 +1079,21 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let mut state=s.borrow_mut();
                 let bar=state.bars.iter_mut().find(|b|b.hwnd==hwnd)?;
                 let current=bar.keyboard?;
-                let max=bar.items.len();
+                let max=bar.items.len()+1;
                 let next=match key{
                     VK_LEFT|VK_UP=>current.saturating_sub(1),VK_RIGHT|VK_DOWN=>(current+1).min(max),
                     VK_HOME=>0,VK_END=>max,
-                    VK_RETURN=>return Some((bar.items.get(current).cloned(),current==max,0)),
-                    VK_ESCAPE=>return Some((None,false,bar.previous_focus)),
+                    VK_RETURN=>return Some((bar.items.get(current).cloned(),current+1==max,current==max,0)),
+                    VK_ESCAPE=>return Some((None,false,false,bar.previous_focus)),
                     _=>return None,
                 };
                 bar.keyboard=Some(next);
-                Some((None,false,0))
+                Some((None,false,false,0))
             });
-            if let Some((item,search,previous))=action{
+            if let Some((item,search,utilities,previous))=action{
                 if let Some(item)=item{activate(&item);}
                 if search {open_launcher();}
+                if utilities{request_utilities(hwnd);}
                 if previous!=0 && IsWindow(previous as _)!=0{SetForegroundWindow(previous as _);}
                 InvalidateRect(hwnd,ptr::null(),0);
             }
@@ -1083,15 +1120,15 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let mut state=s.borrow_mut();let bar=state.bars.iter_mut().find(|b|b.hwnd==hwnd)?;
                 let layout=bar.layout.as_ref()?;
                 let item=layout.hit(x as f32,y as f32).and_then(|i|bar.items.get(i)).cloned();
-                Some((item,layout.is_launch_button(x as f32,y as f32),bar.pressed.take(),bar.collapsed))
+                Some((item,layout.is_launch_button(x as f32,y as f32),layout.is_utility_button(x as f32,y as f32),bar.pressed.take(),bar.collapsed))
             });
-            if let Some((item,search,pressed,collapsed))=rendered{
+            if let Some((item,search,utilities,pressed,collapsed))=rendered{
                 if collapsed{return 0;}
                 if let Some((start,sx,sy))=pressed {
                     if (x-sx).abs()+(y-sy).abs()>9 {
                         if let Some(item)=item{if item.pinned {emit(Event::Edit(Edit::MovePin(start,item.path)));}}
                     }else if let Some(item)=item{if item.path==start{activate(&item);}}
-                }else if search{open_launcher();}
+                }else if search{open_launcher();}else if utilities{request_utilities(hwnd);}
                 return 0;
             }
             let selected=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd).and_then(|b|b.items.get(((x-12).max(0)/ITEM_WIDTH) as usize)).cloned());
@@ -1099,11 +1136,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if x>=12 && (x-12)/ITEM_WIDTH <max as i32 {if let Some(item)=selected{activate(&item);}}
             else {
                 let mut area:RECT=mem::zeroed();GetClientRect(hwnd,&mut area);
-                let x0=area.right-210;
-                if x>=x0 && x<x0+46{open("ms-settings:network-wifi");}
-                else if x>=x0+46 && x<x0+88{open("ms-settings:bluetooth");}
-                else if x>=x0+88 && x<x0+140{open("ms-settings:sound");}
-                else if x>=x0+140{open("ms-settings:taskbar");}
+                if x>=area.right-52{request_utilities(hwnd);}
             }
             0
         }
@@ -1227,6 +1260,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
         update_state(|s|{s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){destroy_stage(&mut b);}});
         SURFACES.with(|s|s.borrow_mut().clear());STAGE_SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
+        UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));
         CONTROL.with(|c|c.set(ptr::null_mut()));DestroyWindow(control);
         OWNER.with(|o|o.set(ptr::null_mut()));
         COMMANDS.with(|c|{c.take();});EVENTS.with(|e|{e.take();});STATE.with(|s|{s.take();});

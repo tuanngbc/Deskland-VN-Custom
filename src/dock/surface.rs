@@ -94,6 +94,31 @@ impl Surface {
             let tail=segment_distance(x,y,center.0+radius*0.65,center.1+radius*0.65,scan.x+scan.w*0.73,scan.y+scan.h*0.73)-0.88*scale;
             Some((tint,(0.5-ring.min(tail)).clamp(0.0,1.0)*238.0))
         });
+        let utility=layout.utility;
+        if hover==Some(items.len()+1){rounded(data,w,h,utility,utility.w*0.22,tint,50);}
+        let divider=|a:Rect,b:Rect|{
+            if layout.side==super::DockSide::Bottom{
+                Rect{x:(a.x+a.w+b.x)*0.5-0.5*scale,y:layout.glass.y+layout.glass.h*0.22,w:scale,h:layout.glass.h*0.56}
+            }else{
+                Rect{x:layout.glass.x+layout.glass.w*0.22,y:(a.y+a.h+b.y)*0.5-0.5*scale,w:layout.glass.w*0.56,h:scale}
+            }
+        };
+        let group=divider(scan,utility);
+        rounded(data,w,h,group,scale*0.5,tint,82);
+        if let Some(split)=items.windows(2).position(|pair|pair[0].pinned&&!pair[1].pinned){
+            let group=divider(layout.slots[split],layout.slots[split+1]);
+            rounded(data,w,h,group,scale*0.5,tint,58);
+        }
+        // Two native-looking control switches; vector coverage scales with DPI.
+        draw(data,w,h,utility,|x,y|{
+            let (x,y)=(x-utility.x,y-utility.y);
+            let edge=utility.w;
+            let top=segment_distance(x,y,edge*0.26,edge*0.37,edge*0.74,edge*0.37)-0.85*scale;
+            let bottom=segment_distance(x,y,edge*0.26,edge*0.63,edge*0.74,edge*0.63)-0.85*scale;
+            let knob0=(x-edge*0.43).hypot(y-edge*0.37)-edge*0.085;
+            let knob1=(x-edge*0.60).hypot(y-edge*0.63)-edge*0.085;
+            Some((tint,(0.5-top.min(bottom).min(knob0).min(knob1)).clamp(0.0,1.0)*240.0))
+        });
         self.layer.present(hwnd)
     }
 }

@@ -18,6 +18,7 @@ pub struct Layout {
     pub glass: Rect,
     pub slots: Vec<Rect>,
     pub scan: Rect,
+    pub utility: Rect,
     pub indicators: Vec<(f32,f32)>,
     pub scale:f32,
     pub side:DockSide,
@@ -26,6 +27,14 @@ impl Layout {
     pub fn hit(&self,x:f32,y:f32)->Option<usize>{
         self.slots.iter().position(|r|r.contains(x,y))
     }
+    pub fn hot(&self,x:f32,y:f32)->Option<usize>{
+        self.hit(x,y).or_else(||{
+            if self.is_launch_button(x,y){Some(self.slots.len())}
+            else if self.is_utility_button(x,y){Some(self.slots.len()+1)}
+            else{None}
+        })
+    }
+    pub fn is_utility_button(&self,x:f32,y:f32)->bool{self.utility.contains(x,y)}
     pub fn is_launch_button(&self,x:f32,y:f32)->bool { self.scan.contains(x,y) }
     pub fn axis(&self,x:f32,y:f32)->f32 {if self.side==DockSide::Bottom{x}else{y}}
 }
@@ -40,7 +49,7 @@ pub fn measure(display:&Display, style:&Appearance, count:usize, focus:Option<f3
     let margins=2.0*(edge+shadow);
     let max_span=if oriented {display.work.bottom-display.work.top} else {display.work.right-display.work.left};
     // A permanent search affordance opens the existing Deskland launcher.
-    let cells=count+1;
+    let cells=count+2;
     let max_span=max_span as f32-margins;
     let available=(max_span-2.0*pad-(cells-1) as f32*spacing).max(cells as f32*8.0);
     // Reserve enough room for the largest neighborhood before drawing the
@@ -92,6 +101,7 @@ pub fn measure(display:&Display, style:&Appearance, count:usize, focus:Option<f3
         all.push(r);
         cursor+=size+spacing;
     }
+    let utility=all.pop().unwrap_or_default();
     let scan=all.pop().unwrap_or_default();
     // The background follows the app row; empty hover slack remains alpha 0.
     let height=icon+20.0*scale;
@@ -100,7 +110,7 @@ pub fn measure(display:&Display, style:&Appearance, count:usize, focus:Option<f3
         DockSide::Right=>Rect{x:total_cross-shadow-height,y:start,w:height,h:span},
         DockSide::Left=>Rect{x:shadow,y:start,w:height,h:span},
     };
-    Layout{window:RECT{left:x,top:y,right:x+w as i32,bottom:y+h as i32},glass,slots:all,scan,indicators,scale,side:style.position}
+    Layout{window:RECT{left:x,top:y,right:x+w as i32,bottom:y+h as i32},glass,slots:all,scan,utility,indicators,scale,side:style.position}
 }
 
 #[cfg(test)]
