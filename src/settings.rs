@@ -628,6 +628,7 @@ pub fn autostart_enabled() -> bool {
 }
 
 pub fn set_autostart(on: bool) {
+    if let Err(error) = crate::trial::protect_windows() { crate::log!("{error}"); return; }
     use windows_sys::Win32::System::Registry::HKEY_CURRENT_USER;
     if on {
         let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();

@@ -24,6 +24,7 @@ const SAVER_MARKER: &str = "DesklandRsSaverInstalled";
 
 /// Thư mục dữ liệu của bản Rust (ngoài AppData để tránh ảo hoá MSIX khi chạy từ ứng dụng đóng gói).
 pub fn data_dir() -> std::path::PathBuf {
+    if let Some(path) = crate::trial::data_dir() { return path.to_path_buf(); }
     let base = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into());
     let d = std::path::Path::new(&base).join(".deskland-rs");
     let _ = std::fs::create_dir_all(&d);
@@ -31,6 +32,7 @@ pub fn data_dir() -> std::path::PathBuf {
 }
 
 pub fn lock_now() {
+    if crate::trial::protect_windows().is_err() { return; }
     crate::log!("Khóa máy bằng LockWorkStation() (khóa thật của Windows)");
     if unsafe { LockWorkStation() } == 0 {
         crate::log!("LockWorkStation thất bại: lỗi {}", unsafe { GetLastError() });
@@ -58,6 +60,7 @@ pub(crate) fn reg_get_string(root: HKEY, key: &str, name: &str) -> Option<String
 }
 
 pub(crate) fn reg_set_string(root: HKEY, key: &str, name: &str, val: &str) -> bool {
+    if crate::trial::protect_windows().is_err() { return false; }
     let (k, n, v) = (wide(key), wide(name), wide(val));
     let r = unsafe { RegSetKeyValueW(root, k.as_ptr(), n.as_ptr(), REG_SZ, v.as_ptr() as *const _, (v.len() * 2) as u32) };
     r == ERROR_SUCCESS
@@ -70,6 +73,7 @@ pub fn winl_disabled() -> bool {
 
 /// Xoá giá trị `DisableLockWorkstation` (chỉ khi người dùng bấm trong menu khay).
 pub fn restore_winl() -> bool {
+    if crate::trial::protect_windows().is_err() { return false; }
     let (k, n) = (wide(POLICY_KEY), wide("DisableLockWorkstation"));
     let r = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, k.as_ptr(), n.as_ptr()) };
     let ok = r == ERROR_SUCCESS || r == ERROR_FILE_NOT_FOUND;
@@ -133,6 +137,7 @@ fn runtime_value(action: u32) -> Result<u32, String> {
 // Registry và trạng thái trong phiên Windows là hai dữ liệu khác nhau. Ghi
 // Registry hoặc broadcast WM_SETTINGCHANGE đơn thuần không tắt timer Winlogon.
 fn set_saver_parameter(set: u32, get: u32, value: u32) -> Result<(), String> {
+    crate::trial::protect_windows()?;
     if unsafe { SystemParametersInfoW(set, value, std::ptr::null_mut(), SPIF_UPDATEINIFILE | SPIF_SENDCHANGE) } == 0 {
         return Err(format!("Windows chưa áp dụng cài đặt màn hình chờ (SPI=0x{set:X}, lỗi {})", unsafe { GetLastError() }));
     }
@@ -172,6 +177,7 @@ fn repair_disabled_state(
 /// Sửa bản cũ đã ghi "tắt" trong Registry nhưng vẫn để timer Winlogon bật.
 /// Không bật saver khi khởi động, không đổi saver của phần mềm khác.
 pub fn reconcile_disabled_saver() -> Result<(), String> {
+    if crate::trial::active() { return Ok(()); }
     if reg_get_string(HKEY_CURRENT_USER, SAVER_POLICY_KEY, "ScreenSaveActive").is_some() { return Ok(()); }
     let path = reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, "SCRNSAVE.EXE").unwrap_or_default();
     let marker = reg_get_string(HKEY_CURRENT_USER, DESKTOP_KEY, SAVER_MARKER);
@@ -199,6 +205,7 @@ pub fn saver_installed() -> bool {
 
 /// Đặt tuanpc-desk làm trình bảo vệ màn hình, BẮT BUỘC kèm "khi tiếp tục, hiện màn hình đăng nhập".
 pub fn install_saver(idle_mins: u32) -> Result<(), String> {
+    crate::trial::protect_windows()?;
     if let Some(p) = reg_get_string(HKEY_CURRENT_USER, SAVER_POLICY_KEY, "SCRNSAVE.EXE") {
         return Err(format!("Chính sách nhóm đang ép trình bảo vệ màn hình '{p}', không đổi được"));
     }
@@ -271,6 +278,7 @@ pub fn input_desktop_is_default() -> bool {
 /// Vì `ScreenSaverIsSecure=1`, Windows coi đây là trạng thái an toàn và tự hiện màn đăng nhập khi
 /// có thao tác. tuanpc-desk không tự chạy file .scr (như vậy Windows không biết để khóa).
 pub fn start_secure_saver(hwnd: HWND) {
+    if crate::trial::protect_windows().is_err() { return; }
     crate::log!("Nhờ Windows bật trình bảo vệ màn hình (SC_SCREENSAVE)");
     unsafe {
         SetForegroundWindow(hwnd);
@@ -279,6 +287,7 @@ pub fn start_secure_saver(hwnd: HWND) {
 }
 
 pub fn preview_saver() -> Result<(), String> {
+    crate::trial::protect_windows()?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     std::process::Command::new(exe).args(["--saver", "--fps", "6"])
         .creation_flags(0x0800_0000).spawn().map_err(|e| e.to_string())?;
@@ -288,6 +297,7 @@ pub fn preview_saver() -> Result<(), String> {
 
 /// Gỡ saver của mình; thao tác lặp lại vẫn sửa được timer cũ còn bật trong RAM.
 pub fn uninstall_saver() -> Result<(), String> {
+    crate::trial::protect_windows()?;
     log_saver_state("trước tắt");
     if saver_installed() {
         // Tắt Winlogon trước khi xóa marker. Nếu Windows từ chối (đang khóa),
@@ -337,6 +347,7 @@ pub fn uninstall_saver() -> Result<(), String> {
 /// Đặt ảnh màn khóa Windows từ ảnh BMP (chạy nền, không chặn vòng vẽ).
 /// Chuyển BMP -> JPG rồi gọi WinRT `Windows.System.UserProfile.LockScreen.SetImageFileAsync`.
 pub fn sync_lock_image(bmp: &std::path::Path) {
+    if crate::trial::protect_windows().is_err() { return; }
     let jpg = bmp.with_extension("jpg");
     let esc = |p: &std::path::Path| p.to_string_lossy().replace('\'', "''");
     let script = format!(
@@ -368,6 +379,7 @@ pub fn sync_lock_image(bmp: &std::path::Path) {
 /// Đặt ảnh BMP làm hình nền tĩnh của Windows (kiểu Fill, chạy ở luồng riêng vì SPIF_SENDCHANGE phát
 /// thông điệp đồng bộ). Lúc mở máy, trước khi app kịp chạy, desktop hiện đúng cảnh này thay vì màn đen.
 pub fn set_static_wallpaper(bmp: std::path::PathBuf) {
+    if crate::trial::protect_windows().is_err() { return; }
     std::thread::spawn(move || {
         reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "WallpaperStyle", "10");
         reg_set_string(HKEY_CURRENT_USER, DESKTOP_KEY, "TileWallpaper", "0");
@@ -384,6 +396,7 @@ pub fn set_static_wallpaper(bmp: std::path::PathBuf) {
 }
 
 pub(crate) fn reg_delete_value(root: HKEY, key: &str, name: &str) -> bool {
+    if crate::trial::protect_windows().is_err() { return false; }
     let (k, n) = (wide(key), wide(name));
     let r = unsafe { RegDeleteKeyValueW(root, k.as_ptr(), n.as_ptr()) };
     r == ERROR_SUCCESS || r == ERROR_FILE_NOT_FOUND

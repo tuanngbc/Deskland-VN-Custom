@@ -39,6 +39,7 @@ mod system_monitor;
 mod presentation;
 mod gpu_present;
 mod config_store;
+mod trial;
 
 use desktop::wide;
 use engine::{IconBox, Prog, Shared, Theme};
@@ -605,7 +606,7 @@ fn rust_settings_path() -> std::path::PathBuf {
 fn load_config(cli_theme: Option<String>) -> Config {
     let read = |p: &std::path::Path| std::fs::read_to_string(p).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(s.trim_start_matches('\u{feff}')).ok());
     let cs = std::env::var("LOCALAPPDATA").map(|d| std::path::PathBuf::from(d).join("DesklandPreview").join("settings.json")).unwrap_or_default();
-    let csv = read(&cs);
+    let csv = if trial::active() { None } else { read(&cs) };
     let root = read(&rust_settings_path()).or_else(|| csv.clone()).unwrap_or(serde_json::Value::Null);
     // Ngôn ngữ: bản Rust chưa lưu thì theo lựa chọn ở bản C#
     let lang = root.get("lang").or_else(|| csv.as_ref().and_then(|c| c.get("lang"))).and_then(|v| v.as_str()).unwrap_or("auto").to_string();
@@ -1941,6 +1942,7 @@ impl App {
 
     /// Chụp cảnh màn hình chính rồi đặt làm ảnh màn khóa Windows (chạy nền).
     fn sync_lock_image(&self) {
+        if trial::active() { return; }
         if self.walls.is_empty() {
             return;
         }
@@ -1954,6 +1956,7 @@ impl App {
     /// Chụp cảnh màn hình chính làm hình nền tĩnh của Windows, để lúc mở máy (trước khi app chạy)
     /// desktop hiện đúng cảnh này thay vì màn đen.
     fn sync_static_wallpaper(&self) {
+        if trial::active() { return; }
         if self.walls.is_empty() {
             return;
         }
@@ -2078,6 +2081,21 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if let Err(error) = trial::initialize(&args) {
+        eprintln!("Trial initialization refused: {error}");
+        std::process::exit(2);
+    }
+    if args.iter().any(|a| a == "--trial-isolation-check") {
+        if let Err(error) = trial::verify_guards() {
+            eprintln!("Trial isolation check failed: {error}");
+            std::process::exit(3);
+        }
+        return;
+    }
+    if trial::active() && args.iter().any(|a| {
+        let a = a.to_ascii_lowercase();
+        a == "--saver" || a.starts_with("/s") || a.starts_with("-s")
+    }) { std::process::exit(2); }
     if let Some(path) = arg_value(&args, "--system-monitor-diagnostics") {
         let _ = system_monitor::diagnostics(std::path::Path::new(&path));
         return;
@@ -2099,6 +2117,8 @@ fn main() {
             if !h.is_null() {
                 let mut pid = 0;
                 GetWindowThreadProcessId(h, &mut pid);
+                // Trial CLI must never forward to an installed production owner.
+                if trial::active() { std::process::exit(2); }
                 AllowSetForegroundWindow(pid);
                 PostMessageW(h, if open_launcher { WM_OPEN_LAUNCHER } else { WM_OPEN_SETTINGS }, 0, 0);
                 return;
@@ -2106,6 +2126,7 @@ fn main() {
         }
     }
     if args.iter().any(|a| a == "--quit") {
+        if trial::active() { std::process::exit(2); }
         let cls = wide(MSG_CLASS);
         unsafe {
             let h = FindWindowW(cls.as_ptr(), std::ptr::null());

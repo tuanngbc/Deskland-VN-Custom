@@ -48,6 +48,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./tests/trial-isolation.ps1 -Exe (Resolve-Path target/release/tuanpc-desk.exe).Path
           node tests/renderer-contract.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/shortcuts-contract.cjs
