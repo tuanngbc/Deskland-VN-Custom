@@ -633,7 +633,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let fullscreen=state.suspended || screen.is_some_and(|s|fullscreen_outputs.contains(&s.id));
         if b.hidden!=fullscreen {
             ShowWindow(b.hwnd,if fullscreen{SW_HIDE}else{SW_SHOWNOACTIVATE});b.hidden=fullscreen;
-            if fullscreen{close_status_tip(b.hwnd);KillTimer(b.hwnd,STATUS_TIP_TIMER);b.status_hover=None;KillTimer(b.hwnd,MOTION_TIMER);KillTimer(b.hwnd,HIDE_TIMER);KillTimer(b.hwnd,FEEDBACK_TIMER);b.motion=Motion::default();b.hovered=-1;b.keyboard=None;b.pressed=None;b.pointer=None;b.collapsed=b.auto_hide;b.reveal=motion::Spring::rest(if b.collapsed{0.0}else{1.0});b.feedback=None;}
+            if fullscreen{utilities::close_panels_for(b.hwnd);close_status_tip(b.hwnd);KillTimer(b.hwnd,STATUS_TIP_TIMER);b.status_hover=None;KillTimer(b.hwnd,MOTION_TIMER);KillTimer(b.hwnd,HIDE_TIMER);KillTimer(b.hwnd,FEEDBACK_TIMER);b.motion=Motion::default();b.hovered=-1;b.keyboard=None;b.pressed=None;b.pointer=None;b.collapsed=b.auto_hide;b.reveal=motion::Spring::rest(if b.collapsed{0.0}else{1.0});b.feedback=None;}
             changed=true;
         }
         if changed{InvalidateRect(b.hwnd,ptr::null(),0);}
@@ -908,10 +908,11 @@ unsafe fn paint(hwnd:HWND){
         let active_mask=(0..items.len()).filter(|&i|selected(i)).fold(0u8,|bits,i|bits|(1<<i));
         let atlas=ATLAS.with(|a|a.borrow_mut().as_mut().map(|w|w.request(&items)).unwrap_or_default());
         let labels=items.iter().enumerate().map(|(i,item)|{
+            if groups[i].is_some(){return format!("{} · {}",item.title,item.count);}
             let app=basename(&item.path).trim_end_matches(".exe").to_owned();
             let same_app=items.iter().enumerate().any(|(j,other)|j!=i&&other.path==item.path);
             let name=if app.is_empty()||item.path.starts_with("shell:AppsFolder")||same_app{&item.title}else{&app};
-            if groups[i].is_some(){format!("{name} · {}",item.count)}else{name.to_owned()}
+            name.to_owned()
         }).collect::<Vec<_>>();
         let look=stage_surface::Look{dark,layout,active:active_mask,alpha:layered.then_some((opacity*255/100) as u8)};
         if layered{EndPaint(hwnd,&ps);}
@@ -1004,9 +1005,9 @@ fn apply_audio(action:utilities::Action)->bool{
 unsafe fn show_utilities(){
     let result=UTILITIES.with(|u|u.borrow().as_ref().and_then(utilities::Provider::take_audio_result));
     if let Some(result)=result{utilities::reflect_audio(result);}
-    let snapshot=UTILITIES.with(|u|u.borrow().as_ref().and_then(utilities::Provider::take));
+    let Some(snapshot)=UTILITIES.with(|u|u.borrow().as_ref().and_then(utilities::Provider::take)) else{return;};
     let target=UTILITY_ANCHOR.with(|a|a.take());
-    let (Some(snapshot),Some((bar,point,widget)))=(snapshot,target) else{return;};
+    let Some((bar,point,widget))=target else{return;};
     let hwnd=bar as HWND;
     let Some(mut profile)=utility_profile(hwnd).filter(|p|p.enabled) else{return;};
     if let Some(widget)=widget {
@@ -1835,7 +1836,9 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         SetTimer(control,1,5000,None);
         if ready.send(Ok(control as usize)).is_err(){PostQuitMessage(0);}
         let mut msg:MSG=mem::zeroed();
-        while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0{TranslateMessage(&msg);DispatchMessageW(&msg);}
+        while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0{
+            if !utilities::route_panel_keyboard(&msg){TranslateMessage(&msg);DispatchMessageW(&msg);}
+        }
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
         update_state(|s|{s.appbars.clear();s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){destroy_stage(&mut b);}});
         SURFACES.with(|s|s.borrow_mut().clear());STAGE_SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());

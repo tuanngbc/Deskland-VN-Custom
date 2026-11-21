@@ -7,6 +7,8 @@ Accepted source baseline remains `a604519acaf4d5881b9e13e5476d52f97ac29c0f` on `
 
 ## Verified source and CI
 
+- Product-quality development now takes priority over idle benchmark work. The [visual and daily-use checkpoint](DOCK_VISUAL_ACCEPTANCE.md#product-quality-checkpoint--dock-stage-and-daily-controls) records implementation, Windows evidence requirements, and which controls remain delegated.
+
 - Controlled Stage idle: [2330efd / CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44909008130) completed three matched Windows 11 pairs with three eligible native source windows and six live DWM relationships across two Stage surfaces. See the [scoped performance evidence](DOCK_PERFORMANCE_REPORT.md#native-windows-11-three-valid-stage-idle-pairs). The full performance and owner acceptance gates remain pending.
 
 - P0 final hardening: [5565667 / CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44886447900) validates live DWM relationship cleanup and source resize with foreign fixture windows. [dcd607e / CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44900000775) verifies live AppBar edge changes, simulated recovery and cleanup. The corrected [589e9a4 build](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44902284107) completed three matched native Wallpaper-only vs two-display Dock idle pairs. See the [measurements and remaining workloads](DOCK_PERFORMANCE_REPORT.md).

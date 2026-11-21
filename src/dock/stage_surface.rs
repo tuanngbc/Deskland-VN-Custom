@@ -1,6 +1,6 @@
 //! The layered Stage surface paints premultiplied cards and caption masks.
 //! A regular owned HWND displays the live DWM rectangles above it.
-use super::{geometry::Rect,surface::{rounded,draw,distance,IconRasters,fallback_icon,Atlas},glass_probe::Layer,Item};
+use super::{geometry::Rect,surface::{rounded,draw,distance,control_backing,CONTROL_OPACITY,IconRasters,fallback_icon,Atlas},glass_probe::Layer,Item};
 use crate::desktop::wide;
 use windows_sys::Win32::{Foundation::{HWND,RECT},Graphics::Gdi::*};
 
@@ -171,6 +171,19 @@ impl Panel {
                     });
                     Some((rgb,coverage*(alpha as f32+40.0*line+14.0*shine).min(255.0)))
                 });
+                // Local caption backing keeps text stable on bright, dark and
+                // moving content. The thumbnail and gaps keep the chosen alpha.
+                let backing=control_backing(alpha as f32);
+                if backing>0.0 {
+                    let cap=(layout.caption as f32).min(b.h);
+                    let fade=(cap*0.38).max(1.0);
+                    let y0=b.y+b.h-cap;
+                    draw(data,w,h,Rect{x:b.x,y:(y0-fade).max(b.y),w:b.w,h:(cap+fade).min(b.h)},|x,y|{
+                        let coverage=(0.5-distance(b,radius,x,y)).clamp(0.0,1.0);
+                        let amount=((y-y0+fade)/fade).clamp(0.0,1.0);
+                        Some((tint,backing*coverage*amount))
+                    });
+                }
                 // Recessed neutral well stays behind aspect-fit previews.
                 let slot=layout.preview(i);
                 let p=Rect{x:slot.left as f32,y:slot.top as f32,w:(slot.right-slot.left) as f32,h:(slot.bottom-slot.top) as f32};
@@ -179,7 +192,7 @@ impl Panel {
                 }
             }
             if let Some(nav)=layout.nav(){
-                rounded(data,w,h,nav.rect(),nav.h as f32/2.0,if look.dark{[39,33,29]}else{[247,241,236]},alpha);
+                rounded(data,w,h,nav.rect(),nav.h as f32/2.0,if look.dark{[39,33,29]}else{[247,241,236]},alpha.max(CONTROL_OPACITY));
             }
             self.look=Some(look);
         }

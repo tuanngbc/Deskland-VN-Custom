@@ -463,6 +463,19 @@ pub(super) unsafe fn audio_panel(owner:HWND,point:POINT,level:u32,muted:bool){
     ShowWindow(hwnd,SW_SHOW);SetForegroundWindow(hwnd);SetFocus(slider);
 }
 
+pub(super) unsafe fn close_panels_for(owner:HWND){
+    for hwnd in [AUDIO_WINDOW.with(Cell::get),CALENDAR_WINDOW.with(Cell::get)] {
+        if !hwnd.is_null()&&GetWindow(hwnd,GW_OWNER)==owner{DestroyWindow(hwnd);}
+    }
+}
+
+pub(super) unsafe fn route_panel_keyboard(message:&MSG)->bool{
+    if !(WM_KEYFIRST..=WM_KEYLAST).contains(&message.message){return false;}
+    let panel=AUDIO_WINDOW.with(Cell::get);
+    if panel.is_null()||(message.hwnd!=panel&&IsChild(panel,message.hwnd)==0){return false;}
+    IsDialogMessageW(panel,message)!=0
+}
+
 unsafe fn submit_audio(hwnd:HWND,action:Action)->bool{
     if AUDIO_PENDING.with(Cell::get)||!super::apply_audio(action){return false;}
     AUDIO_PENDING.with(|s|s.set(true));
@@ -505,14 +518,14 @@ unsafe extern "system" fn audio_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
             SetWindowTextW(GetDlgItem(hwnd,LABEL as i32),wide(&format!("{value}%")).as_ptr());
             let dragging=w as u32&0xffff==TB_THUMBTRACK;
             TRACK_DRAGGING.with(|s|s.set(dragging));
-            // Keep only the latest requested level while a write is in flight.
-            if !dragging{
-                WANTED_LEVEL.with(|s|s.set(Some(value)));
-                flush_volume(hwnd);
-            }
+            // Respond while dragging or using the keyboard. Endpoint writes
+            // remain serialized and intermediate slider positions coalesce.
+            WANTED_LEVEL.with(|s|s.set(Some(value)));
+            flush_volume(hwnd);
             0
         },
         WM_COMMAND=>match w&0xffff{
+            n if n==IDCANCEL as usize=>{DestroyWindow(hwnd);0},
             MUTE=>{
                 submit_audio(hwnd,Action::Mute);
                 0

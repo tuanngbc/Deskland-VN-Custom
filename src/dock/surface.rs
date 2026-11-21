@@ -19,6 +19,16 @@ impl Material {
     }
 }
 
+// Preserve the chosen glass opacity in open areas. Only the small surfaces
+// behind monochrome controls need enough backing to survive any wallpaper.
+pub(super) const CONTROL_OPACITY: u8 = 218;
+
+pub(super) fn control_backing(base: f32) -> f32 {
+    // Source-over opacity needed to bring the existing material to the floor.
+    let floor = CONTROL_OPACITY as f32;
+    if base >= floor { 0.0 } else { (floor - base) * 255.0 / (255.0 - base) }
+}
+
 pub type Atlas = HashMap<String, Option<Arc<crate::launcher::IconPixels>>>;
 pub struct Surface { layer:Layer, glass:Rect, material:Material, static_pixels:Vec<u8>, icons:IconRasters }
 impl Surface {
@@ -55,10 +65,16 @@ impl Surface {
         }
         let data=self.layer.pixels();
         data.copy_from_slice(&self.static_pixels);
+        let control_tint=if self.material.dark{[34,27,23]}else{[242,236,231]};
+        let control_alpha=control_backing((100-self.material.transparency) as f32*2.55).ceil() as u8;
         for (i,(slot,item)) in layout.slots.iter().zip(items).enumerate(){
             let front=active==Some(i);
             let asleep=(minimized & (1<<i))!=0;
             let tint=if self.material.dark{[245,248,252]}else{[58,69,78]};
+            if !matches!(atlas.get(&item.path),Some(Some(_)))&&control_alpha!=0 {
+                let r=Rect{x:slot.x+slot.w*0.10,y:slot.y+slot.h*0.10,w:slot.w*0.80,h:slot.h*0.80};
+                rounded(data,w,h,r,r.w*0.26,control_tint,control_alpha);
+            }
             if front||hover==Some(i){rounded(data,w,h,*slot,slot.w*0.25,tint,if front{38}else{29});}
             if drop_target==Some(i){
                 let ink=if self.material.dark{[244,219,180]}else{[171,106,44]};
@@ -99,6 +115,7 @@ impl Surface {
         }
         let scan=layout.scan;
         let tint=if self.material.dark{[238,244,252]}else{[43,53,64]};
+        if control_alpha!=0{rounded(data,w,h,scan,scan.w*0.37,control_tint,control_alpha);}
         if hover==Some(items.len()){rounded(data,w,h,scan,scan.w*0.22,tint,50);}
         let center=(scan.x+0.45*scan.w,scan.y+0.44*scan.h);
         let radius=scan.w*0.19;
@@ -108,6 +125,7 @@ impl Surface {
             Some((tint,(0.5-ring.min(tail)).clamp(0.0,1.0)*238.0))
         });
         let utility=layout.utility;
+        if control_alpha!=0{rounded(data,w,h,utility,utility.w*0.37,control_tint,control_alpha);}
         if hover==Some(items.len()+1){rounded(data,w,h,utility,utility.w*0.22,tint,50);}
         let divider=|a:Rect,b:Rect|{
             if layout.side==super::DockSide::Bottom{
@@ -126,6 +144,7 @@ impl Surface {
             rounded(data,w,h,group,scale*0.5,tint,58);
         }
         for (i,(widget,slot)) in layout.inline.iter().copied().enumerate(){
+            if control_alpha!=0{rounded(data,w,h,slot,slot.w*0.37,control_tint,control_alpha);}
             if hover==Some(items.len()+2+i){rounded(data,w,h,slot,slot.w*0.22,tint,50);}
             status_on(data,w,h,slot,scale,tint,Some(widget));
         }
@@ -175,6 +194,25 @@ fn glass_pixel(tint:Material,rect:Rect,radius:f32,x:f32,y:f32,scale:f32,d:f32)->
 #[cfg(test)]
 mod material_tests {
     use super::*;
+
+    #[test]
+    fn glass_controls_keep_contrast_on_extreme_backdrops() {
+        fn luminance(rgb: [f32;3]) -> f32 {
+            let [b,g,r] = rgb.map(|c| ((c / 255.0 + 0.055) / 1.055).powf(2.4));
+            0.0722*b + 0.7152*g + 0.2126*r
+        }
+        for opacity in [26.0,64.0,90.0] {
+            let base = opacity*2.55;
+            let alpha = (base + control_backing(base)*(1.0-base/255.0))/255.0;
+            for (material,ink,wall) in [([34.0,27.0,23.0],[238.0,244.0,252.0],255.0),
+                ([242.0,236.0,231.0],[43.0,53.0,64.0],0.0)] {
+                let background = luminance(material.map(|value| value*alpha + wall*(1.0-alpha)));
+                let foreground = luminance(ink);
+                assert!((foreground.max(background)+0.05)/(foreground.min(background)+0.05)>4.5);
+            }
+        }
+        assert_eq!(control_backing(255.0),0.0);
+    }
 
     #[test]
     fn capsule_has_clear_corners_a_soft_shadow_and_premultiplied_edges_at_both_dpis() {
