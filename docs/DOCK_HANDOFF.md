@@ -1,27 +1,27 @@
 # Durable development handoff
 
-UTC: 2026-11-21 00:26. Inspected SHA: `1d5d4c99a868fd4a475b1a1e160976d19ea29d35`; this documentation checkpoint has a later SHA.
-Branch: `codex/rust-dock`, [Draft PR #1](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1). Base: `codex/rust-test`, accepted `a604519`.
+UTC checkpoint: 2026-11-21 00:53. Branch `codex/rust-dock`, [PR #1 Draft](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1), base `codex/rust-test`. Accepted baseline `a604519acaf4d5881b9e13e5476d52f97ac29c0f` untouched in E:\deskland.
 
-Owner assigned implementation/commit/push/CI in 21/11 handover, superseding old read-only audit. Previous AI writer paused. D9 requires one integrated Deskland product, not companion demos. No merge/deployment/owner test before safe RC and OWNER_NATIVE_ACCEPTED.
+Owner assigned implementation/commit/push/CI in 21/11 handover, superseding old read-only request. Previous AI writer paused. D9 is mandatory: same Deskland executable/config/Settings/startup/lifecycle, independent modules, backwards compatibility and one bundle. No merge or production deployment without OWNER_NATIVE_ACCEPTED. No repeated owner tests before RC.
 
-## Checkpoint scope
+## Verified commits and tests
 
-D0 lifecycle/resource/API audit, five living documents, D9 architecture/gate. No runtime changes in this checkpoint. Stable checkout/binary/profile untouched.
+- `45bacf4`: D0 audit + five living docs. [44844337708](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44844337708) CI_PASS.
+- `16b73d0`: D1/D9 foundation, [44845761358](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44845761358) CI_FAIL on DWM attribute cast.
+- `3526fcc4b470f8f0191868eb043498e3a5a33929`: cast corrected and independent Stage HWND retention, [44846159435](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44846159435) CI_PASS. 47 Rust + six separately invoked native tests, JS 32+7+4 passed; Dock model tests eight included in 47.
 
-Verified CI: [44839614362](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44839614362), SUCCESS at inspected SHA. 42 Rust (seven Dock included), five existing native separately passed. JS 32 renderer + seven shortcuts. No Dock GUI evidence. This docs checkpoint needs own CI before D0 closes.
+Foundation: managed same-process UI thread in src/dock/runtime.rs; canonical options/migration in src/dock/options.rs; config_store atomic preserving writes; Settings/tray/fallback integration, independent wallpaper switch; coalesced hooks, cached icons, work-area reconciliation; local/unpinned selection + iconic/cloaked fixes. No separate Dock process or config writer. Default new modules off. Stage still sidebar only.
 
-## Next in order
+Following code increment (the commit containing this entry) adds documented TaskbarCreated message routing to restore main tray/reattach wallpaper, session shutdown and shortcut/session-notification cleanup, prompt owner-loop wakeup, a hidden-controller destruction assertion and an isolated shell-message CI test. Wallpaper startup failure no longer exits other desktop utilities; wallpaper-off frees staging memory. Native shell restart itself is NOT tested. This increment needs its own CI; do not reuse 3526fcc PASS as evidence for later code.
 
-CI correction: source 16b73d0 failed [44845761358](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44845761358) on `DWMWA_CLOAKED` i32 vs API u32. Explicit cast fixed in following commit. Also preserve Stage HWNDs when only Dock toggles (and vice versa), update Stage side by repositioning rather than rebuilding both modules. Native lifecycle assertion strengthened; workflow bounded at 20 minutes. Await replacement CI before PASS.
+## Immediate next actions
 
-Foundation code increment after D0: managed same-process runtime and canonical settings/tray/UI; independent wallpaper toggle and legacy migration; coalesced hooks/cache/work-area refresh; local activation/minimized/cloaked fixes. Source is the commit containing this entry (parent docs 45bacf4). Local JS 32+7+4 PASS; Rust and new isolated native lifecycle test require this increment's CI. D0 own CI is now PASS: [44844337708](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44844337708). Do not treat partial D1/D9 as milestone completion.
+1. Verify actual branch HEAD and latest increment CI; fix failures before PASS. Record actual tested SHA/run/artifact. No candidate EXE downloaded to owner PC.
+2. D1 packaged/AUMID identity, proper multi-window model/selection/pin reorder and stale/hung HWND safeguards.
+3. D2/D5 + remaining D9: per-display appearance/size/position/auto-hide/config controls and DPI/hotplug handling; actual glass/motion/keyboard/drag workflows.
+4. D3 real DWM previews/workspaces/privacy and D4 reversible placement/controls.
+5. D6 real classified statuses, D7 compatibility + supported tray/recovery strategy review, D8 full regression/performance/RC.
 
-1. Verify checkpoint CI, then D1 local/global selection, collector/filtering, coalesced lifecycle model.
-2. D9 main-owned configuration/migration, managed runtime, Settings/tray roundtrip, independent module controls and cleanup. Default new modules off.
-3. D2/D3 UI/cache/previews/workspaces; D4/D5 reversible actions and monitor/DPI recovery, each CI tested.
-4. D6 classified statuses, D7 safety review, D8 regression/performance/RC.
+All Windows 11 owner dual-display/Windows autostart/actual Explorer restart/wallpaper toggle/performance/long-run acceptance NATIVE_PENDING. Same-process threads avoid orphan children, not process crash isolation. Initial Shell icon lookup remains synchronous; a blocking Shell handler may delay joined shutdown: refine/reuse launcher icon pipeline and stress-test before RC. D7 Replacement BLOCKED without safe tray parity; no private Shell hook, Explorer kill or taskbar hiding.
 
-All interactive Dock/Stage acceptance NATIVE_PENDING. OWNER ACTION: NONE. D7 safe tray parity unresolved; keep Compatibility Mode and report blocker, no invented/private Shell API.
-
-Build only in `.github/workflows/build-rust-test.yml`. No local Rust/SDK install or candidate EXE download/run. Push only user repository development branch; no force/history reset. Do not touch installed E:\deskland EXE, baseline or %USERPROFILE%\.deskland-rs. No credentials/target/logs in git. Next session fetch/read actual HEAD and this file before edits.
+OWNER ACTION: NONE for current foundation. Do not call whole D1/D9 completed. Next session fetch and read this file + actual HEAD first. Push only owner repository, never upstream origin. No force/history reset/main/baseline edits. Build only through .github/workflows/build-rust-test.yml on GitHub; no local Rust/SDK install or build, no trial EXE download/run. Keep legal files and owner profile unchanged; no credentials/target/logs in git.

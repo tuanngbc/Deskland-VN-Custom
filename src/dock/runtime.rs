@@ -18,11 +18,11 @@ pub struct Runtime {
     thread: Option<JoinHandle<()>>,
 }
 impl Runtime {
-    pub fn new(options: Options) -> Result<Self,String> {
+    pub fn new(options: Options, owner:usize) -> Result<Self,String> {
         let (commands,receiver)=mpsc::channel();let (events_tx,events)=mpsc::channel();
         let (ready_tx,ready)=mpsc::sync_channel(1);
         let thread=std::thread::Builder::new().name("Deskland Dock & Stage".into()).spawn(move || {
-            super::run(options,receiver,events_tx,ready_tx);
+            super::run(options,owner,receiver,events_tx,ready_tx);
         }).map_err(|e|e.to_string())?;
         match ready.recv() {
             Ok(Ok(control))=>Ok(Self{control,commands,events,thread:Some(thread)}),
@@ -62,7 +62,8 @@ mod tests {
         let screens=crate::monitors().len();assert!(screens>0);
         let mut options=Options{enabled:true,stage_enabled:true,..Default::default()};
         for _ in 0..3 {
-            let runtime=Runtime::new(options.clone()).unwrap();
+            let runtime=Runtime::new(options.clone(),0).unwrap();
+            let control=runtime.control;
             let handles=runtime.inspect();assert_eq!(handles.len(),screens*2);
             for &handle in &handles {unsafe {let mut pid=0;GetWindowThreadProcessId(handle as _,&mut pid);assert_eq!(pid,std::process::id());}}
             runtime.suspend(true);
@@ -74,6 +75,7 @@ mod tests {
             options.stage_enabled=false;runtime.configure(options.clone());assert!(runtime.inspect().is_empty());
             options.enabled=true;runtime.configure(options.clone());assert_eq!(runtime.inspect().len(),screens);
             drop(runtime);
+            assert_eq!(unsafe{IsWindow(control as _)},0,"hidden controller must be destroyed too");
             for handle in handles.into_iter().chain(stages){assert_eq!(unsafe{IsWindow(handle as _)},0);}
             options.stage_enabled=true;
         }

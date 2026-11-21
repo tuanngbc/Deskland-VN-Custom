@@ -4,9 +4,9 @@ Vocabulary: NOT_STARTED, IN_PROGRESS, IMPLEMENTED_UNVERIFIED, CI_PASS, CI_FAIL, 
 
 | Gate | Required evidence | Remaining / existing evidence | Native |
 |---|---|---|---|
-| D0 | Lifecycle/resource/API audit, benchmark protocol, CI | Audit and baseline CI recorded; checkpoint needs own CI | NATIVE_PENDING |
-| D1 | Identity/filtering/local activation, multiple windows, pin/order, events | EXE-only scaffold; seven model/geometry tests | NATIVE_PENDING |
-| D2 | Glass, crisp icons, magnification, auto-hide, keyboard/drag, idle budget | Opaque GDI scaffold, uncached Shell icons | NATIVE_PENDING |
+| D0 | Lifecycle/resource/API audit, benchmark protocol, CI | CI_PASS at 45bacf4, run 44844337708 | NATIVE_PENDING |
+| D1 | Identity/filtering/local activation, multiple windows, pin/order, events | Coalesced hooks, cloaked/minimized handling, local/global regression; EXE identity still incomplete | NATIVE_PENDING |
+| D2 | Glass, crisp icons, magnification, auto-hide, keyboard/drag, idle budget | GDI scaffold, bounded icon cache; actual glass/motion/drag pending | NATIVE_PENDING |
 | D3 | Real previews, group switch/restore, privacy | Sidebar only | NATIVE_PENDING |
 | D4 | Reversible snap/quadrants/move; explicit fullscreen limits | Basic controls; no saved geometry | NATIVE_PENDING |
 | D5 | Negative coords/work-area/DPI/hotplug/stable display preferences | Pure geometry tests, manifest PerMonitorV2 | NATIVE_PENDING |
@@ -14,7 +14,7 @@ Vocabulary: NOT_STARTED, IN_PROGRESS, IMPLEMENTED_UNVERIFIED, CI_PASS, CI_FAIL, 
 | D7 A | Windows tray retained, Explorer recovery | Compatibility intent only | NATIVE_PENDING |
 | D7 B | Tray parity/AppBar/watchdog/restore | BLOCKED; supported tray strategy unresolved | NATIVE_PENDING |
 | D8 | Regression/performance/leaks/RC hashes/rollback | Development package only, no RC | NATIVE_PENDING |
-| D9 | Same EXE/config/Settings/autostart, independent modules, cleanup | Architecture recorded; current child not accepted | NATIVE_PENDING |
+| D9 | Same EXE/config/Settings/autostart, independent modules, cleanup | Managed same-process runtime + common Settings/tray/config migration; CI lifecycle PASS at 3526fcc. Per-display appearance/behavior and full desktop acceptance pending | NATIVE_PENDING |
 
 ## D9 integration cases
 

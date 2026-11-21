@@ -60,6 +60,7 @@ struct State { bars:Vec<Bar>, stages:Vec<Stage>, windows:Vec<AppWindow>, prefs:P
 thread_local! {
     static STATE:RefCell<State>=RefCell::new(State::default());
     static CONTROL:Cell<HWND>=const{Cell::new(ptr::null_mut())};
+    static OWNER:Cell<HWND>=const{Cell::new(ptr::null_mut())};
     static DIRTY:Cell<bool>=const{Cell::new(false)};
     static COMMANDS:RefCell<Option<mpsc::Receiver<Command>>>=const{RefCell::new(None)};
     static EVENTS:RefCell<Option<mpsc::Sender<Event>>>=const{RefCell::new(None)};
@@ -73,7 +74,11 @@ fn update_state(f:impl FnOnce(&mut State)) {
     f(&mut state);
     STATE.with(|s|{s.replace(state);});
 }
-fn emit(event:Event) {EVENTS.with(|s|{if let Some(tx)=s.borrow().as_ref(){let _=tx.send(event);}});}
+fn emit(event:Event) {
+    EVENTS.with(|s|{if let Some(tx)=s.borrow().as_ref(){let _=tx.send(event);}});
+    let owner=OWNER.with(|o|o.get());
+    if !owner.is_null(){unsafe{PostMessageW(owner,WM_NULL,0,0);}}
+}
 
 fn monitors()->Vec<Screen> {
     // Reuse Deskland's monitor detection/DPI owner; retrieve current work area
@@ -361,7 +366,7 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
             AppendMenuW(menu,MF_STRING,MENU_RESTORE,wide("Khôi phục kích thước").as_ptr());
             AppendMenuW(menu,MF_STRING,MENU_SNAP_LEFT,wide("Chia nửa trái").as_ptr());
             AppendMenuW(menu,MF_STRING,MENU_SNAP_RIGHT,wide("Chia nửa phải").as_ptr());
-            AppendMenuW(menu,MF_STRING,MENU_FULLSCREEN,wide("Đầy màn hình (borderless thử nghiệm)").as_ptr());
+            AppendMenuW(menu,MF_STRING,MENU_FULLSCREEN,wide("Mở rộng tới màn hình (giữ kiểu cửa sổ)").as_ptr());
         }
         AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
     }
@@ -369,7 +374,7 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     AppendMenuW(menu,MF_STRING|if !prefs.all_windows{MF_CHECKED}else{0},MENU_LOCAL,wide("Chỉ ứng dụng trên màn hình này").as_ptr());
     AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
     for (id,text) in [(MENU_STAGE_LEFT,"Stage Manager bên trái"),(MENU_STAGE_RIGHT,"Stage Manager bên phải"),(MENU_STAGE_OFF,"Tắt Stage Manager")] {
-        AppendMenuW(menu,MF_STRING|if (id==MENU_STAGE_LEFT && prefs.stage_side=="left")||
+        AppendMenuW(menu,MF_STRING|if (id==MENU_STAGE_LEFT && prefs.stage_enabled && prefs.stage_side=="left")||
             (id==MENU_STAGE_RIGHT && prefs.stage_enabled && prefs.stage_side=="right")||(id==MENU_STAGE_OFF && !prefs.stage_enabled){MF_CHECKED}else{0},
             id,wide(text).as_ptr());
     }
@@ -502,7 +507,7 @@ unsafe fn drain_commands() {
         }
     }
 }
-fn run(options:Options,commands:mpsc::Receiver<Command>,events:mpsc::Sender<Event>,ready:mpsc::SyncSender<Result<usize,String>>) {
+fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc::Sender<Event>,ready:mpsc::SyncSender<Result<usize,String>>) {
     unsafe {
         use windows::Win32::System::Com::{CoInitializeEx,CoUninitialize,COINIT_APARTMENTTHREADED};
         let com=CoInitializeEx(None,COINIT_APARTMENTTHREADED);
@@ -517,6 +522,7 @@ fn run(options:Options,commands:mpsc::Receiver<Command>,events:mpsc::Sender<Even
         let control=CreateWindowExW(WS_EX_TOOLWINDOW,class.as_ptr(),wide("Deskland Dock controller").as_ptr(),WS_POPUP,0,0,0,0,ptr::null_mut(),ptr::null_mut(),wc.hInstance,ptr::null());
         if control.is_null(){let _=ready.send(Err(format!("Create Dock controller: {}",GetLastError())));if com.is_ok(){CoUninitialize();}return;}
         CONTROL.with(|c|c.set(control));DIRTY.with(|c|c.set(false));
+        OWNER.with(|o|o.set(owner as HWND));
         COMMANDS.with(|c|{c.replace(Some(commands));});EVENTS.with(|e|{e.replace(Some(events));});
         update_state(|state|{state.prefs=options;refresh(state);});
         let mut hooks=Vec::new();
@@ -535,6 +541,7 @@ fn run(options:Options,commands:mpsc::Receiver<Command>,events:mpsc::Sender<Even
         update_state(|s|{for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for b in s.stages.drain(..){DestroyWindow(b.hwnd);}});
         ICONS.with(|c|{for (_,icon) in c.borrow_mut().drain(){if !icon.is_null(){DestroyIcon(icon);}}});
         CONTROL.with(|c|c.set(ptr::null_mut()));DestroyWindow(control);
+        OWNER.with(|o|o.set(ptr::null_mut()));
         COMMANDS.with(|c|{c.take();});EVENTS.with(|e|{e.take();});STATE.with(|s|{s.take();});
         if com.is_ok(){CoUninitialize();}
     }

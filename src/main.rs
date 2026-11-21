@@ -180,6 +180,8 @@ thread_local! {
     static MOUSE_DOWN: Cell<Option<(i32, i32, Instant)>> = const { Cell::new(None) };
     static ZORDER_DIRTY: Cell<bool> = const { Cell::new(false) };
     static DISPLAY_CHANGED: Cell<bool> = const { Cell::new(false) };
+    static TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
+    static TRAY_RESTORE_PENDING: Cell<bool> = const { Cell::new(false) };
     static REPAINT: Cell<bool> = const { Cell::new(false) };
     static LOCK_SYNC: Cell<bool> = const { Cell::new(true) };
     static INTERACTIONS_ENABLED: Cell<bool> = const { Cell::new(true) };
@@ -215,7 +217,14 @@ unsafe fn register_hotkey_logged(hwnd: HWND, id: i32, mods: u32, vk: u32, name: 
 }
 
 unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if m!=0 && TASKBAR_CREATED.with(|id|id.get())==m {
+        TRAY_RESTORE_PENDING.with(|p|p.set(true));
+        DISPLAY_CHANGED.with(|p|p.set(true));
+        return 0;
+    }
     match m {
+        WM_QUERYENDSESSION=>1,
+        WM_ENDSESSION if w!=0=>{PostQuitMessage(0);0},
         WM_HOTKEY if SHORTCUT_RECORDING.with(|c| c.get()) => 0,
         WM_INPUT => {
             let mut raw: RAWINPUT = std::mem::zeroed();
@@ -761,7 +770,7 @@ fn web_init(app: &App) -> serde_json::Value {
             "w": p.rect.right - p.rect.left, "h": p.rect.bottom - p.rect.top,
             "dpi": (p.dpr * 96.0).round(), "scale": p.dpr,
             "primary": p.primary,
-            "theme": app.cfg.theme, "status": if !app.cfg.wallpaper_enabled {"disabled"}else if app.walls.get(i).is_some_and(|w|w.paused) { "paused" } else { "running" },
+            "theme": app.cfg.theme, "status": if !app.cfg.wallpaper_enabled {"disabled"}else if app.walls.is_empty(){"error"}else if app.walls.get(i).is_some_and(|w|w.paused) { "paused" } else { "running" },
         }));
     }
     let registry = web::find_prototype()
@@ -939,6 +948,7 @@ fn output_surface(gl:&glow::Context,width:i32,height:i32)->Result<(glow::Framebu
 }}
 
 struct App {
+    owner:HWND,
     ctx: Option<wgl::GlContext>,
     shared: Option<Shared>,
     vao: Option<glow::VertexArray>,
@@ -982,7 +992,7 @@ impl App {
         self.dock_error=None;
         if self.saver || self.headless || !self.cfg.dock.any_enabled() {self.dock_runtime=None;}
         else if let Some(runtime)=self.dock_runtime.as_ref() {runtime.configure(self.cfg.dock.clone());}
-        else {match dock::Runtime::new(self.cfg.dock.clone()) {
+        else {match dock::Runtime::new(self.cfg.dock.clone(),self.owner as usize) {
             Ok(runtime)=>self.dock_runtime=Some(runtime),
             Err(error)=>{log!("Dock & Stage: {error}");self.dock_error=Some(error);}
         }}
@@ -1008,6 +1018,7 @@ impl App {
             }
         }
         self.drop_shared();self.destroy_walls();self.gpu_device=None;self.ctx=None;self.gpu_attempted=false;
+        self.staging.replace(Vec::new());
         if let Some((hwnd,dc))=self.dummy.take(){unsafe{ReleaseDC(hwnd,dc);DestroyWindow(hwnd);}}
     }
     fn configure_system_monitor(&mut self, owner: HWND) {
@@ -2165,6 +2176,7 @@ fn main() {
     WIDGET_LOCKED.with(|c| c.set(cfg.widget_locked));
 
     register_class(MSG_CLASS, Some(msg_proc), false);
+    TASKBAR_CREATED.with(|id|id.set(unsafe{RegisterWindowMessageW(wide("TaskbarCreated").as_ptr())}));
     register_class(WALL_CLASS, Some(wall_proc), true);
     register_class(SAVER_CLASS, Some(saver_proc), true);
     let msg_hwnd = unsafe {
@@ -2228,6 +2240,7 @@ fn main() {
     let interactions_enabled = cfg.interactions_enabled;
     let environment = cfg.environment.clone();
     let mut app = App {
+        owner:msg_hwnd,
         ctx: None,
         shared: None,
         vao: None,
@@ -2275,11 +2288,7 @@ fn main() {
             }
             Err(e) => {
                 log!("Khởi động/gắn hình nền lần {} thất bại: {e}", attempt + 1);
-                app.destroy_walls();
-                app.drop_shared();
-                app.gpu_device=None;app.gpu_attempted=false;
-                app.ctx = None;
-                app.vao = None;
+                app.stop_wallpaper();
                 if attempt < 11 {
                     std::thread::sleep(Duration::from_millis(500));
                 }
@@ -2287,9 +2296,8 @@ fn main() {
         }
     }
     if !walls_ready {
-        log!("Không thể gắn hình nền sau nhiều lần thử");
-        unsafe { Shell_NotifyIconW(NIM_DELETE, &nid) };
-        return;
+        log!("Không thể gắn hình nền sau nhiều lần thử; các tiện ích desktop vẫn độc lập");
+        if saver || headless {return;}
     }
     app.init_widget();
     app.configure_system_monitor(msg_hwnd);
@@ -2459,6 +2467,10 @@ fn main() {
             }
         }
         let cmd = PENDING_CMD.with(|c| c.replace(0));
+        if TRAY_RESTORE_PENDING.with(|p|p.replace(false)) && !saver && !headless {
+            unsafe{Shell_NotifyIconW(NIM_ADD,&nid);}
+            log!("Explorer khởi động lại: khôi phục menu tray, giữ cấu hình module");
+        }
         let dock_events=app.dock_runtime.as_ref().map(|r|r.take_events()).unwrap_or_default();
         let mut dock_edited=false;
         for event in dock_events {match event {
@@ -3212,9 +3224,32 @@ fn main() {
             DestroyWindow(h);
         }
         if !saver && !headless {
+            unregister_shortcuts(msg_hwnd);
+            windows_sys::Win32::System::RemoteDesktop::WTSUnRegisterSessionNotification(msg_hwnd);
             Shell_NotifyIconW(NIM_DELETE, &nid);
         }
         DestroyWindow(msg_hwnd);
+    }
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    #[test]
+    #[ignore = "real hidden HWND and Explorer broadcast routing; explicitly run in CI"]
+    fn native_explorer_restart_queues_recovery_without_settings_writes() {
+        // Route the documented shell message without restarting Explorer or
+        // reading/writing a profile. Actual desktop restart remains native pending.
+        register_class(MSG_CLASS,Some(msg_proc),false);
+        let message=unsafe{RegisterWindowMessageW(wide("TaskbarCreated").as_ptr())};assert_ne!(message,0);
+        TASKBAR_CREATED.with(|id|id.set(message));
+        let class=wide(MSG_CLASS);
+        let hwnd=unsafe{CreateWindowExW(WS_EX_TOOLWINDOW,class.as_ptr(),class.as_ptr(),WS_POPUP,0,0,0,0,std::ptr::null_mut(),std::ptr::null_mut(),GetModuleHandleW(std::ptr::null()),std::ptr::null())};
+        assert!(!hwnd.is_null());
+        unsafe{SendMessageW(hwnd,message,0,0);}
+        assert!(TRAY_RESTORE_PENDING.with(|p|p.replace(false)));
+        assert!(DISPLAY_CHANGED.with(|p|p.replace(false)));
+        unsafe{DestroyWindow(hwnd);}
     }
 }
 

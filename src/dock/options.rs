@@ -17,7 +17,7 @@ pub enum Edit {
 impl Edit {
     pub fn apply(self, options: &mut Options) {
         match self {
-            Self::Pin(path)=>{if options.pinned.len()<32 && !path.contains('\0') && !options.pinned.iter().any(|p|p.eq_ignore_ascii_case(&path)){options.pinned.push(path);}}
+            Self::Pin(path)=>{if options.pinned.len()<32 && !path.is_empty() && path.len()<=32760 && !path.contains('\0') && !options.pinned.iter().any(|p|p.eq_ignore_ascii_case(&path)){options.pinned.push(path);}}
             Self::Unpin(path)=>options.pinned.retain(|p|!p.eq_ignore_ascii_case(&path)),
             Self::AllWindows(on)=>options.all_windows=on,
             Self::StageSide(side)=>{if side=="left"||side=="right" {options.stage_side=side;options.stage_enabled=true;}}
