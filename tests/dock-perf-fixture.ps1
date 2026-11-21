@@ -3,6 +3,7 @@ param(
     [ValidateRange(0,8)][int]$Cards = 0,
     [ValidateSet('none','primary','secondary')][string]$Fullscreen = 'none',
     [ValidateSet('primary','secondary')][string[]]$BackgroundCovered = @(),
+    [switch]$WaitForShow,
     [ValidateRange(30,900)][int]$TimeoutSeconds = 180
 )
 $ErrorActionPreference = 'Stop'
@@ -45,13 +46,18 @@ try {
         # WinForms uses a layered source when Opacity is below 1.0. This
         # permits a verified display-affinity query on Windows 11.
         $form.Opacity = 0.98
-        $form.Show()
     }
     $control = [Windows.Forms.Form]::new()
     $forms.Add($control)
     $control.Text = 'Deskland isolated benchmark fixture'
     $control.StartPosition = 'Manual'
     $control.BackColor = [Drawing.Color]::MidnightBlue
+    if ($Cards -gt 0 -and $Fullscreen -eq 'none') {
+        # This owns foreground in both intervals without occupying a Stage
+        # card or providing a fourth DWM source in the preview scenario.
+        $control.FormBorderStyle = 'FixedToolWindow'
+        $control.ShowInTaskbar = $false
+    }
     $deactivated = Join-Path $Evidence 'fixture-deactivated.log'
     $control.Add_Deactivate({
         [IO.File]::AppendAllText($deactivated, [string][DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()+[Environment]::NewLine)
@@ -63,7 +69,20 @@ try {
         $control.FormBorderStyle = 'None'
         $control.Bounds = $screen.Bounds
     }
-    $control.Show()
+    if ($WaitForShow) {
+        # Publish the owned HWND while it is hidden, so the collector can bind
+        # the candidate to this fixture without moving foreground before launch.
+        $handle = $control.Handle.ToInt64()
+        $created = Join-Path $Evidence 'fixture-created.next'
+        [ordered]@{PID=$PID;Hwnd=$handle} | ConvertTo-Json | Set-Content -LiteralPath $created
+        Move-Item -LiteralPath $created -Destination (Join-Path $Evidence 'fixture-created.json')
+        $show = Join-Path $Evidence 'fixture-show'
+        while (!(Test-Path -LiteralPath $show)) {
+            if ($clock.Elapsed.TotalSeconds -ge 15 -or (Test-Path -LiteralPath $stop)) { throw 'Fixture show was not requested' }
+            Start-Sleep -Milliseconds 50
+        }
+    }
+    foreach ($form in $forms) { $form.Show() }
     $control.Activate()
     $controlRect = [DeskPerfFixture]::WindowRect($control.Handle)
     if (!$controlRect -or $control.WindowState -ne 'Normal') { throw 'Expected ordinary owned fixture geometry' }
