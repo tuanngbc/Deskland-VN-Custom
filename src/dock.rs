@@ -22,6 +22,7 @@ mod geometry;
 mod surface;
 mod icon_atlas;
 mod previews;
+mod workspaces;
 pub use glass_probe::probe as glass_probe;
 pub use appearance::{Appearance,DockSide};
 pub use options::{Options,Edit,DisplayMode,DisplayTarget};
@@ -95,9 +96,9 @@ impl Motion {
         unsettled
     }
 }
-struct Stage { hwnd:HWND, bounds:RECT, items:Vec<Item>, hidden:bool, previews:previews::Previews }
+struct Stage { hwnd:HWND, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, selected:Option<u64>, hidden:bool, previews:previews::Previews }
 #[derive(Default)]
-struct State { bars:Vec<Bar>, stages:Vec<Stage>, windows:Vec<AppWindow>, prefs:Preferences, screens:Vec<Screen>, suspended:bool, foreground:isize }
+struct State { bars:Vec<Bar>, stages:Vec<Stage>, windows:Vec<AppWindow>, prefs:Preferences, screens:Vec<Screen>, suspended:bool, foreground:isize, workspaces:workspaces::Workspaces }
 thread_local! {
     static STATE:RefCell<State>=RefCell::new(State::default());
     static CONTROL:Cell<HWND>=const{Cell::new(ptr::null_mut())};
@@ -289,26 +290,6 @@ fn item_list(all:&[AppWindow],screen:RECT,prefs:&Preferences)->Vec<Item>{
     }
     result.truncate(MAX_ITEMS);result
 }
-// Stage follows the same per-monitor visibility preference as Dock; deduplicate by executable.
-fn stage_item_list(all:&[AppWindow],screen:RECT,all_windows:bool)->Vec<Item>{
-    // In global mode an application may have windows on multiple monitors.
-    // Prefer the local HWND for this Stage's click target, just as Dock does.
-    // Keep the first-seen executable ordering stable while selecting that target.
-    let mut seen=HashSet::<String>::new();
-    let mut result=Vec::new();
-    for w in all.iter().filter(|w|all_windows || rect_intersects(screen,w.rect)) {
-        if !seen.insert(w.path.to_lowercase()){continue;}
-        let local=all.iter().find(|a|a.path.eq_ignore_ascii_case(&w.path)
-            && rect_intersects(screen,a.rect));
-        let selected=local.unwrap_or(w);
-        let count=all.iter().filter(|a|a.path.eq_ignore_ascii_case(&w.path)
-            && (all_windows || rect_intersects(screen,a.rect))).count();
-        result.push(Item{path:selected.path.clone(),title:selected.title.clone(),
-            hwnd:selected.hwnd,count,pinned:false});
-        if result.len()==5{break;}
-    }
-    result
-}
 fn stage_rect(screen:&Screen,side:&str)->RECT {
     let scale=(screen.dpi as f32/96.0).clamp(0.75,3.0);
     let px=|n:f32|(n*scale).round() as i32;
@@ -335,8 +316,10 @@ unsafe fn recreate(state:&mut State) {
         if !keep { DestroyWindow(b.hwnd); }
         keep
     });
+    let stage_enabled_ids=stage_targets.iter().map(|&i|screens[i].id.clone()).collect();
+    state.workspaces.restore_offscreen(&stage_enabled_ids);
     state.stages.retain_mut(|s| {
-        let keep = stage_targets.iter().any(|&i| same_rect(screens[i].bounds, s.bounds));
+        let keep = stage_targets.iter().any(|&i| screens[i].id==s.display&&same_rect(screens[i].bounds, s.bounds));
         if !keep { s.previews.clear();DestroyWindow(s.hwnd); }
         keep
     });
@@ -362,7 +345,7 @@ unsafe fn recreate(state:&mut State) {
                 ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
             if !stage_hwnd.is_null(){
                 previews::style_destination(stage_hwnd);
-                state.stages.push(Stage{hwnd:stage_hwnd,bounds:screen.bounds,items:Vec::new(),hidden:true,previews:previews::Previews::default()});
+                state.stages.push(Stage{hwnd:stage_hwnd,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),selected:None,hidden:true,previews:previews::Previews::default()});
             } else { emit(Event::Error(format!("Create Stage window: {}",GetLastError()))); }
         }
     }
@@ -399,13 +382,16 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         }
         if changed{InvalidateRect(b.hwnd,ptr::null(),0);}
     }
+    state.workspaces.prune();
     for stage in &mut state.stages {
         if let Some(screen)=state.screens.iter().find(|s|same_rect(s.bounds,stage.bounds)) {
             let r=stage_rect(screen,&state.prefs.stage_side);let mut actual:RECT=mem::zeroed();
             if GetWindowRect(stage.hwnd,&mut actual)==0 || !same_rect(r,actual){SetWindowPos(stage.hwnd,HWND_TOPMOST,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE);}
         }
-        let items=stage_item_list(&state.windows,stage.bounds,state.prefs.all_windows);
-        let mut changed=stage.items!=items || active_changed;stage.items=items;
+        let (items,groups)=state.workspaces.cards(&stage.display,stage.bounds,&state.windows,state.prefs.all_windows);
+        let selected=state.workspaces.active(&stage.display);
+        let mut changed=stage.items!=items||stage.groups!=groups||stage.selected!=selected||active_changed;
+        stage.items=items;stage.groups=groups;stage.selected=selected;
         // Handle fullscreen on the local monitor even while the foreground
         // window is on another screen. The top local app must cover the output.
         let local_fullscreen=state.windows.iter().find(|w|rect_intersects(w.rect,stage.bounds)&&IsIconic(w.hwnd)==0)
@@ -489,14 +475,14 @@ unsafe fn paint(hwnd:HWND){
         let state=cell.borrow();
         let stage=state.stages.iter().find(|stage|stage.hwnd==hwnd)?;
         let ready=stage.items.iter().map(|item|stage.previews.includes(item.hwnd)).collect::<Vec<_>>();
-        Some((stage.items.clone(),ready,state.foreground))
+        Some((stage.items.clone(),ready,stage.groups.clone(),stage.selected,state.foreground))
     });
-    if let Some((items,ready,foreground))=stage {
+    if let Some((items,ready,groups,active,foreground))=stage {
         label(dc,6,4,area.right-12,"Stage Manager",0x00eae9e7);
         for (i,item) in items.iter().enumerate(){
             let tile=previews::tile(area.right,area.bottom,i);
             if tile.bottom-tile.top<22{continue;}
-            let selected=item.hwnd as isize==foreground;
+            let selected=item.hwnd as isize==foreground||(active.is_some()&&active==groups[i]);
             let brush=CreateSolidBrush(if selected{0x00614936}else{0x00362923});
             let pen=CreatePen(PS_SOLID as i32,1,if selected{0x00c29a63}else{0x0053493f});
             let pb=SelectObject(dc,brush);let pp=SelectObject(dc,pen);
@@ -507,7 +493,8 @@ unsafe fn paint(hwnd:HWND){
                 DrawIconEx(dc,(area.right-24)/2,tile.top+(tile.bottom-tile.top-40).max(8)/2,
                     image,24,24,0,ptr::null_mut(),DI_NORMAL);
             }
-            label(dc,tile.left+6,tile.bottom-25,tile.right-tile.left-12,&basename(&item.path),0x00eeeeee);
+            let title=if groups[i].is_some(){format!("{} · {}",item.title,item.count)}else{basename(&item.path)};
+            label(dc,tile.left+6,tile.bottom-25,tile.right-tile.left-12,&title,0x00eeeeee);
         }
         EndPaint(hwnd,&ps);return;
     }
@@ -628,6 +615,48 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
         MENU_QUIT=>emit(Event::Edit(Edit::DockEnabled(false))),
         _=>{}
     }
+}
+unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
+    let mut area:RECT=mem::zeroed();GetClientRect(hwnd,&mut area);
+    let card=STATE.with(|s|{
+        let state=s.borrow();
+        let stage=state.stages.iter().find(|p|p.hwnd==hwnd)?;
+        let i=previews::slot_at(area.right,area.bottom,x,y,stage.items.len())?;
+        let item=stage.items.get(i)?;
+        let local=state.windows.iter().any(|w|w.hwnd==item.hwnd&&rect_intersects(w.rect,stage.bounds));
+        Some((item.hwnd,stage.groups.get(i).copied().flatten(),stage.display.clone(),stage.selected,local,state.workspaces.can_create(&stage.display)))
+    });
+    let Some((item,group,display,current,local,can_create))=card else{return;};
+    let menu=CreatePopupMenu();
+    if menu.is_null(){return;}
+    let add=|id,title:&str,active|{
+        AppendMenuW(menu,MF_STRING|if active{0}else{MF_GRAYED},id,wide(title).as_ptr());
+    };
+    add(1,"Tạo nhóm từ cửa sổ này",local&&group.is_none()&&can_create);
+    add(2,"Thêm vào nhóm đang mở",local&&group.is_none()&&current.is_some());
+    add(3,"Tách cửa sổ đại diện khỏi nhóm",group.is_some());
+    add(4,"Giải tán nhóm và khôi phục cửa sổ",group.is_some());
+    let mut point:POINT=mem::zeroed();GetCursorPos(&mut point);
+    let result=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,point.x,point.y,0,hwnd,ptr::null()) as usize;
+    DestroyMenu(menu);
+    if result==0{return;}
+    update_state(|state|{
+        // The menu can run a nested loop. Revalidate the original source and
+        // display against the current enumeration before changing a workspace.
+        let Some(stage)=state.stages.iter().find(|stage|stage.hwnd==hwnd&&stage.display==display)else{return;};
+        let Some(i)=stage.items.iter().position(|entry|entry.hwnd==item)else{return;};
+        if stage.groups[i]!=group{return;}
+        let present=state.windows.iter().any(|w|w.hwnd==item);
+        let still_local=present && state.windows.iter().any(|w|w.hwnd==item&&rect_intersects(w.rect,stage.bounds));
+        match result{
+            1 if still_local&&group.is_none()=>{state.workspaces.create(&display,item);}
+            2 if still_local&&group.is_none()&&current==stage.selected=>state.workspaces.add(&display,item),
+            3 if group.is_some()&&present=>state.workspaces.remove(item),
+            4=>{if let Some(id)=group{state.workspaces.dissolve(id);}},
+            _=>{}
+        }
+        refresh(state,false);
+    });
 }
 unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     match msg {
@@ -780,9 +809,17 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             let stage_item=STATE.with(|s|{
                 let a=s.borrow();
                 let stage=a.stages.iter().find(|stage|stage.hwnd==hwnd)?;
-                previews::slot_at(area.right,area.bottom,px,y,stage.items.len()).and_then(|i|stage.items.get(i)).cloned()
+                let i=previews::slot_at(area.right,area.bottom,px,y,stage.items.len())?;
+                Some((stage.items.get(i)?.clone(),stage.groups.get(i).copied().flatten(),stage.display.clone()))
             });
-            if let Some(item)=stage_item {activate(&item);return 0;}
+            if let Some((item,group,display))=stage_item {
+                if let Some(id)=group{
+                    let mut focus=None;
+                    update_state(|state|{focus=state.workspaces.switch(&display,id);refresh(state,false);});
+                    if let Some(hwnd)=focus{SetForegroundWindow(hwnd);}
+                }else{activate(&item);}
+                return 0;
+            }
             let is_stage=STATE.with(|s|s.borrow().stages.iter().any(|stage|stage.hwnd==hwnd));
             if is_stage{return 0;}
             let x=(l as u32&0xffff) as i16 as i32;
@@ -815,7 +852,9 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         }
         WM_RBUTTONUP=>{
-            if STATE.with(|s|s.borrow().stages.iter().any(|stage|stage.hwnd==hwnd)){return 0;}
+            if STATE.with(|s|s.borrow().stages.iter().any(|stage|stage.hwnd==hwnd)){
+                stage_menu(hwnd,l as i16 as i32,(l>>16) as i16 as i32);return 0;
+            }
             let x=(l as u32&0xffff) as i16 as i32;
             let (bar,index)=STATE.with(|s|{let a=s.borrow();let i=a.bars.iter().position(|b|b.hwnd==hwnd).unwrap_or(0);
               let y=(l>>16) as i16 as f32;
@@ -911,7 +950,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         let mut msg:MSG=mem::zeroed();
         while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0{TranslateMessage(&msg);DispatchMessageW(&msg);}
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
-        update_state(|s|{for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){b.previews.clear();DestroyWindow(b.hwnd);}});
+        update_state(|s|{s.workspaces.restore_offscreen(&HashSet::new());for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){b.previews.clear();DestroyWindow(b.hwnd);}});
         ICONS.with(|c|{for (_,icon) in c.borrow_mut().drain(){if !icon.is_null(){DestroyIcon(icon);}}});
         SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
         CONTROL.with(|c|c.set(ptr::null_mut()));DestroyWindow(control);
@@ -938,35 +977,16 @@ mod tests{
         assert!(left.left<right.left && left.left>=sc.work.left && right.right<=sc.work.right);
         assert!(left.top>=sc.work.top && left.bottom<=sc.work.bottom);
     }
-    #[test] fn stage_respects_monitor_filter_and_counts(){
-        let make=|hwnd:usize,path:&str,r:[i32;4]|AppWindow{
-            hwnd:hwnd as HWND,title:path.into(),path:path.into(),rect:rect(r)};
-        let windows=vec![
-            make(1,"C:\\\\Apps\\\\alpha.exe",[-1800,0,-100,900]),
-            make(2,"c:\\\\apps\\\\ALPHA.EXE",[100,0,700,900]),
-            make(3,"C:\\\\Apps\\\\beta.exe",[100,0,700,900])];
-        let local=stage_item_list(&windows,rect([-1920,0,0,1080]),false);
-        assert_eq!(local.len(),1);assert_eq!(local[0].count,1);
-        let global=stage_item_list(&windows,rect([-1920,0,0,1080]),true);
-        assert_eq!(global.len(),2);assert_eq!(global[0].count,2);
-    }
-    #[test] fn global_stage_prefers_local_window_for_activation(){
-        let make=|hwnd:usize,path:&str,r:[i32;4]|AppWindow{
-            hwnd:hwnd as HWND,title:format!("window {hwnd}"),path:path.into(),rect:rect(r)};
-        let windows=vec![
-            make(1,"C:\\Apps\\alpha.exe",[100,0,700,900]),
-            make(2,"c:\\apps\\ALPHA.EXE",[-1800,0,-100,900]),
-            make(3,"C:\\Apps\\beta.exe",[100,0,700,900])];
-        let secondary=rect([-1920,0,0,1080]);
-        let global=stage_item_list(&windows,secondary,true);
-        assert_eq!(global.len(),2);
-        assert_eq!(global[0].hwnd,2 as HWND);
-        assert_eq!(global[0].count,2);
-        assert_eq!(global[1].hwnd,3 as HWND);
-        let local=stage_item_list(&windows,secondary,false);
-        assert_eq!(local.len(),1);
-        assert_eq!(local[0].hwnd,2 as HWND);
-        assert_eq!(local[0].count,1);
+    #[test] fn stage_keeps_distinct_windows_even_with_the_same_executable(){
+        let make=|hwnd:usize,r:[i32;4]|AppWindow{
+            hwnd:hwnd as HWND,title:format!("window {hwnd}"),path:"C:\\Apps\\editor.exe".into(),rect:rect(r)};
+        let windows=vec![make(1,[-800,0,-400,800]),make(2,[-700,0,-300,800]),make(3,[50,0,500,800])];
+        let stage=workspaces::Workspaces::default();
+        let (local,groups)=stage.cards("portrait",rect([-1920,0,0,1080]),&windows,false);
+        assert_eq!(local.iter().map(|item|item.hwnd as usize).collect::<Vec<_>>(),vec![1,2]);
+        assert_eq!(groups,vec![None,None]);
+        let (global,_)=stage.cards("portrait",rect([-1920,0,0,1080]),&windows,true);
+        assert_eq!(global.len(),3);
     }
     #[test] fn pinned_app_respects_local_monitor_and_deduplicates(){
         let make=|hwnd:usize,r:[i32;4]|AppWindow{hwnd:hwnd as HWND,title:format!("window {hwnd}"),path:"C:\\\\Apps\\\\alpha.exe".into(),rect:rect(r)};
