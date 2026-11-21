@@ -1,6 +1,6 @@
 # Deskland Rust Dock + Stage Manager — execution status
 
-Checkpoint: 2026-11-21 00:53 UTC. Development only on `codex/rust-dock`, [Draft PR #1](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1).
+Checkpoint: 2026-11-21 01:00 UTC. Development only on `codex/rust-dock`, [Draft PR #1](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1).
 Accepted baseline remains `a604519acaf4d5881b9e13e5476d52f97ac29c0f` on `codex/rust-test`. No owner profile/installed EXE change, candidate download/run or merge.
 
 ## Verified source and CI
@@ -10,7 +10,8 @@ Accepted baseline remains `a604519acaf4d5881b9e13e5476d52f97ac29c0f` on `codex/r
 - Foundation `3526fcc4b470f8f0191868eb043498e3a5a33929`: [44846159435](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44846159435), CI_PASS.
 - At 3526fcc: 47 Rust passed, six ignored tests each explicitly run and passed (five prior native cases plus new integrated Dock/Stage lifecycle). Eight Dock model/geometry tests are included in the 47 and rerun separately. JS renderer 32, shortcuts seven, Dock Settings handlers four: all passed.
 - Runner is Windows Server 2025, not owner Windows 11 dual-monitor acceptance. No numerical CPU/GPU/FPS improvement is claimed.
-- The next increment adds shell restart message recovery, hidden-controller cleanup assertion and prompt owner-loop wakeup; it requires its own CI. Consult actual branch HEAD before selecting artifacts.
+- Shell recovery increment `390bacb2d2be77fb81c544528a7fb8d20730293b`: [44846968455](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44846968455), CI_PASS. 47 Rust plus seven separately invoked native tests passed, JS 32+7+4. Includes documented shell-message routing, hidden-controller cleanup and prompt owner-loop wakeup; actual Explorer restart remains NATIVE_PENDING.
+- This following increment shares fullscreen detection between Dock and independent Stage, excludes desktop/Shell windows, and adds a regression so clicking desktop cannot hide Stage. It requires its own CI; consult actual HEAD/run before selecting artifacts.
 
 ## Actual implementation
 

@@ -100,6 +100,17 @@ fn basename(path:&str)->String {
 fn is_shell_class(class:&str)->bool {
     matches!(class,"Progman"|"WorkerW"|"Shell_TrayWnd"|"Shell_SecondaryTrayWnd"|"NotifyIconOverflowWindow"|"ApplicationFrameInputSinkWindow"|"TuanpcDeskNativeDock"|"TuanpcDeskMsg"|"TuanpcDeskWall")
 }
+fn covers_display(class:&str,window:RECT,screen:RECT)->bool {
+    !is_shell_class(class) && window.left<=screen.left && window.top<=screen.top
+        && window.right>=screen.right && window.bottom>=screen.bottom
+}
+unsafe fn foreground_fullscreen(screen:RECT)->bool {
+    let foreground=GetForegroundWindow();
+    if foreground.is_null() || IsIconic(foreground)!=0{return false;}
+    let mut class=[0u16;128];let n=GetClassNameW(foreground,class.as_mut_ptr(),128);
+    let mut bounds:RECT=mem::zeroed();
+    GetWindowRect(foreground,&mut bounds)!=0 && covers_display(&String::from_utf16_lossy(&class[..n.max(0) as usize]),bounds,screen)
+}
 unsafe extern "system" fn enumerate(hwnd:HWND,param:LPARAM)->i32 {
     let out=&mut *(param as *mut Vec<AppWindow>);
     if IsWindowVisible(hwnd)==0 || GetWindow(hwnd,GW_OWNER)!=ptr::null_mut() {return 1;}
@@ -242,19 +253,10 @@ unsafe fn refresh(state:&mut State) {
             let mut actual:RECT=mem::zeroed();
             if GetWindowRect(b.hwnd,&mut actual)==0 || !same_rect(r,actual){SetWindowPos(b.hwnd,HWND_TOPMOST,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE);}
         }
-        let fg=GetForegroundWindow();
-        let mut fg_rect:RECT=mem::zeroed();
-        let fg_class=if fg.is_null(){String::new()}else{
-            let mut cls=[0u16;128];let n=GetClassNameW(fg,cls.as_mut_ptr(),128);
-            String::from_utf16_lossy(&cls[..n.max(0) as usize])
-        };
-        let fullscreen=state.suspended || (!fg.is_null()&&!is_shell_class(&fg_class)&&GetWindowRect(fg,&mut fg_rect)!=0
-            && fg_rect.left<=b.bounds.left && fg_rect.top<=b.bounds.top
-            && fg_rect.right>=b.bounds.right && fg_rect.bottom>=b.bounds.bottom);
+        let fullscreen=state.suspended || foreground_fullscreen(b.bounds);
         if b.hidden!=fullscreen { ShowWindow(b.hwnd,if fullscreen{SW_HIDE}else{SW_SHOWNOACTIVATE});b.hidden=fullscreen; }
         if changed{InvalidateRect(b.hwnd,ptr::null(),0);}
     }
-    let own:Vec<HWND>=state.bars.iter().map(|b|b.hwnd).chain(state.stages.iter().map(|s|s.hwnd)).collect();
     for stage in &mut state.stages {
         if let Some(screen)=state.screens.iter().find(|s|same_rect(s.bounds,stage.bounds)) {
             let r=stage_rect(screen,&state.prefs.stage_side);let mut actual:RECT=mem::zeroed();
@@ -262,9 +264,7 @@ unsafe fn refresh(state:&mut State) {
         }
         let items=stage_item_list(&state.windows,stage.bounds,state.prefs.all_windows);
         let changed=stage.items!=items || active_changed;stage.items=items;
-        let fg=GetForegroundWindow();let mut rect:RECT=mem::zeroed();
-        let hide=state.suspended || (!fg.is_null() && !own.contains(&fg)
-            && GetWindowRect(fg,&mut rect)!=0 && rect.left<=stage.bounds.left && rect.top<=stage.bounds.top && rect.right>=stage.bounds.right && rect.bottom>=stage.bounds.bottom);
+        let hide=state.suspended || foreground_fullscreen(stage.bounds);
         if hide!=stage.hidden{ShowWindow(stage.hwnd,if hide{SW_HIDE}else{SW_SHOWNOACTIVATE});stage.hidden=hide;}
         if changed{InvalidateRect(stage.hwnd,ptr::null(),0);}
     }
@@ -550,6 +550,12 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
 mod tests{
     use super::*;
     fn rect(a:[i32;4])->RECT{RECT{left:a[0],top:a[1],right:a[2],bottom:a[3]}}
+    #[test] fn desktop_foreground_never_hides_independent_stage_or_dock(){
+        let screen=rect([-1920,-120,0,1080]);let desktop=rect([-1920,-120,2560,1440]);
+        for class in ["Progman","WorkerW",CLASS,"Shell_TrayWnd","Shell_SecondaryTrayWnd"]{assert!(!covers_display(class,desktop,screen),"{class}");}
+        assert!(covers_display("RealApp",screen,screen));
+        assert!(!covers_display("RealApp",rect([-1920,-120,0,1040]),screen));
+    }
     #[test] fn mixed_coordinate_overlap(){assert!(rect_intersects(rect([-1200,-200,0,900]),rect([-100,0,100,100])));assert!(!rect_intersects(rect([-1200,-200,0,900]),rect([0,0,100,100])));}
     #[test] fn distinct_monitor_geometry(){let s=Screen{bounds:rect([-1920,0,0,1080]),work:rect([-1920,0,0,1040]),primary:false};let r=bar_rect(&s,5);assert!(r.left<0 && r.right<=0 && r.bottom<=1040);}
     #[test] fn stage_geometry_on_negative_monitor(){

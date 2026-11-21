@@ -175,7 +175,9 @@ Settings remain in `%USERPROFILE%\.deskland-rs\settings.json`. When its `dock`
 object is absent, legacy `dock.json` pins/scope/side are imported without enabling
 new overlays. The legacy file is retained. Existing theme/widget/shortcut fields
 and unknown settings are preserved by atomic writes. Do not delete the profile
-to roll back; restore the accepted binary/bundle instead.
+to roll back; restore the accepted binary/bundle instead. Before any RC trial,
+retain a copy of settings.json: the accepted older binary can rewrite settings
+without newer Dock fields. A downgrade is not a substitute for a profile backup.
 
 This branch is not an accepted release. Stage is still a sidebar, not completed
 workspace management. Windows taskbar/tray remain available. Track actual CI and

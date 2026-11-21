@@ -1,6 +1,6 @@
 # Durable development handoff
 
-UTC checkpoint: 2026-11-21 00:53. Branch `codex/rust-dock`, [PR #1 Draft](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1), base `codex/rust-test`. Accepted baseline `a604519acaf4d5881b9e13e5476d52f97ac29c0f` untouched in E:\deskland.
+UTC checkpoint: 2026-11-21 01:00. Branch `codex/rust-dock`, [PR #1 Draft](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1), base `codex/rust-test`. Accepted baseline `a604519acaf4d5881b9e13e5476d52f97ac29c0f` untouched in E:\deskland.
 
 Owner assigned implementation/commit/push/CI in 21/11 handover, superseding old read-only request. Previous AI writer paused. D9 is mandatory: same Deskland executable/config/Settings/startup/lifecycle, independent modules, backwards compatibility and one bundle. No merge or production deployment without OWNER_NATIVE_ACCEPTED. No repeated owner tests before RC.
 
@@ -12,7 +12,9 @@ Owner assigned implementation/commit/push/CI in 21/11 handover, superseding old 
 
 Foundation: managed same-process UI thread in src/dock/runtime.rs; canonical options/migration in src/dock/options.rs; config_store atomic preserving writes; Settings/tray/fallback integration, independent wallpaper switch; coalesced hooks, cached icons, work-area reconciliation; local/unpinned selection + iconic/cloaked fixes. No separate Dock process or config writer. Default new modules off. Stage still sidebar only.
 
-Following code increment (the commit containing this entry) adds documented TaskbarCreated message routing to restore main tray/reattach wallpaper, session shutdown and shortcut/session-notification cleanup, prompt owner-loop wakeup, a hidden-controller destruction assertion and an isolated shell-message CI test. Wallpaper startup failure no longer exits other desktop utilities; wallpaper-off frees staging memory. Native shell restart itself is NOT tested. This increment needs its own CI; do not reuse 3526fcc PASS as evidence for later code.
+Shell recovery source `390bacb2d2be77fb81c544528a7fb8d20730293b` passed [44846968455](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44846968455): 47 Rust plus seven explicitly run native tests; JS 32+7+4 passed. Adds TaskbarCreated routing, session cleanup, owner-loop wakeup, hidden-controller assertion and isolated shell-message test. Wallpaper startup failure no longer exits other desktop utilities; wallpaper-off frees staging memory. Actual native Explorer restart NOT tested.
+
+The following increment (commit containing this entry) fixes independent Stage incorrectly treating desktop foreground as fullscreen by sharing the Dock/Shell exclusion helper. Adds regression for virtual desktop spanning negative-coordinate monitors, own/Shell classes and actual fullscreen vs work-area maximize. Requires own CI, not 390bacb's PASS.
 
 ## Immediate next actions
 
