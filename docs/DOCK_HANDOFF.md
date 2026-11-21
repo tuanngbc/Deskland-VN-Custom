@@ -2,6 +2,8 @@
 
 Current P0 build and scoped native evidence: [Dock P0 verification](DOCK_P0_VERIFICATION.md). The full owner acceptance gates remain pending.
 
+For the P0 follow-up, continue from remote HEAD, not the older handoff commits below. Owner smoke evidence for 5f8d2e8 and 4b37064 is under the private trial folders ending in their short SHAs. The 4b37064 release is the last owner-tested executable. Dddd812 adds an exact CI crash probe (real Explorer, primary monitor, test-owned child). Do not stop Explorer or rerun that probe on the owner desktop. Keep the production and baseline unchanged, PR Draft, and leave `OWNER_NATIVE_ACCEPTED` unset. Next native evidence: actual Explorer restart in a recoverable Windows 11 session, alternate primary/mixed DPI, real app maximize and fullscreen paths, hover, utility navigation and repeatable resource sampling.
+
 Checkpoint 2026-11-21 02:10 UTC. Only codex/rust-dock, [Draft PR #1](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1), base codex/rust-test. Stable source a604519 remains clean in E:\deskland. No merge or production replacement; owner alone grants OWNER_NATIVE_ACCEPTED.
 
 Latest owner attachment authorized download, isolated native smoke, fixes, push and GitHub-only builds. It superseded the former no-download/no-run restriction for that test; it did not authorize candidate deployment. Prior AI writer was paused. Fetch and verify HEAD before changes; never reset/rebase/force-push over another writer. Push only owner repository, never upstream origin.

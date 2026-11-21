@@ -2,10 +2,12 @@
 
 Current P0 build and scoped native evidence: [Dock P0 verification](DOCK_P0_VERIFICATION.md). The full owner acceptance gates remain pending.
 
-Checkpoint: 2026-11-21 02:10 UTC. Development only on `codex/rust-dock`, [Draft PR #1](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1).
+Checkpoint: 2026-11-21 08:34 UTC. Development only on `codex/rust-dock`, [Draft PR #1](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1).
 Accepted source baseline remains `a604519acaf4d5881b9e13e5476d52f97ac29c0f` on `codex/rust-test`, clean. Owner subsequently authorized isolated native smoke, fixes and CI, without production replacement or merge. See [native report](DOCK_NATIVE_SMOKE_REPORT.md). Installed EXE bytes were preserved; their source lineage lacks a BUILD-COMMIT marker and is not independently confirmed.
 
 ## Verified source and CI
+
+- P0 follow-up: AppBar [5f8d2e8 / CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44884226117), icon/utility [4b37064 / CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44884664434), and actual forced-exit AppBar cleanup on the [dddd812 CI desktop](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44885050608). Owner Windows 11 smoke: both 96-DPI outputs, negative-coordinate portrait, separate toggles, normal restore and rollback. Actual Explorer restart, high/mixed-DPI visuals, fullscreen games and performance acceptance remain pending.
 
 - D0 docs `45bacf4`: [44844337708](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44844337708), CI_PASS.
 - Initial integration `16b73d0`: [44845761358](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44845761358), CI_FAIL (DWM attribute i32/u32 binding). Fixed in `3526fcc`.
