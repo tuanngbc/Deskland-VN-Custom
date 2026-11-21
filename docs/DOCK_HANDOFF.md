@@ -33,3 +33,12 @@ Installed EXE bytes preserved. All 402 original profile files matched the verifi
 4. Matched reveal/cover measurements including DWM/WebView children, stress/long-run handles; then safe DPI/hotplug, Explorer recovery and login/reboot gates. Trial mode intentionally cannot certify Windows saver/Startup mutation.
 
 Managed same-process threads are not crash isolation. First Shell icon extraction is synchronous and can delay joined shutdown; no bounded recovery claim. Sole build workflow .github/workflows/build-rust-test.yml. Preserve legal/third_party files; no binaries/logs/profiles/credentials in git. No merge/deployment without later owner authorization and OWNER_NATIVE_ACCEPTED.
+
+
+## Owner visual rebuild checkpoint
+
+Fetch the user repository before further edits; keep PR #1 Draft and stable a604519 unchanged. M1 landed in c2a589b and named display discovery in 6ca3997. See status/native report for exact artifact and verified scopes. The new `--trial-dock-displays` diagnostic writes inventory only inside the marked profile. Never upload its device paths; target IDs can contain per-device identifiers.
+
+Latest matched-measurement attempt uses the pre-renderer fa93c16 release artifact in a fresh trial profile, native Dock/Wall settings, serial production/trial startup and private raw counters. Fixture coverage is sampled from the wallpaper log; a changed workload or missing GPU engine counters invalidates a performance comparison. Restore and verify production between groups of trials. Read [performance notes](DOCK_PERFORMANCE_REPORT.md) before starting a full benchmark or inferring any resource improvement.
+
+The glass proof is opt-in on an isolated `--trial-dir` with the same singleton. It compares a documented DWM backdrop request and a true premultiplied capsule over the same high-contrast reference. Accepted HRESULTs are capability hints. The production GDI overlay does not select the proof. Resume with measured visual verification, then integrate an event-driven renderer, motion, and Stage thumbnails/groups; no visual or performance PASS yet.

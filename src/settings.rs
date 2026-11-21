@@ -414,7 +414,7 @@ pub fn open(state: &State) {
         let dpi = GetDpiForSystem().max(96);
         let s = dpi as f32 / 96.0;
         let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-        let mut r = RECT { left: 0, top: 0, right: (540.0 * s) as i32, bottom: (808.0 * s) as i32 };
+        let mut r = RECT { left: 0, top: 0, right: (540.0 * s) as i32, bottom: (790.0 * s) as i32 };
         AdjustWindowRectEx(&mut r, style, 0, 0);
         let (w, h) = (r.right - r.left, r.bottom - r.top);
         let (sw, sh) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
@@ -471,7 +471,9 @@ pub fn open(state: &State) {
         };
         let btn = BS_PUSHBUTTON as u32 | WS_TABSTOP;
         let chk = BS_AUTOCHECKBOX as u32 | WS_TABSTOP;
-        ui.ctl("STATIC", "Chủ đề", 0, 20, 16, 300, 24, 0, true);
+        ui.ctl("STATIC", "Chủ đề", 0, 20, 16, 220, 24, 0, true);
+        ui.ctl("BUTTON","Màn hình Dock…",btn,249,9,118,28,ID_DOCK_DISPLAY,false);
+        ui.ctl("BUTTON","Màn hình Stage…",btn,376,9,144,28,ID_STAGE_DISPLAY,false);
         ui.theme_combo = ui.ctl("COMBOBOX", "", CBS_DROPDOWNLIST as u32 | WS_VSCROLL | WS_TABSTOP, 20, 44, 240, 320, ID_THEME, false);
         for &(_, label, _) in crate::THEMES {
             SendMessageW(ui.theme_combo, CB_ADDSTRING, 0, wide(label).as_ptr() as LPARAM);
@@ -509,8 +511,6 @@ pub fn open(state: &State) {
         ui.wallpaper=ui.ctl("BUTTON","Hình nền động",chk,20,y2+94,165,26,ID_WALLPAPER,false);
         ui.dock=ui.ctl("BUTTON","Dock",chk,190,y2+94,115,26,ID_DOCK,false);
         ui.stage=ui.ctl("BUTTON","Stage Manager",chk,320,y2+94,190,26,ID_STAGE,false);
-        ui.ctl("BUTTON","Màn hình Dock…",btn,20,y2+123,240,26,ID_DOCK_DISPLAY,false);
-        ui.ctl("BUTTON","Màn hình Stage Manager…",btn,280,y2+123,240,26,ID_STAGE_DISPLAY,false);
         UI.with(|u| *u.borrow_mut() = Some(ui));
         sync(state);
         ShowWindow(hwnd, SW_SHOWNORMAL);

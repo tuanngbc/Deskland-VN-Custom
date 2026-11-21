@@ -1,0 +1,9 @@
+# Dock and Stage performance evidence
+
+Status: **PERFORMANCE_PENDING**. Compare to the pre-renderer development artifact [fa93c16 / run 44852504957](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44852504957), not to an unverified installed EXE lineage. Keep the same trial fixture, live display modes, reveal/cover state and foreground workload in each pair. Preserve the wallpaper renderer as a control.
+
+Capture 125 one-second readings after 15 seconds of warm-up, and use at least 120 seconds of valid stable data for each of three repeats. Retain Deskland CPU time, private bytes, working set, and handle/GUI resource counts; include DWM and Settings WebView children. Retain raw GPU engine labels, timestamps, values and statuses. Normalize CPU to logical processors, match GPU adapter and engine type, and account for DWM; summing all unrelated engine and process percentages does not produce a valid total GPU load. Dynamic/invalid GPU counter instances must be reported separately from valid samples.
+
+An initial baseline recording (Dock on both, Stage off) obtained 125 process samples on the owner Windows 11 test machine. A wallpaper changed from revealed to covered during the recording and the wildcard GPU query logged invalid instances. This recording is diagnostic only, not a comparison suitable for the performance gate. Raw data and evidence are kept privately; no personal settings or device identifiers are published.
+
+Pending matched matrix: wallpaper only, one/all Dock, one Stage, all modules, idle versus continuous magnification, 5–10 live previews, fullscreen on primary, covered wallpaper, Settings open/closed, both modules OFF. Some scenarios require M3/M4 features and cannot be benchmarked as if implemented. Record animation p50/p95/p99, 100 toggles and a four-hour stability run before an RC. Do not equate CI or a visual screenshot with performance acceptance.

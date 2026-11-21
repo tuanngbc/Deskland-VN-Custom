@@ -31,6 +31,8 @@ Run-Check @('--trial-isolation-check','--trial-dir',('"'+$dir+'"')) 0
 $value=Get-Content -LiteralPath (Join-Path $dir 'settings.json') -Raw | ConvertFrom-Json
 if($value.futureSentinel -ne 73 -or $value.widget.x -ne -800 -or -not $value.trialProbe){throw 'Isolated profile write failed preservation'}
 Run-Check @('--trial-isolation-check') 3
+Run-Check @('--trial-dock-glass-probe') 2
+Run-Check @('--trial-dock-displays') 2
 Run-Check @('--trial-isolation-check','--trial-dir') 2
 Run-Check @('--trial-isolation-check','--trial-dir','relative') 2
 Run-Check @('--trial-isolation-check','--trial-dir',('"'+(Join-Path $env:USERPROFILE '.deskland-rs')+'"')) 2

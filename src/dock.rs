@@ -15,6 +15,8 @@ use windows_sys::Win32::UI::Accessibility::*;
 
 mod options;
 mod runtime;
+mod glass_probe;
+pub use glass_probe::probe as glass_probe;
 pub use options::{Options,Edit,DisplayMode,DisplayTarget};
 pub use runtime::{Runtime,Event};
 use runtime::Command;

@@ -110,3 +110,18 @@ Final recovery at 02:08–02:09 UTC: original EXE hash verified, all 402 origina
 At final verification production PID 16356 ran the exact original EXE; real settings.json hash and Startup path matched preflight; candidate processes and trial WebView children were zero. Final candidate Exit had left no TuanpcDesk HWNDs before production restart. Stable E:\deskland checkout remained clean at a604519. Startup launch after actual Windows reboot, Explorer restart, logout, hotplug and DPI changes were deliberately not attempted: broad native smoke is still incomplete. Trial mode intentionally blocks saver/lockscreen/Windows Startup mutation, so it cannot certify those features.
 
 Next auditor/native checklist: review N01/N02 changes and sanitized evidence; reproduce N03 with clock ON; verify overlay app activation/pin/unpin/locality on both screens, Stage desktop/fullscreen behavior, tray controls and a short real toggle recording; measure matched reveal/cover CPU/GPU including DWM and WebView children; test many toggles/long-run handle trends; then mixed DPI/primary/hotplug, safe Explorer recovery and finally login/reboot. Keep Draft PR and no baseline merge until the owner supplies OWNER_NATIVE_ACCEPTED.
+
+
+## 2026-11-21 M1 output targeting trial
+
+Source [c2a589b](https://github.com/tuanngbc/Deskland-VN-Custom/commit/c2a589b3be946503f84ed5b81d6bef09d2ffe141), [CI 44856277842](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44856277842), [artifact 14688380242](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44856277842/artifacts/14688380242). Exact BUILD-COMMIT, both ZIP digests, EXE and packaged settings/assets verified; release isolation preflight passed. Fresh marked profile with Wallpaper/Dock/Stage ON at launch, Dock Primary and Stage All, no manual `--dock`.
+
+| Actual visible overlay | Bounds left,top,right,bottom | Display |
+|---|---|---|
+| Dock | 1104,955,1456,1025 | Primary landscape |
+| Stage | 8,160,128,720 | Primary landscape |
+| Stage | -1072,-571,-952,-11 | Secondary portrait |
+
+All overlays had the same Deskland owner PID and 96 DPI. Only the internal controller was hidden. WebView Settings screenshot showed both physical resolutions, primary status and the predicted overlay layout; the screenshot does not certify appearance of the overlay renderer. A drop-down opened, but the target change was not observed. Stage Secondary-only, Custom, editing in Win32, persistence on relaunch, physical hotplug and mixed-DPI interaction stay pending.
+
+Normal exit and production restart succeeded. Bytes of the production EXE, every file in the fresh backed-up profile and the scoped Registry snapshot matched before restoration; no Registry writes or production replacement were needed. Private raw readings and screenshot remain outside the repository. No user action required for this checkpoint.

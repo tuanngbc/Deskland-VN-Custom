@@ -35,3 +35,15 @@ Vocabulary: NOT_STARTED, IN_PROGRESS, IMPLEMENTED_UNVERIFIED, CI_PASS, CI_FAIL, 
 Record resolution, refresh, orientation, primary, negative coordinates and scale; use landscape + portrait at different DPI. Swap primary, unplug/replug, change scale/taskbar position/work area live. Verify local/global multi-window selection (Win32 + packaged), minimized window restore, elevated/hung apps and fullscreen each screen. Test keyboard/focus, icons/glass/motion at 100/125/150/200% and reduce motion.
 
 Stage moving previews must be real; independent groups restore minimized/maximized states and geometry. Cloaked/locked/protected content must not leak. Test rapid close/reopen, lock/unlock, saver, sleep/resume and monitor loss. Retain Windows Start/tray/Task Manager. Follow D8 benchmark, 100 toggles and long run. Save actual tested SHA/screenshots/traces. Only owner sets OWNER_NATIVE_ACCEPTED; do not merge beforehand.
+
+
+## Visual rebuild milestones (separate from D9 smoke)
+
+| Milestone | Verified | Remaining gate |
+|---|---|---|
+| M1 | c2a589b CI and owner-host HWND geometry for primary Dock/all-display Stage; real WebView layout captured | Exact latest artifact, secondary-only and Custom tests, Settings/Win32 persistence, hotplug and mixed DPI |
+| M2 | Native glass/layered proof prepared; [visual notes](DOCK_VISUAL_ACCEPTANCE.md) | Hardware evidence and production integration, DPI/quality/icons |
+| M3 | Existing basic activations only | Animated layout and hit testing, auto-hide, reorder, keyboard and feedback |
+| M4 | Existing app sidebar only | Live DWM previews, privacy, groups/restoration, per-screen behavior |
+| M5 | Raw pre-refactor samples started | Matched 12-scenario results, animation times, 100 toggles and leak checks |
+| M6 | No RC or owner visual/native acceptance | Native mixed-DPI/recovery/rollback and four-hour run |

@@ -24,3 +24,11 @@ Updated after owner smoke at `fa93c16`, CI 44852504957, 2026-11-21. See [native 
 K12 clarification: fa93c16 owner smoke verifies basic same-PID/two-monitor geometry, eight toggle combinations, configuration preservation, saved startup and normal Exit. Overlay actions, mixed DPI/hotplug, real shell/login recovery, matched performance and long-run evidence remain pending. Short samples are not budget acceptance. Same-process integration provides no process crash isolation. A Shell icon handler could block the UI worker and delay joined shutdown: resolve/test before RC; no bounded fault-isolation guarantee.
 
 No baseline/installed binary replacement. Owner state restored and verified, including reviewed runtime cache/image changes during production restarts. No taskbar hiding/Explorer termination. No merge without OWNER_NATIVE_ACCEPTED.
+
+
+## Owner rebuild observations
+
+- Generic monitor labels on the first Windows 11 Settings capture: c2a589b showed both real resolutions and primary state but named both "Generic PnP Monitor". DisplayConfig detection added in 6ca3997; recheck on the owner's hardware.
+- Output identity is per-monitor device path where available. Remote/virtual outputs may fall back to their GDI source name, whose identity is not guaranteed across reconnect. Mirroring is one drawable desktop source and must not spawn duplicate overlays.
+- First owner trial observed settings and real geometry, but coordinate injection into the WebView2 drop-down hit its separate Chrome window. Do not count that attempt as a successfully applied target. Recheck via native fixture or keyboard and record the saved mode and actual HWNDs.
+- The old GDI Dock and Stage sidebar continue to run during M1. Native glass probe success cannot certify the Dock, and successful DWM API calls alone do not certify blur.

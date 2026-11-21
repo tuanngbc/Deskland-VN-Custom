@@ -2096,6 +2096,23 @@ fn main() {
         }
         return;
     }
+    if args.iter().any(|a| a == "--trial-dock-glass-probe") {
+        let Some(dir) = trial::data_dir() else { std::process::exit(2); };
+        // Share the production singleton even though this read-only renderer
+        // proof does not start the normal tray/launcher/wallpaper lifecycle.
+        let singleton = unsafe {
+            let name = wide("TuanpcDesk_Singleton");
+            let mutex = CreateMutexW(std::ptr::null(), 1, name.as_ptr());
+            if mutex.is_null() || GetLastError() == ERROR_ALREADY_EXISTS { std::process::exit(2); }
+            SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            mutex
+        };
+        let duration = arg_value(&args, "--trial-dock-glass-probe").and_then(|s| s.parse().ok()).unwrap_or(30);
+        let result = dock::glass_probe(dir,duration);
+        unsafe { CloseHandle(singleton); }
+        if result.is_err() { std::process::exit(3); }
+        return;
+    }
     if args.iter().any(|a| a == "--trial-dock-displays") {
         let Some(dir) = trial::data_dir() else { std::process::exit(2); };
         // Report only to an explicit, marked trial profile selected by the caller.
