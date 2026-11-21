@@ -2,12 +2,13 @@
 
 Current P0 build and scoped native evidence: [Dock P0 verification](DOCK_P0_VERIFICATION.md). The full owner acceptance gates remain pending.
 
-Checkpoint: 2026-11-21 08:34 UTC. Development only on `codex/rust-dock`, [Draft PR #1](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1).
+Checkpoint: 2026-11-21 14:48 UTC. Development only on `codex/rust-dock`, [Draft PR #1](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1).
 Accepted source baseline remains `a604519acaf4d5881b9e13e5476d52f97ac29c0f` on `codex/rust-test`, clean. Owner subsequently authorized isolated native smoke, fixes and CI, without production replacement or merge. See [native report](DOCK_NATIVE_SMOKE_REPORT.md). Installed EXE bytes were preserved; their source lineage lacks a BUILD-COMMIT marker and is not independently confirmed.
 
 ## Verified source and CI
 
 - Product-quality development now takes priority over idle benchmark work. The [visual and daily-use checkpoint](DOCK_VISUAL_ACCEPTANCE.md#product-quality-checkpoint--dock-stage-and-daily-controls) records implementation, Windows evidence requirements, and which controls remain delegated.
+- [bc33de8 / CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44915090278) adds Stage placement recovery for disconnected displays, local contrast backing, responsive volume slider and per-output flyout cleanup. Owner-host evidence verifies the sound flyout opens and Dock OFF survives isolated relaunch without disabling either Stage output. The previously accepted scoped idle baselines are unchanged; no general UX or owner gate is closed.
 
 - Controlled Stage idle: [2330efd / CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44909008130) completed three matched Windows 11 pairs with three eligible native source windows and six live DWM relationships across two Stage surfaces. See the [scoped performance evidence](DOCK_PERFORMANCE_REPORT.md#native-windows-11-three-valid-stage-idle-pairs). The full performance and owner acceptance gates remain pending.
 
