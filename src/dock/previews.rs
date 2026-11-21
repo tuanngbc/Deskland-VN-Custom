@@ -72,10 +72,12 @@ unsafe fn preview_pid(window:HWND)->Option<u32>{
     Some(pid)
 }
 
+pub const NAV_HEIGHT:i32=24;
+pub fn rows(height:i32)->usize{((height-31-NAV_HEIGHT)/38).clamp(1,5) as usize}
 pub fn tile(width:i32,height:i32,gap:i32,i:usize)->RECT{
-    let step=((height-28)/5).clamp(28,126);
+    let step=((height-31-NAV_HEIGHT)/rows(height) as i32).clamp(20,126);
     let top=31+i as i32*step;
-    RECT{left:7,top,right:width-7,bottom:(top+step-gap.min((step/4).max(2))).min(height-4)}
+    RECT{left:7,top,right:width-7,bottom:(top+step-gap.min((step/4).max(2))).min(height-NAV_HEIGHT)}
 }
 pub fn slot_at(width:i32,height:i32,x:i32,y:i32,items:usize,gap:i32)->Option<usize>{
     (0..items).find(|&i|{let r=tile(width,height,gap,i);x>=r.left&&x<r.right&&y>=r.top&&y<r.bottom})
@@ -109,5 +111,13 @@ mod tests{
             assert_eq!(slot_at(164,590,dest.left,dest.top,5,6),Some(2));
         }
         assert!(fit(area,SIZE{cx:0,cy:120}).is_none());
+    }
+    #[test]
+    fn small_sidebar_reserves_navigation_instead_of_clipping_cards(){
+        let height=140;
+        let shown=rows(height);
+        assert_eq!(shown,2);
+        assert!(tile(160,height,20,shown-1).bottom<=height-NAV_HEIGHT);
+        assert_eq!(slot_at(160,height,80,height-12,shown,20),None);
     }
 }

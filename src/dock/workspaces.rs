@@ -253,8 +253,6 @@ impl Workspaces{
             items.push(Item{path:w.path.clone(),title:w.title.clone(),hwnd:w.hwnd,count:1,pinned:false});
             ids.push(None);
         }
-        items.truncate(5);
-        ids.truncate(5);
         (items,ids)
     }
 }

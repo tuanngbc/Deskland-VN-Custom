@@ -145,4 +145,42 @@ mod tests {
             options.stage_enabled=true;
         }
     }
+
+    #[test]
+    #[ignore = "real Windows resources; explicitly run in CI"]
+    fn native_100_toggles_release_overlays_and_process_handles() {
+        use std::time::{Duration,Instant};
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess,GetProcessHandleCount};
+        fn handles() -> u32 {
+            let mut n=0;
+            assert_ne!(unsafe{GetProcessHandleCount(GetCurrentProcess(),&mut n)},0);
+            n
+        }
+        let off=Options::default();
+        let on=Options{enabled:true,stage_enabled:true,..Default::default()};
+        let runtime=Runtime::new(on.clone(),0).unwrap();
+        runtime.inspect();
+        runtime.configure(off.clone());
+        assert!(runtime.inspect().is_empty());
+        let start=handles();
+        let t=Instant::now();
+        for _ in 0..100 {
+            runtime.configure(on.clone());
+            let active=runtime.inspect();
+            assert!(!active.is_empty());
+            runtime.configure(off.clone());
+            assert!(runtime.inspect().is_empty());
+            assert!(active.iter().all(|h| unsafe{IsWindow(*h as _)}==0));
+        }
+        let end=Instant::now();
+        while handles()>start+8 && end.elapsed()<Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let after=handles();
+        eprintln!("100 Dock/Stage toggles in {:?}; handles before/after: {start}/{after}",t.elapsed());
+        assert!(after<=start+8,"process handles must not accumulate after module OFF");
+        let controller=runtime.control;
+        drop(runtime);
+        assert_eq!(unsafe{IsWindow(controller as _)},0);
+    }
 }

@@ -12,6 +12,13 @@ use super::{Item,WM_ICON_CHANGED,surface::Atlas};
 type ResultIcon=Option<Arc<IconPixels>>;
 const CAP:usize=48;
 const PENDING:usize=16;
+// Quitting a module must never wait on a third-party Shell provider. Keep at
+// most one extraction thread, including an older one still returning from COM.
+static WORKER_ACTIVE:AtomicBool=AtomicBool::new(false);
+struct Permit;
+impl Drop for Permit {
+    fn drop(&mut self){WORKER_ACTIVE.store(false,Ordering::Release);}
+}
 
 pub struct Worker {
     send:Option<SyncSender<String>>,
@@ -24,12 +31,17 @@ pub struct Worker {
 }
 impl Worker {
     pub fn new(control:*mut std::ffi::c_void)->Option<Self>{
+        if WORKER_ACTIVE.compare_exchange(false,true,Ordering::AcqRel,Ordering::Acquire).is_err(){
+            return None;
+        }
+        let permit=Permit;
         let (send,work)=mpsc::sync_channel::<String>(PENDING);
         let (reply,done)=mpsc::channel();
         let stop=Arc::new(AtomicBool::new(false));
         let cancel=stop.clone();
         let control=control as usize;
         let worker=std::thread::Builder::new().name("Deskland Dock icons".into()).spawn(move||unsafe{
+            let _permit=permit;
             use windows::Win32::System::Com::{CoInitializeEx,CoUninitialize,COINIT_APARTMENTTHREADED};
             use windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW;
             let init=CoInitializeEx(None,COINIT_APARTMENTTHREADED);

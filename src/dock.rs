@@ -23,6 +23,7 @@ mod surface;
 mod icon_atlas;
 mod previews;
 mod workspaces;
+mod perf;
 pub use glass_probe::probe as glass_probe;
 pub use appearance::{Appearance,DockSide};
 pub use options::{Options,Edit,DisplayMode,DisplayTarget,StageStyle};
@@ -97,7 +98,7 @@ impl Motion {
         unsettled
     }
 }
-struct Stage { hwnd:HWND, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, selected:Option<u64>, gap:i32, hidden:bool, previews:previews::Previews }
+struct Stage { hwnd:HWND, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, selected:Option<u64>, gap:i32, page:usize, pages:usize, hidden:bool, previews:previews::Previews }
 #[derive(Default)]
 struct State { bars:Vec<Bar>, stages:Vec<Stage>, windows:Vec<AppWindow>, prefs:Preferences, screens:Vec<Screen>, suspended:bool, foreground:isize, workspaces:workspaces::Workspaces }
 thread_local! {
@@ -109,7 +110,6 @@ thread_local! {
     static WORKSPACE_TIMER_ARMED:Cell<bool>=const{Cell::new(false)};
     static COMMANDS:RefCell<Option<mpsc::Receiver<Command>>>=const{RefCell::new(None)};
     static EVENTS:RefCell<Option<mpsc::Sender<Event>>>=const{RefCell::new(None)};
-    static ICONS:RefCell<HashMap<(String,bool),HICON>>=RefCell::new(HashMap::new());
     static SURFACES:RefCell<HashMap<usize,surface::Surface>>=RefCell::new(HashMap::new());
     static ATLAS:RefCell<Option<icon_atlas::Worker>>=const{RefCell::new(None)};
 }
@@ -366,7 +366,7 @@ unsafe fn recreate(state:&mut State) {
                 ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
             if !stage_hwnd.is_null(){
                 previews::style_destination(stage_hwnd);
-                state.stages.push(Stage{hwnd:stage_hwnd,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),selected:None,gap:stage_gap(screen,style),hidden:true,previews:previews::Previews::default()});
+                state.stages.push(Stage{hwnd:stage_hwnd,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),selected:None,gap:stage_gap(screen,style),page:0,pages:1,hidden:true,previews:previews::Previews::default()});
             } else { emit(Event::Error(format!("Create Stage window: {}",GetLastError()))); }
         }
     }
@@ -414,9 +414,18 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             let gap=stage_gap(screen,style);placement_changed=gap!=stage.gap;stage.gap=gap;
             if GetWindowRect(stage.hwnd,&mut actual)==0 || !same_rect(r,actual){SetWindowPos(stage.hwnd,HWND_TOPMOST,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE);}
         }
+        let mut area:RECT=mem::zeroed();
+        GetClientRect(stage.hwnd,&mut area);
+        let rows=previews::rows(area.bottom);
         let (items,groups)=state.workspaces.cards(&stage.display,stage.bounds,&state.windows,state.prefs.all_windows);
         let selected=state.workspaces.active(&stage.display);
-        let mut changed=placement_changed||stage.items!=items||stage.groups!=groups||stage.selected!=selected||active_changed;
+        let old_pages=stage.pages;
+        stage.pages=items.len().div_ceil(rows).max(1);
+        stage.page=if selected!=stage.selected{0}else{stage.page.min(stage.pages-1)};
+        let start=stage.page*rows;
+        let items:Vec<_>=items.into_iter().skip(start).take(rows).collect();
+        let groups:Vec<_>=groups.into_iter().skip(start).take(rows).collect();
+        let mut changed=placement_changed||stage.items!=items||stage.groups!=groups||stage.selected!=selected||active_changed||old_pages!=stage.pages;
         stage.items=items;stage.groups=groups;stage.selected=selected;
         // Handle fullscreen on the local monitor even while the foreground
         // window is on another screen. The top local app must cover the output.
@@ -426,8 +435,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         if hide!=stage.hidden{ShowWindow(stage.hwnd,if hide{SW_HIDE}else{SW_SHOWNOACTIVATE});stage.hidden=hide;changed=true;}
         if hide{changed|=stage.previews.clear();}
         else {
-            let mut area:RECT=mem::zeroed();
-            if GetClientRect(stage.hwnd,&mut area)!=0{
+            if area.right>0&&area.bottom>0{
                 changed|=stage.previews.update(stage.hwnd,&stage.items,area.right,area.bottom,stage.gap);
             }
         }
@@ -446,28 +454,17 @@ fn color(seed:&str)->u32 {
     let n=seed.bytes().fold(0x811c9dc5u32,|x,b|(x^b as u32).wrapping_mul(0x01000193));
     0x00353535|((n&0x3f)<<16)|(((n>>8)&0x3f)<<8)
 }
-unsafe fn icon(path:&str,small:bool)->HICON {
-    let key=(path.to_lowercase(),small);
-    if let Some(icon)=ICONS.with(|cache|cache.borrow().get(&key).copied()){return icon;}
-    let mut file:SHFILEINFOW=mem::zeroed();
-    let got=SHGetFileInfoW(wide(path).as_ptr(),0,&mut file,mem::size_of::<SHFILEINFOW>() as u32,
-        SHGFI_ICON|if small{SHGFI_SMALLICON}else{SHGFI_LARGEICON});
-    let icon=if got==0{ptr::null_mut()}else{file.hIcon};
-    ICONS.with(|cache|{let mut cache=cache.borrow_mut();
-        if cache.len()>=256{for (_,handle) in cache.drain(){if !handle.is_null(){DestroyIcon(handle);}}}
-        cache.insert(key,icon);
-    });icon
-}
 unsafe fn paint(hwnd:HWND){
     let layered=STATE.with(|s|{
         let state=s.borrow();
         let bar=state.bars.iter().find(|b|b.hwnd==hwnd)?;
-        Some((bar.layout.clone()?,bar.items.clone(),bar.hovered,bar.collapsed,bar.keyboard,state.prefs.appearance.clone(),state.foreground))
+        Some((bar.layout.clone()?,bar.items.clone(),bar.hovered,bar.collapsed,bar.keyboard,state.prefs.appearance.clone(),state.foreground,bar.motion.at))
     });
     let mut ps:PAINTSTRUCT=mem::zeroed();let dc=BeginPaint(hwnd,&mut ps);
-    if let Some((layout,items,hovered,collapsed,keyboard,style,active))=layered{
+    if let Some((layout,items,hovered,collapsed,keyboard,style,active,animation_tick))=layered{
         EndPaint(hwnd,&ps);
         let key=hwnd as usize;
+        let paint=animation_tick.filter(|_|perf::active()).map(|tick|(tick,std::time::Instant::now()));
         let material=surface::Material::system(style.theme,style.transparency,style.reduced_motion);
         let size=(layout.window.right-layout.window.left,layout.window.bottom-layout.window.top);
         let canvas=SURFACES.with(|s|s.borrow_mut().remove(&key));
@@ -482,6 +479,7 @@ unsafe fn paint(hwnd:HWND){
             });
             let applied=if collapsed {canvas.rail(hwnd,&layout)} else {canvas.paint(hwnd,&layout,&items,&atlas,active,keyboard.or_else(||usize::try_from(hovered).ok()))};
             if applied{
+                if let Some((tick,paint))=paint{perf::submitted(key,tick,paint);}
                 SURFACES.with(|s|s.borrow_mut().insert(key,canvas));
                 return;
             }
@@ -501,9 +499,9 @@ unsafe fn paint(hwnd:HWND){
         let state=cell.borrow();
         let stage=state.stages.iter().find(|stage|stage.hwnd==hwnd)?;
         let ready=stage.items.iter().map(|item|stage.previews.includes(item.hwnd)).collect::<Vec<_>>();
-        Some((stage.items.clone(),ready,stage.groups.clone(),stage.selected,stage.gap,state.foreground))
+        Some((stage.items.clone(),ready,stage.groups.clone(),stage.selected,stage.gap,stage.page,stage.pages,state.foreground))
     });
-    if let Some((items,ready,groups,active,gap,foreground))=stage {
+    if let Some((items,ready,groups,active,gap,page,pages,foreground))=stage {
         label(dc,6,4,area.right-12,"Stage Manager",0x00eae9e7);
         for (i,item) in items.iter().enumerate(){
             let tile=previews::tile(area.right,area.bottom,gap,i);
@@ -522,6 +520,12 @@ unsafe fn paint(hwnd:HWND){
             let title=if groups[i].is_some(){format!("{} · {}",item.title,item.count)}else{item.title.clone()};
             label(dc,tile.left+6,tile.bottom-25,tile.right-tile.left-12,&title,0x00eeeeee);
         }
+        if pages>1 {
+            let y=area.bottom-previews::NAV_HEIGHT;
+            label(dc,8,y,25,"‹",if page>0{0x00eeeeee}else{0x00606060});
+            label(dc,33,y,area.right-66,&format!("{} / {pages}",page+1),0x00cccccc);
+            label(dc,area.right-33,y,25,"›",if page+1<pages{0x00eeeeee}else{0x00606060});
+        }
         EndPaint(hwnd,&ps);return;
     }
     let bar=STATE.with(|cell|cell.borrow().bars.iter().find(|b|b.hwnd==hwnd).cloned());
@@ -532,13 +536,10 @@ unsafe fn paint(hwnd:HWND){
             let box_rect=RECT{left:left+zoom/2,top:9-zoom/2,right:left+48+zoom,bottom:50+zoom/2};
             fill(dc,box_rect,color(&item.path));
             let title=basename(&item.path);
-            let icon=icon(&item.path,false);
-            if !icon.is_null() {
-                DrawIconEx(dc,left+7,11,icon,34,34,0,ptr::null_mut(),DI_NORMAL);
-            } else {
-                let initial=title.chars().take(2).collect::<String>().to_uppercase();
-                label(dc,left,18,54,&initial,0x00ffffff);
-            }
+            // A driver that rejects the layered surface still gets a
+            // clickable label. Never call the Shell synchronously during paint.
+            let initial=title.chars().take(2).collect::<String>().to_uppercase();
+            label(dc,left,18,54,&initial,0x00ffffff);
             if item.count>0 {
                 fill(dc,RECT{left:left+23,top:56,right:left+29,bottom:60},0x00ffffff);
             }
@@ -689,6 +690,18 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
         refresh(state,false);
     });
 }
+unsafe fn turn_stage_page(hwnd:HWND,forward:bool)->bool{
+    let changed=STATE.with(|s|{
+        let mut state=s.borrow_mut();
+        let Some(stage)=state.stages.iter_mut().find(|p|p.hwnd==hwnd) else{return false;};
+        let next=if forward{(stage.page+1).min(stage.pages-1)}else{stage.page.saturating_sub(1)};
+        if next==stage.page{return false;}
+        stage.page=next;
+        true
+    });
+    if changed{update_state(|state|refresh(state,false));InvalidateRect(hwnd,ptr::null(),0);}
+    changed
+}
 unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     match msg {
         WM_CONFIG=>{drain_commands();0},
@@ -701,6 +714,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_NCDESTROY=>{
+            perf::forget(hwnd as usize);
             SURFACES.with(|s|s.borrow_mut().remove(&(hwnd as usize)));
             DefWindowProcW(hwnd,msg,w,l)
         },
@@ -752,6 +766,11 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_ERASEBKGND=>1,
         WM_PAINT=>{paint(hwnd);0},
         WM_MOUSEACTIVATE=>MA_NOACTIVATE as LRESULT,
+        WM_MOUSEWHEEL if STATE.with(|s|s.borrow().stages.iter().any(|stage|stage.hwnd==hwnd))=>{
+            let delta=(w>>16) as i16;
+            if delta!=0{turn_stage_page(hwnd,delta<0);}
+            0
+        },
         WM_TIMER if w==WORKSPACE_TIMER=>{update_state(|state|{state.workspaces.advance();});0},
         WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
         WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_DPICHANGED=>{DISPLAY_DIRTY.with(|d|d.set(true));queue_refresh();0},
@@ -853,7 +872,10 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 return 0;
             }
             let is_stage=STATE.with(|s|s.borrow().stages.iter().any(|stage|stage.hwnd==hwnd));
-            if is_stage{return 0;}
+            if is_stage{
+                if y>=area.bottom-previews::NAV_HEIGHT{turn_stage_page(hwnd,px>=area.right/2);}
+                return 0;
+            }
             let x=(l as u32&0xffff) as i16 as i32;
             let rendered=STATE.with(|s|{
                 let mut state=s.borrow_mut();let bar=state.bars.iter_mut().find(|b|b.hwnd==hwnd)?;
@@ -966,6 +988,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         let control=CreateWindowExW(WS_EX_TOOLWINDOW,class.as_ptr(),wide("Deskland Dock controller").as_ptr(),WS_POPUP,0,0,0,0,ptr::null_mut(),ptr::null_mut(),wc.hInstance,ptr::null());
         if control.is_null(){let _=ready.send(Err(format!("Create Dock controller: {}",GetLastError())));if com.is_ok(){CoUninitialize();}return;}
         CONTROL.with(|c|c.set(control));DIRTY.with(|c|c.set(false));
+        perf::start();
         OWNER.with(|o|o.set(owner as HWND));
         COMMANDS.with(|c|{c.replace(Some(commands));});EVENTS.with(|e|{e.replace(Some(events));});
         update_state(|state|{state.prefs=options;refresh(state,false);});
@@ -983,11 +1006,11 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0{TranslateMessage(&msg);DispatchMessageW(&msg);}
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
         update_state(|s|{s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){b.previews.clear();DestroyWindow(b.hwnd);}});
-        ICONS.with(|c|{for (_,icon) in c.borrow_mut().drain(){if !icon.is_null(){DestroyIcon(icon);}}});
         SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
         CONTROL.with(|c|c.set(ptr::null_mut()));DestroyWindow(control);
         OWNER.with(|o|o.set(ptr::null_mut()));
         COMMANDS.with(|c|{c.take();});EVENTS.with(|e|{e.take();});STATE.with(|s|{s.take();});
+        perf::finish();
         if com.is_ok(){CoUninitialize();}
     }
 }
