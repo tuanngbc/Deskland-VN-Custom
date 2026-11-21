@@ -5,19 +5,19 @@ const start=html.indexOf('let dockOptions='),end=html.indexOf("for(const id of [
 assert(start>0&&end>start,'integrated settings handlers must exist');
 const controls=new Map(),messages=[];
 const $=id=>{if(!controls.has(id))controls.set(id,{checked:false,value:'',textContent:'',listeners:{},classList:{toggle(){}},addEventListener(name,handler){this.listeners[name]=handler;}});return controls.get(id);};
-const context=vm.createContext({$,send:m=>messages.push(m),t:key=>key});
+const context=vm.createContext({$,send:m=>messages.push(m),t:key=>key==='dockRunning'?'Translated running':key,esc:value=>String(value).replace(/&/g,'&amp;').replace(/"/g,'&quot;')});
 vm.runInContext(html.slice(start,end),context);
 let count=0;function test(name,fn){fn();count++;console.log('PASS '+name);}
 test('saved settings and tray updates use the same controls',()=>{
   context.syncDockSettings({dock:{enabled:false,stageEnabled:true,allWindows:true,stageSide:'right'},wallpaperEnabled:false,dockRunning:true});
   assert.equal($('dockEnabled').checked,false);assert.equal($('dockStageEnabled').checked,true);
   assert.equal($('dockAllWindows').checked,true);assert.equal($('dockStageSide').value,'right');
-  assert.equal($('dockWallpaperEnabled').checked,false);assert.equal($('dockRuntimeStatus').textContent,'dockRunning');
+  assert.equal($('dockWallpaperEnabled').checked,false);assert.equal($('dockRuntimeStatus').textContent,'Translated running');
 });
 test('editing one module preserves the other module and scope',()=>{
   $('dockEnabled').checked=true;$('dockEnabled').listeners.change();
   const message=messages.pop();assert.equal(message.t,'dock');assert.equal(message.enabled,true);
-  assert.equal(message.stageEnabled,true);assert.equal(message.allWindows,true);assert.equal(message.stageSide,'right');
+  assert.equal(Object.keys(message).sort().join(','),'enabled,t');
   assert(!('pinned' in message),'UI must not overwrite the canonical pin list');
 });
 test('wallpaper toggle is its own message and does not reset dock settings',()=>{
@@ -28,6 +28,32 @@ test('wallpaper toggle is its own message and does not reset dock settings',()=>
 test('startup failures are visible and a subsequent host update clears them',()=>{
   context.syncDockSettings({dockError:'Native window creation failed',dockRunning:false});
   assert.equal($('dockRuntimeStatus').textContent,'Native window creation failed');
-  context.syncDockSettings({dockError:null,dockRunning:true});assert.equal($('dockRuntimeStatus').textContent,'dockRunning');
+  context.syncDockSettings({dockError:null,dockRunning:true});assert.equal($('dockRuntimeStatus').textContent,'Translated running');
+});
+test('independent display modes update only their own targets and preview',()=>{
+  const monitors=[{id:'landscape',name:'Main',w:2560,h:1080,dpi:96,primary:true},{id:'portrait',name:'Vertical',w:1080,h:1920,dpi:120,primary:false}];
+  context.syncDockSettings({dockDisplays:monitors,dock:{enabled:true,stageEnabled:true,allWindows:true,
+    dockDisplay:{mode:'primary'},stageDisplay:{mode:'selected',selected:'portrait'}}});
+  assert.equal($('dockDisplayMode').value,'primary');assert.equal($('stageDisplayMode').value,'selected');
+  assert.match($('stageDisplayChoices').innerHTML,/value="portrait" selected/);
+  assert.match($('dockDisplayPreview').innerHTML,/<small>Dock<\/small>.+<small>Stage Manager<\/small>/);
+  $('stageDisplayMode').listeners.change({target:{value:'custom'}});
+  const m=messages.pop();
+  assert.equal(Object.keys(m).sort().join(','),'stageDisplay,t');
+  assert.equal(m.stageDisplay.mode,'custom');
+  $('stageDisplayChoices').listeners.change({target:{hasAttribute:key=>key==='data-display-id',checked:true,dataset:{displayId:'portrait'}}});
+  assert.equal(JSON.stringify(messages.pop().stageDisplay.custom),JSON.stringify(['landscape','portrait']));
+  assert.equal($('dockDisplayMode').value,'primary');
+});
+test('disconnected saved selection falls back and is restored without writing settings',()=>{
+  const main={id:'landscape',name:'Main',w:2560,h:1080,dpi:96,primary:true};
+  context.syncDockSettings({dockDisplays:[main],dock:{stageEnabled:true,stageDisplay:{mode:'selected',selected:'portrait'}}});
+  assert.equal($('dockDisplayFallback').hidden,false);
+  assert.match($('stageDisplayChoices').innerHTML,/disabled selected/);
+  assert.match($('dockDisplayPreview').innerHTML,/<small>Dock · Stage Manager<\/small>/);
+  context.syncDockSettings({dockDisplays:[main,{...main,id:'portrait',name:'Vertical',primary:false}]});
+  assert.equal($('dockDisplayFallback').hidden,true);
+  assert.match($('stageDisplayChoices').innerHTML,/value="portrait" selected/);
+  assert.equal(messages.length,0);
 });
 console.log('TOTAL: '+count+' PASS / 0 FAIL');

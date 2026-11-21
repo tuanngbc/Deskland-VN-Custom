@@ -1,6 +1,17 @@
 {
   "name": "简体中文",
   "ui": {
+    "dockScopeHint": "应用范围不会更改 Dock 或 Stage 所在的显示器。",
+    "dockDisplayTarget": "显示位置",
+    "dockDisplayAll": "所有显示器",
+    "dockDisplayPrimary": "仅主显示器",
+    "dockDisplaySelected": "选择一台显示器",
+    "dockDisplayCustom": "自定义显示器",
+    "dockDisplayPreview": "显示布局",
+    "dockDisplayFallback": "所选显示器未连接，暂时使用主显示器。",
+    "dockDisplayDisconnected": "显示器已断开",
+    "dockDisplayNone": "未检测到显示器",
+    "dockDisplayOff": "已关闭",
     "adaptive": "自适应",
     "themes": "主题",
     "collectionTitle": "选一片风景。",

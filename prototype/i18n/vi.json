@@ -1,6 +1,17 @@
 {
   "name": "Tiếng Việt",
   "ui": {
+    "dockScopeHint": "Phạm vi ứng dụng không thay đổi màn hình hiển thị Dock hay Stage.",
+    "dockDisplayTarget": "Màn hình hiển thị",
+    "dockDisplayAll": "Tất cả màn hình",
+    "dockDisplayPrimary": "Chỉ màn hình chính",
+    "dockDisplaySelected": "Một màn hình đã chọn",
+    "dockDisplayCustom": "Tự chọn nhiều màn hình",
+    "dockDisplayPreview": "Bố cục hiển thị",
+    "dockDisplayFallback": "Màn hình đã chọn không có mặt. Tạm hiển thị trên màn hình chính; lựa chọn cũ được giữ lại.",
+    "dockDisplayDisconnected": "Màn hình đã ngắt kết nối",
+    "dockDisplayNone": "Chưa có màn hình",
+    "dockDisplayOff": "Đã tắt",
     "nav_dock": "Dock & Stage Manager",
     "navSub_dock": "Quản lý các thành phần trong cùng không gian làm việc.",
     "dockDescription": "Bật riêng hình nền, Dock và thanh Stage Manager. Các lựa chọn được khôi phục khi mở tuanpc-desk.",

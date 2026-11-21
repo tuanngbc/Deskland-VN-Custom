@@ -89,6 +89,36 @@ mod tests {
         }
     }
     #[test]
+    #[ignore = "actual overlay windows on available Windows displays; explicitly run in CI"]
+    fn native_display_targets_filter_hwnds_and_keep_other_module() {
+        use super::super::{displays,DisplayMode};
+        use windows_sys::Win32::{Foundation::RECT,UI::WindowsAndMessaging::GetWindowRect};
+        let displays=displays();
+        let primary=displays.iter().find(|d|d.primary).expect("primary monitor");
+        let selected=displays.iter().find(|d|!d.primary).unwrap_or(primary);
+        let mut options=Options{enabled:true,stage_enabled:true,all_windows:true,..Default::default()};
+        options.dock_display.mode=DisplayMode::Primary;
+        options.stage_display.mode=DisplayMode::Selected;
+        options.stage_display.selected=Some(selected.id.clone());
+        let runtime=Runtime::new(options.clone(),0).unwrap();
+        let fits=|handle:usize,area:RECT|unsafe{
+            let mut r:RECT=std::mem::zeroed();
+            GetWindowRect(handle as _,&mut r)!=0&&r.left>=area.left&&r.top>=area.top&&r.right<=area.right&&r.bottom<=area.bottom
+        };
+        let h=runtime.inspect();
+        assert_eq!(h.len(),2,"application scope must not create overlays on other outputs");
+        assert!(fits(h[0],primary.bounds));assert!(fits(h[1],selected.bounds));
+        options.enabled=false;runtime.configure(options.clone());assert_eq!(runtime.inspect(),vec![h[1]]);
+        options.stage_display.mode=DisplayMode::Custom;
+        options.stage_display.custom=vec!["monitor:missing-fixture".into()];
+        runtime.configure(options.clone());
+        let fallback=runtime.inspect();
+        assert_eq!(fallback.len(),1);assert!(fits(fallback[0],primary.bounds));
+        options.stage_display.custom.push(selected.id.clone());runtime.configure(options);
+        let restored=runtime.inspect();
+        assert_eq!(restored.len(),1);assert!(fits(restored[0],selected.bounds));
+    }
+    #[test]
     #[ignore = "real isolated Windows HWND/thread lifecycle; explicitly run in CI"]
     fn native_integrated_modules_toggle_suspend_and_cleanup() {
         // Never load/write a real profile or use the installed application.

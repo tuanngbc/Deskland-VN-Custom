@@ -1,6 +1,17 @@
 {
   "name": "English",
   "ui": {
+    "dockScopeHint": "Application scope does not change which displays host Dock or Stage.",
+    "dockDisplayTarget": "Show on",
+    "dockDisplayAll": "All displays",
+    "dockDisplayPrimary": "Primary display only",
+    "dockDisplaySelected": "One selected display",
+    "dockDisplayCustom": "Custom selection",
+    "dockDisplayPreview": "Display layout",
+    "dockDisplayFallback": "The selected displays are unavailable. Using the primary display until they return.",
+    "dockDisplayDisconnected": "Disconnected display",
+    "dockDisplayNone": "No displays detected",
+    "dockDisplayOff": "Off",
     "nav_dock": "Dock & Stage Manager",
     "navSub_dock": "Manage each part of your workspace together.",
     "dockDescription": "Enable wallpaper, Dock and the Stage sidebar independently. Your choices are restored when tuanpc-desk starts.",

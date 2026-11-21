@@ -3,6 +3,7 @@
 //! cập nhật lại giao diện theo trạng thái thật.
 
 use crate::desktop::wide;
+use crate::dock::{Display, DisplayMode, DisplayTarget};
 use std::cell::RefCell;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -28,6 +29,7 @@ pub enum Action {
     Wallpaper(bool),
     Dock(bool),
     Stage(bool),
+    DockDisplay(bool, DisplayTarget),
 }
 
 /// Trạng thái thật mà giao diện hiển thị.
@@ -42,8 +44,8 @@ pub struct State {
     pub hotkey: bool,
     pub interaction: bool,
     pub wallpaper_enabled:bool,
-    pub dock_enabled:bool,
-    pub stage_enabled:bool,
+    pub dock:crate::dock::Options,
+    pub displays:Vec<Display>,
 }
 
 pub struct ParamDef {
@@ -253,6 +255,8 @@ const ID_INTERACTION: usize = 1307;
 const ID_WALLPAPER:usize=1308;
 const ID_DOCK:usize=1309;
 const ID_STAGE:usize=1310;
+const ID_DOCK_DISPLAY:usize=1311;
+const ID_STAGE_DISPLAY:usize=1312;
 const ID_ROW: usize = 1100;
 
 const TBM_GETPOS_: u32 = WM_USER;
@@ -288,6 +292,9 @@ struct Ui {
     wallpaper:HWND,
     dock:HWND,
     stage:HWND,
+    dock_target:DisplayTarget,
+    stage_target:DisplayTarget,
+    displays:Vec<Display>,
     note: HWND,
 }
 
@@ -407,7 +414,7 @@ pub fn open(state: &State) {
         let dpi = GetDpiForSystem().max(96);
         let s = dpi as f32 / 96.0;
         let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-        let mut r = RECT { left: 0, top: 0, right: (540.0 * s) as i32, bottom: (790.0 * s) as i32 };
+        let mut r = RECT { left: 0, top: 0, right: (540.0 * s) as i32, bottom: (808.0 * s) as i32 };
         AdjustWindowRectEx(&mut r, style, 0, 0);
         let (w, h) = (r.right - r.left, r.bottom - r.top);
         let (sw, sh) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
@@ -452,6 +459,9 @@ pub fn open(state: &State) {
             wallpaper:std::ptr::null_mut(),
             dock:std::ptr::null_mut(),
             stage:std::ptr::null_mut(),
+            dock_target:DisplayTarget::default(),
+            stage_target:DisplayTarget::default(),
+            displays:Vec::new(),
             saver_now: std::ptr::null_mut(),
             saver: std::ptr::null_mut(),
             idle: std::ptr::null_mut(),
@@ -499,6 +509,8 @@ pub fn open(state: &State) {
         ui.wallpaper=ui.ctl("BUTTON","Hình nền động",chk,20,y2+94,165,26,ID_WALLPAPER,false);
         ui.dock=ui.ctl("BUTTON","Dock",chk,190,y2+94,115,26,ID_DOCK,false);
         ui.stage=ui.ctl("BUTTON","Stage Manager",chk,320,y2+94,190,26,ID_STAGE,false);
+        ui.ctl("BUTTON","Màn hình Dock…",btn,20,y2+123,240,26,ID_DOCK_DISPLAY,false);
+        ui.ctl("BUTTON","Màn hình Stage Manager…",btn,280,y2+123,240,26,ID_STAGE_DISPLAY,false);
         UI.with(|u| *u.borrow_mut() = Some(ui));
         sync(state);
         ShowWindow(hwnd, SW_SHOWNORMAL);
@@ -532,12 +544,73 @@ pub fn sync(state: &State) {
             set_check(ui.interaction, state.interaction);
             set_check(ui.auto, state.autostart);
             set_check(ui.wallpaper,state.wallpaper_enabled);
-            set_check(ui.dock,state.dock_enabled);
-            set_check(ui.stage,state.stage_enabled);
+            set_check(ui.dock,state.dock.enabled);
+            set_check(ui.stage,state.dock.stage_enabled);
+            ui.dock_target=state.dock.dock_display.clone();
+            ui.stage_target=state.dock.stage_display.clone();
+            ui.displays=state.displays.clone();
             let t = if state.hotkey { "Khóa với cảnh động (Ctrl+Alt+L)" } else { "Khóa với cảnh động" };
             SetWindowTextW(ui.saver_now, wide(t).as_ptr());
         }
     });
+}
+
+/// An in-place Windows menu keeps the essential display controls accessible
+/// with a keyboard even when the WebView cannot start.
+unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
+    let Some((mut target, displays)) = UI.with(|u| u.borrow().as_ref().map(|ui| {
+        (if stage { ui.stage_target.clone() } else { ui.dock_target.clone() }, ui.displays.clone())
+    })) else { return };
+    let menu = CreatePopupMenu();
+    if menu.is_null() { return; }
+    let effective = target.outputs(displays.iter().map(|d| (d.id.as_str(), d.primary)));
+    let add = |id, title: &str, checked| {
+        AppendMenuW(menu, MF_STRING | if checked { MF_CHECKED } else { 0 }, id, wide(title).as_ptr());
+    };
+    add(1, "Tất cả màn hình", target.mode == DisplayMode::All);
+    add(2, "Chỉ màn hình chính", target.mode == DisplayMode::Primary);
+    add(3, "Chọn một màn hình", target.mode == DisplayMode::Selected);
+    add(4, "Tự chọn nhiều màn hình", target.mode == DisplayMode::Custom);
+    AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+    for (i,d) in displays.iter().take(32).enumerate() {
+        let label = format!("{} · {} × {} · {} DPI{}{}", d.name.replace('&',"&&"),
+            d.bounds.right-d.bounds.left, d.bounds.bottom-d.bounds.top, d.dpi,
+            if d.primary {" · Chính"} else {""}, if effective.contains(&i) {" · Đang chọn"} else {""});
+        let checked = match target.mode {
+            DisplayMode::Selected => target.selected.as_deref() == Some(d.id.as_str()),
+            DisplayMode::Custom => target.custom.contains(&d.id),
+            _ => effective.contains(&i),
+        };
+        add(100+i,&label,checked);
+    }
+    let mut rect: RECT = std::mem::zeroed();
+    GetWindowRect(button,&mut rect);
+    let command = TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,rect.left,rect.bottom,0,owner,std::ptr::null()) as usize;
+    DestroyMenu(menu);
+    match command {
+        1 => target.mode=DisplayMode::All,
+        2 => target.mode=DisplayMode::Primary,
+        3 => {
+            target.mode=DisplayMode::Selected;
+            if target.selected.is_none() { target.selected=displays.first().map(|d| d.id.clone()); }
+        }
+        4 => {
+            target.mode=DisplayMode::Custom;
+            if target.custom.is_empty() { target.custom=displays.first().map(|d|d.id.clone()).into_iter().collect(); }
+        }
+        100..=131 => {
+            let Some(d)=displays.get(command-100) else {return};
+            if target.mode==DisplayMode::Custom {
+                if target.custom.contains(&d.id) { target.custom.retain(|id|id!=&d.id); }
+                else if target.custom.len()<32 { target.custom.push(d.id.clone()); }
+            } else {
+                target.mode=DisplayMode::Selected;
+                target.selected=Some(d.id.clone());
+            }
+        }
+        _ => return,
+    }
+    push(Action::DockDisplay(stage,target));
 }
 
 unsafe extern "system" fn proc_(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -564,6 +637,7 @@ unsafe extern "system" fn proc_(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESUL
                 (ID_WALLPAPER,BN_CLICKED)=>push(Action::Wallpaper(checked(ctl))),
                 (ID_DOCK,BN_CLICKED)=>push(Action::Dock(checked(ctl))),
                 (ID_STAGE,BN_CLICKED)=>push(Action::Stage(checked(ctl))),
+                (ID_DOCK_DISPLAY|ID_STAGE_DISPLAY,BN_CLICKED)=>display_menu(h,ctl,id==ID_STAGE_DISPLAY),
                 (ID_IDLE, CBN_SELCHANGE) => {
                     let i = SendMessageW(ctl, CB_GETCURSEL, 0, 0);
                     if let Some(&m) = IDLE_CHOICES.get(i as usize) {

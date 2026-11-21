@@ -14,7 +14,7 @@ use windows_sys::Win32::UI::Accessibility::*;
 
 mod options;
 mod runtime;
-pub use options::{Options,Edit};
+pub use options::{Options,Edit,DisplayMode,DisplayTarget};
 pub use runtime::{Runtime,Event};
 use runtime::Command;
 type Preferences=Options;
@@ -46,7 +46,11 @@ const MENU_SNAP_RIGHT:usize=518;
 const MENU_FULLSCREEN:usize=519;
 
 #[derive(Clone)]
-struct Screen { bounds:RECT, work:RECT, primary:bool }
+pub struct Display {
+    pub id: String, pub name: String, pub bounds: RECT, pub work: RECT,
+    pub primary: bool, pub dpi: u32,
+}
+type Screen = Display;
 #[derive(Clone)]
 struct AppWindow { hwnd:HWND, title:String, path:String, rect:RECT }
 #[derive(Clone,Debug,PartialEq,Eq)]
@@ -62,6 +66,7 @@ thread_local! {
     static CONTROL:Cell<HWND>=const{Cell::new(ptr::null_mut())};
     static OWNER:Cell<HWND>=const{Cell::new(ptr::null_mut())};
     static DIRTY:Cell<bool>=const{Cell::new(false)};
+    static DISPLAY_DIRTY:Cell<bool>=const{Cell::new(false)};
     static COMMANDS:RefCell<Option<mpsc::Receiver<Command>>>=const{RefCell::new(None)};
     static EVENTS:RefCell<Option<mpsc::Sender<Event>>>=const{RefCell::new(None)};
     static ICONS:RefCell<HashMap<(String,bool),HICON>>=RefCell::new(HashMap::new());
@@ -80,15 +85,39 @@ fn emit(event:Event) {
     if !owner.is_null(){unsafe{PostMessageW(owner,WM_NULL,0,0);}}
 }
 
-fn monitors()->Vec<Screen> {
-    // Reuse Deskland's monitor detection/DPI owner; retrieve current work area
-    // without a competing display enumeration implementation.
-    crate::monitors().into_iter().map(|monitor|{
-        let bounds=monitor.rect;let mut work=bounds;
-        unsafe {let h=MonitorFromRect(&bounds,MONITOR_DEFAULTTONEAREST);let mut info:MONITORINFO=mem::zeroed();
-            info.cbSize=mem::size_of::<MONITORINFO>() as u32;if GetMonitorInfoW(h,&mut info)!=0{work=info.rcWork;}}
-        Screen{bounds,work,primary:monitor.primary}
+pub fn displays() -> Vec<Display> {
+    fn utf16(z: &[u16]) -> String {
+        String::from_utf16_lossy(&z[..z.iter().position(|&c| c == 0).unwrap_or(z.len())])
+    }
+    // A monitor interface path is independent of desktop coordinates and
+    // primary status. Remote/virtual outputs can lack a physical interface.
+    crate::monitors().into_iter().enumerate().map(|(index, monitor)| {
+        let mut path = String::new();
+        let mut name = String::new();
+        unsafe {
+            for i in 0..32 {
+                let mut device: DISPLAY_DEVICEW = mem::zeroed();
+                device.cb = mem::size_of::<DISPLAY_DEVICEW>() as u32;
+                // EDD_GET_DEVICE_INTERFACE_NAME returns GUID_DEVINTERFACE_MONITOR.
+                if EnumDisplayDevicesW(monitor.device.as_ptr(), i, &mut device, 1) == 0 { break; }
+                if device.StateFlags & 1 == 0 { continue; } // DISPLAY_DEVICE_ACTIVE
+                path = utf16(&device.DeviceID);
+                name = utf16(&device.DeviceString);
+                if !path.is_empty() { break; }
+            }
+        }
+        let source = utf16(&monitor.device);
+        let id = if path.is_empty() { format!("source:{source}") } else { format!("monitor:{path}") }.to_lowercase();
+        if name.is_empty() { name = if source.is_empty() { format!("Display {}", index+1) } else { source }; }
+        Display { id, name, bounds: monitor.rect, work: monitor.work, primary: monitor.primary,
+            dpi: (monitor.dpr * 96.0).round() as u32 }
     }).collect()
+}
+pub fn display_json() -> serde_json::Value {
+    serde_json::Value::Array(displays().into_iter().map(|d| serde_json::json!({
+        "id":d.id,"name":d.name,"primary":d.primary,"dpi":d.dpi,
+        "x":d.bounds.left,"y":d.bounds.top,"w":d.bounds.right-d.bounds.left,"h":d.bounds.bottom-d.bounds.top
+    })).collect())
 }
 fn same_rect(a:RECT,b:RECT)->bool { a.left==b.left&&a.right==b.right&&a.top==b.top&&a.bottom==b.bottom }
 fn rect_intersects(a:RECT,b:RECT)->bool {
@@ -210,14 +239,22 @@ fn bar_rect(screen:&Screen,items:usize)->RECT {
     RECT{left:x,top:bottom-HEIGHT,right:x+width,bottom}
 }
 unsafe fn recreate(state:&mut State) {
-    let screens=monitors();
-    let changed=screens.len()!=state.screens.len() || !screens.iter().zip(&state.screens).all(|(s,b)|same_rect(s.bounds,b.bounds)&&same_rect(s.work,b.work)&&s.primary==b.primary);
-    if changed || !state.prefs.enabled{for b in state.bars.drain(..){DestroyWindow(b.hwnd);}}
-    if changed || !state.prefs.stage_enabled{for s in state.stages.drain(..){DestroyWindow(s.hwnd);}}
+    let screens = &state.screens;
+    let dock_targets = if state.prefs.enabled { state.prefs.dock_display.outputs(screens.iter().map(|s| (s.id.as_str(), s.primary))) } else { Vec::new() };
+    let stage_targets = if state.prefs.stage_enabled { state.prefs.stage_display.outputs(screens.iter().map(|s| (s.id.as_str(), s.primary))) } else { Vec::new() };
+    state.bars.retain(|b| {
+        let keep = dock_targets.iter().any(|&i| same_rect(screens[i].bounds, b.bounds));
+        if !keep { DestroyWindow(b.hwnd); }
+        keep
+    });
+    state.stages.retain(|s| {
+        let keep = stage_targets.iter().any(|&i| same_rect(screens[i].bounds, s.bounds));
+        if !keep { DestroyWindow(s.hwnd); }
+        keep
+    });
     let class=wide(CLASS);
-    state.screens=screens.clone();
-    for screen in screens {
-        if state.prefs.enabled && !state.bars.iter().any(|b|same_rect(b.bounds,screen.bounds)) {
+    for (i, screen) in screens.iter().enumerate() {
+        if dock_targets.contains(&i) && !state.bars.iter().any(|b|same_rect(b.bounds,screen.bounds)) {
         let items=item_list(&state.windows,screen.bounds,&state.prefs);
         let r=bar_rect(&screen,items.len());
         let hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,
@@ -225,24 +262,23 @@ unsafe fn recreate(state:&mut State) {
             r.left,r.top,r.right-r.left,r.bottom-r.top,
             ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
         if !hwnd.is_null(){
-        ShowWindow(hwnd,SW_SHOWNOACTIVATE);
-        state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:false});
+        state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:true});
         }else{emit(Event::Error(format!("Create Dock window: {}",GetLastError())));}
         }
-        if state.prefs.stage_enabled && !state.stages.iter().any(|s|same_rect(s.bounds,screen.bounds)) {
+        if stage_targets.contains(&i) && !state.stages.iter().any(|s|same_rect(s.bounds,screen.bounds)) {
             let r=stage_rect(&screen,&state.prefs.stage_side);
             let stage_hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,
                 class.as_ptr(),wide("tuanpc-desk Stage Manager").as_ptr(),WS_POPUP,
                 r.left,r.top,r.right-r.left,r.bottom-r.top,
                 ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
             if !stage_hwnd.is_null(){
-                ShowWindow(stage_hwnd,SW_SHOWNOACTIVATE);
-                state.stages.push(Stage{hwnd:stage_hwnd,bounds:screen.bounds,items:Vec::new(),hidden:false});
-            }
+                state.stages.push(Stage{hwnd:stage_hwnd,bounds:screen.bounds,items:Vec::new(),hidden:true});
+            } else { emit(Event::Error(format!("Create Stage window: {}",GetLastError()))); }
         }
     }
 }
-unsafe fn refresh(state:&mut State) {
+unsafe fn refresh(state:&mut State, topology:bool) {
+    if topology || state.screens.is_empty() { state.screens = displays(); }
     state.windows=if state.suspended{Vec::new()}else{windows()};
     recreate(state);
     let foreground=GetForegroundWindow() as isize;let active_changed=foreground!=state.foreground;state.foreground=foreground;
@@ -406,7 +442,7 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
                     MENU_MAXIMIZE=>{ShowWindowAsync(item.hwnd,SW_MAXIMIZE);}
                     MENU_RESTORE=>{ShowWindowAsync(item.hwnd,SW_RESTORE);}
                     MENU_SNAP_LEFT|MENU_SNAP_RIGHT|MENU_FULLSCREEN=>{
-                        let screen=monitors().into_iter().find(|s|{
+                        let screen=displays().into_iter().find(|s|{
                             let mut r:RECT=mem::zeroed();GetWindowRect(item.hwnd,&mut r)!=0&&rect_intersects(r,s.bounds)
                         });
                         if let Some(screen)=screen {
@@ -439,8 +475,8 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_ERASEBKGND=>1,
         WM_PAINT=>{paint(hwnd);0},
         WM_MOUSEACTIVATE=>MA_NOACTIVATE as LRESULT,
-        WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}update_state(|s|refresh(s));}0},
-        WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_DPICHANGED=>{queue_refresh();0},
+        WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
+        WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_DPICHANGED=>{DISPLAY_DIRTY.with(|d|d.set(true));queue_refresh();0},
         WM_MOUSEMOVE=>{
             let x=(l as u32&0xffff) as i16 as i32;
             let changed=STATE.with(|s|{let mut a=s.borrow_mut();if let Some(b)=a.bars.iter_mut().find(|b|b.hwnd==hwnd){
@@ -502,9 +538,9 @@ unsafe fn drain_commands() {
     for command in commands {
         match command {
             Command::Configure(options)=>update_state(|state|{
-                state.prefs=options;refresh(state);
+                state.prefs=options;refresh(state,false);
             }),
-            Command::Suspend(on)=>update_state(|state|{if state.suspended!=on{state.suspended=on;refresh(state);}}),
+            Command::Suspend(on)=>update_state(|state|{if state.suspended!=on{state.suspended=on;refresh(state,!on);}}),
             Command::Stop=>{EndMenu();PostQuitMessage(0);},
             #[cfg(test)] Command::Inspect(tx)=>{let handles=STATE.with(|s|{let s=s.borrow();s.bars.iter().map(|b|b.hwnd as usize).chain(s.stages.iter().map(|s|s.hwnd as usize)).collect()});let _=tx.send(handles);},
         }
@@ -527,7 +563,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         CONTROL.with(|c|c.set(control));DIRTY.with(|c|c.set(false));
         OWNER.with(|o|o.set(owner as HWND));
         COMMANDS.with(|c|{c.replace(Some(commands));});EVENTS.with(|e|{e.replace(Some(events));});
-        update_state(|state|{state.prefs=options;refresh(state);});
+        update_state(|state|{state.prefs=options;refresh(state,false);});
         let mut hooks=Vec::new();
         for (low,high) in [(EVENT_SYSTEM_FOREGROUND,EVENT_SYSTEM_FOREGROUND),(EVENT_SYSTEM_MINIMIZESTART,EVENT_SYSTEM_MINIMIZEEND),
             (EVENT_OBJECT_CREATE,EVENT_OBJECT_HIDE),(EVENT_OBJECT_LOCATIONCHANGE,EVENT_OBJECT_NAMECHANGE)] {
@@ -560,9 +596,9 @@ mod tests{
         assert!(!covers_display("RealApp",rect([-1920,-120,0,1040]),screen));
     }
     #[test] fn mixed_coordinate_overlap(){assert!(rect_intersects(rect([-1200,-200,0,900]),rect([-100,0,100,100])));assert!(!rect_intersects(rect([-1200,-200,0,900]),rect([0,0,100,100])));}
-    #[test] fn distinct_monitor_geometry(){let s=Screen{bounds:rect([-1920,0,0,1080]),work:rect([-1920,0,0,1040]),primary:false};let r=bar_rect(&s,5);assert!(r.left<0 && r.right<=0 && r.bottom<=1040);}
+    #[test] fn distinct_monitor_geometry(){let s=Screen{bounds:rect([-1920,0,0,1080]),work:rect([-1920,0,0,1040]),primary:false,id:"test".into(),name:"Test".into(),dpi:96};let r=bar_rect(&s,5);assert!(r.left<0 && r.right<=0 && r.bottom<=1040);}
     #[test] fn stage_geometry_on_negative_monitor(){
-        let sc=Screen{bounds:rect([-1920,-120,0,1080]),work:rect([-1920,-120,0,1040]),primary:false};
+        let sc=Screen{bounds:rect([-1920,-120,0,1080]),work:rect([-1920,-120,0,1040]),primary:false,id:"test".into(),name:"Test".into(),dpi:96};
         let left=stage_rect(&sc,"left");let right=stage_rect(&sc,"right");
         assert!(left.left<right.left && left.left>=sc.work.left && right.right<=sc.work.right);
         assert!(left.top>=sc.work.top && left.bottom<=sc.work.bottom);

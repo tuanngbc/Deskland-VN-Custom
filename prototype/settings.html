@@ -130,7 +130,33 @@
     <label class="setting-row switch-row"><b data-i18n="dockStageEnabled">Bật thanh Stage Manager</b><input type="checkbox" id="dockStageEnabled" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <label class="setting-row switch-row"><b data-i18n="dockAllWindows">Ứng dụng từ mọi màn hình</b><input type="checkbox" id="dockAllWindows" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <label class="setting-row"><b data-i18n="dockStageSide">Vị trí Stage Manager</b><select id="dockStageSide"><option value="left" data-i18n="dockLeft">Bên trái</option><option value="right" data-i18n="dockRight">Bên phải</option></select></label>
+    <p class="monitor-detail" data-i18n="dockScopeHint">Phạm vi ứng dụng không thay đổi màn hình hiển thị Dock hay Stage.</p>
     <p id="dockRuntimeStatus" class="monitor-detail" role="status" aria-live="polite"></p>
+  </section>
+  <section class="setting-card dock-placement">
+    <h3>Dock</h3>
+    <label class="setting-row"><b data-i18n="dockDisplayTarget">Màn hình hiển thị</b><select id="dockDisplayMode">
+      <option value="all" data-i18n="dockDisplayAll">Tất cả màn hình</option>
+      <option value="primary" data-i18n="dockDisplayPrimary">Chỉ màn hình chính</option>
+      <option value="selected" data-i18n="dockDisplaySelected">Một màn hình đã chọn</option>
+      <option value="custom" data-i18n="dockDisplayCustom">Tự chọn nhiều màn hình</option>
+    </select></label>
+    <div id="dockDisplayChoices" class="dock-display-choices"></div>
+  </section>
+  <section class="setting-card dock-placement">
+    <h3>Stage Manager</h3>
+    <label class="setting-row"><b data-i18n="dockDisplayTarget">Màn hình hiển thị</b><select id="stageDisplayMode">
+      <option value="all" data-i18n="dockDisplayAll">Tất cả màn hình</option>
+      <option value="primary" data-i18n="dockDisplayPrimary">Chỉ màn hình chính</option>
+      <option value="selected" data-i18n="dockDisplaySelected">Một màn hình đã chọn</option>
+      <option value="custom" data-i18n="dockDisplayCustom">Tự chọn nhiều màn hình</option>
+    </select></label>
+    <div id="stageDisplayChoices" class="dock-display-choices"></div>
+  </section>
+  <section class="setting-card">
+    <h3 data-i18n="dockDisplayPreview">Bố cục hiển thị</h3>
+    <div id="dockDisplayPreview" class="dock-display-preview"></div>
+    <p class="monitor-detail" id="dockDisplayFallback" hidden data-i18n="dockDisplayFallback">Màn hình đã chọn không có mặt. Tạm hiển thị trên màn hình chính; lựa chọn cũ được giữ lại.</p>
   </section>
 </section>
 <section class="settings-page" id="page-system" hidden><div class="update-notice" id="updateNotice" hidden role="status" aria-live="polite">
@@ -294,7 +320,7 @@ function localizeRegistry() {
 }
 function applyStatic() {
   document.documentElement.lang = lang;
-  document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll('[data-i18n]').forEach(el => { const key=el.dataset.i18n; const value=t(key); if(value!==key)el.textContent=value; });
   document.querySelectorAll('[data-i18n-title]').forEach(el => { el.title = t(el.dataset.i18nTitle); });
   document.querySelectorAll('[data-i18n-alt]').forEach(el => { el.alt = t(el.dataset.i18nAlt); });
   document.querySelectorAll('[data-i18n-placeholder]').forEach(el => { el.placeholder = t(el.dataset.i18nPlaceholder); });
@@ -318,6 +344,7 @@ function rerenderTexts() {
   for (const name of ['capture', 'record']) setHotkeyButton(document.querySelector(`[data-hotkey-for="${name}"]`), miniTools[name].mods, miniTools[name].vk);
   setHotkeyButton($('saverRecord'), state.saverHotkey?.mods || 16387, state.saverHotkey?.vk || 76);
   syncMiniTools({});
+  syncDockSettings({});
 }
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -706,20 +733,93 @@ function syncSystemMonitor(m) {
   $('systemMonitorInterval').value=String(options.interval);
 }
 let dockOptions={enabled:false,stageEnabled:false,allWindows:false,stageSide:'left'};
+let dockDisplays=[],dockError=null,dockRunning=false;
+const dockFallbackText={
+  dockStopped:'Dock và Stage đang tắt',dockStarting:'Đang bật Dock hoặc Stage…',dockRunning:'Dock và Stage đang chạy',
+  primaryMonitor:'Màn hình chính',dockDisplayDisconnected:'Màn hình đã ngắt kết nối',
+  dockDisplayNone:'Chưa có màn hình',dockDisplayOff:'Đã tắt',dockDisplayTarget:'Màn hình hiển thị'
+};
+const dockText=key=>{const value=t(key);return value===key?dockFallbackText[key]||value:value;};
+const placement=key=>Object.assign({mode:'all',selected:null,custom:[]},dockOptions[key]||{});
+function requestedDisplays(target){
+  return dockDisplays.filter(d=>target.mode==='all'||(target.mode==='primary'&&d.primary)||
+    (target.mode==='selected'&&target.selected===d.id)||(target.mode==='custom'&&target.custom.includes(d.id)));
+}
+const defaultDisplay=()=>dockDisplays.find(d=>d.primary)||dockDisplays[0];
+const displayLabel=d=>d.name+' · '+d.w+' × '+d.h+' · '+d.dpi+' DPI'+(d.primary?' · '+dockText('primaryMonitor'):'');
+function renderDockPlacement(){
+  const layouts={};
+  let fallback=false;
+  for(const [key,enabled] of [['dockDisplay',dockOptions.enabled],['stageDisplay',dockOptions.stageEnabled]]){
+    const target=placement(key);
+    $(key+'Mode').value=target.mode;
+    const requested=requestedDisplays(target);
+    const effective=requested.length?requested:(defaultDisplay()?[defaultDisplay()]:[]);
+    layouts[key]=new Set(enabled?effective.map(d=>d.id):[]);
+    fallback ||= !!(enabled&&!requested.length&&effective.length);
+    const unavailable=target.mode==='selected'&&target.selected&&!dockDisplays.some(d=>d.id===target.selected);
+    const missing=target.mode==='custom'?target.custom.filter(id=>!dockDisplays.some(d=>d.id===id)).length:0;
+    const choices=$(key+'Choices');
+    let markup='';
+    if(target.mode==='selected'){
+      const values=dockDisplays.map(d=>'<option value="'+esc(d.id)+'"'+(target.selected===d.id?' selected':'')+'>'+esc(displayLabel(d))+'</option>');
+      const pending=unavailable?'<option value="" disabled selected>'+esc(dockText('dockDisplayDisconnected'))+'</option>':'';
+      markup='<select data-display-select aria-label="'+esc(dockText('dockDisplayTarget'))+'">'+pending+values.join('')+'</select>';
+    }else if(target.mode==='custom'){
+      markup=dockDisplays.map(d=>'<label><input type="checkbox" data-display-id="'+esc(d.id)+'"'+(target.custom.includes(d.id)?' checked':'')+'> '+esc(displayLabel(d))+'</label>').join('');
+      if(missing)markup+='<small>'+esc(dockText('dockDisplayDisconnected'))+' ('+missing+')</small>';
+    }
+    // Avoid replacing a focused control when the native owner acknowledges an edit.
+    if(choices.dockMarkup!==markup){
+      choices.innerHTML=markup;
+      choices.dockMarkup=markup;
+    }
+  }
+  $('dockDisplayFallback').hidden=!fallback;
+  $('dockDisplayPreview').innerHTML=dockDisplays.length?dockDisplays.map(d=>{
+    const app=layouts.dockDisplay.has(d.id),stage=layouts.stageDisplay.has(d.id);
+    return '<div class="dock-display-card"><div class="dock-display-diagram" aria-hidden="true" style="aspect-ratio:'+Math.max(.5,Math.min(2.5,d.w/d.h))+'">'+
+      (app?'<i class="dock-display-bar"></i>':'')+(stage?'<i class="dock-display-stage '+(dockOptions.stageSide==='right'?'right':'')+'"></i>':'')+
+      '</div><b>'+esc(displayLabel(d))+'</b><small>'+esc([app?'Dock':'',stage?'Stage Manager':''].filter(Boolean).join(' · ')||dockText('dockDisplayOff'))+'</small></div>';
+  }).join(''):'<p>'+esc(dockText('dockDisplayNone'))+'</p>';
+}
 function syncDockSettings(m) {
   dockOptions=Object.assign({},dockOptions,m.dock||{});
+  if(Array.isArray(m.dockDisplays))dockDisplays=m.dockDisplays;
+  if('dockError' in m)dockError=m.dockError;
+  if('dockRunning' in m)dockRunning=m.dockRunning;
   if(typeof m.wallpaperEnabled==='boolean')$('dockWallpaperEnabled').checked=m.wallpaperEnabled;
   $('dockEnabled').checked=!!dockOptions.enabled;
   $('dockStageEnabled').checked=!!dockOptions.stageEnabled;
   $('dockAllWindows').checked=!!dockOptions.allWindows;
   $('dockStageSide').value=dockOptions.stageSide==='right'?'right':'left';
-  $('dockRuntimeStatus').textContent=m.dockError||t(m.dockRunning?'dockRunning':dockOptions.enabled||dockOptions.stageEnabled?'dockStarting':'dockStopped');
-  $('dockRuntimeStatus').classList.toggle('error-text',!!m.dockError);
+  $('dockRuntimeStatus').textContent=dockError||dockText(dockRunning?'dockRunning':dockOptions.enabled||dockOptions.stageEnabled?'dockStarting':'dockStopped');
+  $('dockRuntimeStatus').classList.toggle('error-text',!!dockError);
+  renderDockPlacement();
 }
-for(const id of ['dockEnabled','dockStageEnabled','dockAllWindows','dockStageSide'])$(id).addEventListener('change',()=>{
-  send({t:'dock',enabled:$('dockEnabled').checked,stageEnabled:$('dockStageEnabled').checked,
-    allWindows:$('dockAllWindows').checked,stageSide:$('dockStageSide').value});
+for(const [id,key,type] of [['dockEnabled','enabled','checked'],['dockStageEnabled','stageEnabled','checked'],
+      ['dockAllWindows','allWindows','checked'],['dockStageSide','stageSide','value']])$(id).addEventListener('change',()=>{
+  const value=$(id)[type]; dockOptions[key]=value; renderDockPlacement();
+  send({t:'dock',[key]:value});
 });
+for(const key of ['dockDisplay','stageDisplay']){
+  function apply(target){dockOptions[key]=target;renderDockPlacement();send({t:'dock',[key]:target});}
+  $(key+'Mode').addEventListener('change',e=>{
+    const target=placement(key);target.mode=e.target.value;
+    if(target.mode==='selected'&&!target.selected)target.selected=defaultDisplay()?.id||null;
+    if(target.mode==='custom'&&!target.custom.length&&defaultDisplay())target.custom=[defaultDisplay().id];
+    apply(target);
+  });
+  $(key+'Choices').addEventListener('change',e=>{
+    const target=placement(key);
+    if(e.target.hasAttribute('data-display-select'))target.selected=e.target.value;
+    else if(e.target.hasAttribute('data-display-id')){
+      const id=e.target.dataset.displayId;
+      target.custom=e.target.checked?[...new Set([...target.custom,id])]:target.custom.filter(x=>x!==id);
+    }else return;
+    apply(target);
+  });
+}
 $('dockWallpaperEnabled').addEventListener('change',()=>send({t:'wallpaperEnabled',enabled:$('dockWallpaperEnabled').checked}));
 for(const id of ['systemMonitorEnabled','systemMonitorInterval'])$(id).addEventListener('change',()=>{
   send({t:'systemMonitor',enabled:$('systemMonitorEnabled').checked,interval:Number($('systemMonitorInterval').value)});

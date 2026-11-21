@@ -442,18 +442,20 @@ fn register_class(name: &str, proc_: WNDPROC, own_dc: bool) {
 // ---------------------------------------------------------------- Màn hình
 struct Monitor {
     rect: RECT,
+    work: RECT,
+    device: [u16; 32],
     dpr: f32,
     primary: bool,
 }
 
 unsafe extern "system" fn enum_monitor(hm: HMONITOR, _: HDC, _: *mut RECT, l: LPARAM) -> BOOL {
     let out = &mut *(l as *mut Vec<Monitor>);
-    let mut mi: MONITORINFO = std::mem::zeroed();
-    mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-    if GetMonitorInfoW(hm, &mut mi) != 0 {
+    let mut mi: MONITORINFOEXW = std::mem::zeroed();
+    mi.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    if GetMonitorInfoW(hm, &mut mi.monitorInfo) != 0 {
         let (mut dx, mut dy) = (96u32, 96u32);
         GetDpiForMonitor(hm, MDT_EFFECTIVE_DPI, &mut dx, &mut dy);
-        out.push(Monitor { rect: mi.rcMonitor, dpr: dx as f32 / 96.0, primary: mi.dwFlags & MONITORINFOF_PRIMARY != 0 });
+        out.push(Monitor { rect: mi.monitorInfo.rcMonitor, work: mi.monitorInfo.rcWork, device: mi.szDevice, dpr: dx as f32 / 96.0, primary: mi.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0 });
     }
     1
 }
@@ -802,6 +804,7 @@ fn web_init(app: &App) -> serde_json::Value {
         "systemMonitor": app.cfg.system_monitor.json(),
         "wallpaperEnabled": app.cfg.wallpaper_enabled,
         "dock": app.cfg.dock.json(),
+        "dockDisplays": dock::display_json(),
         "dockRunning": app.dock_runtime.as_ref().is_some_and(|r|!r.finished()),
         "dockError": app.dock_error,
         "miniToolsHotkeys": TOOL_HOTKEYS.with(|c|c.get()),
@@ -1000,7 +1003,8 @@ impl App {
         self.post_dock_state();
     }
     fn post_dock_state(&self) {
-        web::post(&serde_json::json!({"t":"dockState","dock":self.cfg.dock.json(),"wallpaperEnabled":self.cfg.wallpaper_enabled,
+        if !web::is_open() { return; }
+        web::post(&serde_json::json!({"t":"dockState","dock":self.cfg.dock.json(),"dockDisplays":dock::display_json(),"wallpaperEnabled":self.cfg.wallpaper_enabled,
             "dockRunning":self.dock_runtime.as_ref().is_some_and(|r|!r.finished()),"dockError":self.dock_error}).to_string());
     }
     fn set_wallpaper_enabled(&mut self,on:bool)->Result<(),String> {
@@ -1535,8 +1539,8 @@ impl App {
             hotkey: HOTKEY_OK.with(|c| c.get()),
             interaction: self.interactions_enabled,
             wallpaper_enabled:self.cfg.wallpaper_enabled,
-            dock_enabled:self.cfg.dock.enabled,
-            stage_enabled:self.cfg.dock.stage_enabled,
+            dock:self.cfg.dock.clone(),
+            displays:dock::displays(),
         }
     }
 
@@ -2575,6 +2579,10 @@ fn main() {
                 Action::Wallpaper(on)=>{if let Err(error)=app.set_wallpaper_enabled(on){log!("Hình nền: {error}");}app.post_dock_state();}
                 Action::Dock(on)=>{app.cfg.dock.enabled=on;app.configure_dock();}
                 Action::Stage(on)=>{app.cfg.dock.stage_enabled=on;app.configure_dock();}
+                Action::DockDisplay(stage,target)=>{
+                    if stage {app.cfg.dock.stage_display=target;} else {app.cfg.dock.dock_display=target;}
+                    app.configure_dock();
+                }
                 Action::Interaction(on) => {
                     INTERACTIONS_ENABLED.with(|c| c.set(on));
                     app.interactions_enabled = on;
@@ -2875,7 +2883,7 @@ fn main() {
                 "dock" => {
                     // Partial UI patch must preserve pins/unknown monitor settings.
                     let mut value=app.cfg.dock.json();
-                    for key in ["enabled","stageEnabled","allWindows","stageSide"] {
+                    for key in ["enabled","stageEnabled","allWindows","stageSide","dockDisplay","stageDisplay"] {
                         if let Some(v)=m.get(key){value[key]=v.clone();}
                     }
                     app.cfg.dock=dock::Options::from_json(&value);app.configure_dock();web_changed=true;
@@ -3108,6 +3116,8 @@ fn main() {
                 break;
             }
             app.init_widget();
+            if web::is_open() { app.post_dock_state(); }
+            if settings::hwnd().is_some() { settings::sync(&app.settings_state()); }
         }
         if REPAINT.with(|c| c.replace(false)) {
             app.repaint_all();
