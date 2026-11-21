@@ -100,7 +100,7 @@ impl Motion {
 }
 struct Stage { hwnd:HWND, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, selected:Option<u64>, gap:i32, page:usize, pages:usize, hidden:bool, previews:previews::Previews }
 #[derive(Default)]
-struct State { bars:Vec<Bar>, stages:Vec<Stage>, windows:Vec<AppWindow>, prefs:Preferences, screens:Vec<Screen>, suspended:bool, foreground:isize, workspaces:workspaces::Workspaces }
+struct State { bars:Vec<Bar>, stages:Vec<Stage>, windows:Vec<AppWindow>, prefs:Preferences, screens:Vec<Screen>, suspended:bool, foreground:isize, workspaces:workspaces::Workspaces, material:Option<surface::Material> }
 thread_local! {
     static STATE:RefCell<State>=RefCell::new(State::default());
     static CONTROL:Cell<HWND>=const{Cell::new(ptr::null_mut())};
@@ -375,7 +375,12 @@ unsafe fn recreate(state:&mut State) {
 }
 unsafe fn refresh(state:&mut State, topology:bool) {
     if topology || state.screens.is_empty() { state.screens = displays(); }
-    state.windows=if state.suspended{Vec::new()}else{windows()};
+    let material_changed=if topology||state.material.is_none(){
+        let style=&state.prefs.appearance;
+        let material=surface::Material::system(style.theme,style.transparency,style.reduced_motion);
+        state.material.replace(material)!=Some(material)
+    }else{false};
+    state.windows=if state.suspended||!state.prefs.any_enabled(){Vec::new()}else{windows()};
     recreate(state);
     ATLAS.with(|a|{
         let mut worker=a.borrow_mut();
@@ -385,7 +390,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
     let foreground=GetForegroundWindow() as isize;let active_changed=foreground!=state.foreground;state.foreground=foreground;
     for b in &mut state.bars {
         let items=item_list(&state.windows,b.bounds,&state.prefs);
-        let mut changed=b.items!=items || active_changed;
+        let mut changed=b.items!=items || active_changed || material_changed;
         b.items=items;
         let screen=state.screens.iter().find(|s|same_rect(s.bounds,b.bounds));
         if let Some(screen)=screen {
@@ -458,14 +463,13 @@ unsafe fn paint(hwnd:HWND){
     let layered=STATE.with(|s|{
         let state=s.borrow();
         let bar=state.bars.iter().find(|b|b.hwnd==hwnd)?;
-        Some((bar.layout.clone()?,bar.items.clone(),bar.hovered,bar.collapsed,bar.keyboard,state.prefs.appearance.clone(),state.foreground,bar.motion.at))
+        Some((bar.layout.clone()?,bar.items.clone(),bar.hovered,bar.collapsed,bar.keyboard,state.material?,state.foreground,bar.motion.at))
     });
     let mut ps:PAINTSTRUCT=mem::zeroed();let dc=BeginPaint(hwnd,&mut ps);
-    if let Some((layout,items,hovered,collapsed,keyboard,style,active,animation_tick))=layered{
+    if let Some((layout,items,hovered,collapsed,keyboard,material,active,animation_tick))=layered{
         EndPaint(hwnd,&ps);
         let key=hwnd as usize;
         let paint=animation_tick.filter(|_|perf::active()).map(|tick|(tick,std::time::Instant::now()));
-        let material=surface::Material::system(style.theme,style.transparency,style.reduced_motion);
         let size=(layout.window.right-layout.window.left,layout.window.bottom-layout.window.top);
         let canvas=SURFACES.with(|s|s.borrow_mut().remove(&key));
         let canvas=match canvas{Some(c) if c.size()==size=>Some(c),_=>surface::Surface::new(size.0,size.1,layout.glass,material)};
@@ -941,6 +945,7 @@ unsafe fn drain_commands() {
         match command {
             Command::Configure(options)=>update_state(|state|{
                 let repaint=state.prefs.appearance!=options.appearance;
+                if repaint{state.material=None;}
                 if repaint { for b in &mut state.bars{
                     KillTimer(b.hwnd,MOTION_TIMER);KillTimer(b.hwnd,HIDE_TIMER);b.motion=Motion::default();
                     if state.prefs.appearance.auto_hide!=options.appearance.auto_hide{b.collapsed=options.appearance.auto_hide;}

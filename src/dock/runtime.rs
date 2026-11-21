@@ -162,25 +162,36 @@ mod tests {
         runtime.inspect();
         runtime.configure(off.clone());
         assert!(runtime.inspect().is_empty());
-        let start=handles();
-        let t=Instant::now();
-        for _ in 0..100 {
-            runtime.configure(on.clone());
-            let active=runtime.inspect();
-            assert!(!active.is_empty());
-            runtime.configure(off.clone());
-            assert!(runtime.inspect().is_empty());
-            assert!(active.iter().all(|h| unsafe{IsWindow(*h as _)}==0));
+        let measure=|interval:u32| {
+            let deadline=Instant::now()+Duration::from_secs(2);
+            while handles()>interval+8 && Instant::now()<deadline {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            handles()
+        };
+        let mut results=Vec::new();
+        for (label,dock,stage) in [("control",false,false),("stage-only",false,true),
+            ("dock-only",true,false),("both",true,true)] {
+            let on=Options{enabled:dock,stage_enabled:stage,..Default::default()};
+            let start=handles();
+            let t=Instant::now();
+            for _ in 0..100 {
+                runtime.configure(on.clone());
+                let active=runtime.inspect();
+                assert_eq!(active.is_empty(),!(dock||stage));
+                runtime.configure(off.clone());
+                assert!(runtime.inspect().is_empty());
+                assert!(active.iter().all(|h| unsafe{IsWindow(*h as _)}==0));
+            }
+            let after=measure(start);
+            eprintln!("100 {label} toggles in {:?}; process handles {start} -> {after}",t.elapsed());
+            results.push((label,start,after));
         }
-        let end=Instant::now();
-        while handles()>start+8 && end.elapsed()<Duration::from_secs(2) {
-            std::thread::sleep(Duration::from_millis(25));
-        }
-        let after=handles();
-        eprintln!("100 Dock/Stage toggles in {:?}; handles before/after: {start}/{after}",t.elapsed());
-        assert!(after<=start+8,"process handles must not accumulate after module OFF");
         let controller=runtime.control;
         drop(runtime);
         assert_eq!(unsafe{IsWindow(controller as _)},0);
+        eprintln!("After runtime shutdown: {} process handles",handles());
+        assert!(results.iter().all(|(_,start,after)|*after<=start+8),
+            "process handles must not accumulate after module OFF: {results:?}");
     }
 }
