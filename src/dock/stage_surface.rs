@@ -1,6 +1,6 @@
 //! The layered Stage surface paints premultiplied cards and caption masks.
 //! A regular owned HWND displays the live DWM rectangles above it.
-use super::{geometry::Rect,surface::{rounded,draw,distance,icon_on,fallback_icon,Atlas},glass_probe::Layer,Item};
+use super::{geometry::Rect,surface::{rounded,draw,distance,IconRasters,fallback_icon,Atlas},glass_probe::Layer,Item};
 use crate::desktop::wide;
 use windows_sys::Win32::{Foundation::{HWND,RECT},Graphics::Gdi::*};
 
@@ -94,14 +94,14 @@ impl Layout {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Look {pub dark:bool,pub layout:Layout,pub active:u8,pub alpha:Option<u8>}
 
-pub(super) struct Panel {layer:Layer,look:Option<Look>,static_pixels:Vec<u8>,mask:Option<Layer>,font:HFONT,dpi:u32}
+pub(super) struct Panel {layer:Layer,look:Option<Look>,static_pixels:Vec<u8>,mask:Option<Layer>,font:HFONT,dpi:u32,icons:IconRasters}
 impl Panel {
     pub unsafe fn new(w:i32,h:i32,dpi:u32)->Option<Self>{
         let layer=Layer::new(w,h)?;
         let font_height=((12*dpi.clamp(72,288)+48)/96) as i32;
         let font=CreateFontW(-font_height,0,0,0,500,0,0,0,DEFAULT_CHARSET as u32,0,0,
             ANTIALIASED_QUALITY as u32,DEFAULT_PITCH as u32,wide("Segoe UI Variable").as_ptr());
-        Some(Self{layer,look:None,static_pixels:Vec::new(),mask:None,font,dpi})
+        Some(Self{layer,look:None,static_pixels:Vec::new(),mask:None,font,dpi,icons:IconRasters::default()})
     }
     pub fn geometry(&self)->(i32,i32,u32){(self.layer.size.0,self.layer.size.1,self.dpi)}
     pub fn font(&self)->HFONT{self.font}
@@ -175,7 +175,7 @@ impl Panel {
             let size=(layout.caption-5).max(1) as f32;
             let small=Rect{x:(c.x+layout.inset) as f32,y:(c.y+c.h) as f32-(layout.caption as f32+size)/2.0,w:size,h:size};
             let mut badge=|r|{
-                if let Some(Some(icon))=atlas.get(&item.path){icon_on(data,w,h,r,icon);}
+                if let Some(Some(icon))=atlas.get(&item.path){self.icons.paint(data,w,h,r,icon);}
                 else{fallback_icon(data,w,h,r,tint);}
             };
             badge(small);

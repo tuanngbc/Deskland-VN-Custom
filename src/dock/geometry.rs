@@ -42,6 +42,20 @@ impl Layout {
     pub fn is_utility_button(&self,x:f32,y:f32)->bool{self.utility.contains(x,y)}
     pub fn is_launch_button(&self,x:f32,y:f32)->bool { self.scan.contains(x,y) }
     pub fn axis(&self,x:f32,y:f32)->f32 {if self.side==DockSide::Bottom{x}else{y}}
+    /// Use visual order without changing the click/paint indices.
+    pub fn key_order(&self)->Vec<usize>{
+        let n=self.slots.len();
+        let mut indexes=Vec::with_capacity(n+self.inline.len()+2);
+        let append_status=|out:&mut Vec<usize>| {
+            if self.utility_leading{out.extend(n+2..n+2+self.inline.len());}
+            if self.utility.w>0.0{out.push(n+1);}
+            if !self.utility_leading{out.extend(n+2..n+2+self.inline.len());}
+        };
+        if self.utility_leading{append_status(&mut indexes);}
+        indexes.extend(0..=n);
+        if !self.utility_leading{append_status(&mut indexes);}
+        indexes
+    }
 }
 
 #[cfg(test)]
@@ -228,6 +242,12 @@ mod tests{
                 assert_eq!(l.utility.w,28.0);
                 assert!(l.inline.iter().all(|(_,r)|r.w==28.0));
                 assert_eq!(l.slots[0].w,44.0);
+                let lead=measure_widgets(&d,&Appearance::default(),10,None,0.0,Some(true),pins,28);
+                assert_eq!(&lead.key_order()[..6],&[12,13,14,15,16,11]);
+                assert_eq!(l.key_order(),(0..17).collect::<Vec<_>>());
+                for (i,(_,r)) in lead.inline.iter().enumerate(){
+                    assert_eq!(lead.hot(r.x+r.w*0.5,r.y+r.h*0.5),Some(i+12));
+                }
                 let zoom=measure_widgets(&d,&Appearance::default(),10,Some(l.slots[3].x),1.0,Some(false),pins,28);
                 assert_eq!(zoom.inline[0].1.w,28.0);
                 assert!(zoom.slots[3].w>44.0);

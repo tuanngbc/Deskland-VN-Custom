@@ -1,8 +1,10 @@
 //! Dock surface: antialiased cached pixels; DWM composes the window.
 //! No desktop capture, timer, or per-frame allocation in the static path.
 use super::{appearance::Theme, geometry::{Layout,Rect}, glass_probe::Layer};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::{HashMap,VecDeque}, sync::{Arc,Weak}};
 use windows_sys::Win32::Foundation::HWND;
+use crate::launcher::IconPixels;
+use super::UtilityWidget;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Material { pub dark:bool, pub transparency:u32, pub reduced_motion:bool }
@@ -18,11 +20,11 @@ impl Material {
 }
 
 pub type Atlas = HashMap<String, Option<Arc<crate::launcher::IconPixels>>>;
-pub struct Surface { layer:Layer, glass:Rect, material:Material, static_pixels:Vec<u8> }
+pub struct Surface { layer:Layer, glass:Rect, material:Material, static_pixels:Vec<u8>, icons:IconRasters }
 impl Surface {
     pub unsafe fn new(w:i32,h:i32,glass:Rect,material:Material)->Option<Self>{
         let layer=Layer::new(w,h)?;
-        Some(Self{layer,glass,material,static_pixels:Vec::new()})
+        Some(Self{layer,glass,material,static_pixels:Vec::new(),icons:IconRasters::default()})
     }
     pub fn size(&self)->(i32,i32){self.layer.size}
     pub fn set_material(&mut self,value:Material){
@@ -74,7 +76,7 @@ impl Surface {
             let tint=if self.material.dark{[245,248,252]}else{[58,69,78]};
             if front||hover==Some(i){rounded(data,w,h,*slot,slot.w*0.22,tint,if front{54}else{32});}
             if let Some(Some(icon))=atlas.get(&item.path){
-                icon_on(data,w,h,*slot,icon);
+                self.icons.paint(data,w,h,*slot,icon);
             }else{
                 fallback_icon(data,w,h,*slot,tint);
             }
@@ -114,24 +116,9 @@ impl Surface {
         }
         for (i,(widget,slot)) in layout.inline.iter().copied().enumerate(){
             if hover==Some(items.len()+2+i){rounded(data,w,h,slot,slot.w*0.22,tint,50);}
-            let strokes=widget.glyph();
-            draw(data,w,h,slot,|x,y|{
-                let d=strokes.iter().map(|&(ax,ay,bx,by)| segment_distance(x,y,
-                    slot.x+slot.w*ax,slot.y+slot.h*ay,slot.x+slot.w*bx,slot.y+slot.h*by))
-                    .fold(f32::INFINITY,f32::min);
-                Some((tint,(0.5+slot.w*0.021-d).clamp(0.0,1.0)*245.0))
-            });
+            status_on(data,w,h,slot,scale,tint,Some(widget));
         }
-        // Two native-looking control switches; vector coverage scales with DPI.
-        draw(data,w,h,utility,|x,y|{
-            let (x,y)=(x-utility.x,y-utility.y);
-            let edge=utility.w;
-            let top=segment_distance(x,y,edge*0.26,edge*0.37,edge*0.74,edge*0.37)-0.85*scale;
-            let bottom=segment_distance(x,y,edge*0.26,edge*0.63,edge*0.74,edge*0.63)-0.85*scale;
-            let knob0=(x-edge*0.43).hypot(y-edge*0.37)-edge*0.085;
-            let knob1=(x-edge*0.60).hypot(y-edge*0.63)-edge*0.085;
-            Some((tint,(0.5-top.min(bottom).min(knob0).min(knob1)).clamp(0.0,1.0)*240.0))
-        });
+        status_on(data,w,h,utility,scale,tint,None);
         self.layer.present(hwnd)
     }
 }
@@ -169,40 +156,150 @@ pub(super) fn fallback_icon(data:&mut[u8],w:i32,h:i32,slot:Rect,tint:[u8;3]){
         rounded(data,w,h,Rect{x:slot.x+u*slot.w-k,y:slot.y+v*slot.h-k,w:k*2.0,h:k*2.0},k,tint,188);
     }
 }
-pub(super) fn icon_on(data:&mut[u8],w:i32,h:i32,slot:Rect,icon:&crate::launcher::IconPixels){
-    let source_w=icon.width as usize;let source_h=icon.height as usize;
-    if source_w==0||source_h==0{return;}
-    let size=(slot.w.min(slot.h)*0.84).round().max(1.0);
-    let ratio=source_w.max(source_h) as f32;
-    let (tw,th)=((size*source_w as f32/ratio).round().max(1.0),(size*source_h as f32/ratio).round().max(1.0));
-    let target=Rect{x:(slot.x+(slot.w-tw)*0.5).round(),y:(slot.y+(slot.h-th)*0.5).round(),w:tw,h:th};
-    // Integrate source pixels on downscale; use interpolation only for an
-    // undersized shell icon. Premultiplied BGRA avoids dark/colored halos.
-    fn axis(p:f32,start:f32,extent:f32,src:usize)->(usize,usize,f32,f32){
-        let step=src as f32/extent;
-        if step>=1.0 {
-            let lo=((p-start-0.5)*step).max(0.0);
-            let hi=(lo+step).min(src as f32);
-            (lo.floor() as usize,(hi.ceil() as usize).min(src),lo,hi)
+fn status_on(data:&mut[u8],w:i32,h:i32,cell:Rect,scale:f32,tint:[u8;3],widget:Option<UtilityWidget>){
+    use UtilityWidget::*;
+    if cell.w<=0.0||cell.h<=0.0{return;}
+    let edge=(18.0*scale).min(cell.w.min(cell.h));
+    let px=(cell.x+(cell.w-edge)*0.5).round();
+    let py=(cell.y+(cell.h-edge)*0.5).round();
+    let ink=Rect{x:px,y:py,w:edge,h:edge};
+    let line=|x,y,ax,ay,bx,by|segment_distance(x,y,ax,ay,bx,by);
+    // Ring segment used by the original Wi-Fi and sound glyphs; round caps
+    // are kept at the arc endpoints when the test point lies outside the sweep.
+    let arc=|x:f32,y:f32,cx:f32,cy:f32,r:f32,ux:f32,uy:f32|{
+        let (dx,dy)=(x-cx,y-cy);
+        let len=dx.hypot(dy);
+        let center=dx*ux+dy*uy;
+        if center>=len*0.68 {(len-r).abs()}else{
+            let lateral=(dy*ux-dx*uy).signum()*0.7332;
+            (dx-r*(ux*0.68-uy*lateral)).hypot(dy-r*(uy*0.68+ux*lateral))
+        }
+    };
+    draw(data,w,h,ink,|x,y|{
+        let (x,y)=((x-px)/edge,(y-py)/edge);
+        let d=match widget {
+            None=>[0.22_f32,0.50,0.78].into_iter().map(|cx|(x-cx).hypot(y-0.50)-0.045).fold(f32::INFINITY,f32::min),
+            Some(Network)=>{
+                let bands=[0.54,0.365,0.195].into_iter().map(|r|arc(x,y,0.50,0.73,r,0.0,-1.0)).fold(f32::INFINITY,f32::min);
+                bands.min((x-0.50).hypot(y-0.76)-0.025)
+            }
+            Some(Calendar)=>((x-0.50).hypot(y-0.50)-0.39).abs()
+                .min(line(x,y,0.50,0.28,0.50,0.51)).min(line(x,y,0.50,0.51,0.65,0.59)),
+            Some(Sound)=>{
+                let horn=[(0.10,0.39,0.25,0.39),(0.10,0.39,0.10,0.61),(0.10,0.61,0.25,0.61),
+                    (0.25,0.39,0.48,0.22),(0.25,0.61,0.48,0.78),(0.48,0.22,0.48,0.78)]
+                    .into_iter().map(|(ax,ay,bx,by)|line(x,y,ax,ay,bx,by)).fold(f32::INFINITY,f32::min);
+                horn.min(arc(x,y,0.47,0.50,0.24,1.0,0.0)).min(arc(x,y,0.47,0.50,0.45,1.0,0.0))
+            }
+            Some(widget)=>widget.glyph().iter().map(|&(ax,ay,bx,by)|{
+                // Expand each control equally about its optical center.
+                let pos=|p:f32|0.5+(p-0.5)*1.17;
+                line(x,y,pos(ax),pos(ay),pos(bx),pos(by))
+            }).fold(f32::INFINITY,f32::min),
+        };
+        let stroke=(0.78*scale).max(0.66);
+        Some((tint,(0.5+stroke-edge*d).clamp(0.0,1.0)*247.0))
+    });
+}
+
+struct Raster { width:i32, height:i32, pixels:Vec<u8> }
+const RASTER_BUDGET:usize=384*1024; // per visible Dock/Stage surface
+const RASTER_ITEMS:usize=32;
+#[derive(Default)]
+pub(super) struct IconRasters {recent:VecDeque<(Weak<IconPixels>,Raster)>,bytes:usize}
+impl IconRasters {
+    pub fn paint(&mut self,data:&mut[u8],w:i32,h:i32,slot:Rect,source:&Arc<IconPixels>){
+        if source.width<=0||source.height<=0{return;}
+        let size=(slot.w.min(slot.h)*0.84).round().max(1.0);
+        let longest=source.width.max(source.height) as f32;
+        let (tw,th)=((size*source.width as f32/longest).round().max(1.0) as i32,
+            (size*source.height as f32/longest).round().max(1.0) as i32);
+        let index=self.recent.iter().position(|(old,r)|old.as_ptr()==Arc::as_ptr(source)&&r.width==tw&&r.height==th);
+        let entry=if let Some(index)=index {
+            self.recent.remove(index).unwrap()
         }else{
-            let at=((p-start)*step-0.5).clamp(0.0,(src-1) as f32);
-            (at.floor() as usize,(at.floor() as usize+2).min(src),at,at+1.0)
+            let raster=resample(source,tw,th);
+            let used=raster.pixels.len();
+            while self.bytes+used>RASTER_BUDGET||self.recent.len()>=RASTER_ITEMS {
+                let Some((_,old))=self.recent.pop_front() else{break;};
+                self.bytes-=old.pixels.len();
+            }
+            self.bytes+=used;
+            (Arc::downgrade(source),raster)
+        };
+        let raster=&entry.1;
+        let left=(slot.x+(slot.w-tw as f32)*0.5).round() as i32;
+        let top=(slot.y+(slot.h-th as f32)*0.5).round() as i32;
+        for y in 0.max(-top)..th.min(h-top){
+            for x in 0.max(-left)..tw.min(w-left) {
+                let p=((y*tw+x)*4) as usize;
+                let d=(((top+y)*w+left+x)*4) as usize;
+                let inverse=255-raster.pixels[p+3] as u32;
+                if inverse==255{continue;}
+                for c in 0..4{
+                    data[d+c]=(raster.pixels[p+c] as u32+(data[d+c] as u32*inverse+127)/255).min(255) as u8;
+                }
+            }
+        }
+        if self.bytes<=RASTER_BUDGET{self.recent.push_back(entry);}else{self.bytes-=entry.1.pixels.len();}
+    }
+}
+
+fn resample(icon:&IconPixels,width:i32,height:i32)->Raster{
+    // Integrate on downscale and use linear sampling only when the shell image
+    // is too small. Keep the native premultiplied BGRA in every intermediate.
+    fn axis(pixel:i32,extent:i32,src:i32)->(usize,usize,f32,f32){
+        let step=src as f32/extent as f32;
+        let (lo,hi)=if step>=1.0{
+            (pixel as f32*step,((pixel+1) as f32*step).min(src as f32))
+        }else{
+            let at=((pixel as f32+0.5)*step-0.5).clamp(0.0,(src-1) as f32);
+            (at,at+1.0)
+        };
+        (lo.floor() as usize,(hi.ceil() as usize).min(src as usize),lo,hi)
+    }
+    let xaxis=(0..width).map(|x|axis(x,width,icon.width)).collect::<Vec<_>>();
+    let mut pixels=Vec::with_capacity((width*height*4) as usize);
+    for y in 0..height{
+        let (t,b,ay,by)=axis(y,height,icon.height);
+        for &(l,r,ax,bx) in &xaxis{
+            let mut out=[0.0;4];let mut sum=0.0;
+            for yy in t..b{let wy=((yy+1) as f32).min(by)-(yy as f32).max(ay);
+                for xx in l..r{
+                    let wx=((xx+1) as f32).min(bx)-(xx as f32).max(ax);
+                    let weight=wx*wy;
+                    let at=(yy*icon.width as usize+xx)*4;
+                    for c in 0..4{out[c]+=icon.pixels[at+c] as f32*weight;}
+                    sum+=weight;
+                }
+            }
+            if sum>0.0{pixels.extend(out.map(|c|(c/sum).round() as u8));}
+            else{pixels.extend([0;4]);}
         }
     }
-    draw(data,w,h,target,|x,y|{
-        let (l,r,ax,bx)=axis(x,target.x,target.w,source_w);
-        let (t,b,ay,by)=axis(y,target.y,target.h,source_h);
-        let mut out=[0.0;4]; let mut sum=0.0;
-        for yy in t..b {for xx in l..r {
-            let wx=((xx+1) as f32).min(bx)-(xx as f32).max(ax);
-            let wy=((yy+1) as f32).min(by)-(yy as f32).max(ay);
-            let weight=wx.max(0.0)*wy.max(0.0);
-            let k=(yy*source_w+xx)*4;
-            for c in 0..4{out[c]+=icon.pixels[k+c] as f32*weight;}
-            sum+=weight;
-        }}
-        if sum<=0.0||out[3]<=0.0{return None;}
-        let channel=|i:usize|(out[i]*255.0/out[3]).round().clamp(0.0,255.0) as u8;
-        Some(([channel(0),channel(1),channel(2)],out[3]/sum))
-    });
+    Raster{width,height,pixels}
+}
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    #[test]
+    fn premultiplied_sampling_preserves_channel_order_and_alpha(){
+        let icon=IconPixels{width:2,height:1,pixels:vec![20,40,140,200,0,0,0,0]};
+        assert_eq!(resample(&icon,1,1).pixels,[10,20,70,100]);
+        let expanded=resample(&icon,4,1);
+        assert_eq!(&expanded.pixels[..4],&[20,40,140,200]);
+        assert_eq!(&expanded.pixels[12..],&[0,0,0,0]);
+    }
+    #[test]
+    fn raster_cache_is_bounded_when_hover_cycles_through_physical_sizes(){
+        let icon=Arc::new(IconPixels{width:2,height:2,pixels:vec![90;16]});
+        let mut cache=IconRasters::default();
+        let mut canvas=vec![0;128*128*4];
+        for edge in 16..150{
+            cache.paint(&mut canvas,128,128,Rect{x:0.0,y:0.0,w:edge as f32,h:edge as f32},&icon);
+            assert!(cache.bytes<=RASTER_BUDGET&&cache.recent.len()<=RASTER_ITEMS);
+        }
+        assert!(!cache.recent.is_empty());
+    }
 }

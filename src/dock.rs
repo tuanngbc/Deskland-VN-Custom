@@ -12,7 +12,7 @@ use windows_sys::Win32::System::Threading::{OpenProcess,QueryFullProcessImageNam
 use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::Win32::UI::Accessibility::*;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent,TRACKMOUSEEVENT,TME_LEAVE,SetFocus,VK_LEFT,VK_RIGHT,VK_UP,VK_DOWN,VK_RETURN,VK_ESCAPE,VK_HOME,VK_END};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent,TRACKMOUSEEVENT,TME_LEAVE,SetFocus,VK_LEFT,VK_RIGHT,VK_UP,VK_DOWN,VK_RETURN,VK_ESCAPE,VK_HOME,VK_END,VK_APPS,VK_F10,VK_SHIFT,GetKeyState};
 
 mod options;
 mod runtime;
@@ -672,7 +672,14 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let worker=worker.get_or_insert_with(||icon_atlas::Worker::new(CONTROL.with(Cell::get)));
         let dock=state.bars.iter().filter(|b|!b.hidden).flat_map(|b|&b.items);
         let stage=state.stages.iter().filter(|s|!s.hidden).flat_map(|s|&s.items);
-        worker.restrict_visible(dock.chain(stage));
+        let style=&state.prefs.appearance;
+        let magnify=if style.reduced_motion{1.0}else{1.0+style.magnification as f32/100.0};
+        let dock_edge=state.bars.iter().filter_map(|b|b.layout.as_ref())
+            .map(|layout|style.icon_size as f32*layout.scale*magnify*0.84)
+            .fold(0.0,f32::max);
+        let stage_edge=state.stages.iter().filter_map(|stage|stage.layout)
+            .map(|layout|layout.caption as f32*1.2).fold(0.0,f32::max);
+        worker.restrict_visible(dock.chain(stage),icon_atlas::source_request(dock_edge.max(stage_edge)));
     });
 }
 unsafe fn fill(hdc:HDC,r:RECT,color:u32) {
@@ -936,6 +943,14 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
     AppendMenuW(menu,MF_STRING,MENU_QUIT,wide("Đóng Dock (giữ hình nền)").as_ptr());
     let mut point:POINT=mem::zeroed();GetCursorPos(&mut point);
+    let key_target=STATE.with(|state|{
+        let state=state.borrow();
+        let bar=state.bars.get(bar_index)?;
+        if bar.keyboard!=Some(item_index){return None;}
+        let item=bar.layout.as_ref()?.slots.get(item_index)?;
+        Some(POINT{x:(item.x+item.w*0.5) as i32,y:item.y as i32})
+    });
+    if let Some(at)=key_target{point=at;ClientToScreen(hwnd,&mut point);}
     SetForegroundWindow(hwnd);
     let cmd=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,hwnd,ptr::null()) as usize;
     DestroyMenu(menu);
@@ -1293,16 +1308,25 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 InvalidateRect(hwnd,ptr::null(),0);
                 return 0;
             }
+            if key==VK_APPS||(key==VK_F10&&GetKeyState(VK_SHIFT as i32)<0){
+                let cursor=STATE.with(|s|s.borrow().bars.iter().enumerate().find(|(_,b)|b.hwnd==hwnd)
+                    .and_then(|(i,b)|b.keyboard.map(|cell|(i,cell,b.items.len()))));
+                if let Some((bar,cell,count))=cursor{
+                    if cell<count{native_menu(hwnd,bar,cell);}else{request_utilities(hwnd,None);}
+                }
+                return 0;
+            }
             let action=STATE.with(|s|{
                 let mut state=s.borrow_mut();
                 let bar=state.bars.iter_mut().find(|b|b.hwnd==hwnd)?;
                 let current=bar.keyboard?;
                 let has_utilities=bar.layout.as_ref().is_none_or(|l|l.utility.w>0.0);
-                let max=bar.items.len()+usize::from(has_utilities)+bar.layout.as_ref().map_or(0,|l|l.inline.len());
-                let current=current.min(max);
+                let order=bar.layout.as_ref().map_or_else(||(0..=bar.items.len()+usize::from(has_utilities)).collect(),|l|l.key_order());
+                let i=order.iter().position(|id|*id==current).unwrap_or(0);
+                let current=order[i];
                 let next=match key{
-                    VK_LEFT|VK_UP=>current.saturating_sub(1),VK_RIGHT|VK_DOWN=>(current+1).min(max),
-                    VK_HOME=>0,VK_END=>max,
+                    VK_LEFT|VK_UP=>order[i.saturating_sub(1)],VK_RIGHT|VK_DOWN=>order[(i+1).min(order.len()-1)],
+                    VK_HOME=>order[0],VK_END=>order[order.len()-1],
                     VK_RETURN=>return Some((bar.items.get(current).cloned(),current==bar.items.len(),has_utilities&&current==bar.items.len()+1,bar.layout.as_ref().and_then(|l|l.inline.get(current.checked_sub(bar.items.len()+2)?)).map(|(w,_)|*w),0)),
                     VK_ESCAPE=>return Some((None,false,false,None,bar.previous_focus)),
                     _=>return None,
@@ -1460,7 +1484,7 @@ unsafe fn focus_dock(){
         let idx=state.bars.iter().position(|bar|!bar.hidden&&pos.x>=bar.bounds.left&&pos.x<bar.bounds.right&&pos.y>=bar.bounds.top&&pos.y<bar.bounds.bottom)
             .or_else(||state.bars.iter().position(|b|!b.hidden))?;
         let bar=&mut state.bars[idx];
-        bar.collapsed=false;bar.keyboard=Some(0);bar.previous_focus=foreground as isize;
+        bar.collapsed=false;bar.keyboard=Some(bar.layout.as_ref().map_or(0,|l|l.key_order()[0]));bar.previous_focus=foreground as isize;
         Some(bar.hwnd)
     });
     if let Some(hwnd)=target{
