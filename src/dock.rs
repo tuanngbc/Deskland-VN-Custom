@@ -12,7 +12,7 @@ use windows_sys::Win32::System::Threading::{OpenProcess,QueryFullProcessImageNam
 use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::Win32::UI::Accessibility::*;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent,TRACKMOUSEEVENT,TME_LEAVE,SetFocus,SetCapture,GetCapture,ReleaseCapture,VK_LEFT,VK_RIGHT,VK_UP,VK_DOWN,VK_RETURN,VK_ESCAPE,VK_HOME,VK_END,VK_APPS,VK_F10,VK_SHIFT,GetKeyState};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent,TRACKMOUSEEVENT,TME_LEAVE,SetFocus,SetCapture,GetCapture,ReleaseCapture,VK_LEFT,VK_RIGHT,VK_UP,VK_DOWN,VK_RETURN,VK_ESCAPE,VK_HOME,VK_END,VK_PRIOR,VK_NEXT,VK_APPS,VK_F10,VK_SHIFT,GetKeyState};
 
 mod options;
 mod runtime;
@@ -653,7 +653,11 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         layout.stack=(0..items.len()).filter(|&i|items[i].count>1).fold(0u8,|bits,i|bits|(1<<i));
         if stage.items!=items {
             stage.hover=None;stage.emphasis=StageEmphasis::default();KillTimer(stage.hwnd,STAGE_MOTION_TIMER);
-            stage.keyboard=stage.keyboard.filter(|i|*i<items.len());
+            stage.keyboard=stage.keyboard.and_then(|index|{
+                let previous=stage.items.get(index);
+                previous.and_then(|w|items.iter().position(|i|i.hwnd==w.hwnd))
+                    .or_else(||items.len().checked_sub(1).map(|last|index.min(last)))
+            });
         }
         stage.items=items;stage.groups=groups;stage.selected=selected;
         if stage.layout!=Some(layout){
@@ -893,12 +897,10 @@ unsafe fn paint(hwnd:HWND){
         let ink=if dark{0x00f1ebe7}else{0x00342823};
         let muted=if dark{0x00a09d98}else{0x007e7268};
         for (i,title) in labels.iter().enumerate(){stage_surface::caption(dc,layout,i,title,ink);}
-        if let Some(nav)=layout.nav(){
-            let segment=(nav.w/4).max(1);
-            stage_surface::nav_label(dc,stage_surface::Box2{w:segment,..nav},"‹",if page>0{ink}else{muted});
-            stage_surface::nav_label(dc,stage_surface::Box2{x:nav.x+nav.w-segment,w:segment,..nav},"›",if page+1<pages{ink}else{muted});
-            stage_surface::nav_label(dc,stage_surface::Box2{x:nav.x+segment,w:nav.w-segment*2,..nav},
-                &format!("{} · {pages}",page+1),ink);
+        if let Some(nav)=layout.pages(pages){
+            stage_surface::nav_label(dc,nav.previous,"‹",if page>0{ink}else{muted});
+            stage_surface::nav_label(dc,nav.next,"›",if page+1<pages{ink}else{muted});
+            stage_surface::nav_label(dc,nav.middle,&format!("{}/{pages}",page+1),ink);
         }
         if !previous.is_null(){SelectObject(dc,previous);}
         EndPaint(hwnd,&ps);
@@ -1101,21 +1103,37 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
         let i=stage.layout?.hit(x,y)?;
         let item=stage.items.get(i)?;
         let local=stage_window_is_local(item.hwnd,stage.bounds);
-        Some((item.hwnd,stage.groups.get(i).copied().flatten(),stage.display.clone(),stage.selected,local,state.workspaces.can_create(&stage.display)))
+        let group=stage.groups.get(i).copied().flatten();
+        let members=group.map(|id|state.workspaces.members(id)).unwrap_or_default().into_iter()
+            .filter_map(|hwnd|state.windows.iter().find(|w|w.hwnd==hwnd).map(|w|(hwnd,w.title.clone())))
+            .collect::<Vec<_>>();
+        Some((item.hwnd,group,stage.display.clone(),stage.selected,local,state.workspaces.can_create(&stage.display),members))
     });
-    let Some((item,group,display,current,local,can_create))=card else{return;};
+    let Some((item,group,display,current,local,can_create,members))=card else{return;};
     let menu=CreatePopupMenu();
     if menu.is_null(){return;}
+    const DETACH_FIRST:usize=100;
     let add=|id,title:&str,active|{
         AppendMenuW(menu,MF_STRING|if active{0}else{MF_GRAYED},id,wide(title).as_ptr());
     };
     add(1,"Tạo nhóm từ cửa sổ này",local&&group.is_none()&&can_create);
     add(2,"Thêm vào nhóm đang mở",local&&group.is_none()&&current.is_some());
-    add(3,"Tách cửa sổ đại diện khỏi nhóm",group.is_some());
+    if !members.is_empty(){
+        let submenu=CreatePopupMenu();
+        if !submenu.is_null(){
+            for (index,(_,title)) in members.iter().enumerate(){
+                let label=title.replace('&',"&&").chars().take(90).collect::<String>();
+                AppendMenuW(submenu,MF_STRING,DETACH_FIRST+index,wide(&label).as_ptr());
+            }
+            if AppendMenuW(menu,MF_POPUP,submenu as usize,wide("Tách cửa sổ khỏi nhóm").as_ptr())==0{
+                DestroyMenu(submenu);
+            }
+        }
+    }
     add(4,"Giải tán nhóm và khôi phục cửa sổ",group.is_some());
     AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
     add(5,"Điều hướng Stage bằng bàn phím",true);
-    let mut point:POINT=mem::zeroed();GetCursorPos(&mut point);
+    let mut point=POINT{x,y};ClientToScreen(hwnd,&mut point);
     // A no-activate tool window needs a temporary foreground owner while its
     // native menu is open, so Escape and clicks outside dismiss the menu.
     let previous=GetForegroundWindow();
@@ -1145,8 +1163,12 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
         match result{
             1 if still_local&&group.is_none()=>{state.workspaces.create(&display,item);}
             2 if still_local&&group.is_none()&&current==stage.selected=>state.workspaces.add(&display,item),
-            3 if group.is_some()&&present=>state.workspaces.remove(item),
             4=>{if let Some(id)=group{state.workspaces.dissolve(id);}},
+            id if id>=DETACH_FIRST=>{
+                if let Some((group,(target,_)))=group.zip(members.get(id-DETACH_FIRST)){
+                    state.workspaces.remove_from(group,*target);
+                }
+            }
             _=>{}
         }
         refresh(state,false);
@@ -1167,10 +1189,18 @@ unsafe fn activate_stage(hwnd:HWND,i:usize){
     }
 }
 unsafe fn turn_stage_page(hwnd:HWND,forward:bool)->bool{
+    let next=STATE.with(|s|{
+        let s=s.borrow();
+        let p=s.stages.iter().find(|p|p.hwnd==hwnd)?;
+        Some(if forward{p.page+1}else{p.page.saturating_sub(1)})
+    });
+    next.is_some_and(|n|go_to_stage_page(hwnd,n))
+}
+unsafe fn go_to_stage_page(hwnd:HWND,next:usize)->bool{
     let changed=STATE.with(|s|{
         let mut state=s.borrow_mut();
         let Some(stage)=state.stages.iter_mut().find(|p|p.hwnd==hwnd) else{return false;};
-        let next=if forward{(stage.page+1).min(stage.pages-1)}else{stage.page.saturating_sub(1)};
+        let next=next.min(stage.pages-1);
         if next==stage.page{return false;}
         stage.page=next;
         true
@@ -1429,10 +1459,15 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             });
             if let Some((i,previous))=stage_action{
                 match key{
-                    VK_LEFT|VK_RIGHT=>{if turn_stage_page(hwnd,key==VK_RIGHT){
+                    VK_LEFT|VK_RIGHT|VK_PRIOR|VK_NEXT=>{if turn_stage_page(hwnd,matches!(key,VK_RIGHT|VK_NEXT)){
                         STATE.with(|s|{if let Some(p)=s.borrow_mut().stages.iter_mut().find(|p|p.hwnd==hwnd){p.keyboard=Some(0);}});
                     }},
                     VK_RETURN=>activate_stage(hwnd,i),
+                    VK_APPS|VK_F10 if key==VK_APPS||GetKeyState(VK_SHIFT as i32)<0=>{
+                        let point=STATE.with(|s|s.borrow().stages.iter().find(|p|p.hwnd==hwnd)
+                            .and_then(|p|p.layout).filter(|l|i<l.count).map(|l|l.card(i).center()));
+                        if let Some((x,y))=point{stage_menu(hwnd,x,y);}
+                    },
                     VK_ESCAPE if previous!=0&&IsWindow(previous as HWND)!=0=>{SetForegroundWindow(previous as HWND);},
                     _=>{}
                 }
@@ -1458,7 +1493,8 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let next=match key{
                     VK_LEFT|VK_UP=>order[i.saturating_sub(1)],VK_RIGHT|VK_DOWN=>order[(i+1).min(order.len()-1)],
                     VK_HOME=>order[0],VK_END=>order[order.len()-1],
-                    VK_RETURN=>return Some((bar.items.get(current).cloned(),current==bar.items.len(),has_utilities&&current==bar.items.len()+1,bar.layout.as_ref().and_then(|l|l.inline.get(current.checked_sub(bar.items.len()+2)?)).map(|(w,_)|*w),0)),
+                    VK_RETURN=>return Some((bar.items.get(current).cloned(),current==bar.items.len(),has_utilities&&current==bar.items.len()+1,
+                        current.checked_sub(bar.items.len()+2).and_then(|i|bar.layout.as_ref()?.inline.get(i)).map(|(w,_)|*w),0)),
                     VK_ESCAPE=>return Some((None,false,false,None,bar.previous_focus)),
                     _=>return None,
                 };
@@ -1481,13 +1517,12 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let a=s.borrow();
                 let stage=a.stages.iter().find(|stage|stage.hwnd==hwnd)?;
                 let layout=stage.layout?;
-                let nav=layout.nav().and_then(|r| (px>=r.x&&px<r.x+r.w&&y>=r.y&&y<r.y+r.h)
-                    .then_some(px>=r.x+r.w/2));
+                let nav=layout.pages(stage.pages).and_then(|strip|strip.target(px,y,stage.page));
                 Some((layout.hit(px,y),nav))
             });
             if let Some((item,nav))=stage_hit {
                 if let Some(i)=item{activate_stage(hwnd,i);}
-                else if let Some(forward)=nav{turn_stage_page(hwnd,forward);}
+                else if let Some(page)=nav{go_to_stage_page(hwnd,page);}
                 return 0;
             }
             let x=(l as u32&0xffff) as i16 as i32;

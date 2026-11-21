@@ -10,6 +10,30 @@ impl Box2 {
     fn rect(self)->Rect{Rect{x:self.x as f32,y:self.y as f32,w:self.w as f32,h:self.h as f32}}
     pub fn win(self)->RECT{RECT{left:self.x,top:self.y,right:self.x+self.w,bottom:self.y+self.h}}
     fn hit(self,x:i32,y:i32)->bool{x>=self.x&&x<self.x+self.w&&y>=self.y&&y<self.y+self.h}
+    pub fn center(self)->(i32,i32){(self.x+self.w/2,self.y+self.h/2)}
+}
+
+/// One geometry for drawing the miniature page switcher and targeting it.
+#[derive(Clone, Copy)]
+pub(super) struct PageStrip { pub previous:Box2,pub next:Box2,pub middle:Box2,pub pages:usize }
+impl PageStrip {
+    fn new(boxes:Box2,pages:usize)->Self {
+        let edge=boxes.h.min(boxes.w/4).max(1);
+        Self{previous:Box2{w:edge,..boxes},next:Box2{x:boxes.x+boxes.w-edge,w:edge,..boxes},
+            middle:Box2{x:boxes.x+edge,w:boxes.w-2*edge,..boxes},pages}
+    }
+    pub fn uses_dots(self)->bool{self.pages<=7&&self.middle.w>=7*self.pages as i32}
+    fn dot(self,i:usize)->Box2{
+        let a=self.middle.x+self.middle.w*i as i32/self.pages as i32;
+        let b=self.middle.x+self.middle.w*(i+1) as i32/self.pages as i32;
+        Box2{x:a,w:b-a,..self.middle}
+    }
+    pub fn target(self,x:i32,y:i32,page:usize)->Option<usize>{
+        if self.previous.hit(x,y){return page.checked_sub(1);}
+        if self.next.hit(x,y){return (page+1<self.pages).then_some(page+1);}
+        if !self.uses_dots(){return None;}
+        (0..self.pages).find(|&i|i!=page&&self.dot(i).hit(x,y))
+    }
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub(super) struct Layout {
@@ -21,7 +45,7 @@ impl Layout {
     pub fn new(width:i32,height:i32,dpi:u32,gap:i32,limit:usize,total:usize,right:bool)->Self{
         let px=|n:i32|(n*dpi.clamp(72,288) as i32+48)/96;
         let inset=px(6);
-        let nav_h=px(25);
+        let nav_h=px(21);
         let gap=gap.max(px(5));
         let min_h=px(48);
         let rows_for=|nav:i32|((height-inset*2-nav+gap)/(min_h+gap)).max(1) as usize;
@@ -33,7 +57,7 @@ impl Layout {
         let available=(height-2*inset-reserve-(shown-1)*gap)/shown;
         let ideal=((width-2*inset)*2/3+px(18)).clamp(min_h,px(160));
         let card_h=available.min(ideal).max(1);
-        Self{width,height,card_h,inset,gap,radius:px(10),caption:px(24),rows,count:0,paged,stack:0,nav_h,right}
+        Self{width,height,card_h,inset,gap,radius:px(12),caption:px(25),rows,count:0,paged,stack:0,nav_h,right}
     }
     pub fn card(self,i:usize)->Box2 {
         // Reserve the same margin for the stack on every card so thumbnails
@@ -55,10 +79,11 @@ impl Layout {
     pub fn nav(self)->Option<Box2>{
         if !self.paged||self.count==0{return None;}
         let c=self.card(self.count-1);
-        let w=(c.w*2/3).max(1);
+        let w=(c.w*5/6).max(1);
         let y=c.y+c.h+self.gap;
         (y+self.nav_h<=self.height).then_some(Box2{x:c.x+(c.w-w)/2,y,w,h:self.nav_h})
     }
+    pub fn pages(self,count:usize)->Option<PageStrip>{self.nav().map(|bounds|PageStrip::new(bounds,count))}
     pub fn content_height(self)->i32{
         let bottom=self.nav().map(|n|n.y+n.h)
             .or_else(||self.count.checked_sub(1).map(|i|{let r=self.card(i);r.y+r.h}))
@@ -66,7 +91,8 @@ impl Layout {
         (bottom+self.inset.max(7)).clamp(1,self.height.max(1))
     }
     pub fn hit(self,x:i32,y:i32)->Option<usize>{
-        (0..self.count).find(|&i|self.card(i).hit(x,y)||(self.stack&(1<<i)!=0&&self.rear(i,3).hit(x,y)))
+        let inside=|box2:Box2|box2.hit(x,y)&&distance(box2.rect(),self.radius.min(box2.h/2) as f32,x as f32+0.5,y as f32+0.5)<=0.0;
+        (0..self.count).find(|&i|inside(self.card(i))||(self.stack&(1<<i)!=0&&inside(self.rear(i,3))))
     }
     pub unsafe fn apply(self,hwnd:HWND)->bool {
         let region=CreateRectRgn(0,0,0,0);
@@ -125,15 +151,15 @@ impl Panel {
                     });
                 }
                 if layout.stack&(1<<i)!=0 {
-                    rounded(data,w,h,layout.rear(i,3).rect(),radius,if look.dark{[66,56,51]}else{[166,153,145]},alpha);
-                    rounded(data,w,h,layout.rear(i,2).rect(),radius,if look.dark{[89,80,73]}else{[208,199,192]},alpha);
+                    rounded(data,w,h,layout.rear(i,3).rect(),radius,if look.dark{[70,59,49]}else{[168,151,136]},alpha);
+                    rounded(data,w,h,layout.rear(i,2).rect(),radius,if look.dark{[108,91,74]}else{[221,210,199]},alpha);
                 }
                 let active=look.active&(1<<i)!=0;
                 let edge=match (look.dark,active){
-                    (true,true)=>[241,183,115],(false,true)=>[202,126,61],
-                    (true,false)=>[94,83,75],(false,false)=>[196,185,178],
+                    (true,true)=>[215,177,132],(false,true)=>[185,134,86],
+                    (true,false)=>[113,97,81],(false,false)=>[223,215,208],
                 };
-                let tint:[u8;3]=if look.dark{[40,35,32]}else{[238,233,228]};
+                let tint:[u8;3]=if look.dark{[37,30,24]}else{[246,241,237]};
                 draw(data,w,h,b,|x,y|{
                     let d=distance(b,radius,x,y);
                     let coverage=(0.5-d).clamp(0.0,1.0);
@@ -153,7 +179,7 @@ impl Panel {
                 }
             }
             if let Some(nav)=layout.nav(){
-                rounded(data,w,h,nav.rect(),nav.h as f32/2.0,if look.dark{[48,40,37]}else{[241,234,228]},alpha);
+                rounded(data,w,h,nav.rect(),nav.h as f32/2.0,if look.dark{[39,33,29]}else{[247,241,236]},alpha);
             }
             self.look=Some(look);
         }
@@ -194,13 +220,21 @@ impl Panel {
                     let r=caption_box(layout,i);
                     draw_mask(data,w,h,mask,self.font,r,title,false,ink);
                 }
-                if let Some(nav)=layout.nav(){
-                    let segment=(nav.w/4).max(1);
+                if let Some(nav)=layout.pages(pages){
                     let muted=if look.dark{[161,154,148]}else{[125,114,103]};
-                    draw_mask(data,w,h,mask,self.font,Box2{w:segment,..nav},"‹",true,if page>0{ink}else{muted});
-                    draw_mask(data,w,h,mask,self.font,Box2{x:nav.x+nav.w-segment,w:segment,..nav},"›",true,if page+1<pages{ink}else{muted});
-                    draw_mask(data,w,h,mask,self.font,Box2{x:nav.x+segment,w:nav.w-2*segment,..nav},
-                        &format!("{} · {pages}",page+1),true,ink);
+                    draw_mask(data,w,h,mask,self.font,nav.previous,"‹",true,if page>0{ink}else{muted});
+                    draw_mask(data,w,h,mask,self.font,nav.next,"›",true,if page+1<pages{ink}else{muted});
+                    if nav.uses_dots(){
+                        let weight=(self.dpi as f32/96.0).clamp(0.75,3.0);
+                        for i in 0..pages{
+                            let (x,y)=nav.dot(i).center();
+                            let dot=if i==page{2.15}else{1.5}*weight;
+                            rounded(data,w,h,Rect{x:x as f32-dot,y:y as f32-dot,w:2.0*dot,h:2.0*dot},dot,
+                                if i==page{ink}else{muted},if i==page{245}else{174});
+                        }
+                    }else{
+                        draw_mask(data,w,h,mask,self.font,nav.middle,&format!("{}/{pages}",page+1),true,ink);
+                    }
                 }
             }
             self.layer.present(hwnd)
@@ -270,6 +304,29 @@ mod tests {
             let nav=l.nav().unwrap();
             assert!(nav.y+nav.h<=l.height);
             assert_eq!(l.hit(nav.x+nav.w/2,nav.y+nav.h/2),None);
+        }
+    }
+    #[test]
+    fn pager_uses_the_same_cells_for_painted_dots_and_page_selection() {
+        for dpi in [96,144,192] {
+            let mut layout=Layout::new(200*dpi as i32/96, 480*dpi as i32/96,dpi,12,3,13,false);
+            layout.count=3;
+            let strip=layout.pages(5).unwrap();
+            assert!(strip.uses_dots());
+            for i in 0..5 {
+                let (x,y)=strip.dot(i).center();
+                assert_eq!(strip.target(x,y,0),(i!=0).then_some(i));
+            }
+            let (x,y)=strip.previous.center();
+            assert_eq!(strip.target(x,y,0),None);
+            assert_eq!(strip.target(x,y,3),Some(2));
+            let (x,y)=strip.next.center();
+            assert_eq!(strip.target(x,y,4),None);
+            let (x,y)=layout.card(0).center();
+            assert_eq!(strip.target(x,y,0),None);
+            assert_eq!(layout.hit(x,y),Some(0));
+            let card=layout.card(0);
+            assert_eq!(layout.hit(card.x,card.y),None);
         }
     }
     #[test]

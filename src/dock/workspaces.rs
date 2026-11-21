@@ -163,6 +163,16 @@ impl Workspaces{
         self.detaching.clear();
     }
     pub fn active(&self,screen:&str)->Option<u64>{self.active.get(screen).copied()}
+    pub fn members(&self,id:u64)->Vec<HWND>{
+        self.groups.iter().find(|g|g.id==id)
+            .map(|g|g.members.iter().map(|member|member.key.handle()).collect()).unwrap_or_default()
+    }
+    pub unsafe fn remove_from(&mut self,id:u64,hwnd:HWND)->bool{
+        let Some(key)=Key::read(hwnd)else{return false;};
+        if !self.groups.iter().any(|g|g.id==id&&g.members.iter().any(|m|m.key==key)){return false;}
+        self.detach(key);
+        true
+    }
     pub fn title(id:u64)->String{format!("Nhóm {id}")}
     pub fn can_create(&self,screen:&str)->bool {
         self.groups.len()<20 && self.groups.iter().filter(|g|g.screen==screen).count()<4
