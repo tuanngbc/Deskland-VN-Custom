@@ -330,6 +330,34 @@ mod tests {
         }
     }
     #[test]
+    #[ignore = "native Win32 paired overlay positions; explicitly run in CI"]
+    fn native_slide_keeps_live_preview_host_aligned_without_activating_either_window() {
+        use std::{mem::zeroed,ptr::null_mut};
+        use windows_sys::Win32::UI::WindowsAndMessaging::*;
+        unsafe {
+            let make=|owner|CreateWindowExW(WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW|WS_EX_TOPMOST,wide("STATIC").as_ptr(),
+                null_mut(),WS_POPUP,14,20,155,250,owner,null_mut(),null_mut(),null_mut());
+            let stage=make(null_mut());
+            assert!(!stage.is_null());
+            let preview=make(stage);
+            assert!(!preview.is_null());
+            let foreground=GetForegroundWindow();
+            let rect=RECT{left:36,top:94,right:196,bottom:420};
+            for offset in [-6,-2,0] {
+                super::super::position_stage(stage,preview,rect,offset);
+                for window in [stage,preview] {
+                    let mut r:RECT=zeroed();
+                    assert_ne!(GetWindowRect(window,&mut r),0);
+                    assert_eq!((r.left,r.top,r.right,r.bottom),(rect.left+offset,rect.top,rect.right+offset,rect.bottom));
+                    assert_eq!(IsWindowVisible(window),0);
+                }
+                assert_eq!(GetWindow(preview,GW_OWNER),stage);
+            }
+            assert_eq!(GetForegroundWindow(),foreground);
+            DestroyWindow(preview);DestroyWindow(stage);
+        }
+    }
+    #[test]
     #[ignore = "native Win32 window region; explicitly run in CI"]
     fn native_region_clips_desktop_gaps_and_preserves_thumbnail_slots() {
         use std::ptr::null_mut;

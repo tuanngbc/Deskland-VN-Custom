@@ -169,7 +169,35 @@ impl StageEmphasis {
         keyboard.map(|i|(i,255)).or_else(||self.index.map(|i|(i,self.strength)))
     }
 }
-struct Stage { hwnd:HWND, rail:HWND, collapsed:bool, auto_hide:bool, preview_hwnd:HWND, preview_boxes:Vec<RECT>, preview_visible:bool, layered:bool, opacity:u32, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, emphasis:StageEmphasis, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews }
+struct Stage { hwnd:HWND, rail:HWND, collapsed:bool, auto_hide:bool, preview_hwnd:HWND, preview_boxes:Vec<RECT>, preview_visible:bool, layered:bool, opacity:u32, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, emphasis:StageEmphasis, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews,
+    resting:RECT, slide:Option<(std::time::Instant,i32)>, offset:i32 }
+impl Stage {
+    unsafe fn begin_slide(&mut self,reduced:bool){
+        let Some(layout)=self.layout else{return;};
+        if reduced{return;}
+        let dpi=windows_sys::Win32::UI::HiDpi::GetDpiForWindow(self.hwnd).clamp(72,288) as i32;
+        let travel=(6*dpi+48)/96;
+        self.offset=if layout.right{travel}else{-travel};
+        self.slide=Some((std::time::Instant::now(),self.offset));
+        if SetTimer(self.hwnd,STAGE_MOTION_TIMER,16,None)==0{self.offset=0;self.slide=None;}
+    }
+    unsafe fn position(&self){
+        position_stage(self.hwnd,self.preview_hwnd,self.resting,self.offset);
+    }
+}
+unsafe fn position_stage(hwnd:HWND,preview:HWND,rect:RECT,offset:i32){
+    let x=rect.left+offset;
+    let (width,height)=(rect.right-rect.left,rect.bottom-rect.top);
+    let flags=SWP_NOACTIVATE|SWP_NOZORDER|SWP_NOOWNERZORDER;
+    if !preview.is_null(){
+        let mut batch=BeginDeferWindowPos(2);
+        if !batch.is_null(){batch=DeferWindowPos(batch,hwnd,ptr::null_mut(),x,rect.top,width,height,flags);}
+        if !batch.is_null(){batch=DeferWindowPos(batch,preview,ptr::null_mut(),x,rect.top,width,height,flags);}
+        if !batch.is_null()&&EndDeferWindowPos(batch)!=0{return;}
+        SetWindowPos(preview,ptr::null_mut(),x,rect.top,width,height,flags);
+    }
+    SetWindowPos(hwnd,ptr::null_mut(),x,rect.top,width,height,flags);
+}
 #[derive(Default)]
 struct State { bars:Vec<Bar>, stages:Vec<Stage>, windows:Vec<AppWindow>, prefs:Preferences, screens:Vec<Screen>, suspended:bool, foreground:isize, workspaces:workspaces::Workspaces, material:Option<surface::Material>, appbars:appbar::Bars, reservation_failed:bool }
 thread_local! {
@@ -547,7 +575,8 @@ unsafe fn recreate(state:&mut State) {
                     SetWindowLongPtrW(stage_hwnd,GWL_EXSTYLE,GetWindowLongPtrW(stage_hwnd,GWL_EXSTYLE)& !(WS_EX_LAYERED as isize));
                     previews::style_destination(stage_hwnd);
                 }
-                state.stages.push(Stage{hwnd:stage_hwnd,rail:ptr::null_mut(),collapsed:false,auto_hide:false,preview_hwnd,preview_boxes:Vec::new(),preview_visible:false,layered,opacity:style.opacity,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),selected:None,layout:None,page:0,pages:1,hidden:true,hover:None,emphasis:StageEmphasis::default(),keyboard:None,previous_focus:0,previews:previews::Previews::default()});
+                state.stages.push(Stage{hwnd:stage_hwnd,rail:ptr::null_mut(),collapsed:false,auto_hide:false,preview_hwnd,preview_boxes:Vec::new(),preview_visible:false,layered,opacity:style.opacity,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),selected:None,layout:None,page:0,pages:1,hidden:true,hover:None,emphasis:StageEmphasis::default(),keyboard:None,previous_focus:0,previews:previews::Previews::default(),
+                    resting:r,slide:None,offset:0});
             } else { emit(Event::Error(format!("Create Stage window: {}",GetLastError()))); }
         }
     }
@@ -643,18 +672,20 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         layout.count=items.len();
         layout.height=layout.content_height();
         bounds.bottom=bounds.top+layout.height;
+        if topology || state.prefs.appearance.reduced_motion {
+            stage.slide=None;stage.offset=0;
+        }
+        stage.resting=bounds;
         let mut actual:RECT=mem::zeroed();
-        if GetWindowRect(stage.hwnd,&mut actual)==0 || !same_rect(bounds,actual){
-            for window in [stage.hwnd,stage.preview_hwnd]{
-                if !window.is_null(){
-                    SetWindowPos(window,ptr::null_mut(),bounds.left,bounds.top,layout.width,layout.height,SWP_NOACTIVATE|SWP_NOZORDER);
-                }
-            }
+        let shifted=RECT{left:bounds.left+stage.offset,right:bounds.right+stage.offset,..bounds};
+        if GetWindowRect(stage.hwnd,&mut actual)==0 || !same_rect(shifted,actual){
+            stage.position();
             changed=true;
         }
         layout.stack=(0..items.len()).filter(|&i|items[i].count>1).fold(0u8,|bits,i|bits|(1<<i));
         if stage.items!=items {
-            stage.hover=None;stage.emphasis=StageEmphasis::default();KillTimer(stage.hwnd,STAGE_MOTION_TIMER);
+            stage.hover=None;stage.emphasis=StageEmphasis::default();
+            if stage.slide.is_none(){KillTimer(stage.hwnd,STAGE_MOTION_TIMER);}
             stage.keyboard=stage.keyboard.and_then(|index|{
                 let previous=stage.items.get(index);
                 previous.and_then(|w|items.iter().position(|i|i.hwnd==w.hwnd))
@@ -694,7 +725,8 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let mut steps=[previews::PreviewStep::NotRun;8];
         if hide!=stage.hidden{ShowWindow(stage.hwnd,if hide{SW_HIDE}else{SW_SHOWNOACTIVATE});stage.hidden=hide;changed=true;}
         if hide {
-            if stage.emphasis.start.is_some(){KillTimer(stage.hwnd,STAGE_MOTION_TIMER);}
+            if stage.emphasis.start.is_some()||stage.slide.is_some(){KillTimer(stage.hwnd,STAGE_MOTION_TIMER);}
+            stage.slide=None;stage.offset=0;
             stage.hover=None;stage.emphasis=StageEmphasis::default();stage.keyboard=None;changed|=stage.previews.clear();
         }
         else if layout.width>0&&layout.height>0{
@@ -1261,7 +1293,12 @@ unsafe fn activate_stage(hwnd:HWND,i:usize){
     if let Some((item,group,display))=selected {
         if let Some(id)=group{
             let mut focus=None;
-            update_state(|state|{focus=state.workspaces.switch(&display,id);refresh(state,false);});
+            update_state(|state|{
+                focus=state.workspaces.switch(&display,id);
+                let reduced=state.prefs.appearance.reduced_motion;
+                if let Some(p)=state.stages.iter_mut().find(|p|p.hwnd==hwnd&&p.selected!=Some(id)){p.begin_slide(reduced);}
+                refresh(state,false);
+            });
             if let Some(hwnd)=focus{SetForegroundWindow(hwnd);}
         }else{activate(hwnd,&item);}
     }
@@ -1277,10 +1314,12 @@ unsafe fn turn_stage_page(hwnd:HWND,forward:bool)->bool{
 unsafe fn go_to_stage_page(hwnd:HWND,next:usize)->bool{
     let changed=STATE.with(|s|{
         let mut state=s.borrow_mut();
+        let reduced=state.prefs.appearance.reduced_motion;
         let Some(stage)=state.stages.iter_mut().find(|p|p.hwnd==hwnd) else{return false;};
         let next=next.min(stage.pages-1);
         if next==stage.page{return false;}
         stage.page=next;
+        stage.begin_slide(reduced);
         true
     });
     if changed{update_state(|state|refresh(state,false));InvalidateRect(hwnd,ptr::null(),0);}
@@ -1349,12 +1388,25 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let reduced=state.prefs.appearance.reduced_motion;
                 let speed=state.prefs.appearance.animation_speed;
                 let p=state.stages.iter_mut().find(|p|p.hwnd==hwnd&&!p.hidden)?;
-                let start=p.emphasis.start?;
-                let elapsed=if reduced{1.0}else{start.elapsed().as_secs_f32()*speed as f32/16.0};
-                Some(p.emphasis.tick(p.hover,elapsed))
+                let duration=|start:std::time::Instant,ms:f32|if reduced{1.0}else{(start.elapsed().as_secs_f32()*speed as f32*10.0/ms).clamp(0.0,1.0)};
+                let emphasis=p.emphasis.start.map(|s|p.emphasis.tick(p.hover,duration(s,160.0)));
+                let mut next_position=None;
+                if let Some((start,from))=p.slide {
+                    let t=duration(start,195.0);
+                    let offset=(from as f32*(1.0-t).powi(3)).round() as i32;
+                    if offset!=p.offset{
+                        p.offset=offset;
+                        next_position=Some((p.preview_hwnd,p.resting,offset));
+                    }
+                    if t>=1.0{p.slide=None;}
+                }
+                Some((emphasis.is_some(),emphasis==Some(true)||p.slide.is_some(),next_position))
             });
-            if step.is_some(){InvalidateRect(hwnd,ptr::null(),0);}
-            if step!=Some(true){KillTimer(hwnd,STAGE_MOTION_TIMER);}
+            if let Some((redraw,again,position))=step{
+                if let Some((preview,rect,offset))=position{position_stage(hwnd,preview,rect,offset);}
+                if redraw{InvalidateRect(hwnd,ptr::null(),0);}
+                if !again{KillTimer(hwnd,STAGE_MOTION_TIMER);}
+            }else{KillTimer(hwnd,STAGE_MOTION_TIMER);}
             0
         },
         WM_TIMER if w==STATUS_TIP_TIMER=>{KillTimer(hwnd,STATUS_TIP_TIMER);show_status_tip(hwnd);0},
@@ -1671,7 +1723,8 @@ unsafe extern "system" fn stage_rail_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->
         WM_MOUSEMOVE=>{
             let mut stage=ptr::null_mut();
             update_state(|s|{
-                if let Some(p)=s.stages.iter_mut().find(|p|p.rail==hwnd){p.collapsed=false;stage=p.hwnd;}
+                let reduced=s.prefs.appearance.reduced_motion;
+                if let Some(p)=s.stages.iter_mut().find(|p|p.rail==hwnd){p.collapsed=false;p.begin_slide(reduced);stage=p.hwnd;}
                 if !stage.is_null(){refresh(s,false);}
             });
             if !stage.is_null(){SetTimer(stage,HIDE_TIMER,850,None);}
