@@ -24,7 +24,33 @@ Values are medians across the three intervals per mode. Median *paired* changes:
 
 **`DOCK_IDLE_PERFORMANCE_SCOPED_PASS`:** no practically meaningful idle CPU, matched GPU engine or wallpaper frame-rate regression observed in these three pairs. The additional memory and handles are measurable; these short intervals do not establish a leak or long-run stability. This is a feature-cost comparison within one executable. A comparison against an older installed build remains separate. Normal trial Exit left no trial process; subsequent verification confirmed the installed EXE, profile and scoped Registry were unchanged. Raw host evidence stays private.
 
-**Still pending:** verified live Stage thumbnails, Utilities, sustained hover/magnification, matched fullscreen and covered workloads, toggle recovery on the owner desktop, and the four-hour isolated soak.
+**Still pending beyond the two idle comparisons:** Utilities, sustained hover/magnification, matched fullscreen and covered workloads, toggle recovery on the owner desktop, and the four-hour isolated soak.
+
+## Native Windows 11: three valid Stage idle pairs
+
+Measured [2330efd](https://github.com/tuanngbc/Deskland-VN-Custom/commit/2330efd3727054f05e3256ae52c3250e60b651c7) from [Windows CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44909008130) and the [verified x64 artifact](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44909008130/artifacts/14708789475). EXE SHA-256: `d9b265d80cb2b37e8db8e2f5a6eac1a9bbe4afc6390916ae7a6799c14c7d303d`.
+
+The same Beach panorama (seed 32600) ran with both wallpapers continuously revealed on the 96-DPI landscape and negative-coordinate portrait displays. Both modes kept floating Dock on both displays, with Utilities and magnification off, fixed time/weather, and Settings closed. One fixture process kept the same confirmed foreground tool window and three eligible source windows across all six intervals. The Stage intervals held six live DWM relationships, with no foreign relationships; controls held zero. Pair order was Stage-first, control-first, Stage-first. Each interval had a 15-second warm-up and 125 samples covering 126.74–126.87 seconds.
+
+| Metric | Wallpaper + Dock idle | Same + Stage (six live previews) | Median paired change (range) |
+| --- | ---: | ---: | ---: |
+| Deskland CPU, normalized | 0.692% | 0.635% | −0.051 pp (−0.092 to +0.024) |
+| DWM CPU, normalized | 0.510% | 0.510% | +0.0001 pp (−0.0005 to +0.0010) |
+| Deskland matched 3D engine | 3.011% | 3.014% | +0.006 pp (−0.006 to +0.007) |
+| DWM matched 3D engine | 1.171% | 1.173% | −0.001 pp (−0.003 to +0.007) |
+| Private memory | 262.13 MiB | 263.11 MiB | +0.58 MiB (−0.27 to +0.99) |
+| Working set | 116.88 MiB | 119.38 MiB | +2.50 MiB (+1.92 to +2.51) |
+| Process handles | 660 | 664 | +2 (+2 to +4) |
+| GDI objects | 55 | 67 | +12 (+12 to +12) |
+| USER objects | 32 | 36 | +4 (+3 to +4) |
+| Wallpaper client render-loop rate | 30.0 FPS | 30.0 FPS | 30.0 in all six intervals |
+| Median of wallpaper client window mean render times | 1.70 ms | 1.68 ms | — |
+
+The first two numerical columns summarize per-mode interval values; the last column computes changes within each pair first. CPU values are normalized to all logical processors. GPU values represent individual matched engines, not total system GPU. Wallpaper client counters do not measure scan-out or DWM presentation.
+
+Two intervals had wildcard PDH collection warnings (114 on pair 2 control; 123 on pair 3 Stage). No preflight warnings occurred. Across all six intervals, all DWM CPU timestamps were populated and all recorded Deskland/DWM GPU readings had status zero: nine complete Deskland series and 22 complete DWM series per interval, with the reported engines matched across the pairs. Warning records for other counter instances were not retained, so the precise source of the wildcard warnings is unknown. The report does not treat those unverified instances as data.
+
+**`STAGE_IDLE_PERFORMANCE_SCOPED_PASS`:** no practically meaningful CPU, matched 3D engine or wallpaper render-loop regression observed with six live previews of idle fixture windows. The extra working set and GUI resources were measurable. This does not establish performance during moving content, Stage interaction or long-running use. The trial exited and the installed executable, saved profile and scoped Registry matched before the production process restarted. Raw diagnostics stay private.
 
 ### Stage workload validation
 
@@ -53,7 +79,7 @@ The hidden-launch helper supplies Windows with an initial hidden show state, whi
 
 The fourth card had no live DWM relationship; the trace reported six fixture and zero other links. Two following performance attempts again reached six, but Windows did not activate the designated fixture anchor before the foreground check. Both were **INVALID with zero samples**. For Stage pairs, hold one fixture process across all intervals. The operator can focus the separate anchor or any test-owned source once before warm-up. The sampler binds to that exact HWND, validates its original geometry and process, and checks its shared focus transition log. A focus mismatch still rejects the measurement. Require the same executable, non-Stage Dock settings, source geometry, and the expected two links per verified fixture source across the two surfaces. Probe diagnostics must stay off during timed sampling.
 
-A subsequent owner-desktop interval with the shared, explicitly focused source reached 125 samples and zero counter warnings. **INVALID**: the foreground changed at zero-based sample 74 and two unrelated DWM links appeared intermittently. It did not proceed to the control interval and does not establish a Stage resource budget. The sampler now ends the interval promptly at a detected focus change while retaining the INVALID manifest and samples collected so far. The next comparison needs a quiet session without other interactive workloads; the existing validator still rejects any unrelated live links. The confirmed six-link source regression is independent of this measurement failure.
+A subsequent owner-desktop interval with the shared, explicitly focused source reached 125 samples and zero counter warnings. **INVALID**: the foreground changed at zero-based sample 74 and two unrelated DWM links appeared intermittently. It did not proceed to the control interval. The sampler now ends the interval promptly at a detected focus change while retaining the INVALID manifest and samples collected so far. The first attempt with 2330efd also reached six links but timed out before the sampler bound an owned foreground window; no samples were taken. A longer operator focus window in the private runner enabled the three matched pairs above without changing any sampling validity checks.
 
 [dddd812 Windows CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44885050608) passed the 100-toggle threshold: controller 451→451, Stage-only 451→453, Dock-only 453→453, both 453→451; 100 full controller restarts were 448→450. This is a CI process-handle regression check. The adaptive icon cache caps source storage at 5 MiB and per-surface stored raster variants at 384 KiB; a miss is cached, and there is no periodic icon fetch. [78bc892](https://github.com/tuanngbc/Deskland-VN-Custom/commit/78bc892538c6b4b66e9f81824f6b190e2d596bf4) retains the capacity of the bounded preview relationship maps while still unregistering stale links and querying current source dimensions. These bounds do not measure memory used by DWM, the Shell, or the GPU driver.
 
