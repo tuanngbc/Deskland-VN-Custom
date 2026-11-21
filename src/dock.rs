@@ -36,6 +36,7 @@ const WM_CONFIG:u32=WM_APP+51;
 const WM_ICON_CHANGED:u32=WM_APP+52;
 const MOTION_TIMER:usize=4;
 const HIDE_TIMER:usize=5;
+const WORKSPACE_TIMER:usize=6;
 const WM_DOCK_MOUSELEAVE:u32=0x02A3;
 const ITEM_WIDTH:i32=66;
 const HEIGHT:i32=70;
@@ -105,6 +106,7 @@ thread_local! {
     static OWNER:Cell<HWND>=const{Cell::new(ptr::null_mut())};
     static DIRTY:Cell<bool>=const{Cell::new(false)};
     static DISPLAY_DIRTY:Cell<bool>=const{Cell::new(false)};
+    static WORKSPACE_TIMER_ARMED:Cell<bool>=const{Cell::new(false)};
     static COMMANDS:RefCell<Option<mpsc::Receiver<Command>>>=const{RefCell::new(None)};
     static EVENTS:RefCell<Option<mpsc::Sender<Event>>>=const{RefCell::new(None)};
     static ICONS:RefCell<HashMap<(String,bool),HICON>>=RefCell::new(HashMap::new());
@@ -117,7 +119,18 @@ thread_local! {
 fn update_state(f:impl FnOnce(&mut State)) {
     let mut state=STATE.with(|s|s.take());
     f(&mut state);
+    let pending=state.workspaces.pending();
     STATE.with(|s|{s.replace(state);});
+    WORKSPACE_TIMER_ARMED.with(|armed| unsafe {
+        let control=CONTROL.with(Cell::get);
+        if control.is_null() || armed.get()==pending {return;}
+        if pending {
+            armed.set(SetTimer(control,WORKSPACE_TIMER,25,None)!=0);
+        } else {
+            KillTimer(control,WORKSPACE_TIMER);
+            armed.set(false);
+        }
+    });
 }
 fn emit(event:Event) {
     EVENTS.with(|s|{if let Some(tx)=s.borrow().as_ref(){let _=tx.send(event);}});
@@ -208,6 +221,12 @@ pub fn display_json() -> serde_json::Value {
 fn same_rect(a:RECT,b:RECT)->bool { a.left==b.left&&a.right==b.right&&a.top==b.top&&a.bottom==b.bottom }
 fn rect_intersects(a:RECT,b:RECT)->bool {
     a.left<b.right && b.left<a.right && a.top<b.bottom && b.top<a.bottom
+}
+unsafe fn stage_window_is_local(hwnd:HWND,bounds:RECT)->bool {
+    let hmon=MonitorFromWindow(hwnd,MONITOR_DEFAULTTONEAREST);
+    let mut info:MONITORINFO=mem::zeroed();
+    info.cbSize=mem::size_of::<MONITORINFO>() as u32;
+    !hmon.is_null() && GetMonitorInfoW(hmon,&mut info)!=0 && same_rect(bounds,info.rcMonitor)
 }
 fn basename(path:&str)->String {
     path.rsplit(['\\','/']).next().unwrap_or(path).trim_end_matches(".exe").to_string()
@@ -319,8 +338,6 @@ unsafe fn recreate(state:&mut State) {
         if !keep { DestroyWindow(b.hwnd); }
         keep
     });
-    let stage_enabled_ids=stage_targets.iter().map(|&i|screens[i].id.clone()).collect();
-    state.workspaces.restore_offscreen(&stage_enabled_ids);
     state.stages.retain_mut(|s| {
         let keep = stage_targets.iter().any(|&i| screens[i].id==s.display&&same_rect(screens[i].bounds, s.bounds));
         if !keep { s.previews.clear();DestroyWindow(s.hwnd); }
@@ -353,6 +370,8 @@ unsafe fn recreate(state:&mut State) {
             } else { emit(Event::Error(format!("Create Stage window: {}",GetLastError()))); }
         }
     }
+    let active_outputs=state.stages.iter().map(|stage|stage.display.clone()).collect();
+    state.workspaces.restore_offscreen(&active_outputs);
 }
 unsafe fn refresh(state:&mut State, topology:bool) {
     if topology || state.screens.is_empty() { state.screens = displays(); }
@@ -630,7 +649,7 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
         let stage=state.stages.iter().find(|p|p.hwnd==hwnd)?;
         let i=previews::slot_at(area.right,area.bottom,x,y,stage.items.len(),stage.gap)?;
         let item=stage.items.get(i)?;
-        let local=state.windows.iter().any(|w|w.hwnd==item.hwnd&&rect_intersects(w.rect,stage.bounds));
+        let local=stage_window_is_local(item.hwnd,stage.bounds);
         Some((item.hwnd,stage.groups.get(i).copied().flatten(),stage.display.clone(),stage.selected,local,state.workspaces.can_create(&stage.display)))
     });
     let Some((item,group,display,current,local,can_create))=card else{return;};
@@ -644,8 +663,13 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
     add(3,"Tách cửa sổ đại diện khỏi nhóm",group.is_some());
     add(4,"Giải tán nhóm và khôi phục cửa sổ",group.is_some());
     let mut point:POINT=mem::zeroed();GetCursorPos(&mut point);
+    // A no-activate tool window needs a temporary foreground owner while its
+    // native menu is open, so Escape and clicks outside dismiss the menu.
+    let previous=GetForegroundWindow();
+    SetForegroundWindow(hwnd);
     let result=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,point.x,point.y,0,hwnd,ptr::null()) as usize;
     DestroyMenu(menu);
+    if GetForegroundWindow()==hwnd && IsWindow(previous)!=0 {SetForegroundWindow(previous);}
     if result==0{return;}
     update_state(|state|{
         // The menu can run a nested loop. Revalidate the original source and
@@ -654,7 +678,7 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
         let Some(i)=stage.items.iter().position(|entry|entry.hwnd==item)else{return;};
         if stage.groups[i]!=group{return;}
         let present=state.windows.iter().any(|w|w.hwnd==item);
-        let still_local=present && state.windows.iter().any(|w|w.hwnd==item&&rect_intersects(w.rect,stage.bounds));
+        let still_local=present && stage_window_is_local(item,stage.bounds);
         match result{
             1 if still_local&&group.is_none()=>{state.workspaces.create(&display,item);}
             2 if still_local&&group.is_none()&&current==stage.selected=>state.workspaces.add(&display,item),
@@ -728,6 +752,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_ERASEBKGND=>1,
         WM_PAINT=>{paint(hwnd);0},
         WM_MOUSEACTIVATE=>MA_NOACTIVATE as LRESULT,
+        WM_TIMER if w==WORKSPACE_TIMER=>{update_state(|state|{state.workspaces.advance();});0},
         WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
         WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_DPICHANGED=>{DISPLAY_DIRTY.with(|d|d.set(true));queue_refresh();0},
         WM_MOUSEMOVE=>{
@@ -957,7 +982,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         let mut msg:MSG=mem::zeroed();
         while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0{TranslateMessage(&msg);DispatchMessageW(&msg);}
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
-        update_state(|s|{s.workspaces.restore_offscreen(&HashSet::new());for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){b.previews.clear();DestroyWindow(b.hwnd);}});
+        update_state(|s|{s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){b.previews.clear();DestroyWindow(b.hwnd);}});
         ICONS.with(|c|{for (_,icon) in c.borrow_mut().drain(){if !icon.is_null(){DestroyIcon(icon);}}});
         SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
         CONTROL.with(|c|c.set(ptr::null_mut()));DestroyWindow(control);

@@ -36,8 +36,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::runtime::tests::native_startup_never_synchronously_reads_own_settings_title -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --release dock::workspaces::tests::native_stage_switch_restores_placement_and_ignores_unmanaged_windows -- --ignored --exact --nocapture --test-threads=1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($attempt in 1..3) {
+            cargo test --release dock::workspaces::tests::native_stage_switch_restores_placement_and_ignores_unmanaged_windows -- --ignored --exact --nocapture --test-threads=1
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
           cargo test --release integration_tests::native_explorer_restart_queues_recovery_without_settings_writes -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # Kiểm tra SPI_SET tắt + SPI_GET xác nhận trên Windows thật. Runner

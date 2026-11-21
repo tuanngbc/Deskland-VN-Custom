@@ -16,7 +16,11 @@ impl Key{
     fn handle(self)->HWND{self.hwnd as HWND}
     unsafe fn live(self)->bool{Self::read(self.handle())==Some(self)&&IsWindow(self.handle())!=0}
 }
-struct Hidden { prior: WINDOWPLACEMENT, observed: bool, restoring: Option<Instant> }
+const TRANSITION_LIMIT: Duration = Duration::from_millis(1200);
+
+#[derive(Clone, Copy)]
+enum Phase { Minimizing(Instant), Hidden, Restoring(Instant) }
+struct Hidden { prior: WINDOWPLACEMENT, phase: Phase, want_hidden: bool }
 struct Member { key: Key, hidden: Option<Hidden> }
 
 unsafe fn placement(hwnd: HWND) -> Option<WINDOWPLACEMENT> {
@@ -29,72 +33,134 @@ unsafe fn request(hwnd: HWND, mut value: WINDOWPLACEMENT, command: i32) -> bool 
     value.showCmd = command as u32;
     SetWindowPlacement(hwnd, &value) != 0
 }
-impl Member{
-    unsafe fn observe(&mut self) {
-        let Some(hidden) = self.hidden.as_mut() else { return; };
-        let iconic = IsIconic(self.key.handle()) != 0;
-        if let Some(since) = hidden.restoring {
-            if iconic { hidden.observed = true; }
-            else if hidden.observed || since.elapsed() >= Duration::from_millis(250) {
+fn restore_command(prior: &WINDOWPLACEMENT) -> i32 {
+    if prior.showCmd == SW_SHOWMAXIMIZED as u32 { SW_SHOWMAXIMIZED } else { SW_SHOWNOACTIVATE }
+}
+impl Member {
+    /// Only arm the short transition timer while a request is outstanding.
+    /// A restore is issued *after* the target window acknowledges minimize.
+    /// Posting both up front can leave the final state dependent on delivery.
+    unsafe fn advance(&mut self) -> bool {
+        let hwnd = self.key.handle();
+        if !self.key.live() { self.hidden = None; return false; }
+        let Some(state) = self.hidden.as_mut() else { return false; };
+        let iconic = IsIconic(hwnd) != 0;
+        match state.phase {
+            Phase::Minimizing(since) if !iconic => {
+                if since.elapsed() < TRANSITION_LIMIT { return true; }
+                if !state.want_hidden {
+                    // Last chance for an unresponsive owner; ordinary paths
+                    // restore only after IsIconic confirms the minimize.
+                    request(hwnd, state.prior, restore_command(&state.prior));
+                }
                 self.hidden = None;
+                return false;
             }
-        } else if iconic {
-            hidden.observed = true;
-        } else if hidden.observed {
-            // Once a user or the app has reopened it we no longer own the state.
-            self.hidden = None;
+            Phase::Minimizing(_) => state.phase = Phase::Hidden,
+            Phase::Restoring(since) => {
+                if iconic && since.elapsed() < TRANSITION_LIMIT { return true; }
+                let rehide = state.want_hidden && !iconic;
+                if iconic {
+                    // Keep ownership so the next explicit switch/Exit can
+                    // retry, but do not keep a fast timer on a hung HWND.
+                    state.phase = Phase::Hidden;
+                    return false;
+                }
+                self.hidden = None;
+                if rehide { self.hide(); }
+                return rehide && self.hidden.is_some();
+            }
+            Phase::Hidden if !iconic => {
+                // A manual reopen releases our ownership. Do not re-minimize
+                // the window on a passive desktop refresh.
+                self.hidden = None;
+                return false;
+            }
+            Phase::Hidden => {}
+        }
+        if state.want_hidden { return false; }
+        if request(hwnd, state.prior, restore_command(&state.prior)) {
+            state.phase = Phase::Restoring(Instant::now());
+            true
+        } else {
+            false
         }
     }
-    unsafe fn reveal(&mut self, leaving: bool) -> bool {
-        if !self.key.live() { return false; }
-        let Some(hidden) = self.hidden.as_mut() else { return false; };
-        if hidden.restoring.is_some() { return true; }
-        if hidden.observed && IsIconic(self.key.handle()) == 0 {
-            self.hidden = None;
-            return false;
-        }
-        let command = if hidden.prior.showCmd == SW_SHOWMAXIMIZED as u32 {
-            SW_SHOWMAXIMIZED
-        } else {
-            SW_SHOWNOACTIVATE
-        };
-        // Post through the same placement path even when the minimize has not
-        // been processed. Testing IsIconic alone loses rapid switch/exit races.
-        if !request(self.key.handle(), hidden.prior, command) { return false; }
-        hidden.restoring = Some(Instant::now());
-        if leaving { self.hidden = None; }
-        true
+
+    unsafe fn reveal(&mut self) -> bool {
+        let Some(state) = self.hidden.as_mut() else { return false; };
+        state.want_hidden = false;
+        self.advance();
+        self.hidden.is_some()
     }
     unsafe fn hide(&mut self) {
         let hwnd = self.key.handle();
         if !self.key.live() || IsWindowVisible(hwnd) == 0 { return; }
-        let prior = match self.hidden.as_ref() {
-            Some(hidden) if hidden.restoring.is_some() => Some(hidden.prior),
-            Some(_) => return,
-            None if IsIconic(hwnd) != 0 => return,
-            None => placement(hwnd),
-        };
-        if let Some(prior) = prior {
+        if let Some(state) = self.hidden.as_mut() {
+            state.want_hidden = true;
+            self.advance();
+            return;
+        }
+        if IsIconic(hwnd) != 0 { return; }
+        if let Some(prior) = placement(hwnd) {
             if request(hwnd, prior, SW_SHOWMINNOACTIVE) {
-                self.hidden = Some(Hidden { prior, observed: false, restoring: None });
+                self.hidden = Some(Hidden { prior, phase: Phase::Minimizing(Instant::now()), want_hidden: true });
+            }
+        }
+    }
+    fn pending(&self) -> bool {
+        self.hidden.as_ref().is_some_and(|state| !matches!(state.phase, Phase::Hidden))
+    }
+    unsafe fn request_final_restore(&self) {
+        if let Some(state) = &self.hidden {
+            if self.key.live() {
+                request(self.key.handle(), state.prior, restore_command(&state.prior));
             }
         }
     }
 }
 struct Group{id:u64,screen:String,members:Vec<Member>}
 #[derive(Default)]
-pub struct Workspaces{groups:Vec<Group>,active:HashMap<String,u64>,sequence:u64}
+pub struct Workspaces{groups:Vec<Group>,active:HashMap<String,u64>,sequence:u64, detaching:Vec<Member>}
 impl Workspaces{
     pub unsafe fn prune(&mut self){
+        self.advance();
         self.groups.retain_mut(|g|{
-            g.members.retain_mut(|m| {
-                if !m.key.live() { return false; }
-                m.observe();
-                true
-            });
+            g.members.retain(|m|m.key.live());
             !g.members.is_empty()
         });
         self.active.retain(|screen,id|self.groups.iter().any(|g|g.id==*id&&g.screen==*screen));
+    }
+    pub fn pending(&self) -> bool {
+        self.groups.iter().flat_map(|group| &group.members).chain(&self.detaching).any(Member::pending)
+    }
+    pub unsafe fn advance(&mut self) -> bool {
+        for group in &mut self.groups {
+            for member in &mut group.members {
+                if member.pending() || member.hidden.as_ref().is_some_and(|state|state.want_hidden) {
+                    member.advance();
+                }
+            }
+        }
+        self.detaching.retain_mut(|member| {
+            member.advance();
+            member.pending()
+        });
+        self.pending()
+    }
+    pub unsafe fn recover_for_exit(&mut self) {
+        self.restore_offscreen(&HashSet::new());
+        let start = Instant::now();
+        while self.advance() && start.elapsed() < Duration::from_millis(400) {
+            // Only on final shutdown, and only while a foreign placement
+            // request is in flight. No UI-thread wait on the target process.
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        for member in self.groups.iter().flat_map(|group|&group.members).chain(&self.detaching) {
+            member.request_final_restore();
+        }
+        self.groups.clear();
+        self.detaching.clear();
     }
     pub fn active(&self,screen:&str)->Option<u64>{self.active.get(screen).copied()}
     pub fn title(id:u64)->String{format!("Nhóm {id}")}
@@ -104,7 +170,8 @@ impl Workspaces{
     pub unsafe fn create(&mut self,screen:&str,hwnd:HWND)->Option<u64>{
         if !self.can_create(screen){return None;}
         let key=Key::read(hwnd)?;
-        self.detach(key);
+        if self.detaching.iter().any(|m| m.key==key)
+            || self.groups.iter().any(|g| g.members.iter().any(|m| m.key==key)) {return None;}
         self.sequence=self.sequence.wrapping_add(1).max(1);
         let id=self.sequence;
         self.groups.push(Group{id,screen:screen.into(),members:vec![Member{key,hidden:None}]});
@@ -116,7 +183,8 @@ impl Workspaces{
         let Some(key)=Key::read(hwnd)else{return;};
         if self.groups.iter().any(|g|g.id==id&&g.members.iter().any(|m|m.key==key)){return;}
         if !self.groups.iter().any(|g|g.id==id&&g.members.len()<12){return;}
-        self.detach(key);
+        if self.detaching.iter().any(|m| m.key==key)
+            || self.groups.iter().any(|g| g.members.iter().any(|m| m.key==key)) {return;}
         if let Some(g)=self.groups.iter_mut().find(|g|g.id==id){
             g.members.push(Member{key,hidden:None});
         }
@@ -124,7 +192,9 @@ impl Workspaces{
     unsafe fn detach(&mut self,key:Key){
         for g in &mut self.groups{
             if let Some(i)=g.members.iter().position(|m|m.key==key){
-                g.members.remove(i).reveal(true);
+                let mut member=g.members.remove(i);
+                member.reveal();
+                if member.pending(){self.detaching.push(member);}
             }
         }
         self.prune();
@@ -133,11 +203,12 @@ impl Workspaces{
         if let Some(key)=Key::read(hwnd){self.detach(key);}
     }
     pub unsafe fn dissolve(&mut self,id:u64){
-        self.groups.retain_mut(|g|{
-            if g.id!=id{return true;}
-            for member in &mut g.members{member.reveal(true);}
-            false
-        });
+        if let Some(i)=self.groups.iter().position(|g|g.id==id){
+            for mut member in self.groups.remove(i).members {
+                member.reveal();
+                if member.pending(){self.detaching.push(member);}
+            }
+        }
         self.active.retain(|_,active|*active!=id);
     }
     pub unsafe fn switch(&mut self,screen:&str,id:u64)->Option<HWND>{
@@ -147,7 +218,7 @@ impl Workspaces{
         for g in self.groups.iter_mut().filter(|g|g.screen==screen){
             for member in &mut g.members{
                 if g.id==id{
-                    let will_activate=member.reveal(false);
+                    let will_activate=member.reveal();
                     if focus.is_none()&&member.key.live()&&(will_activate||IsIconic(member.key.handle())==0){
                         focus=Some(member.key.handle());
                     }
@@ -159,7 +230,7 @@ impl Workspaces{
     pub unsafe fn restore_offscreen(&mut self,enabled:&HashSet<String>){
         for group in &mut self.groups{
             if !enabled.contains(&group.screen){
-                for member in &mut group.members{member.reveal(true);}
+                for member in &mut group.members{member.reveal();}
             }
         }
         self.active.retain(|screen,_|enabled.contains(screen));
@@ -189,7 +260,7 @@ impl Workspaces{
 }
 impl Drop for Workspaces{
     fn drop(&mut self){
-        unsafe{self.restore_offscreen(&HashSet::new());}
+        unsafe{self.recover_for_exit();}
     }
 }
 
@@ -296,15 +367,15 @@ mod tests {
             assert_ne!(PostMessageW(normal, ACK, 1, 0), 0);
             std::fs::write(&fixture.1, b"resume").unwrap();
             until(|| GetPropW(normal, wide(ACK_PROP).as_ptr()) as usize == 1);
-            assert_eq!(IsIconic(normal), 0, "quick Stage OFF leaked a minimize");
+            until(|| !model.advance() && IsIconic(normal) == 0 && IsZoomed(maximized) != 0);
             assert_ne!(IsZoomed(maximized), 0);
             assert_ne!(IsIconic(already_minimized), 0);
 
             model.switch("primary", b);
-            until(|| IsIconic(normal) != 0 && IsIconic(maximized) != 0);
+            until(|| {model.advance(); IsIconic(normal) != 0 && IsIconic(maximized) != 0});
             assert_eq!(IsIconic(other_display), 0);
             model.switch("primary", a);
-            until(|| IsIconic(normal) == 0 && IsZoomed(maximized) != 0 && IsIconic(second_group) != 0);
+            until(|| {model.advance(); IsIconic(normal) == 0 && IsZoomed(maximized) != 0 && IsIconic(second_group) != 0});
             assert!(super::super::same_rect(placement(normal).unwrap().rcNormalPosition, original));
             assert!(super::super::same_rect(placement(maximized).unwrap().rcNormalPosition, max_original));
             assert_eq!(super::super::MonitorFromWindow(normal, super::super::MONITOR_DEFAULTTONEAREST), monitor);
@@ -314,7 +385,11 @@ mod tests {
             ShowWindowAsync(second_group, SW_SHOWNOACTIVATE);
             until(|| IsIconic(second_group) == 0);
             model.prune();
+            assert_eq!(IsIconic(second_group), 0);
+            model.switch("primary", b);
+            until(|| { model.advance(); IsIconic(normal) != 0 && IsIconic(maximized) != 0 });
             drop(model);
+            until(|| IsIconic(normal) == 0 && IsZoomed(maximized) != 0);
             assert_eq!(IsIconic(second_group), 0);
             assert_ne!(IsIconic(already_minimized), 0);
         }
