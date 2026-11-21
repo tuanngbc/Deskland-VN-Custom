@@ -3,11 +3,33 @@
 use std::{path::{Path, PathBuf}, sync::OnceLock};
 
 static DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
+static BENCHMARK: OnceLock<bool> = OnceLock::new();
 const MARKER: &str = ".tuanpc-desk-trial";
 const MARKER_CONTENT: &str = "tuanpc-desk isolated native smoke profile v1\n";
 
 pub fn active() -> bool { DIRECTORY.get().is_some() }
 pub fn data_dir() -> Option<&'static Path> { DIRECTORY.get().map(PathBuf::as_path) }
+
+pub fn benchmark_active() -> bool {
+    let Some(dir) = data_dir() else { return false; };
+    *BENCHMARK.get_or_init(|| std::fs::read_to_string(dir.join("dock-benchmark.enable"))
+        .is_ok_and(|flag| flag.trim() == "tuanpc-desk dock benchmark v1"))
+}
+
+pub fn benchmark_coverage(screens: &[windows_sys::Win32::Foundation::RECT], covered: &[bool]) {
+    if !benchmark_active() { return; }
+    thread_local! { static LAST: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) }; }
+    let mut outputs = screens.iter().zip(covered).map(|(r, c)| (r.left, r.top, r.right, r.bottom, *c)).collect::<Vec<_>>();
+    outputs.sort_unstable();
+    let line = outputs.into_iter().map(|(l,t,r,b,c)| format!("{l},{t},{r},{b}:{}", u8::from(c)))
+        .collect::<Vec<_>>().join(";");
+    LAST.with(|last| {
+        if last.borrow().as_ref() != Some(&line) {
+            crate::log!("DOCK_BENCH_COVERAGE {line}");
+            last.replace(Some(line));
+        }
+    });
+}
 
 fn validate(path: &Path, production: &Path) -> Result<(), String> {
     if !path.is_absolute() || path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {

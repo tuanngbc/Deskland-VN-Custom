@@ -23,7 +23,7 @@ thread_local! {static CAPTURE:RefCell<Option<Capture>>=const{RefCell::new(None)}
 
 pub fn start() {
     let Some(profile)=crate::trial::data_dir() else{return;};
-    if fs::read_to_string(profile.join("dock-benchmark.enable")).ok().is_none_or(|flag|flag.trim()!="tuanpc-desk dock benchmark v1"){return;}
+    if !crate::trial::benchmark_active(){return;}
     let stamp=SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
     let path=profile.join(format!("dock-frames-{}-{stamp}.csv",std::process::id()));
     CAPTURE.with(|slot|slot.replace(Some(Capture{path,started:Instant::now(),last:HashMap::new(),

@@ -1651,6 +1651,7 @@ impl App {
         let own: Vec<HWND> = self.walls.iter().map(|w| w.hwnd).collect();
         let screens:Vec<RECT>=self.walls.iter().map(|w|w.screen).collect();
         let covered=desktop::covered_monitors(&screens,&own);
+        trial::benchmark_coverage(&screens, &covered);
         for (wp,p) in self.walls.iter_mut().zip(covered) {
             if p != wp.paused {
                 wp.paused = p;
