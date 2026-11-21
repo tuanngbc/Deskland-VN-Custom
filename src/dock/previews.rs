@@ -8,7 +8,7 @@ pub struct Link { raw:isize, pid:u32, area:RECT }
 impl Drop for Link {fn drop(&mut self){unsafe{DwmUnregisterThumbnail(self.raw);}}}
 
 #[derive(Default)]
-pub struct Previews { links:HashMap<usize,Link> }
+pub struct Previews { links:HashMap<usize,Link>, next:HashMap<usize,Link> }
 impl Previews {
     pub fn clear(&mut self)->bool{
         let changed=!self.links.is_empty();self.links.clear();changed
@@ -20,7 +20,6 @@ impl Previews {
     }
     pub fn includes(&self,hwnd:HWND)->bool{self.links.contains_key(&(hwnd as usize))}
     pub unsafe fn update(&mut self,dst:HWND,items:&[Item],layout:Layout)->bool{
-        let mut next=HashMap::new();
         let mut changed=false;
         for (i,item) in items.iter().enumerate(){
             let source=item.hwnd;
@@ -52,10 +51,13 @@ impl Previews {
                 link.area=area;
                 changed=true;
             }
-            next.insert(key,link);
+            self.next.insert(key,link);
         }
         changed|=!self.links.is_empty();
-        self.links=next;
+        // Retain the capacity of the two small live-card maps across window
+        // events. Clearing the old entries still unregisters stale links.
+        self.links.clear();
+        std::mem::swap(&mut self.links,&mut self.next);
         changed
     }
 }
