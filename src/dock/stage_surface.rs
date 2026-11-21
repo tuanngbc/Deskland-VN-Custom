@@ -86,7 +86,7 @@ impl Layout {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Look {pub dark:bool,pub layout:Layout,pub active:u8,pub hover:Option<usize>,pub alpha:Option<u8>}
+pub(super) struct Look {pub dark:bool,pub layout:Layout,pub active:u8,pub alpha:Option<u8>}
 
 pub(super) struct Panel {layer:Layer,look:Option<Look>,static_pixels:Vec<u8>,mask:Option<Layer>,font:HFONT,dpi:u32}
 impl Panel {
@@ -99,7 +99,7 @@ impl Panel {
     }
     pub fn geometry(&self)->(i32,i32,u32){(self.layer.size.0,self.layer.size.1,self.dpi)}
     pub fn font(&self)->HFONT{self.font}
-    pub unsafe fn paint(&mut self,target:HDC,look:Look,items:&[Item],atlas:&Atlas,ready:&[bool],layered:Option<(HWND,&[String],usize,usize)>)->bool {
+    pub unsafe fn paint(&mut self,target:HDC,look:Look,items:&[Item],atlas:&Atlas,ready:&[bool],emphasis:Option<(usize,u8)>,layered:Option<(HWND,&[String],usize,usize)>)->bool {
         let (w,h)=self.layer.size;
         let layout=look.layout;
         if self.look!=Some(look){
@@ -123,11 +123,9 @@ impl Panel {
                     rounded(data,w,h,layout.rear(i,2).rect(),radius,if look.dark{[89,80,73]}else{[208,199,192]},alpha);
                 }
                 let active=look.active&(1<<i)!=0;
-                let hover=look.hover==Some(i);
-                let edge=match (look.dark,active,hover){
-                    (true,true,_)=>[241,183,115],(false,true,_)=>[202,126,61],
-                    (true,false,true)=>[182,161,145],(false,false,true)=>[173,141,112],
-                    (true,false,false)=>[94,83,75],(false,false,false)=>[196,185,178],
+                let edge=match (look.dark,active){
+                    (true,true)=>[241,183,115],(false,true)=>[202,126,61],
+                    (true,false)=>[94,83,75],(false,false)=>[196,185,178],
                 };
                 let tint:[u8;3]=if look.dark{[40,35,32]}else{[238,233,228]};
                 draw(data,w,h,b,|x,y|{
@@ -155,6 +153,16 @@ impl Panel {
         }
         let data=self.layer.pixels();
         data.copy_from_slice(&self.static_pixels);
+        if let Some((i,strength))=emphasis.filter(|&(i,a)|i<layout.count&&a>0){
+            let b=layout.card(i).rect();
+            let radius=(layout.radius as f32).min(b.h/2.0);
+            let tint=if look.dark{[241,216,192]}else{[201,144,96]};
+            draw(data,w,h,b,|x,y|{
+                let d=distance(b,radius,x,y);
+                let coverage=(0.5-d).clamp(0.0,1.0)*(d+2.0).clamp(0.0,1.0);
+                Some((tint,coverage*0.82*strength as f32))
+            });
+        }
         let tint=if look.dark{[222,219,216]}else{[64,59,53]};
         for (i,item) in items.iter().enumerate(){
             let c=layout.card(i);
@@ -284,6 +292,34 @@ mod tests {
             assert_ne!(PtInRegion(rgn,nav.x+nav.w/2,nav.y+nav.h/2),0);
             DeleteObject(rgn);
             DestroyWindow(hwnd);
+        }
+    }
+    #[test]
+    #[ignore = "native layered Win32 presentation; explicitly run in CI"]
+    fn native_stage_surface_submits_premultiplied_cards_with_desktop_gaps() {
+        use std::ptr::null_mut;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW,DestroyWindow,WS_EX_LAYERED,WS_POPUP};
+        unsafe {
+            let w=164;let h=400;
+            let hwnd=CreateWindowExW(WS_EX_LAYERED,wide("STATIC").as_ptr(),null_mut(),WS_POPUP,0,0,w,h,
+                null_mut(),null_mut(),null_mut(),null_mut());
+            assert!(!hwnd.is_null());
+            let mut l=Layout::new(w,h,96,16,3,8,false);
+            l.count=3;l.stack=0b010;
+            let items=(0..3).map(|_|Item{path:String::new(),title:"Fixture".into(),hwnd:null_mut(),count:1,pinned:false}).collect::<Vec<_>>();
+            let labels=vec!["Fixture".to_owned();3];
+            let mut panel=Panel::new(w,h,96).unwrap();
+            let layer=Look{dark:true,layout:l,active:1,alpha:Some(155)};
+            let presented=panel.paint(null_mut(),layer,&items,&Atlas::new(),&[false,true,false],Some((0,200)),Some((hwnd,&labels,0,3)));
+            DestroyWindow(hwnd);
+            assert!(presented,"the isolated layered Stage surface must submit pixels successfully");
+            let pixels=panel.layer.pixels();
+            assert!(pixels.chunks_exact(4).all(|p|p[0]<=p[3]&&p[1]<=p[3]&&p[2]<=p[3]));
+            let alpha=|x,y|pixels[((y*w+x)*4+3) as usize];
+            let c=l.card(0);
+            assert_eq!(alpha(0,0),0);
+            assert_eq!(alpha(c.x+c.w/2,c.y+c.h+9),0);
+            assert!((155..255).contains(&alpha(c.x+c.w/2,c.y+c.h/2)));
         }
     }
 }

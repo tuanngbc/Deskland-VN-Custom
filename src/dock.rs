@@ -40,6 +40,7 @@ const WM_ICON_CHANGED:u32=WM_APP+52;
 const MOTION_TIMER:usize=4;
 const HIDE_TIMER:usize=5;
 const WORKSPACE_TIMER:usize=6;
+const STAGE_MOTION_TIMER:usize=7;
 const WM_DOCK_MOUSELEAVE:u32=0x02A3;
 const ITEM_WIDTH:i32=66;
 const HEIGHT:i32=70;
@@ -100,7 +101,39 @@ impl Motion {
         unsettled
     }
 }
-struct Stage { hwnd:HWND, preview_hwnd:HWND, preview_boxes:Vec<RECT>, preview_visible:bool, layered:bool, opacity:u32, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews }
+#[derive(Default)]
+struct StageEmphasis {
+    index:Option<usize>,
+    strength:u8,
+    from:u8,
+    start:Option<std::time::Instant>,
+}
+impl StageEmphasis {
+    fn change(&mut self,hover:Option<usize>,reduced:bool)->bool{
+        if reduced {
+            self.index=hover;self.strength=if hover.is_some(){255}else{0};self.start=None;return false;
+        }
+        if let Some(i)=hover{
+            if self.index!=Some(i){self.strength=0;}
+            self.index=Some(i);
+        }
+        if self.index.is_none(){return false;}
+        self.from=self.strength;
+        self.start=Some(std::time::Instant::now());
+        true
+    }
+    fn tick(&mut self,hover:Option<usize>,elapsed:f32)->bool{
+        let t=elapsed.clamp(0.0,1.0);
+        let progress=1.0-(1.0-t).powi(3);
+        let goal=if hover.is_some(){255.0}else{0.0};
+        self.strength=(self.from as f32+(goal-self.from as f32)*progress).round() as u8;
+        if t>=1.0{self.start=None;self.index=hover;false}else{true}
+    }
+    fn highlight(&self,keyboard:Option<usize>)->Option<(usize,u8)>{
+        keyboard.map(|i|(i,255)).or_else(||self.index.map(|i|(i,self.strength)))
+    }
+}
+struct Stage { hwnd:HWND, preview_hwnd:HWND, preview_boxes:Vec<RECT>, preview_visible:bool, layered:bool, opacity:u32, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, emphasis:StageEmphasis, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews }
 #[derive(Default)]
 struct State { bars:Vec<Bar>, stages:Vec<Stage>, windows:Vec<AppWindow>, prefs:Preferences, screens:Vec<Screen>, suspended:bool, foreground:isize, workspaces:workspaces::Workspaces, material:Option<surface::Material> }
 thread_local! {
@@ -366,6 +399,7 @@ unsafe fn recreate(state:&mut State) {
         }else{emit(Event::Error(format!("Create Dock window: {}",GetLastError())));}
         }
         if stage_targets.contains(&i) && !state.stages.iter().any(|s|same_rect(s.bounds,screen.bounds)) {
+            let style=state.prefs.stage_style(&screen.id);
             let r=stage_rect(screen,style);
             let stage_hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|WS_EX_LAYERED,
                 class.as_ptr(),wide("tuanpc-desk Stage Manager").as_ptr(),WS_POPUP,
@@ -381,7 +415,7 @@ unsafe fn recreate(state:&mut State) {
                     SetWindowLongPtrW(stage_hwnd,GWL_EXSTYLE,GetWindowLongPtrW(stage_hwnd,GWL_EXSTYLE)& !(WS_EX_LAYERED as isize));
                     previews::style_destination(stage_hwnd);
                 }
-                state.stages.push(Stage{hwnd:stage_hwnd,preview_hwnd,preview_boxes:Vec::new(),preview_visible:false,layered,opacity:style.opacity,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),selected:None,layout:None,page:0,pages:1,hidden:true,hover:None,keyboard:None,previous_focus:0,previews:previews::Previews::default()});
+                state.stages.push(Stage{hwnd:stage_hwnd,preview_hwnd,preview_boxes:Vec::new(),preview_visible:false,layered,opacity:style.opacity,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),selected:None,layout:None,page:0,pages:1,hidden:true,hover:None,emphasis:StageEmphasis::default(),keyboard:None,previous_focus:0,previews:previews::Previews::default()});
             } else { emit(Event::Error(format!("Create Stage window: {}",GetLastError()))); }
         }
     }
@@ -397,11 +431,6 @@ unsafe fn refresh(state:&mut State, topology:bool) {
     }else{false};
     state.windows=if state.suspended||!state.prefs.any_enabled(){Vec::new()}else{windows()};
     recreate(state);
-    ATLAS.with(|a|{
-        let mut worker=a.borrow_mut();
-        if state.bars.is_empty(){worker.take();}
-        else if worker.is_none(){*worker=Some(icon_atlas::Worker::new(CONTROL.with(Cell::get)));}
-    });
     let foreground=GetForegroundWindow() as isize;let active_changed=foreground!=state.foreground;state.foreground=foreground;
     for b in &mut state.bars {
         let items=item_list(&state.windows,b.bounds,&state.prefs);
@@ -432,7 +461,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let style=state.prefs.stage_style(&screen.id);
         {
             let r=stage_rect(screen,style);let mut actual:RECT=mem::zeroed();
-                        if GetWindowRect(stage.hwnd,&mut actual)==0 || !same_rect(r,actual){
+            if GetWindowRect(stage.hwnd,&mut actual)==0 || !same_rect(r,actual){
                 SetWindowPos(stage.hwnd,ptr::null_mut(),r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_NOZORDER);
                 if !stage.preview_hwnd.is_null(){
                     SetWindowPos(stage.preview_hwnd,ptr::null_mut(),r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_NOZORDER);
@@ -458,7 +487,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         layout.count=items.len();
         layout.stack=(0..items.len()).filter(|&i|items[i].count>1).fold(0u8,|bits,i|bits|(1<<i));
         if stage.items!=items {
-            stage.hover=None;
+            stage.hover=None;stage.emphasis=StageEmphasis::default();KillTimer(stage.hwnd,STAGE_MOTION_TIMER);
             stage.keyboard=stage.keyboard.filter(|i|*i<items.len());
         }
         stage.items=items;stage.groups=groups;stage.selected=selected;
@@ -472,7 +501,10 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             .is_some_and(|w|covers_display("",w.rect,stage.bounds));
         let hide=stage.layout.is_none() || stage.items.is_empty() || state.suspended || foreground_fullscreen(stage.bounds) || local_fullscreen;
         if hide!=stage.hidden{ShowWindow(stage.hwnd,if hide{SW_HIDE}else{SW_SHOWNOACTIVATE});stage.hidden=hide;changed=true;}
-        if hide{stage.hover=None;stage.keyboard=None;changed|=stage.previews.clear();}
+        if hide {
+            if stage.emphasis.start.is_some(){KillTimer(stage.hwnd,STAGE_MOTION_TIMER);}
+            stage.hover=None;stage.emphasis=StageEmphasis::default();stage.keyboard=None;changed|=stage.previews.clear();
+        }
         else if area.right>0&&area.bottom>0{
             let host=if stage.preview_hwnd.is_null(){stage.hwnd}else{stage.preview_hwnd};
             changed|=stage.previews.update(host,&stage.items,layout);
@@ -492,6 +524,16 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         }
         if changed{InvalidateRect(stage.hwnd,ptr::null(),0);}
     }
+    // Pick at most one cacheful across both modules; otherwise icon-complete
+    // messages could continually evict and re-request visible icons.
+    ATLAS.with(|a|{
+        let mut worker=a.borrow_mut();
+        if state.bars.is_empty()&&state.stages.is_empty(){worker.take();return;}
+        let worker=worker.get_or_insert_with(||icon_atlas::Worker::new(CONTROL.with(Cell::get)));
+        let dock=state.bars.iter().filter(|b|!b.hidden).flat_map(|b|&b.items);
+        let stage=state.stages.iter().filter(|s|!s.hidden).flat_map(|s|&s.items);
+        worker.restrict_visible(dock.chain(stage));
+    });
 }
 unsafe fn fill(hdc:HDC,r:RECT,color:u32) {
     let brush=CreateSolidBrush(color);FillRect(hdc,&r,brush);DeleteObject(brush as HGDIOBJ);
@@ -550,7 +592,7 @@ unsafe fn paint(hwnd:HWND){
         let ready=stage.items.iter().map(|item|(stage.preview_hwnd.is_null()||stage.preview_visible)&&stage.previews.includes(item.hwnd)).collect::<Vec<_>>();
         let dpi=state.screens.iter().find(|s|s.id==stage.display).map_or(96,|s|s.dpi);
         let dark=state.material.is_none_or(|m|m.dark);
-        Some((stage.items.clone(),ready,stage.groups.clone(),stage.selected,stage.layout?,stage.page,stage.pages,state.foreground,dpi,dark,stage.keyboard.or(stage.hover),stage.layered,stage.opacity))
+        Some((stage.items.clone(),ready,stage.groups.clone(),stage.selected,stage.layout?,stage.page,stage.pages,state.foreground,dpi,dark,stage.emphasis.highlight(stage.keyboard),stage.layered,stage.opacity))
     });
     if let Some((items,ready,groups,active,layout,page,pages,foreground,dpi,dark,hover,layered,opacity))=stage {
         let key=hwnd as usize;
@@ -566,10 +608,10 @@ unsafe fn paint(hwnd:HWND){
             let name=if app.is_empty()||same_app{&item.title}else{&app};
             if groups[i].is_some(){format!("{name} · {}",item.count)}else{name.to_owned()}
         }).collect::<Vec<_>>();
-        let look=stage_surface::Look{dark,layout,active:active_mask,hover,alpha:layered.then_some((opacity*255/100) as u8)};
-        let rendered=panel.as_mut().is_some_and(|p|p.paint(dc,look,&items,&atlas,&ready,layered.then_some((hwnd,&labels[..],page,pages))));
+        let look=stage_surface::Look{dark,layout,active:active_mask,alpha:layered.then_some((opacity*255/100) as u8)};
+        if layered{EndPaint(hwnd,&ps);}
+        let rendered=panel.as_mut().is_some_and(|p|p.paint(dc,look,&items,&atlas,&ready,hover,layered.then_some((hwnd,&labels[..],page,pages))));
         if layered{
-            EndPaint(hwnd,&ps);
             if rendered{
                 if let Some(panel)=panel{STAGE_SURFACES.with(|s|s.borrow_mut().insert(key,panel));}
             }else{
@@ -819,9 +861,17 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_DOCK_MOUSELEAVE=>{
             let stage=STATE.with(|s|{
                 let mut state=s.borrow_mut();
-                state.stages.iter_mut().find(|p|p.hwnd==hwnd).map(|p|p.hover.take().is_some())
+                let reduced=state.prefs.appearance.reduced_motion;
+                state.stages.iter_mut().find(|p|p.hwnd==hwnd).map(|p|{
+                    let changed=p.hover.take().is_some();
+                    (changed,changed&&p.emphasis.change(None,reduced))
+                })
             });
-            if let Some(changed)=stage{if changed{InvalidateRect(hwnd,ptr::null(),0);}return 0;}
+            if let Some((changed,animate))=stage{
+                if animate{SetTimer(hwnd,STAGE_MOTION_TIMER,16,None);}
+                if changed{InvalidateRect(hwnd,ptr::null(),0);}
+                return 0;
+            }
             let tracked=STATE.with(|s|{
                 let mut state=s.borrow_mut();
                 let animate=!state.prefs.appearance.reduced_motion;
@@ -837,6 +887,20 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if tracked.1{SetTimer(hwnd,MOTION_TIMER,16,None);}
             if tracked.2{SetTimer(hwnd,HIDE_TIMER,650,None);}
             if tracked.0{InvalidateRect(hwnd,ptr::null(),0);}
+            0
+        },
+        WM_TIMER if w==STAGE_MOTION_TIMER=>{
+            let step=STATE.with(|s|{
+                let mut state=s.borrow_mut();
+                let reduced=state.prefs.appearance.reduced_motion;
+                let speed=state.prefs.appearance.animation_speed;
+                let p=state.stages.iter_mut().find(|p|p.hwnd==hwnd&&!p.hidden)?;
+                let start=p.emphasis.start?;
+                let elapsed=if reduced{1.0}else{start.elapsed().as_secs_f32()*speed as f32/16.0};
+                Some(p.emphasis.tick(p.hover,elapsed))
+            });
+            if step.is_some(){InvalidateRect(hwnd,ptr::null(),0);}
+            if step!=Some(true){KillTimer(hwnd,STAGE_MOTION_TIMER);}
             0
         },
         WM_TIMER if w==HIDE_TIMER=>{
@@ -882,12 +946,15 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             let y=(l>>16) as i16 as i32;
             let stage=STATE.with(|s|{
                 let mut state=s.borrow_mut();
+                let reduced=state.prefs.appearance.reduced_motion;
                 let p=state.stages.iter_mut().find(|p|p.hwnd==hwnd)?;
                 let hit=p.layout.and_then(|layout|layout.hit(x,y));
                 let old=std::mem::replace(&mut p.hover,hit);
-                Some(old!=hit)
+                let changed=old!=hit;
+                Some((changed,changed&&p.emphasis.change(hit,reduced)))
             });
-            if let Some(changed)=stage{
+            if let Some((changed,animate))=stage{
+                if animate{SetTimer(hwnd,STAGE_MOTION_TIMER,16,None);}
                 let mut event=TRACKMOUSEEVENT{cbSize:mem::size_of::<TRACKMOUSEEVENT>() as u32,dwFlags:TME_LEAVE,hwndTrack:hwnd,dwHoverTime:0};
                 TrackMouseEvent(&mut event);
                 if changed{InvalidateRect(hwnd,ptr::null(),0);}

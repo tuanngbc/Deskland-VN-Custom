@@ -1,7 +1,7 @@
 //! Dock icon cache fed by a single cancellable Windows thread pool request.
 //! There is no private worker thread to start and stop during module toggles.
 use std::{
-    collections::HashMap,
+    collections::{HashMap,HashSet},
     ffi::c_void,
     path::Path,
     ptr,
@@ -56,6 +56,7 @@ pub struct Worker {
     done:Receiver<(String,ResultIcon)>,
     cache:HashMap<String,(ResultIcon,u64)>,
     pending:bool,
+    visible:HashSet<String>,
     clock:u64,
     cancelled:Arc<AtomicBool>,
     control:usize,
@@ -63,14 +64,22 @@ pub struct Worker {
 impl Worker {
     pub fn new(control:*mut c_void)->Self{
         let (result,done)=mpsc::channel();
-        Self{result,done,cache:HashMap::new(),pending:false,clock:0,
+        Self{result,done,cache:HashMap::new(),pending:false,visible:HashSet::new(),clock:0,
             cancelled:Arc::new(AtomicBool::new(false)),control:control as usize}
+    }
+    pub fn restrict_visible<'a>(&mut self,items:impl Iterator<Item=&'a Item>){
+        self.visible.clear();
+        for item in items {
+            if !item.path.is_empty(){self.visible.insert(item.path.clone());}
+            if self.visible.len()==CAP{break;}
+        }
     }
     pub fn receive(&mut self)->bool{
         let Ok((path,icon))=self.done.try_recv()else{return false;};
         self.pending=false;
+        if !self.visible.contains(&path){return true;}
         if self.cache.len()>=CAP {
-            if let Some(oldest)=self.cache.iter().min_by_key(|(_,(_,at))|*at).map(|(id,_)|id.clone()){
+            if let Some(oldest)=self.cache.iter().min_by_key(|(path,(_,at))|(self.visible.contains(*path),*at)).map(|(id,_)|id.clone()){
                 self.cache.remove(&oldest);
             }
         }
@@ -83,7 +92,7 @@ impl Worker {
         for item in items{
             if let Some((icon,at))=self.cache.get_mut(&item.path){
                 *at=self.clock;visible.insert(item.path.clone(),icon.clone());
-            }else if !self.pending&&EXTRACTION_ACTIVE.compare_exchange(false,true,Ordering::AcqRel,Ordering::Acquire).is_ok(){
+            }else if self.visible.contains(&item.path)&&!self.pending&&EXTRACTION_ACTIVE.compare_exchange(false,true,Ordering::AcqRel,Ordering::Acquire).is_ok(){
                 let raw=Box::into_raw(Box::new(Job{path:item.path.clone(),result:self.result.clone(),
                     cancelled:self.cancelled.clone(),control:self.control,permit:Permit}));
                 unsafe{
