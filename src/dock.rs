@@ -569,6 +569,8 @@ unsafe fn refresh(state:&mut State, topology:bool) {
     }
     if state.bars.iter().all(|b|b.hidden)||state.suspended{utilities::close_audio();UTILITY_ANCHOR.with(|a|a.set(None));UTILITIES.with(|u|u.borrow_mut().take());}
     state.workspaces.prune();
+    let benchmark_sources=crate::trial::benchmark_stage_sources();
+    let mut stage_report=Vec::new();
     for stage in &mut state.stages {
         let Some(screen)=state.screens.iter().find(|s|s.id==stage.display) else{continue;};
         let style=state.prefs.stage_style(&screen.id);
@@ -589,6 +591,9 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         stage.pages=items.len().div_ceil(rows).max(1);
         stage.page=if selected!=stage.selected{0}else{stage.page.min(stage.pages-1)};
         let start=stage.page*rows;
+        let model_count=items.len();
+        let fixture_positions=benchmark_sources.map(|sources| sources.iter().map(|&handle|
+            items.iter().position(|item| item.hwnd as usize==handle)).collect::<Vec<_>>());
         let items:Vec<_>=items.into_iter().skip(start).take(rows).collect();
         let groups:Vec<_>=groups.into_iter().skip(start).take(rows).collect();
         let mut changed=stage.items!=items||stage.groups!=groups||stage.selected!=selected||active_changed||material_changed||old_pages!=stage.pages;
@@ -640,6 +645,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             }
         }
         let hide=hide&&(unavailable||stage.collapsed);
+        let mut steps=[previews::PreviewStep::NotRun;8];
         if hide!=stage.hidden{ShowWindow(stage.hwnd,if hide{SW_HIDE}else{SW_SHOWNOACTIVATE});stage.hidden=hide;changed=true;}
         if hide {
             if stage.emphasis.start.is_some(){KillTimer(stage.hwnd,STAGE_MOTION_TIMER);}
@@ -647,12 +653,14 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         }
         else if layout.width>0&&layout.height>0{
             let host=if stage.preview_hwnd.is_null(){stage.hwnd}else{stage.preview_hwnd};
-            changed|=stage.previews.update(host,&stage.items,layout);
+            changed|=stage.previews.update_traced(host,&stage.items,layout,benchmark_sources.map(|_| steps.as_mut_slice()));
         }
+        let mut clip_ok=true;
         if !stage.preview_hwnd.is_null(){
             let areas=stage.previews.areas();
             let reshape=areas.len()!=stage.preview_boxes.len()||areas.iter().zip(&stage.preview_boxes).any(|(&a,&b)|!same_rect(a,b));
             let clipped=!reshape||previews::clip_destination(stage.preview_hwnd,&areas);
+            clip_ok=clipped;
             let show=clipped&&!areas.is_empty()&&!hide;
             if clipped&&reshape{stage.preview_boxes=areas;}
             if stage.preview_visible!=show{
@@ -662,8 +670,36 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             }
             if !clipped {changed|=stage.previews.clear();}
         }
+        if let Some((sources, positions))=benchmark_sources.zip(fixture_positions) {
+            let owner=crate::trial::benchmark_stage_fixture().unwrap().0;
+            let host=if stage.preview_hwnd.is_null(){stage.hwnd}else{stage.preview_hwnd};
+            let host_visible=IsWindowVisible(host)!=0;
+            let cards=sources.iter().zip(positions).enumerate().map(|(i,(&handle,index))|{
+                let hwnd=handle as HWND;
+                let mut pid=0;
+                GetWindowThreadProcessId(hwnd,&mut pid);
+                if pid!=owner {return serde_json::json!({"source":i,"identity":"Missing"});}
+                let enumerated=state.windows.iter().find(|item|item.hwnd==hwnd);
+                let mut rect:RECT=mem::zeroed();
+                let positioned=GetWindowRect(hwnd,&mut rect)!=0;
+                let on_monitor=|r:RECT| positioned&&rect_intersects(rect,r);
+                let source_display=state.screens.iter().position(|display|on_monitor(display.bounds));
+                let slot=stage.items.iter().position(|item| item.hwnd==hwnd);
+                serde_json::json!({"source":i,"sourceOutput":source_display.map(|n| if state.screens[n].primary {"primary"}else{"secondary"}),
+                    "visible":IsWindowVisible(hwnd)!=0,"local":on_monitor(screen.bounds),"enumerated":enumerated.is_some(),
+                    "eligibility":match previews::preview_pid(hwnd){Ok(_)=>"Eligible".to_owned(),Err(reason)=>format!("{reason:?}")},
+                    "cardIndex":index,"cardPage":index.map(|n|n/rows),"slot":slot,
+                    "dwm":slot.map(|n| format!("{:?}",steps[n])),
+                    "finalLink":host_visible&&clip_ok&&stage.previews.includes(hwnd)})
+            }).collect::<Vec<_>>();
+            stage_report.push(serde_json::json!({"output":if screen.primary {"primary"}else{"secondary"},
+                "allWindows":state.prefs.all_windows,"target":state.prefs.stage_display.mode.key(),
+                "limit":style.group_limit,"modelCount":model_count,"rows":rows,"shownPage":stage.page,"pages":stage.pages,
+                "previewHostVisible":host_visible,"clippingOk":clip_ok,"cards":cards}));
+        }
         if changed{InvalidateRect(stage.hwnd,ptr::null(),0);}
     }
+    if benchmark_sources.is_some(){crate::trial::benchmark_stage_diagnostic(&stage_report);}
     if let Some((pid, anchor)) = crate::trial::benchmark_stage_fixture() {
         let (fixture, other) = state.stages.iter()
             .filter(|s| s.preview_visible && IsWindowVisible(s.preview_hwnd) != 0)

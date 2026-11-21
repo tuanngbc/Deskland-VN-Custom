@@ -4,6 +4,7 @@ param(
     [ValidateSet('none','primary','secondary')][string]$Fullscreen = 'none',
     [ValidateSet('primary','secondary')][string[]]$BackgroundCovered = @(),
     [switch]$WaitForShow,
+    [switch]$StageDiagnostic,
     [ValidateRange(30,900)][int]$TimeoutSeconds = 180
 )
 $ErrorActionPreference = 'Stop'
@@ -83,7 +84,8 @@ try {
         # the candidate to this fixture without moving foreground before launch.
         $handle = $control.Handle.ToInt64()
         $created = Join-Path $Evidence 'fixture-created.next'
-        [ordered]@{PID=$PID;Hwnd=$handle} | ConvertTo-Json | Set-Content -LiteralPath $created
+        $sourceHandles = if ($StageDiagnostic) { @(for ($i=0; $i -lt $Cards; $i++) { $forms[$i].Handle.ToInt64() }) }
+        [ordered]@{PID=$PID;Hwnd=$handle;SourceHandles=@($sourceHandles)} | ConvertTo-Json | Set-Content -LiteralPath $created
         Move-Item -LiteralPath $created -Destination (Join-Path $Evidence 'fixture-created.json')
         $show = Join-Path $Evidence 'fixture-show'
         while (!(Test-Path -LiteralPath $show)) {
@@ -97,12 +99,14 @@ try {
         [Windows.Forms.Application]::DoEvents()
         $sources = @(for ($i=0; $i -lt $Cards; $i++) {
             $source = $forms[$i].Handle
+            if ($StageDiagnostic -and $source.ToInt64() -ne @($sourceHandles)[$i]) { throw "Fixture card $i recreated its HWND on show" }
             [uint32]$affinity = 0
             [uint32]$cloaked = 0
             $affinityOk = [DeskPerfFixture]::GetWindowDisplayAffinity($source,[ref]$affinity)
             $cloakOk = [DeskPerfFixture]::DwmGetWindowAttribute($source,14,[ref]$cloaked,4) -ge 0
             [pscustomobject]@{
                 Card=$i;Rect=[DeskPerfFixture]::WindowRect($source)
+                Output=if([Windows.Forms.Screen]::FromHandle($source).Primary){'primary'}else{'secondary'}
                 Visible=[DeskPerfFixture]::IsWindowVisible($source);Minimized=[DeskPerfFixture]::IsIconic($source)
                 Unowned=[DeskPerfFixture]::GetWindow($source,4) -eq [IntPtr]::Zero
                 ToolWindow=([DeskPerfFixture]::GetWindowLong($source,-20) -band 0x80) -ne 0

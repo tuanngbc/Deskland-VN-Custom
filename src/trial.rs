@@ -30,6 +30,31 @@ pub fn benchmark_stage_fixture() -> Option<(u32, usize)> {
     })
 }
 
+pub fn benchmark_stage_sources() -> Option<&'static [usize]> {
+    static SOURCES: OnceLock<Option<Vec<usize>>> = OnceLock::new();
+    benchmark_stage_fixture()?;
+    SOURCES.get_or_init(|| {
+        let stage = data_dir()?.join("dock-stage-diagnostics.txt");
+        let contents = std::fs::read_to_string(stage).ok()?;
+        let sources = contents.split_whitespace().map(str::parse::<usize>)
+            .collect::<Result<Vec<_>,_>>().ok()?;
+        (!sources.is_empty() && sources.len() <= 8 && !sources.contains(&0)
+            && sources.iter().enumerate().all(|(i, x)| !sources[..i].contains(x))).then_some(sources)
+    }).as_deref()
+}
+
+pub fn benchmark_stage_diagnostic(report: &[serde_json::Value]) {
+    thread_local! { static LAST: std::cell::RefCell<Vec<serde_json::Value>> = const { std::cell::RefCell::new(Vec::new()) }; }
+    LAST.with(|last| {
+        let mut last = last.borrow_mut();
+        if last.as_slice() != report {
+            crate::log!("DOCK_STAGE_DIAGNOSTIC {}", serde_json::to_string(report).unwrap_or_default());
+            last.clear();
+            last.extend_from_slice(report);
+        }
+    });
+}
+
 pub fn benchmark_stage_links(fixture: usize, other: usize) {
     thread_local! { static LAST: std::cell::Cell<Option<(usize, usize)>> = const { std::cell::Cell::new(None) }; }
     LAST.with(|last| {

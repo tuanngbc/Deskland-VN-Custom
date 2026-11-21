@@ -123,17 +123,21 @@ fn native_preview_relationships_survive_switches_and_release() {
             Item { path: String::new(), title: format!("test card {i}"), hwnd, count: 1, pinned: false }
         }).collect::<Vec<_>>();
         until("Windows permits preview for each public fixture", ||
-            items[..7].iter().all(|item| preview_pid(item.hwnd) == Some(fixture.0.id())));
+            items[..7].iter().all(|item| preview_pid(item.hwnd) == Ok(fixture.0.id())));
         let mut affinity = 0;
         assert_ne!(GetWindowDisplayAffinity(items[7].hwnd, &mut affinity), 0);
         assert_eq!(affinity, WDA_EXCLUDEFROMCAPTURE);
-        assert!(preview_pid(items[7].hwnd).is_none() && preview_pid(items[8].hwnd).is_none());
+        assert_eq!(preview_pid(items[7].hwnd), Err(PreviewStep::Protected));
+        assert_eq!(preview_pid(items[8].hwnd), Err(PreviewStep::Minimized));
 
         let dst = window("test compositor destination", false);
         let replacement = window("test replacement destination", false);
         let layout = Layout::new(180, 880, 96, 6, 8, COUNT, false);
         let mut state = Previews::default();
-        assert!(state.update(dst.0, &items, layout));
+        let mut diagnostic=[PreviewStep::NotRun;COUNT];
+        assert!(state.update_traced(dst.0, &items, layout, Some(&mut diagnostic)));
+        assert_eq!(diagnostic[..7], [PreviewStep::Linked;7]);
+        assert_eq!(diagnostic[7..], [PreviewStep::Protected,PreviewStep::Minimized]);
         assert_eq!(state.links.len(), 7);
         assert!(!state.includes(items[7].hwnd) && !state.includes(items[8].hwnd));
         assert_eq!(state.benchmark_counts(fixture.0.id(), 0), (7, 0));
