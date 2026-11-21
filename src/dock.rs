@@ -12,11 +12,17 @@ use windows_sys::Win32::System::Threading::{OpenProcess,QueryFullProcessImageNam
 use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::Win32::UI::Accessibility::*;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent,TRACKMOUSEEVENT,TME_LEAVE};
 
 mod options;
 mod runtime;
 mod glass_probe;
+mod appearance;
+mod geometry;
+mod surface;
+mod icon_atlas;
 pub use glass_probe::probe as glass_probe;
+pub use appearance::{Appearance,DockSide};
 pub use options::{Options,Edit,DisplayMode,DisplayTarget};
 pub use runtime::{Runtime,Event};
 use runtime::Command;
@@ -25,6 +31,9 @@ type Preferences=Options;
 const CLASS:&str="TuanpcDeskNativeDock";
 const WM_TICK:u32=WM_APP+50;
 const WM_CONFIG:u32=WM_APP+51;
+const WM_ICON_CHANGED:u32=WM_APP+52;
+const MOTION_TIMER:usize=4;
+const WM_DOCK_MOUSELEAVE:u32=0x02A3;
 const ITEM_WIDTH:i32=66;
 const HEIGHT:i32=70;
 const MAX_ITEMS:usize=10;
@@ -59,7 +68,30 @@ struct AppWindow { hwnd:HWND, title:String, path:String, rect:RECT }
 #[derive(Clone,Debug,PartialEq,Eq)]
 struct Item { path:String, title:String, hwnd:HWND, count:usize, pinned:bool }
 #[derive(Clone)]
-struct Bar { hwnd:HWND, bounds:RECT, items:Vec<Item>, hovered:i32, hidden:bool }
+struct Bar {
+    hwnd:HWND, bounds:RECT, items:Vec<Item>, hovered:i32, hidden:bool,
+    layout:Option<geometry::Layout>, motion:Motion,
+}
+#[derive(Clone,Default)]
+struct Motion {
+    focus:Option<f32>, target:Option<f32>, amount:f32, at:Option<std::time::Instant>, scheduled:bool,
+}
+impl Motion {
+    fn tick(&mut self, speed:u32)->bool{
+        let now=std::time::Instant::now();
+        let dt=self.at.replace(now).map_or(0.016,|t|now.duration_since(t).as_secs_f32().clamp(0.001,0.045));
+        let gain=1.0-(-dt*18.0*speed as f32/100.0).exp();
+        let goal=if self.target.is_some(){1.0}else{0.0};
+        self.amount+=(goal-self.amount)*gain;
+        if let Some(target)=self.target{
+            let current=self.focus.unwrap_or(target);
+            self.focus=Some(current+(target-current)*gain);
+        }
+        let unsettled=(goal-self.amount).abs()>0.005||matches!((self.focus,self.target),(Some(a),Some(b)) if (a-b).abs()>0.3);
+        if !unsettled{self.amount=goal;self.focus=self.target;self.at=None;self.scheduled=false;}
+        unsettled
+    }
+}
 #[derive(Clone)]
 struct Stage { hwnd:HWND, bounds:RECT, items:Vec<Item>, hidden:bool }
 #[derive(Default)]
@@ -73,6 +105,8 @@ thread_local! {
     static COMMANDS:RefCell<Option<mpsc::Receiver<Command>>>=const{RefCell::new(None)};
     static EVENTS:RefCell<Option<mpsc::Sender<Event>>>=const{RefCell::new(None)};
     static ICONS:RefCell<HashMap<(String,bool),HICON>>=RefCell::new(HashMap::new());
+    static SURFACES:RefCell<HashMap<usize,surface::Surface>>=RefCell::new(HashMap::new());
+    static ATLAS:RefCell<Option<icon_atlas::Worker>>=const{RefCell::new(None)};
 }
 
 // Detach state before any synchronous Win32 operation. Nested WM_PAINT sees an
@@ -305,13 +339,14 @@ unsafe fn recreate(state:&mut State) {
     for (i, screen) in screens.iter().enumerate() {
         if dock_targets.contains(&i) && !state.bars.iter().any(|b|same_rect(b.bounds,screen.bounds)) {
         let items=item_list(&state.windows,screen.bounds,&state.prefs);
-        let r=bar_rect(&screen,items.len());
-        let hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,
+        let layout=geometry::measure(screen,&state.prefs.appearance,items.len(),None,0.0);
+        let r=layout.window;
+        let hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|WS_EX_LAYERED,
             class.as_ptr(),wide("tuanpc-desk Dock").as_ptr(),WS_POPUP,
             r.left,r.top,r.right-r.left,r.bottom-r.top,
             ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
         if !hwnd.is_null(){
-        state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:true});
+        state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:true,layout:Some(layout),motion:Motion::default()});
         }else{emit(Event::Error(format!("Create Dock window: {}",GetLastError())));}
         }
         if stage_targets.contains(&i) && !state.stages.iter().any(|s|same_rect(s.bounds,screen.bounds)) {
@@ -330,19 +365,32 @@ unsafe fn refresh(state:&mut State, topology:bool) {
     if topology || state.screens.is_empty() { state.screens = displays(); }
     state.windows=if state.suspended{Vec::new()}else{windows()};
     recreate(state);
+    ATLAS.with(|a|{
+        let mut worker=a.borrow_mut();
+        if state.bars.is_empty(){worker.take();}
+        else if worker.is_none(){*worker=icon_atlas::Worker::new(CONTROL.with(Cell::get));}
+    });
     let foreground=GetForegroundWindow() as isize;let active_changed=foreground!=state.foreground;state.foreground=foreground;
     for b in &mut state.bars {
         let items=item_list(&state.windows,b.bounds,&state.prefs);
-        let changed=b.items!=items || active_changed;
+        let mut changed=b.items!=items || active_changed;
         b.items=items;
         let screen=state.screens.iter().find(|s|same_rect(s.bounds,b.bounds));
         if let Some(screen)=screen {
-            let r=bar_rect(&screen,b.items.len());
+            let r=if b.layout.is_some(){
+                let layout=geometry::measure(screen,&state.prefs.appearance,b.items.len(),b.motion.focus,b.motion.amount);
+                changed|=b.layout.as_ref().is_some_and(|old|old.glass!=layout.glass||old.slots!=layout.slots);
+                let r=layout.window;b.layout=Some(layout);r
+            }else{bar_rect(screen,b.items.len())};
             let mut actual:RECT=mem::zeroed();
             if GetWindowRect(b.hwnd,&mut actual)==0 || !same_rect(r,actual){SetWindowPos(b.hwnd,HWND_TOPMOST,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE);}
         }
         let fullscreen=state.suspended || foreground_fullscreen(b.bounds);
-        if b.hidden!=fullscreen { ShowWindow(b.hwnd,if fullscreen{SW_HIDE}else{SW_SHOWNOACTIVATE});b.hidden=fullscreen; }
+        if b.hidden!=fullscreen {
+            ShowWindow(b.hwnd,if fullscreen{SW_HIDE}else{SW_SHOWNOACTIVATE});b.hidden=fullscreen;
+            if fullscreen{KillTimer(b.hwnd,MOTION_TIMER);b.motion=Motion::default();b.hovered=-1;}
+            changed=true;
+        }
         if changed{InvalidateRect(b.hwnd,ptr::null(),0);}
     }
     for stage in &mut state.stages {
@@ -382,7 +430,42 @@ unsafe fn icon(path:&str,small:bool)->HICON {
     });icon
 }
 unsafe fn paint(hwnd:HWND){
+    let layered=STATE.with(|s|{
+        let state=s.borrow();
+        let bar=state.bars.iter().find(|b|b.hwnd==hwnd)?;
+        Some((bar.layout.clone()?,bar.items.clone(),bar.hovered,state.prefs.appearance.clone(),state.foreground))
+    });
     let mut ps:PAINTSTRUCT=mem::zeroed();let dc=BeginPaint(hwnd,&mut ps);
+    if let Some((layout,items,hovered,style,active))=layered{
+        EndPaint(hwnd,&ps);
+        let key=hwnd as usize;
+        let material=surface::Material::system(style.theme,style.transparency,style.reduced_motion);
+        let size=(layout.window.right-layout.window.left,layout.window.bottom-layout.window.top);
+        let canvas=SURFACES.with(|s|s.borrow_mut().remove(&key));
+        let canvas=match canvas{Some(c) if c.size()==size=>Some(c),_=>surface::Surface::new(size.0,size.1,layout.glass,material)};
+        if let Some(mut canvas)=canvas{
+            canvas.set_material(material);
+            // Clone Arc handles only; do not hold the atlas borrow across
+            // UpdateLayeredWindow, which may dispatch nested Win32 messages.
+            let atlas=ATLAS.with(|a|{
+                let mut a=a.borrow_mut();
+                a.as_mut().map(|atlas|atlas.request(&items)).unwrap_or_default()
+            });
+            let applied=canvas.paint(hwnd,&layout,&items,&atlas,active,usize::try_from(hovered).ok());
+            if applied{
+                SURFACES.with(|s|s.borrow_mut().insert(key,canvas));
+                return;
+            }
+        }
+        // A driver or remote session can reject per-pixel presentation. Keep
+        // app switching available using the previous native paint path.
+        STATE.with(|s|{if let Some(bar)=s.borrow_mut().bars.iter_mut().find(|b|b.hwnd==hwnd){bar.layout=None;}});
+        SetWindowLongPtrW(hwnd,GWL_EXSTYLE,GetWindowLongPtrW(hwnd,GWL_EXSTYLE)& !(WS_EX_LAYERED as isize));
+        KillTimer(hwnd,MOTION_TIMER);
+        queue_refresh();
+        InvalidateRect(hwnd,ptr::null(),0);
+        return;
+    }
     let mut area:RECT=mem::zeroed();GetClientRect(hwnd,&mut area);
     fill(dc,area,0x00201b18);
     let stage=STATE.with(|cell|cell.borrow().stages.iter().find(|stage|stage.hwnd==hwnd).cloned());
@@ -521,17 +604,79 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     match msg {
         WM_CONFIG=>{drain_commands();0},
         WM_TICK=>{SetTimer(hwnd,2,60,None);0},
+        WM_ICON_CHANGED=>{
+            let changed=ATLAS.with(|a|a.borrow_mut().as_mut().is_some_and(|worker|worker.receive()));
+            if changed{for h in STATE.with(|s|s.borrow().bars.iter().filter(|b|!b.hidden).map(|b|b.hwnd).collect::<Vec<_>>()){
+                InvalidateRect(h,ptr::null(),0);
+            }}
+            0
+        },
+        WM_NCDESTROY=>{
+            SURFACES.with(|s|s.borrow_mut().remove(&(hwnd as usize)));
+            DefWindowProcW(hwnd,msg,w,l)
+        },
+        WM_DOCK_MOUSELEAVE=>{
+            let tracked=STATE.with(|s|{
+                let mut state=s.borrow_mut();
+                let animate=!state.prefs.appearance.reduced_motion;
+                if let Some(b)=state.bars.iter_mut().find(|b|b.hwnd==hwnd){
+                    b.hovered=-1;b.motion.target=None;
+                    if !animate{b.motion=Motion::default();}
+                    let start=animate&&b.layout.is_some()&&!b.motion.scheduled&&b.motion.amount>0.001;
+                    b.motion.scheduled|=start;
+                    (true,start)
+                }else{(false,false)}
+            });
+            if tracked.1{SetTimer(hwnd,MOTION_TIMER,16,None);}
+            if tracked.0{InvalidateRect(hwnd,ptr::null(),0);}
+            0
+        },
+        WM_TIMER if w==MOTION_TIMER=>{
+            let motion=STATE.with(|s|{
+                let mut state=s.borrow_mut();
+                let State{screens,prefs,bars,..}=&mut *state;
+                let b=bars.iter_mut().find(|b|b.hwnd==hwnd)?;
+                if b.hidden || b.layout.is_none(){return None;}
+                let display=screens.iter().find(|d|same_rect(d.bounds,b.bounds))?;
+                let again=b.motion.tick(prefs.appearance.animation_speed);
+                b.layout=Some(geometry::measure(display,&prefs.appearance,b.items.len(),b.motion.focus,b.motion.amount));
+                Some(again)
+            });
+            if motion.is_some(){InvalidateRect(hwnd,ptr::null(),0);}
+            if motion!=Some(true){KillTimer(hwnd,MOTION_TIMER);}
+            0
+        },
         WM_ERASEBKGND=>1,
         WM_PAINT=>{paint(hwnd);0},
         WM_MOUSEACTIVATE=>MA_NOACTIVATE as LRESULT,
         WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
         WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_DPICHANGED=>{DISPLAY_DIRTY.with(|d|d.set(true));queue_refresh();0},
         WM_MOUSEMOVE=>{
-            let x=(l as u32&0xffff) as i16 as i32;
-            let changed=STATE.with(|s|{let mut a=s.borrow_mut();if let Some(b)=a.bars.iter_mut().find(|b|b.hwnd==hwnd){
-                let idx=if x>=12 && x<12+MAX_ITEMS as i32*ITEM_WIDTH{(x-12)/ITEM_WIDTH}else{-1};
-                if idx!=b.hovered {b.hovered=idx;return true;}
-            }false});if changed{InvalidateRect(hwnd,ptr::null(),0);}0
+            let x=l as i16 as i32;
+            let y=(l>>16) as i16 as i32;
+            let (changed,animate,track)=STATE.with(|s|{
+                let mut state=s.borrow_mut();
+                let reduced=state.prefs.appearance.reduced_motion||state.prefs.appearance.magnification==0;
+                let Some(b)=state.bars.iter_mut().find(|b|b.hwnd==hwnd) else{return (false,false,false)};
+                let prev=b.hovered;
+                if let Some(layout)=b.layout.as_ref(){
+                    b.hovered=layout.hit(x as f32,y as f32).map_or(-1,|i|i as i32);
+                    let desired=if !reduced&&(layout.glass.contains(x as f32,y as f32)||b.hovered>=0){Some(layout.axis(x as f32,y as f32))}else{None};
+                    let start=desired!=b.motion.target&&!b.motion.scheduled&&!reduced;
+                    b.motion.target=desired;b.motion.scheduled|=start;
+                    (prev!=b.hovered,start,true)
+                }else{
+                    b.hovered=if x>=12&&(x-12)/ITEM_WIDTH<b.items.len() as i32{(x-12)/ITEM_WIDTH}else{-1};
+                    (prev!=b.hovered,false,true)
+                }
+            });
+            if track{
+                let mut event=TRACKMOUSEEVENT{cbSize:mem::size_of::<TRACKMOUSEEVENT>() as u32,dwFlags:TME_LEAVE,hwndTrack:hwnd,dwHoverTime:0};
+                TrackMouseEvent(&mut event);
+            }
+            if animate{SetTimer(hwnd,MOTION_TIMER,16,None);}
+            if changed{InvalidateRect(hwnd,ptr::null(),0);}
+            0
         }
         WM_LBUTTONUP=>{
             let y=((l as u32>>16)&0xffff) as i16 as i32;
@@ -545,6 +690,20 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             let is_stage=STATE.with(|s|s.borrow().stages.iter().any(|stage|stage.hwnd==hwnd));
             if is_stage{return 0;}
             let x=(l as u32&0xffff) as i16 as i32;
+            let rendered=STATE.with(|s|{
+                let state=s.borrow();let bar=state.bars.iter().find(|b|b.hwnd==hwnd)?;
+                let layout=bar.layout.as_ref()?;
+                let item=layout.hit(x as f32,y as f32).and_then(|i|bar.items.get(i)).cloned();
+                Some((item,layout.is_launch_button(x as f32,y as f32)))
+            });
+            if let Some((item,search))=rendered{
+                if let Some(item)=item{activate(&item);}
+                else if search{
+                    let owner=OWNER.with(Cell::get);
+                    if !owner.is_null(){PostMessageW(owner,crate::WM_OPEN_LAUNCHER,0,0);}
+                }
+                return 0;
+            }
             let selected=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd).and_then(|b|b.items.get(((x-12).max(0)/ITEM_WIDTH) as usize)).cloned());
             let max=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd).map(|b|b.items.len()).unwrap_or(0));
             if x>=12 && (x-12)/ITEM_WIDTH <max as i32 {if let Some(item)=selected{activate(&item);}}
@@ -562,7 +721,11 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if STATE.with(|s|s.borrow().stages.iter().any(|stage|stage.hwnd==hwnd)){return 0;}
             let x=(l as u32&0xffff) as i16 as i32;
             let (bar,index)=STATE.with(|s|{let a=s.borrow();let i=a.bars.iter().position(|b|b.hwnd==hwnd).unwrap_or(0);
-              (i,if x>=12{((x-12)/ITEM_WIDTH) as usize}else{usize::MAX})});
+              let y=(l>>16) as i16 as f32;
+              let hit=a.bars.get(i).and_then(|b|
+                  if let Some(layout)=b.layout.as_ref(){layout.hit(x as f32,y)}
+                  else if x>=12{Some(((x-12)/ITEM_WIDTH) as usize)}else{None});
+              (i,hit.unwrap_or(usize::MAX))});
             native_menu(hwnd,bar,index);0
         }
         WM_CLOSE=>{
@@ -587,7 +750,10 @@ unsafe fn drain_commands() {
     for command in commands {
         match command {
             Command::Configure(options)=>update_state(|state|{
+                let repaint=state.prefs.appearance!=options.appearance;
+                if repaint { for b in &mut state.bars{KillTimer(b.hwnd,MOTION_TIMER);b.motion=Motion::default();} }
                 state.prefs=options;refresh(state,false);
+                if repaint{for b in &state.bars{InvalidateRect(b.hwnd,ptr::null(),0);}}
             }),
             Command::Suspend(on)=>update_state(|state|{if state.suspended!=on{state.suspended=on;refresh(state,!on);}}),
             Command::Stop=>{EndMenu();PostQuitMessage(0);},
@@ -628,6 +794,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
         update_state(|s|{for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for b in s.stages.drain(..){DestroyWindow(b.hwnd);}});
         ICONS.with(|c|{for (_,icon) in c.borrow_mut().drain(){if !icon.is_null(){DestroyIcon(icon);}}});
+        SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
         CONTROL.with(|c|c.set(ptr::null_mut()));DestroyWindow(control);
         OWNER.with(|o|o.set(ptr::null_mut()));
         COMMANDS.with(|c|{c.take();});EVENTS.with(|e|{e.take();});STATE.with(|s|{s.take();});

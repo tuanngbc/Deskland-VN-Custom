@@ -1,5 +1,6 @@
 //! Canonical Dock/Stage settings. Only Deskland main persists these values.
 use serde_json::{json, Value};
+use super::Appearance;
 use std::collections::HashSet;
 
 /// Output placement is independent of the application model's window scope.
@@ -61,6 +62,7 @@ pub struct Options {
     pub stage_side: String,
     pub dock_display: DisplayTarget,
     pub stage_display: DisplayTarget,
+    pub appearance: Appearance,
 }
 #[derive(Debug)]
 pub enum Edit {
@@ -80,7 +82,7 @@ impl Edit {
 }
 impl Default for Options {
     fn default() -> Self {
-        Self { enabled: false, stage_enabled: false, pinned: Vec::new(), all_windows: false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default() }
+        Self { enabled: false, stage_enabled: false, pinned: Vec::new(), all_windows: false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), appearance: Appearance::default() }
     }
 }
 impl Options {
@@ -95,6 +97,7 @@ impl Options {
             all_windows: v["allWindows"].as_bool().unwrap_or(false),
             dock_display: DisplayTarget::from_json(&v["dockDisplay"]),
             stage_display: DisplayTarget::from_json(&v["stageDisplay"]),
+            appearance: Appearance::from_json(&v["appearance"]),
             stage_side: if v["stageSide"] == "right" { "right" } else { "left" }.into(),
         }
     }
@@ -112,7 +115,7 @@ impl Options {
     pub fn json(&self) -> Value {
         json!({"version":2,"enabled":self.enabled,"stageEnabled":self.stage_enabled,
             "pinned":self.pinned,"allWindows":self.all_windows,"stageSide":self.stage_side,
-            "dockDisplay":self.dock_display.json(),"stageDisplay":self.stage_display.json()})
+            "dockDisplay":self.dock_display.json(),"stageDisplay":self.stage_display.json(),"appearance":self.appearance.json()})
     }
 }
 

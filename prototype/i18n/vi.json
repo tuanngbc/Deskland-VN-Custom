@@ -1,6 +1,17 @@
 {
   "name": "Tiếng Việt",
   "ui": {
+    "dockAppearanceTitle": "Kiểu hiển thị Dock",
+    "dockIconSize": "Cỡ biểu tượng",
+    "dockSpacing": "Khoảng cách biểu tượng",
+    "dockTransparency": "Độ trong suốt",
+    "dockMagnification": "Phóng đại khi rê chuột",
+    "dockMotionSpeed": "Tốc độ chuyển động",
+    "dockPosition": "Cạnh màn hình",
+    "dockBottom": "Bên dưới",
+    "dockTheme": "Màu sắc",
+    "dockReducedMotion": "Giảm chuyển động",
+    "dockAlphaHint": "Bề mặt trong suốt theo từng điểm ảnh. Bản này chưa làm mờ nền phía sau.",
     "dockScopeHint": "Phạm vi ứng dụng không thay đổi màn hình hiển thị Dock hay Stage.",
     "dockDisplayTarget": "Màn hình hiển thị",
     "dockDisplayAll": "Tất cả màn hình",

@@ -103,7 +103,7 @@ struct State {
     history: History, launching: bool,
 }
 #[derive(Clone)]
-struct IconPixels { width: i32, height: i32, pixels: Vec<u8> }
+pub(crate) struct IconPixels { pub(crate) width: i32, pub(crate) height: i32, pub(crate) pixels: Vec<u8> }
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
     static PREFS: RefCell<Appearance> = RefCell::new(Appearance::default());
@@ -253,7 +253,7 @@ fn icon_worker() -> (std::sync::mpsc::Sender<(PathBuf, i32)>, std::sync::mpsc::R
     (tx, rx)
 }
 
-unsafe fn extract_icon(path: &Path, size: i32) -> Option<IconPixels> {
+pub(crate) unsafe fn extract_icon(path: &Path, size: i32) -> Option<IconPixels> {
     use windows::Win32::UI::Shell::{SHCreateItemFromParsingName, IShellItemImageFactory, SIIGBF_ICONONLY, SIIGBF_BIGGERSIZEOK};
     let path = wide(&path.to_string_lossy());
     let factory: IShellItemImageFactory = SHCreateItemFromParsingName(windows::core::PCWSTR(path.as_ptr()), None).ok()?;

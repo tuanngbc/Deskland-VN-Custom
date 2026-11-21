@@ -1,6 +1,17 @@
 {
   "name": "English",
   "ui": {
+    "dockAppearanceTitle": "Dock appearance",
+    "dockIconSize": "Icon size",
+    "dockSpacing": "Icon spacing",
+    "dockTransparency": "Transparency",
+    "dockMagnification": "Hover magnification",
+    "dockMotionSpeed": "Animation speed",
+    "dockPosition": "Screen edge",
+    "dockBottom": "Bottom",
+    "dockTheme": "Color",
+    "dockReducedMotion": "Reduced motion",
+    "dockAlphaHint": "Per-pixel transparency. Background blur is not available in this build.",
     "dockScopeHint": "Application scope does not change which displays host Dock or Stage.",
     "dockDisplayTarget": "Show on",
     "dockDisplayAll": "All displays",

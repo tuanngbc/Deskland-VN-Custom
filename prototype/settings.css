@@ -17,3 +17,8 @@ html[data-appearance=dark]{--bg:#111b23;--panel:#192630;--panel-2:#21313d;--side
 .dock-display-bar{left:20%;right:20%;bottom:7%;height:11%}
 .dock-display-stage{left:7%;top:17%;width:12%;height:59%;opacity:.7}
 .dock-display-stage.right{left:auto;right:7%}
+
+.dock-display-bar.left,.dock-display-bar.right{top:20%;bottom:20%;height:auto;width:11%}
+.dock-display-bar.left{left:8%;right:auto}
+.dock-display-bar.right{left:auto;right:8%}
+[id^="dockValue_"]{display:inline-block;min-width:4em;text-align:right;font-variant-numeric:tabular-nums}

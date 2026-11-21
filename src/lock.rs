@@ -39,7 +39,7 @@ pub fn lock_now() {
     }
 }
 
-fn reg_get_dword(root: HKEY, key: &str, name: &str) -> Option<u32> {
+pub(crate) fn reg_get_dword(root: HKEY, key: &str, name: &str) -> Option<u32> {
     let (k, n) = (wide(key), wide(name));
     let mut v = 0u32;
     let mut sz = 4u32;

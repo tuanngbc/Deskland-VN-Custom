@@ -56,4 +56,16 @@ test('disconnected saved selection falls back and is restored without writing se
   assert.match($('stageDisplayChoices').innerHTML,/value="portrait" selected/);
   assert.equal(messages.length,0);
 });
+test('appearance edits do not overwrite placement, scope, or pins',()=>{
+  context.syncDockSettings({dock:{appearance:{theme:'dark',iconSize:52,position:'left'}}});
+  assert.equal($('dockLook_iconSize').value,'52');
+  assert.equal($('dockLook_position').value,'left');
+  $('dockLook_transparency').value='64';$('dockLook_transparency').listeners.change();
+  const m=messages.pop();
+  assert.equal(Object.keys(m).sort().join(','),'appearance,t');
+  assert.equal(m.appearance.theme,'dark');
+  assert.equal(m.appearance.iconSize,52);
+  assert.equal(m.appearance.transparency,64);
+  assert.equal(m.appearance.position,'left');
+});
 console.log('TOTAL: '+count+' PASS / 0 FAIL');

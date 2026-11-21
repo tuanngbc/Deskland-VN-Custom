@@ -1,6 +1,17 @@
 {
   "name": "简体中文",
   "ui": {
+    "dockAppearanceTitle": "Dock 外观",
+    "dockIconSize": "图标大小",
+    "dockSpacing": "图标间距",
+    "dockTransparency": "透明度",
+    "dockMagnification": "悬停放大",
+    "dockMotionSpeed": "动画速度",
+    "dockPosition": "屏幕边缘",
+    "dockBottom": "底部",
+    "dockTheme": "颜色",
+    "dockReducedMotion": "减少动态效果",
+    "dockAlphaHint": "逐像素透明。当前版本不支持背景模糊。",
     "dockScopeHint": "应用范围不会更改 Dock 或 Stage 所在的显示器。",
     "dockDisplayTarget": "显示位置",
     "dockDisplayAll": "所有显示器",
