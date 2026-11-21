@@ -682,6 +682,8 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
                     AppendMenuW(submenu, MF_STRING | if base.opacity == opacity {MF_CHECKED} else {0},
                         500+edits.len()-1, wide(&format!("Độ đậm của thẻ {opacity}%")).as_ptr());
                 }
+                edits.push((d.id.clone(),StageStyle{stack_groups:!base.stack_groups,..base}));
+                AppendMenuW(submenu,MF_STRING|if base.stack_groups{MF_CHECKED}else{0},500+edits.len()-1,wide("Xếp lớp nhóm cửa sổ").as_ptr());
                 AppendMenuW(submenu,MF_SEPARATOR,0,std::ptr::null());
                 edits.push((d.id.clone(),StageStyle::default()));
                 AppendMenuW(submenu,MF_STRING,500+edits.len()-1,wide("Khôi phục bố cục màn hình này").as_ptr());

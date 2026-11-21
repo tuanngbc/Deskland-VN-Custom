@@ -78,11 +78,13 @@ test('stage layout changes one display and leaves saved disconnected layouts unt
   assert.equal($('stageStyle_side').value,'right');
   assert.equal($('stageStyle_scale').value,'115');
   $('stageStyle_spacing').value='16';$('stageStyle_spacing').listeners.change();
-  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'stageStyle',display:'portrait',style:{side:'right',scale:115,spacing:16,groupLimit:5,opacity:76}});
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'stageStyle',display:'portrait',style:{side:'right',scale:115,spacing:16,groupLimit:5,opacity:76,groupPresentation:'stacked'}});
   $('stageStyle_groupLimit').value='8';$('stageStyle_groupLimit').listeners.change();
   assert.equal(messages.pop().style.groupLimit,8);
   $('stageStyle_opacity').value='55';$('stageStyle_opacity').listeners.change();
-  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop().style)),{side:'right',scale:115,spacing:16,groupLimit:8,opacity:55});
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop().style)),{side:'right',scale:115,spacing:16,groupLimit:8,opacity:55,groupPresentation:'stacked'});
+  $('stageStyle_groupPresentation').value='flat';$('stageStyle_groupPresentation').listeners.change();
+  assert.equal(messages.pop().style.groupPresentation,'flat');
 });
 test('utility order, visibility and reset are isolated to the selected monitor',()=>{
   const d={id:'main',name:'Main',w:2560,h:1080,dpi:96,primary:true};

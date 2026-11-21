@@ -34,9 +34,10 @@ pub struct StageStyle {
     pub spacing: u32,
     pub group_limit: u32,
     pub opacity: u32,
+    pub stack_groups: bool,
 }
 impl Default for StageStyle {
-    fn default() -> Self { Self { right: None, scale: 100, spacing: 6, group_limit: 5, opacity: 76 } }
+    fn default() -> Self { Self { right: None, scale: 100, spacing: 6, group_limit: 5, opacity: 76, stack_groups: true } }
 }
 impl StageStyle {
     pub fn from_json(v: &Value) -> Self {
@@ -47,11 +48,13 @@ impl StageStyle {
             spacing: size("spacing", 6, 2, 20),
             group_limit: size("groupLimit", 5, 1, 8),
             opacity: size("opacity", 76, 35, 100),
+            stack_groups: v["groupPresentation"].as_str()!=Some("flat"),
         }
     }
     fn json(self) -> Value {
         json!({"side":match self.right{Some(false)=>"left",Some(true)=>"right",None=>"default"},
-            "scale":self.scale,"spacing":self.spacing,"groupLimit":self.group_limit,"opacity":self.opacity})
+            "scale":self.scale,"spacing":self.spacing,"groupLimit":self.group_limit,"opacity":self.opacity,
+            "groupPresentation":if self.stack_groups{"stacked"}else{"flat"}})
     }
 }
 

@@ -682,7 +682,9 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             stage.position();
             changed=true;
         }
-        layout.stack=(0..items.len()).filter(|&i|items[i].count>1).fold(0u8,|bits,i|bits|(1<<i));
+        if style.stack_groups {
+            layout.stack=(0..items.len()).filter(|&i|items[i].count>1).fold(0u8,|bits,i|bits|(1<<i));
+        }
         if stage.items!=items {
             stage.hover=None;stage.emphasis=StageEmphasis::default();
             if stage.slide.is_none(){KillTimer(stage.hwnd,STAGE_MOTION_TIMER);}
