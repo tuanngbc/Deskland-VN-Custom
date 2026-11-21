@@ -1,0 +1,35 @@
+# Acceptance matrix D0-D9
+
+Vocabulary: NOT_STARTED, IN_PROGRESS, IMPLEMENTED_UNVERIFIED, CI_PASS, CI_FAIL, NATIVE_PENDING, NATIVE_PASS, OWNER_NATIVE_ACCEPTED, BLOCKED. CI_PASS never implies native acceptance.
+
+| Gate | Required evidence | Remaining / existing evidence | Native |
+|---|---|---|---|
+| D0 | Lifecycle/resource/API audit, benchmark protocol, CI | Audit and baseline CI recorded; checkpoint needs own CI | NATIVE_PENDING |
+| D1 | Identity/filtering/local activation, multiple windows, pin/order, events | EXE-only scaffold; seven model/geometry tests | NATIVE_PENDING |
+| D2 | Glass, crisp icons, magnification, auto-hide, keyboard/drag, idle budget | Opaque GDI scaffold, uncached Shell icons | NATIVE_PENDING |
+| D3 | Real previews, group switch/restore, privacy | Sidebar only | NATIVE_PENDING |
+| D4 | Reversible snap/quadrants/move; explicit fullscreen limits | Basic controls; no saved geometry | NATIVE_PENDING |
+| D5 | Negative coords/work-area/DPI/hotplug/stable display preferences | Pure geometry tests, manifest PerMonitorV2 | NATIVE_PENDING |
+| D6 | Accurate states/controls with explicit classification | Settings links WINDOWS_DELEGATED; remaining statuses PENDING | NATIVE_PENDING |
+| D7 A | Windows tray retained, Explorer recovery | Compatibility intent only | NATIVE_PENDING |
+| D7 B | Tray parity/AppBar/watchdog/restore | BLOCKED; supported tray strategy unresolved | NATIVE_PENDING |
+| D8 | Regression/performance/leaks/RC hashes/rollback | Development package only, no RC | NATIVE_PENDING |
+| D9 | Same EXE/config/Settings/autostart, independent modules, cleanup | Architecture recorded; current child not accepted | NATIVE_PENDING |
+
+## D9 integration cases
+
+1. Fresh profile defaults new modules off; wallpaper/themes/hotkeys/widgets unchanged.
+2. Migrate pins/scope/side from dock.json once, preserve file; canonical settings always win. Malformed/read-only settings fail safely with visible error.
+3. Existing Settings and tray enable Dock/Stage independently, update each other; no manual second app/command.
+4. Wallpaper off while Dock/Stage stay on; restore theme unchanged. Dock off with Stage on, Stage off with Dock on.
+5. Restart app/Windows restores configuration with no duplicate runtime. Saver/headless launches do not start Dock.
+6. Exit, startup failure, crash, forced termination and 100 toggles leave no runtime/windows/timers/hooks/processes.
+7. Explorer restart with wallpaper/clock/system monitor/Dock/Stage restores controls; Windows tray/taskbar stay available.
+8. CI native integration tests use isolated temporary files/windows; interactive native acceptance separately pending.
+9. One Windows x64 package includes all modules, Settings, existing themes/widgets/shortcuts, BUILD-COMMIT and checksum.
+
+## Owner Windows 11 two-monitor RC checklist
+
+Record resolution, refresh, orientation, primary, negative coordinates and scale; use landscape + portrait at different DPI. Swap primary, unplug/replug, change scale/taskbar position/work area live. Verify local/global multi-window selection (Win32 + packaged), minimized window restore, elevated/hung apps and fullscreen each screen. Test keyboard/focus, icons/glass/motion at 100/125/150/200% and reduce motion.
+
+Stage moving previews must be real; independent groups restore minimized/maximized states and geometry. Cloaked/locked/protected content must not leak. Test rapid close/reopen, lock/unlock, saver, sleep/resume and monitor loss. Retain Windows Start/tray/Task Manager. Follow D8 benchmark, 100 toggles and long run. Save actual tested SHA/screenshots/traces. Only owner sets OWNER_NATIVE_ACCEPTED; do not merge beforehand.

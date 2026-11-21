@@ -1,5 +1,27 @@
 # Deskland Rust Dock + Stage Manager — execution status
 
+## Authoritative checkpoint — 2026-11-21 00:26 UTC (D0 + mandatory D9)
+
+Inspected SHA: `1d5d4c99a868fd4a475b1a1e160976d19ea29d35`. Historical pending CI notes below are superseded by [successful run 44839614362](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44839614362).
+42 Rust tests passed (including seven Dock tests), five existing native tests separately passed. JS renderer 32, shortcuts seven. Runner is Windows Server 2025; no Dock-specific native GUI evidence.
+
+| Milestone | Implementation | Native acceptance |
+|---|---|---|
+| D0 architecture | IMPLEMENTED_UNVERIFIED; this docs checkpoint needs own CI | NATIVE_PENDING (measurement protocol only) |
+| D1 window engine | IN_PROGRESS; EXE grouping, seven model/geometry tests | NATIVE_PENDING |
+| D2 Dock UI | IN_PROGRESS; opaque GDI scaffold, uncached Shell icons | NATIVE_PENDING |
+| D3 Stage | IN_PROGRESS; app sidebar only | NATIVE_PENDING |
+| D4 controls | IN_PROGRESS; no reversible placement | NATIVE_PENDING |
+| D5 multi-monitor/DPI | IN_PROGRESS; negative coordinates tested, manifest PerMonitorV2 | NATIVE_PENDING |
+| D6 system | IN_PROGRESS; Settings links WINDOWS_DELEGATED | NATIVE_PENDING |
+| D7 Compatibility | IN_PROGRESS; Windows taskbar retained | NATIVE_PENDING |
+| D7 Replacement | BLOCKED; no safe tray parity/recovery evidence | NATIVE_PENDING |
+| D8 RC | NOT_STARTED; development artifact only | NATIVE_PENDING |
+| D9 product integration | IN_PROGRESS; current unmanaged child/config do not meet gate | NATIVE_PENDING |
+
+Next: D1 local/global app selection/filtering and D9 main-owned configuration, Settings, lifecycle and independent toggles. Build on GitHub only. No installed binary/profile/baseline changes or merge.
+See [architecture](DOCK_ARCHITECTURE.md), [acceptance](DOCK_ACCEPTANCE_MATRIX.md), [issues](DOCK_KNOWN_ISSUES.md), [handoff](DOCK_HANDOFF.md).
+
 Baseline: accepted Rust `a604519` on `codex/rust-test`; development only on `codex/rust-dock`, PR #1 Draft. No merge and no Explorer replacement enabled.
 
 ## Implemented and CI-gated code
