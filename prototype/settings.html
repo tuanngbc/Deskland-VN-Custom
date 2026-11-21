@@ -188,6 +188,7 @@
       <label class="setting-row"><b data-i18n="stageSpacing">Khoảng cách thẻ Stage</b><span><input type="range" id="stageStyle_spacing" min="2" max="20" step="1"><output id="stageValue_spacing"></output></span></label>
       <label class="setting-row"><b data-i18n="stageGroupLimit">Số thẻ Stage mỗi trang</b><span><input type="range" id="stageStyle_groupLimit" min="1" max="8" step="1"><output id="stageValue_groupLimit"></output></span></label>
       <label class="setting-row"><b data-i18n="stageOpacity">Độ đậm của thẻ Stage</b><span><input type="range" id="stageStyle_opacity" min="35" max="100" step="1"><output id="stageValue_opacity"></output></span></label>
+      <button class="ghost-btn" id="stageStyleReset" type="button" data-i18n="stageStyleReset">Khôi phục bố cục màn hình này</button>
     </div>
   </section>
   <section class="setting-card"><h3 data-i18n="dockAppearanceTitle">Kiểu hiển thị Dock</h3>
@@ -203,6 +204,7 @@
     <label class="setting-row switch-row"><b data-i18n="dockReducedMotion">Giảm chuyển động</b><input type="checkbox" id="dockLook_reducedMotion" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <label class="setting-row switch-row"><b data-i18n="dockAutoHide">Tự ẩn Dock</b><input type="checkbox" id="dockLook_autoHide" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <p class="monitor-detail" data-i18n="dockAlphaHint">Bề mặt trong suốt theo từng điểm ảnh. Bản này chưa làm mờ nền phía sau.</p>
+    <button class="ghost-btn" id="dockLookReset" type="button" data-i18n="dockLookReset">Khôi phục kiểu hiển thị Dock</button>
   </section>
   <section class="setting-card">
     <h3 data-i18n="dockDisplayPreview">Bố cục hiển thị</h3>
@@ -818,6 +820,12 @@ for(const key of dockLookKeys){
   });
 }
 const placement=key=>Object.assign({mode:'all',selected:null,custom:[]},dockOptions[key]||{});
+$('dockLookReset').addEventListener('click',()=>{
+  dockOptions.appearance={...dockLookDefaults};
+  showDockAppearance();
+  renderDockPlacement();
+  send({t:'dock',appearance:dockOptions.appearance});
+});
 function requestedDisplays(target){
   return dockDisplays.filter(d=>target.mode==='all'||(target.mode==='primary'&&d.primary)||
     (target.mode==='selected'&&target.selected===d.id)||(target.mode==='custom'&&target.custom.includes(d.id)));
@@ -865,6 +873,15 @@ function showStageStyle(){
   }
 }
 $('stageStyleDisplay').addEventListener('change',e=>{stageStyleDisplay=e.target.value;showStageStyle();});
+$('stageStyleReset').addEventListener('click',()=>{
+  const display=stageStyleDisplay;
+  if(!display)return;
+  const style={...stageStyleDefaults};
+  dockOptions.stageStyles={...dockOptions.stageStyles,[display]:style};
+  showStageStyle();
+  renderDockPlacement();
+  send({t:'stageStyle',display,style});
+});
 for(const key of ['side','scale','spacing','groupLimit','opacity']){
   const control=$('stageStyle_'+key),unit=stageUnits[key];
   if(unit!==undefined)control.addEventListener('input',()=>$('stageValue_'+key).textContent=control.value+unit);

@@ -13,6 +13,8 @@
     "dockTheme": "Color",
     "dockReducedMotion": "Reduced motion",
     "dockAlphaHint": "Per-pixel transparency. Background blur is not available in this build.",
+    "dockLookReset": "Reset Dock appearance",
+    "stageStyleReset": "Reset layout for this display",
     "dockScopeHint": "Application scope does not change which displays host Dock or Stage.",
     "dockDisplayTarget": "Show on",
     "dockDisplayAll": "All displays",

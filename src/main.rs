@@ -2656,6 +2656,7 @@ fn main() {
                 Action::StageStyle(id,style)=>{
                     dock::Edit::StageStyle(id,style).apply(&mut app.cfg.dock);app.configure_dock();
                 }
+                Action::DockAppearance(appearance)=>{app.cfg.dock.appearance=appearance;app.configure_dock();}
                 Action::Interaction(on) => {
                     INTERACTIONS_ENABLED.with(|c| c.set(on));
                     app.interactions_enabled = on;

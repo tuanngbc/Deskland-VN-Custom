@@ -13,6 +13,8 @@
     "dockTheme": "颜色",
     "dockReducedMotion": "减少动态效果",
     "dockAlphaHint": "逐像素透明。当前版本不支持背景模糊。",
+    "dockLookReset": "重置 Dock 外观",
+    "stageStyleReset": "重置此显示器的布局",
     "dockScopeHint": "应用范围不会更改 Dock 或 Stage 所在的显示器。",
     "dockDisplayTarget": "显示位置",
     "dockDisplayAll": "所有显示器",

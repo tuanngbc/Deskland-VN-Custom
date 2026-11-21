@@ -3,7 +3,7 @@
 //! cập nhật lại giao diện theo trạng thái thật.
 
 use crate::desktop::wide;
-use crate::dock::{Display, DisplayMode, DisplayTarget, StageStyle, UtilityProfile, UtilityWidget, WindowMode, WindowPolicy};
+use crate::dock::{Appearance, Display, DisplayMode, DisplayTarget, DockSide, StageStyle, Theme as DockTheme, UtilityProfile, UtilityWidget, WindowMode, WindowPolicy};
 use std::{cell::RefCell, collections::BTreeMap};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -31,6 +31,7 @@ pub enum Action {
     Stage(bool),
     DockDisplay(bool, DisplayTarget),
     StageStyle(String, StageStyle),
+    DockAppearance(Appearance),
     UtilityProfile(String, UtilityProfile),
     WindowPolicy(String,WindowPolicy),
 }
@@ -298,6 +299,7 @@ struct Ui {
     dock_target:DisplayTarget,
     stage_target:DisplayTarget,
     stage_styles:BTreeMap<String,StageStyle>,
+    dock_appearance:Appearance,
     window_policies:BTreeMap<String,WindowPolicy>,
     utility_profiles:BTreeMap<String,UtilityProfile>,
     displays:Vec<Display>,
@@ -468,6 +470,7 @@ pub fn open(state: &State) {
             dock_target:DisplayTarget::default(),
             stage_target:DisplayTarget::default(),
             stage_styles:BTreeMap::new(),
+            dock_appearance:Appearance::default(),
             window_policies:BTreeMap::new(),
             utility_profiles:BTreeMap::new(),
             displays:Vec::new(),
@@ -558,6 +561,7 @@ pub fn sync(state: &State) {
             ui.dock_target=state.dock.dock_display.clone();
             ui.stage_target=state.dock.stage_display.clone();
             ui.stage_styles=state.dock.stage_styles.clone();
+            ui.dock_appearance=state.dock.appearance.clone();
             ui.window_policies=state.dock.window_policies.clone();
             ui.utility_profiles=state.dock.utility_profiles.clone();
             ui.displays=state.displays.clone();
@@ -570,8 +574,8 @@ pub fn sync(state: &State) {
 /// An in-place Windows menu keeps the essential display controls accessible
 /// with a keyboard even when the WebView cannot start.
 unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
-    let Some((mut target, displays, styles, utility_profiles, window_policies)) = UI.with(|u| u.borrow().as_ref().map(|ui| {
-        (if stage { ui.stage_target.clone() } else { ui.dock_target.clone() }, ui.displays.clone(), ui.stage_styles.clone(), ui.utility_profiles.clone(),ui.window_policies.clone())
+    let Some((mut target, displays, styles, utility_profiles, window_policies,appearance)) = UI.with(|u| u.borrow().as_ref().map(|ui| {
+        (if stage { ui.stage_target.clone() } else { ui.dock_target.clone() }, ui.displays.clone(), ui.stage_styles.clone(), ui.utility_profiles.clone(),ui.window_policies.clone(),ui.dock_appearance.clone())
     })) else { return };
     let menu = CreatePopupMenu();
     if menu.is_null() { return; }
@@ -599,6 +603,32 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
     let mut edits = Vec::new();
     let mut utility_edits=Vec::new();
     let mut policy_edits=Vec::new();
+    let mut appearance_edits=Vec::new();
+    if !stage {
+        let look=CreatePopupMenu();
+        if !look.is_null(){
+            let mut item=|label:&str,checked:bool,next:Appearance|{
+                appearance_edits.push(next);
+                AppendMenuW(look,MF_STRING|if checked{MF_CHECKED}else{0},3000+appearance_edits.len()-1,wide(label).as_ptr());
+            };
+            for (position,title) in [(DockSide::Bottom,"Cạnh dưới"),(DockSide::Left,"Cạnh trái"),(DockSide::Right,"Cạnh phải")]{
+                item(title,appearance.position==position,Appearance{position,..appearance.clone()});
+            }
+            AppendMenuW(look,MF_SEPARATOR,0,std::ptr::null());
+            for (theme,title) in [(DockTheme::Auto,"Theo màu hệ thống"),(DockTheme::Light,"Giao diện sáng"),(DockTheme::Dark,"Giao diện tối")]{
+                item(title,appearance.theme==theme,Appearance{theme,..appearance.clone()});
+            }
+            AppendMenuW(look,MF_SEPARATOR,0,std::ptr::null());
+            for (icon_size,title) in [(34,"Biểu tượng nhỏ"),(44,"Biểu tượng chuẩn"),(56,"Biểu tượng lớn")]{
+                item(title,appearance.icon_size==icon_size,Appearance{icon_size,..appearance.clone()});
+            }
+            item("Giảm chuyển động",appearance.reduced_motion,Appearance{reduced_motion:!appearance.reduced_motion,..appearance.clone()});
+            item("Tự ẩn mặc định",appearance.auto_hide,Appearance{auto_hide:!appearance.auto_hide,..appearance.clone()});
+            AppendMenuW(look,MF_SEPARATOR,0,std::ptr::null());
+            item("Khôi phục kiểu hiển thị Dock",false,Appearance::default());
+            if AppendMenuW(menu,MF_POPUP,look as usize,wide("Kiểu hiển thị Dock").as_ptr())==0{DestroyMenu(look);}
+        }
+    }
     let policies=CreatePopupMenu();
     if !policies.is_null(){
         for d in displays.iter().take(32){
@@ -652,6 +682,9 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
                     AppendMenuW(submenu, MF_STRING | if base.opacity == opacity {MF_CHECKED} else {0},
                         500+edits.len()-1, wide(&format!("Độ đậm của thẻ {opacity}%")).as_ptr());
                 }
+                AppendMenuW(submenu,MF_SEPARATOR,0,std::ptr::null());
+                edits.push((d.id.clone(),StageStyle::default()));
+                AppendMenuW(submenu,MF_STRING,500+edits.len()-1,wide("Khôi phục bố cục màn hình này").as_ptr());
                 if AppendMenuW(layouts, MF_POPUP, submenu as usize, wide(&d.name.replace('&',"&&")).as_ptr()) == 0 {
                     DestroyMenu(submenu);
                 }
@@ -694,6 +727,9 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
     GetWindowRect(button,&mut rect);
     let command = TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,rect.left,rect.bottom,0,owner,std::ptr::null()) as usize;
     DestroyMenu(menu);
+    if let Some(appearance)=command.checked_sub(3000).and_then(|i|appearance_edits.get(i)){
+        push(Action::DockAppearance(appearance.clone()));return;
+    }
     if let Some((id,p))=command.checked_sub(2300).and_then(|i|policy_edits.get(i)){
         push(Action::WindowPolicy(id.clone(),*p));return;
     }

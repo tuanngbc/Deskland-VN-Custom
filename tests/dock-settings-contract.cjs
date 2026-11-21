@@ -103,6 +103,25 @@ test('utility order, visibility and reset are isolated to the selected monitor',
   $('utilityDisplay').listeners.change({target:{value:'main'}});
   assert.equal($('utilityEnabled').checked,false);
 });
+test('reset buttons send only the chosen appearance or display layout',()=>{
+  const main={id:'main',name:'Main',w:1920,h:1080,dpi:96,primary:true};
+  context.syncDockSettings({dockDisplays:[main,{...main,id:'vertical',primary:false}],dock:{
+    appearance:{position:'right',theme:'dark'},stageStyles:{main:{scale:135},vertical:{scale:80}}
+  }});
+  $('dockLookReset').listeners.click();
+  const dock=messages.pop();
+  assert.deepEqual(Object.keys(dock).sort(),['appearance','t']);
+  assert.equal(dock.appearance.theme,'auto');
+  assert.equal($('dockLook_position').value,'bottom');
+  $('stageStyleDisplay').listeners.change({target:{value:'vertical'}});
+  $('stageStyleReset').listeners.click();
+  const stage=messages.pop();
+  assert.equal(stage.display,'vertical');
+  assert.equal(stage.style.scale,100);
+  assert.equal($('stageStyle_scale').value,'100');
+  $('stageStyleDisplay').listeners.change({target:{value:'main'}});
+  assert.equal($('stageStyle_scale').value,'135');
+});
 test('window policy edits one output without overwriting its other module',()=>{
   const main={id:'main',name:'Main',w:2560,h:1080,dpi:96,primary:true};
   const portrait={...main,id:'portrait',primary:false};
