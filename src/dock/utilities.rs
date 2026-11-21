@@ -12,7 +12,7 @@ use windows_sys::Win32::{
     Graphics::Gdi::{GetStockObject,DEFAULT_GUI_FONT,GetMonitorInfoW,MonitorFromPoint,MONITORINFO,MONITOR_DEFAULTTONEAREST,COLOR_WINDOW},
     NetworkManagement::{IpHelper::*,Ndis::IfOperStatusUp,WiFi::*},
     System::{LibraryLoader::GetModuleHandleW,Power::*,SystemInformation::GetLocalTime,Threading::{TrySubmitThreadpoolCallback,PTP_CALLBACK_INSTANCE}},
-    UI::{Controls::{InitCommonControlsEx,INITCOMMONCONTROLSEX,ICC_BAR_CLASSES,TBM_SETPOS,TBM_SETRANGEMAX,TB_ENDTRACK,TB_THUMBTRACK,TBS_NOTICKS},Input::KeyboardAndMouse::*,WindowsAndMessaging::*},
+    UI::{Controls::{InitCommonControlsEx,INITCOMMONCONTROLSEX,ICC_BAR_CLASSES,ICC_DATE_CLASSES,MCM_GETMINREQRECT,TBM_SETPOS,TBM_SETRANGEMAX,TB_THUMBTRACK,TBS_NOTICKS},Input::KeyboardAndMouse::*,WindowsAndMessaging::*},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -20,13 +20,16 @@ enum Link { None, Wired, WiFi(Option<u8>), Both(Option<u8>) }
 enum BluetoothState { Unknown, Adapter, Connected }
 #[derive(Clone,Copy)]
 enum BatteryState { Unknown, Absent, Present{level:Option<u8>,ac:Option<bool>,charging:bool} }
-struct Audio { level:u32, muted:bool }
-pub(super) struct Snapshot { network:Option<Link>, bluetooth:BluetoothState, battery:BatteryState, audio:Option<Audio>, local:SYSTEMTIME }
+pub(super) struct Audio { level:u32, muted:bool }
+pub(super) struct Snapshot { network:Option<Link>, bluetooth:BluetoothState, battery:BatteryState, audio:Option<Audio>, pub(super) local:SYSTEMTIME }
 
 #[derive(Clone,Copy)]
 enum JobKind { Read, Volume(u32), Mute }
 #[derive(Default)]
-struct State { pending:AtomicBool, result:Mutex<Option<Snapshot>>, closed:AtomicBool }
+struct State {
+    pending:AtomicBool, result:Mutex<Option<Snapshot>>,
+    audio_result:Mutex<Option<Option<Audio>>>, closed:AtomicBool,
+}
 static WORK_ACTIVE:AtomicBool=AtomicBool::new(false);
 struct Permit;
 impl Drop for Permit{fn drop(&mut self){WORK_ACTIVE.store(false,Ordering::Release);}}
@@ -50,6 +53,7 @@ impl Provider {
     }
     pub fn read(&self,owner:HWND)->bool{self.submit(owner,JobKind::Read)}
     pub fn take(&self)->Option<Snapshot>{self.state.result.lock().ok()?.take()}
+    pub fn take_audio_result(&self)->Option<Option<Audio>>{self.state.audio_result.lock().ok()?.take()}
     pub fn apply(&self,owner:HWND,action:Action)->bool{
         let kind=match action{Action::SetVolume(p)=>JobKind::Volume(p),Action::Mute=>JobKind::Mute,_=>return false};
         self.submit(owner,kind)
@@ -66,11 +70,13 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut std::ffi::c_vo
             let mut local=mem::zeroed();GetLocalTime(&mut local);
             let snapshot=Snapshot{network:network(),bluetooth:bluetooth(),battery:battery(),audio,local};
             if let Ok(mut result)=state.result.lock(){*result=Some(snapshot);}
+        }else if let Ok(mut result)=state.audio_result.lock(){
+            *result=Some(audio);
         }
     }
     drop(job.permit);
     state.pending.store(false,Ordering::Release);
-    if matches!(job.kind,JobKind::Read)&&!state.closed.load(Ordering::Acquire){
+    if !state.closed.load(Ordering::Acquire){
         PostMessageW(job.owner as HWND,WM_UTILITY_READY,0,0);
     }
 }
@@ -350,7 +356,7 @@ pub(super) unsafe fn delegated(action:Action){
     match action{
         Network=>open("ms-settings:network-status"), Bluetooth=>open("ms-settings:bluetooth"),
         Sound=>open("ms-settings:sound"),Battery=>open("ms-settings:powersleep"), Explorer=>open("explorer.exe"),
-        Calendar|Notifications=>shell_key(b'N' as u16),QuickSettings=>shell_key(b'A' as u16),
+        Notifications=>shell_key(b'N' as u16),QuickSettings=>shell_key(b'A' as u16),
         Desktop=>shell_key(b'D' as u16),Windows=>shell_key(VK_TAB),
         _=>{}
     }
@@ -370,6 +376,7 @@ unsafe fn shell_key(key:u16){
 }
 
 const AUDIO_CLASS:&str="TuanpcDeskAudioControl";
+const CALENDAR_CLASS:&str="TuanpcDeskCalendar";
 const TBM_GETPOS:u32=WM_USER;
 const TRACK:usize=4601;
 const MUTE:usize=4602;
@@ -377,13 +384,17 @@ const OUTPUT:usize=4603;
 const LABEL:usize=4604;
 thread_local! {
     static AUDIO_WINDOW:Cell<HWND>=const{Cell::new(ptr::null_mut())};
+    static CALENDAR_WINDOW:Cell<HWND>=const{Cell::new(ptr::null_mut())};
     static TRACK_LAST:Cell<u32>=const{Cell::new(0)};
-    static AUDIO_MUTED:Cell<bool>=const{Cell::new(false)};
+    static AUDIO_PENDING:Cell<bool>=const{Cell::new(false)};
+    static TRACK_DRAGGING:Cell<bool>=const{Cell::new(false)};
+    static WANTED_LEVEL:Cell<Option<u32>>=const{Cell::new(None)};
 }
 
-pub(super) unsafe fn close_audio(){
-    let hwnd=AUDIO_WINDOW.with(Cell::get);
-    if !hwnd.is_null(){DestroyWindow(hwnd);}
+pub(super) unsafe fn close_panels(){
+    for hwnd in [AUDIO_WINDOW.with(Cell::get),CALENDAR_WINDOW.with(Cell::get)] {
+        if !hwnd.is_null(){DestroyWindow(hwnd);}
+    }
 }
 pub(super) unsafe fn audio_from_snapshot(owner:HWND,point:POINT,snapshot:&Snapshot)->bool{
     let Some(audio)=snapshot.audio.as_ref() else{return false;};
@@ -391,7 +402,7 @@ pub(super) unsafe fn audio_from_snapshot(owner:HWND,point:POINT,snapshot:&Snapsh
     true
 }
 pub(super) unsafe fn audio_panel(owner:HWND,point:POINT,level:u32,muted:bool){
-    close_audio();
+    close_panels();
     let class=wide(AUDIO_CLASS);
     let instance=GetModuleHandleW(ptr::null());
     let mut wc:WNDCLASSW=mem::zeroed();
@@ -427,39 +438,63 @@ pub(super) unsafe fn audio_panel(owner:HWND,point:POINT,level:u32,muted:bool){
     SendMessageW(slider,TBM_SETPOS,1,level as isize);
     control("BUTTON",if muted{"Bật tiếng"}else{"Tắt tiếng"},MUTE,WS_TABSTOP,14,75,96,29);
     control("BUTTON","Thiết bị đầu ra…",OUTPUT,WS_TABSTOP,116,75,136,29);
-    TRACK_LAST.with(|s|s.set(level));AUDIO_MUTED.with(|s|s.set(muted));AUDIO_WINDOW.with(|s|s.set(hwnd));
+    TRACK_LAST.with(|s|s.set(level));AUDIO_PENDING.with(|s|s.set(false));TRACK_DRAGGING.with(|s|s.set(false));
+    WANTED_LEVEL.with(|s|s.set(None));AUDIO_WINDOW.with(|s|s.set(hwnd));
     ShowWindow(hwnd,SW_SHOW);SetForegroundWindow(hwnd);SetFocus(slider);
+}
+
+unsafe fn submit_audio(hwnd:HWND,action:Action)->bool{
+    if AUDIO_PENDING.with(Cell::get)||!super::apply_audio(action){return false;}
+    AUDIO_PENDING.with(|s|s.set(true));
+    EnableWindow(GetDlgItem(hwnd,MUTE as i32),0);
+    true
+}
+unsafe fn flush_volume(hwnd:HWND){
+    if AUDIO_PENDING.with(Cell::get){return;}
+    if let Some(value)=WANTED_LEVEL.with(Cell::get){
+        if value==TRACK_LAST.with(Cell::get)||submit_audio(hwnd,Action::SetVolume(value)){
+            WANTED_LEVEL.with(|s|s.set(None));
+        }
+    }
+}
+pub(super) unsafe fn reflect_audio(result:Option<Audio>){
+    let hwnd=AUDIO_WINDOW.with(Cell::get);
+    if hwnd.is_null()||!AUDIO_PENDING.with(|s|s.replace(false)){return;}
+    EnableWindow(GetDlgItem(hwnd,MUTE as i32),1);
+    let label=GetDlgItem(hwnd,LABEL as i32);
+    if let Some(audio)=result{
+        TRACK_LAST.with(|s|s.set(audio.level));
+        SetWindowTextW(GetDlgItem(hwnd,MUTE as i32),wide(if audio.muted{"Bật tiếng"}else{"Tắt tiếng"}).as_ptr());
+        if !TRACK_DRAGGING.with(Cell::get)&&WANTED_LEVEL.with(Cell::get).is_none(){
+            SendMessageW(GetDlgItem(hwnd,TRACK as i32),TBM_SETPOS,1,audio.level as isize);
+            SetWindowTextW(label,wide(&format!("{}%",audio.level)).as_ptr());
+        }
+    }else{
+        let last=TRACK_LAST.with(Cell::get);
+        if !TRACK_DRAGGING.with(Cell::get)&&WANTED_LEVEL.with(Cell::get).is_none(){
+            SendMessageW(GetDlgItem(hwnd,TRACK as i32),TBM_SETPOS,1,last as isize);
+        }
+        SetWindowTextW(label,wide("Không cập nhật được thiết bị âm thanh").as_ptr());
+    }
+    flush_volume(hwnd);
 }
 unsafe extern "system" fn audio_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     match msg {
         WM_HSCROLL if l!=0&&l as HWND==GetDlgItem(hwnd,TRACK as i32)=>{
             let value=SendMessageW(l as HWND,TBM_GETPOS,0,0).clamp(0,100) as u32;
             SetWindowTextW(GetDlgItem(hwnd,LABEL as i32),wide(&format!("{value}%")).as_ptr());
-            // Never flood the OS worker while dragging: commit on release;
-            // keyboard/page-click changes can be sent immediately.
-            if w as u32&0xffff!=TB_THUMBTRACK && TRACK_LAST.with(Cell::get)!=value &&
-                super::apply_audio(Action::SetVolume(value)){
-                TRACK_LAST.with(|s|s.set(value));
-            } else if w as u32&0xffff==TB_ENDTRACK && TRACK_LAST.with(Cell::get)!=value{
-                SetTimer(hwnd,1,40,None);
+            let dragging=w as u32&0xffff==TB_THUMBTRACK;
+            TRACK_DRAGGING.with(|s|s.set(dragging));
+            // Keep only the latest requested level while a write is in flight.
+            if !dragging{
+                WANTED_LEVEL.with(|s|s.set(Some(value)));
+                flush_volume(hwnd);
             }
             0
         },
-        WM_TIMER if w==1=>{
-            KillTimer(hwnd,1);
-            let slider=GetDlgItem(hwnd,TRACK as i32);
-            let value=SendMessageW(slider,TBM_GETPOS,0,0).clamp(0,100) as u32;
-            if TRACK_LAST.with(Cell::get)!=value&&super::apply_audio(Action::SetVolume(value)){
-                TRACK_LAST.with(|s|s.set(value));
-            }
-            0
-        }
         WM_COMMAND=>match w&0xffff{
             MUTE=>{
-                if super::apply_audio(Action::Mute){
-                    let muted=AUDIO_MUTED.with(|s|!s.replace(!s.get()));
-                    SetWindowTextW(GetDlgItem(hwnd,MUTE as i32),wide(if muted{"Bật tiếng"}else{"Tắt tiếng"}).as_ptr());
-                }
+                submit_audio(hwnd,Action::Mute);
                 0
             }
             OUTPUT=>{open("ms-settings:sound");DestroyWindow(hwnd);0},
@@ -474,6 +509,54 @@ unsafe extern "system" fn audio_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
     }
 }
 
+pub(super) unsafe fn calendar_panel(owner:HWND,point:POINT,local:SYSTEMTIME){
+    close_panels();
+    let instance=GetModuleHandleW(ptr::null());
+    let class=wide(CALENDAR_CLASS);
+    let mut wc:WNDCLASSW=mem::zeroed();
+    wc.hInstance=instance;wc.lpszClassName=class.as_ptr();wc.lpfnWndProc=Some(calendar_proc);
+    wc.hbrBackground=(COLOR_WINDOW as usize+1) as _;
+    wc.hCursor=LoadCursorW(ptr::null_mut(),IDC_ARROW);
+    if RegisterClassW(&wc)==0&&GetLastError()!=ERROR_CLASS_ALREADY_EXISTS{return;}
+    if InitCommonControlsEx(&INITCOMMONCONTROLSEX{dwSize:mem::size_of::<INITCOMMONCONTROLSEX>() as u32,dwICC:ICC_DATE_CLASSES})==0{return;}
+    let window_style=WS_POPUP|WS_CAPTION|WS_SYSMENU;
+    let ex_style=WS_EX_TOOLWINDOW|WS_EX_TOPMOST;
+    let caption=wide(&format!("Lịch  ·  {:02}:{:02}",local.wHour,local.wMinute));
+    let hwnd=CreateWindowExW(ex_style,class.as_ptr(),caption.as_ptr(),window_style,point.x,point.y,0,0,
+        owner,ptr::null_mut(),instance,ptr::null());
+    if hwnd.is_null(){return;}
+    let cal=CreateWindowExW(0,wide("SysMonthCal32").as_ptr(),ptr::null(),WS_CHILD|WS_VISIBLE|WS_TABSTOP,
+        0,0,0,0,hwnd,1usize as HMENU,instance,ptr::null());
+    let mut inner:RECT=mem::zeroed();
+    if cal.is_null()||SendMessageW(cal,MCM_GETMINREQRECT,0,(&mut inner as *mut RECT) as LPARAM)==0{DestroyWindow(hwnd);return;}
+    let dpi=windows_sys::Win32::UI::HiDpi::GetDpiForWindow(owner).clamp(72,288);
+    let pad=(9*dpi as i32+48)/96;
+    let (cw,ch)=(inner.right-inner.left,inner.bottom-inner.top);
+    SetWindowPos(cal,ptr::null_mut(),pad,pad,cw,ch,SWP_NOACTIVATE|SWP_NOZORDER);
+    let mut frame=RECT{left:0,top:0,right:cw+pad*2,bottom:ch+pad*2};
+    windows_sys::Win32::UI::HiDpi::AdjustWindowRectExForDpi(&mut frame,window_style,0,ex_style,dpi);
+    let mut mon:MONITORINFO=mem::zeroed();
+    mon.cbSize=mem::size_of::<MONITORINFO>() as u32;
+    if GetMonitorInfoW(MonitorFromPoint(point,MONITOR_DEFAULTTONEAREST),&mut mon)==0{DestroyWindow(hwnd);return;}
+    let work=mon.rcWork;
+    let (width,height)=(frame.right-frame.left,frame.bottom-frame.top);
+    let x=point.x.clamp(work.left,(work.right-width).max(work.left));
+    let y=(point.y-height).clamp(work.top,(work.bottom-height).max(work.top));
+    CALENDAR_WINDOW.with(|s|s.set(hwnd));
+    SetWindowPos(hwnd,HWND_TOPMOST,x,y,width,height,SWP_SHOWWINDOW);
+    SetForegroundWindow(hwnd);SetFocus(cal);
+}
+unsafe extern "system" fn calendar_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
+    match msg{
+        WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{PostMessageW(hwnd,WM_CLOSE,0,0);0},
+        WM_NCDESTROY=>{
+            if CALENDAR_WINDOW.with(Cell::get)==hwnd{CALENDAR_WINDOW.with(|s|s.set(ptr::null_mut()));}
+            DefWindowProcW(hwnd,msg,w,l)
+        },
+        _=>DefWindowProcW(hwnd,msg,w,l)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,6 +566,29 @@ mod tests {
         assert!(network_label(Some(Link::WiFi(Some(72)))).contains("72%"));
         assert!(network_label(None).contains("Không đọc được"));
         assert_ne!(network_label(Some(Link::None)),network_label(None));
+    }
+    #[test]
+    #[ignore = "Windows calendar control and owned panel cleanup; explicitly run in CI"]
+    fn native_calendar_uses_a_real_control_and_closes_with_utilities(){
+        unsafe{
+            let parent=CreateWindowExW(0,wide("STATIC").as_ptr(),ptr::null(),WS_POPUP,0,0,1,1,
+                ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),ptr::null());
+            assert!(!parent.is_null());
+            let mut local=mem::zeroed();GetLocalTime(&mut local);
+            calendar_panel(parent,POINT{x:120,y:250},local);
+            let panel=CALENDAR_WINDOW.with(Cell::get);
+            assert!(!panel.is_null());
+            assert_eq!(GetWindow(panel,GW_OWNER),parent);
+            let month=GetDlgItem(panel,1);
+            assert!(!month.is_null());
+            let mut size:RECT=mem::zeroed();
+            assert_ne!(SendMessageW(month,MCM_GETMINREQRECT,0,(&mut size as *mut RECT) as LPARAM),0);
+            assert!(size.right>size.left&&size.bottom>size.top);
+            close_panels();
+            assert_eq!(IsWindow(panel),0);
+            assert!(CALENDAR_WINDOW.with(Cell::get).is_null());
+            DestroyWindow(parent);
+        }
     }
     #[test]
     #[ignore = "Windows on-demand hardware queries; explicitly run in CI"]
