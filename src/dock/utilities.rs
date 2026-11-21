@@ -3,15 +3,16 @@
 use super::{WM_UTILITY_READY,open};
 use crate::desktop::wide;
 use serde_json::{json,Value};
-use std::{mem,ptr,sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}}};
+use std::{cell::Cell,mem,ptr,sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}}};
 use windows::Win32::Media::Audio::{*,Endpoints::IAudioEndpointVolume};
 use windows::Win32::System::Com::*;
 use windows_sys::Win32::{
-    Devices::BluetoothState::*,
+    Devices::Bluetooth::*,
     Foundation::*,
+    Graphics::Gdi::{GetStockObject,DEFAULT_GUI_FONT,GetMonitorInfoW,MonitorFromPoint,MONITORINFO,MONITOR_DEFAULTTONEAREST,COLOR_WINDOW},
     NetworkManagement::{IpHelper::*,Ndis::IfOperStatusUp,WiFi::*},
-    System::{Power::*,SystemInformation::GetLocalTime,Threading::{TrySubmitThreadpoolCallback,PTP_CALLBACK_INSTANCE}},
-    UI::{Input::KeyboardAndMouse::*,WindowsAndMessaging::*},
+    System::{LibraryLoader::GetModuleHandleW,Power::*,SystemInformation::GetLocalTime,Threading::{TrySubmitThreadpoolCallback,PTP_CALLBACK_INSTANCE}},
+    UI::{Controls::{InitCommonControlsEx,INITCOMMONCONTROLSEX,ICC_BAR_CLASSES,TBM_SETPOS,TBM_SETRANGEMAX,TB_ENDTRACK,TB_THUMBTRACK,TBS_NOTICKS},Input::KeyboardAndMouse::*,WindowsAndMessaging::*},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -167,7 +168,7 @@ pub enum Widget {
     Spotlight, Explorer, Desktop, Capture, Record, Stats, Wallpaper, Stage, Settings, Windows,
 }
 impl Widget {
-    pub const ALL:[Self;17]=[Self::Network,Self::Sound,Self::BluetoothState,Self::BatteryState,Self::Calendar,
+    pub const ALL:[Self;17]=[Self::Network,Self::Sound,Self::Bluetooth,Self::Battery,Self::Calendar,
         Self::Notifications,Self::QuickSettings,Self::Spotlight,Self::Explorer,Self::Desktop,
         Self::Capture,Self::Record,Self::Stats,Self::Wallpaper,Self::Stage,Self::Settings,Self::Windows];
     pub fn key(self)->&'static str{
@@ -225,7 +226,7 @@ pub enum HostAction { Settings, Capture, Record, SystemMonitor, Wallpaper, Stage
 #[derive(Clone,Copy)]
 pub(super) enum Action {
     Host(HostAction), Network, Bluetooth, Sound, Battery, Calendar, Notifications,
-    QuickSettings, Explorer, Desktop, Windows, SetVolume(u32), Mute,
+    QuickSettings, Explorer, Desktop, Windows, SetVolume(u32), Mute, AudioPanel{level:u32,muted:bool},
 }
 const SET_LEVEL:usize=100;
 fn network_label(state:Option<Link>)->String{
@@ -252,6 +253,7 @@ pub(super) unsafe fn menu(owner:HWND,point:POINT,snapshot:&Snapshot,profile:&Pro
                 let sound=CreatePopupMenu();
                 if sound.is_null(){continue;}
                 if let Some(a)=snapshot.audio.as_ref() {
+                    AppendMenuW(sound,MF_STRING,9,wide("Điều chỉnh âm lượng…").as_ptr());
                     AppendMenuW(sound,MF_STRING,10,wide(if a.muted{"Bật tiếng"}else{"Tắt tiếng"}).as_ptr());
                     for p in [0u32,10,20,30,40,50,60,70,80,90,100]{
                         AppendMenuW(sound,MF_STRING|if a.level==p{MF_CHECKED}else{0},SET_LEVEL+p as usize,wide(&format!("{p}%")).as_ptr());
@@ -293,6 +295,7 @@ pub(super) unsafe fn menu(owner:HWND,point:POINT,snapshot:&Snapshot,profile:&Pro
     DestroyMenu(menu);
     if GetForegroundWindow()==owner&&!previous.is_null()&&IsWindow(previous)!=0{SetForegroundWindow(previous);}
     use Action::*;
+    if cmd==9{return snapshot.audio.as_ref().map(|a|AudioPanel{level:a.level,muted:a.muted});}
     if cmd==10{return Some(Mute);}
     if (SET_LEVEL..=200).contains(&cmd){return Some(SetVolume((cmd-SET_LEVEL) as u32));}
     Some(match *Widget::ALL.get(cmd.checked_sub(301)?)? {
@@ -325,6 +328,106 @@ unsafe fn shell_key(key:u16){
     if n>0&&n<4 {
         let tail=if n==2{&input[2..]}else{&input[3..]};
         SendInput(tail.len() as u32,tail.as_ptr(),mem::size_of::<INPUT>() as i32);
+    }
+}
+
+const AUDIO_CLASS:&str="TuanpcDeskAudioControl";
+const TBM_GETPOS:u32=WM_USER;
+const TRACK:usize=4601;
+const MUTE:usize=4602;
+const OUTPUT:usize=4603;
+const LABEL:usize=4604;
+thread_local! {
+    static AUDIO_WINDOW:Cell<HWND>=const{Cell::new(ptr::null_mut())};
+    static TRACK_LAST:Cell<u32>=const{Cell::new(0)};
+    static AUDIO_MUTED:Cell<bool>=const{Cell::new(false)};
+}
+
+pub(super) unsafe fn close_audio(){
+    let hwnd=AUDIO_WINDOW.with(Cell::get);
+    if !hwnd.is_null(){DestroyWindow(hwnd);}
+}
+pub(super) unsafe fn audio_panel(owner:HWND,point:POINT,level:u32,muted:bool){
+    close_audio();
+    let class=wide(AUDIO_CLASS);
+    let instance=GetModuleHandleW(ptr::null());
+    let mut wc:WNDCLASSW=mem::zeroed();
+    wc.hInstance=instance;wc.lpszClassName=class.as_ptr();wc.lpfnWndProc=Some(audio_proc);
+    wc.hbrBackground=(COLOR_WINDOW as usize+1) as _;
+    wc.hCursor=LoadCursorW(ptr::null_mut(),IDC_ARROW);
+    if RegisterClassW(&wc)==0&&GetLastError()!=ERROR_CLASS_ALREADY_EXISTS{return;}
+    InitCommonControlsEx(&INITCOMMONCONTROLSEX{dwSize:mem::size_of::<INITCOMMONCONTROLSEX>() as u32,dwICC:ICC_BAR_CLASSES});
+    let scale=(windows_sys::Win32::UI::HiDpi::GetDpiForWindow(owner).clamp(72,288) as f32)/96.0;
+    let px=|n:i32|(n as f32*scale).round() as i32;
+    let (width,height)=(px(286),px(156));
+    let mut monitor:MONITORINFO=mem::zeroed();
+    monitor.cbSize=mem::size_of::<MONITORINFO>() as u32;
+    if GetMonitorInfoW(MonitorFromPoint(point,MONITOR_DEFAULTTONEAREST),&mut monitor)==0{return;}
+    let work=monitor.rcWork;
+    let x=point.x.clamp(work.left,(work.right-width).max(work.left));
+    let y=(point.y-height).clamp(work.top,(work.bottom-height).max(work.top));
+    let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST,class.as_ptr(),wide("Âm lượng hệ thống").as_ptr(),
+        WS_POPUP|WS_CAPTION|WS_SYSMENU,x,y,width,height,owner,ptr::null_mut(),instance,ptr::null());
+    if hwnd.is_null(){return;}
+    let control=|name:&str,text:&str,id:usize,flags:u32,x,y,w,h|{
+        let child=CreateWindowExW(0,wide(name).as_ptr(),wide(text).as_ptr(),WS_CHILD|WS_VISIBLE|flags,
+            px(x),px(y),px(w),px(h),hwnd,id as HMENU,instance,ptr::null());
+        if !child.is_null(){
+            SendMessageW(child,WM_SETFONT,GetStockObject(DEFAULT_GUI_FONT) as usize,0);
+        }
+        child
+    };
+    control("STATIC",&format!("{level}%"),LABEL,0,14,8,248,22);
+    let slider=control("msctls_trackbar32","",TRACK,WS_TABSTOP|TBS_NOTICKS,10,30,250,36);
+    if slider.is_null(){DestroyWindow(hwnd);return;}
+    SendMessageW(slider,TBM_SETRANGEMAX,1,100);
+    SendMessageW(slider,TBM_SETPOS,1,level as isize);
+    control("BUTTON",if muted{"Bật tiếng"}else{"Tắt tiếng"},MUTE,WS_TABSTOP,14,75,96,29);
+    control("BUTTON","Thiết bị đầu ra…",OUTPUT,WS_TABSTOP,116,75,136,29);
+    TRACK_LAST.with(|s|s.set(level));AUDIO_MUTED.with(|s|s.set(muted));AUDIO_WINDOW.with(|s|s.set(hwnd));
+    ShowWindow(hwnd,SW_SHOW);SetForegroundWindow(hwnd);SetFocus(slider);
+}
+unsafe extern "system" fn audio_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
+    match msg {
+        WM_HSCROLL if l!=0&&l as HWND==GetDlgItem(hwnd,TRACK as i32)=>{
+            let value=SendMessageW(l as HWND,TBM_GETPOS,0,0).clamp(0,100) as u32;
+            SetWindowTextW(GetDlgItem(hwnd,LABEL as i32),wide(&format!("{value}%")).as_ptr());
+            // Never flood the OS worker while dragging: commit on release;
+            // keyboard/page-click changes can be sent immediately.
+            if w as u32&0xffff!=TB_THUMBTRACK && TRACK_LAST.with(Cell::get)!=value &&
+                super::apply_audio(Action::SetVolume(value)){
+                TRACK_LAST.with(|s|s.set(value));
+            } else if w as u32&0xffff==TB_ENDTRACK && TRACK_LAST.with(Cell::get)!=value{
+                SetTimer(hwnd,1,40,None);
+            }
+            0
+        },
+        WM_TIMER if w==1=>{
+            KillTimer(hwnd,1);
+            let slider=GetDlgItem(hwnd,TRACK as i32);
+            let value=SendMessageW(slider,TBM_GETPOS,0,0).clamp(0,100) as u32;
+            if TRACK_LAST.with(Cell::get)!=value&&super::apply_audio(Action::SetVolume(value)){
+                TRACK_LAST.with(|s|s.set(value));
+            }
+            0
+        }
+        WM_COMMAND=>match w&0xffff{
+            MUTE=>{
+                if super::apply_audio(Action::Mute){
+                    let muted=AUDIO_MUTED.with(|s|!s.replace(!s.get()));
+                    SetWindowTextW(GetDlgItem(hwnd,MUTE as i32),wide(if muted{"Bật tiếng"}else{"Tắt tiếng"}).as_ptr());
+                }
+                0
+            }
+            OUTPUT=>{open("ms-settings:sound");DestroyWindow(hwnd);0},
+            _=>DefWindowProcW(hwnd,msg,w,l),
+        }
+        WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{PostMessageW(hwnd,WM_CLOSE,0,0);0},
+        WM_NCDESTROY=>{
+            if AUDIO_WINDOW.with(Cell::get)==hwnd{AUDIO_WINDOW.with(|s|s.set(ptr::null_mut()));}
+            DefWindowProcW(hwnd,msg,w,l)
+        }
+        _=>DefWindowProcW(hwnd,msg,w,l),
     }
 }
 

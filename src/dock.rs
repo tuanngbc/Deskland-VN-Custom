@@ -459,7 +459,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         }
         if changed{InvalidateRect(b.hwnd,ptr::null(),0);}
     }
-    if state.bars.is_empty()||state.suspended{UTILITY_ANCHOR.with(|a|a.set(None));UTILITIES.with(|u|u.borrow_mut().take());}
+    if state.bars.iter().all(|b|b.hidden)||state.suspended{utilities::close_audio();UTILITY_ANCHOR.with(|a|a.set(None));UTILITIES.with(|u|u.borrow_mut().take());}
     state.workspaces.prune();
     for stage in &mut state.stages {
         let mut placement_changed=false;
@@ -694,6 +694,9 @@ fn utility_profile(hwnd:HWND)->Option<UtilityProfile>{
         Some(state.prefs.utility_profiles.get(&output.id).cloned().unwrap_or_default())
     })
 }
+fn apply_audio(action:utilities::Action)->bool{
+    UTILITIES.with(|u|u.borrow().as_ref().is_some_and(|p|p.apply(CONTROL.with(Cell::get),action)))
+}
 unsafe fn show_utilities(){
     let snapshot=UTILITIES.with(|u|u.borrow().as_ref().and_then(utilities::Provider::take));
     let target=UTILITY_ANCHOR.with(|a|a.take());
@@ -703,11 +706,8 @@ unsafe fn show_utilities(){
     if let Some(action)=utilities::menu(hwnd,point,&snapshot,&profile){
         match action{
             utilities::Action::Host(action)=>emit(Event::Utility(action)),
-            utilities::Action::SetVolume(_)|utilities::Action::Mute=>{
-                UTILITIES.with(|u|{
-                    if let Some(provider)=u.borrow().as_ref(){provider.apply(CONTROL.with(Cell::get),action);}
-                });
-            }
+            utilities::Action::AudioPanel{level,muted}=>utilities::audio_panel(hwnd,point,level,muted),
+            utilities::Action::SetVolume(_)|utilities::Action::Mute=>{apply_audio(action);}
             _=>utilities::delegated(action),
         }
     }
@@ -1270,7 +1270,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
         update_state(|s|{s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){destroy_stage(&mut b);}});
         SURFACES.with(|s|s.borrow_mut().clear());STAGE_SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
-        UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));
+        utilities::close_audio();UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));
         CONTROL.with(|c|c.set(ptr::null_mut()));DestroyWindow(control);
         OWNER.with(|o|o.set(ptr::null_mut()));
         COMMANDS.with(|c|{c.take();});EVENTS.with(|e|{e.take();});STATE.with(|s|{s.take();});

@@ -11,3 +11,9 @@ Stage now uses [DWM thumbnail relationships](https://learn.microsoft.com/en-us/w
 ## Native render checkpoint
 
 Actual native capsule and Spotlight activation were observed at 9512260. The separate glass probe at f63d7f7 rendered background stripes through per-pixel alpha, while the DWM candidates stayed opaque with the owner's existing transparency setting. The screenshots are private. Shape and alpha are observed; blur, shadow and contrast under different wallpapers, packaged icon coverage, motion pacing, Stage layout/interaction quality and owner approval stay pending. Native 3afc044 showed actual fixture thumbnails alongside safe fallback icons; a still of three sources does not establish motion quality or privacy coverage across app types.
+
+## Floating Stage: native evidence before utility acceptance
+
+The first rebuild [d2ba9e5](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44877602926) uses a layered card surface, an owned clipped DWM thumbnail target and an opaque per-card fallback when necessary. Source rectangle aspect is preserved. Two actual Windows 11 screenshots were taken in an isolated fixture trial at 2560×1080 and 1080×1920; the fixture-only portrait capture before/after demonstrates changing DWM content, with protected/minimized sources falling back to icons. This proves transparency around and through the material and retained functional previews. It does not prove acrylic blur or visual parity.
+
+Compared with [Apple's Stage Manager behavior](https://support.apple.com/en-us/guide/mac-help/mchl534ba392/mac), standalone thumbnail groups and negative space are present. Windows Stage still shows recent cards in a vertical stack, uses a compact pager and preserves the existing context-menu grouping workflow. Full scale/slide transition, final typography, wallpaper comparisons, actual video, brightness/mixed DPI and owner review remain open. Do not mark VISUAL_PASS.

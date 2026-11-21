@@ -46,3 +46,9 @@ The glass proof is opt-in on an isolated `--trial-dir` with the same singleton. 
 ## Next increment after reversible groups
 
 Use the current [status](DOCK_STATUS.md) and exact-commit CI links instead of treating the original sidebar snapshot above as current. Workspaces are session-local and manage only explicitly enrolled, foreign application windows. d708b09 passed three CI foreign-window runs plus a native two-group switch/restore and changing DWM pixels from a benign fixture. Remaining: cross-display movement, UI group editing, mixed DPI, broader privacy/fallback coverage, and motion quality. Diagnose subsequent handle growth before proceeding to a release candidate. Keep proof separate from CI, keep the native trial profile isolated, and verify production rollback before leaving the desktop.
+
+## Current handoff — floating Stage and utility host
+
+Stage d2ba9e5 is the exact native-tested package, not the latest utility candidate. [CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44877602926) and [artifact](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44877602926/artifacts/14697175816) match; trial rollback verified EXE, profile and scoped Registry. On the test machine, Stage screenshots and diagnostics are in the private D9 evidence folder with suffix d2ba9e5-geometry. Do not publish raw logs, app names or display IDs. Run future builds on GitHub, verify both ZIPs and BUILD-COMMIT before native use, and return to production after the isolated trial.
+
+Next: verify the exact utility package and both Settings paths, audio interaction on an authorized test endpoint, desktop/taskbar actions, compact layout, Stage motion and both-display video. Record device gaps and matched resource data rather than inferring results from CI. Keep draft and baseline unchanged.

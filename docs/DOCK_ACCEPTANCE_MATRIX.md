@@ -55,3 +55,18 @@ Stage moving previews must be real; independent groups restore minimized/maximiz
 | M2 | Owner-host alpha composite and real capsule still; Spotlight click | True blur, light/dark wallpaper matrix, DPI, animation pacing |
 | M3 | Windows CI for rail, keyboard plumbing and reorder model | Native reveal/focus/drag, accessibility, transition quality |
 | M4 | d708b09 CI + native source-content change, two groups, normal placement and Stage OFF | Full privacy matrix, mixed DPI, Z-order and display loss |
+
+## Current utility capability boundaries
+
+| Capability | Native behavior implemented | Delegated / remaining |
+|---|---|---|
+| Network | NATIVE_IMPLEMENTED: physical link state and Wi-Fi signal only when Windows returns it | WINDOWS_DELEGATED: network Settings; link does not prove internet reachability |
+| Audio | NATIVE_IMPLEMENTED: default multimedia endpoint volume/mute, levels; native Trackbar follows the menu snapshot and commits drag on release | WINDOWS_DELEGATED: default output selection; external-volume callbacks and actual device interaction verification pending |
+| Bluetooth | NATIVE_IMPLEMENTED: adapter enumeration and known Classic connection observation | WINDOWS_DELEGATED: Bluetooth Settings; UNSUPPORTED: comprehensive LE/radio on-off status |
+| Battery | NATIVE_IMPLEMENTED: percent, AC, charge, hide without a readable battery | WINDOWS_DELEGATED: Power Settings; real battery host pending |
+| Date/calendar | NATIVE_IMPLEMENTED: local date/time at menu open | WINDOWS_DELEGATED: Windows calendar |
+| Notifications / Quick Settings | UNSUPPORTED: unread count or notifications from other apps | WINDOWS_DELEGATED: Windows panels |
+| Deskland | NATIVE_IMPLEMENTED: commands reuse existing Spotlight, capture/record, taskbar stats, wallpaper, Stage and Settings | WINDOWS_DELEGATED: Explorer, Show Desktop, Task View |
+| Utilities layout | Per-display enable/disable, leading/trailing button, menu details, order/visibility, reset; native Settings has essentials | Inline widgets with individual glyphs/status and per-widget spacing/size/opacity pending. D7 third-party tray stays out of scope. |
+
+Implementation labels do not certify native interaction or full feature acceptance. P4 and OWNER_NATIVE_ACCEPTED remain pending.
