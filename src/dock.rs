@@ -113,6 +113,11 @@ unsafe fn foreground_fullscreen(screen:RECT)->bool {
 }
 unsafe extern "system" fn enumerate(hwnd:HWND,param:LPARAM)->i32 {
     let out=&mut *(param as *mut Vec<AppWindow>);
+    // GetWindowTextW sends WM_GETTEXT for another thread in this process.
+    // The Settings owner can be waiting for Runtime::new or Drop to join us:
+    // skip every own HWND before any title lookup, not just Dock/Shell classes.
+    let mut pid=0u32;GetWindowThreadProcessId(hwnd,&mut pid);
+    if pid==0 || pid==std::process::id(){return 1;}
     if IsWindowVisible(hwnd)==0 || GetWindow(hwnd,GW_OWNER)!=ptr::null_mut() {return 1;}
     if GetWindowLongW(hwnd,GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW!=0 {return 1;}
     let mut cloaked=0u32;
@@ -121,8 +126,6 @@ unsafe extern "system" fn enumerate(hwnd:HWND,param:LPARAM)->i32 {
     if is_shell_class(&String::from_utf16_lossy(&class[..c.max(0) as usize])) {return 1;}
     let mut title=[0u16;260];let n=GetWindowTextW(hwnd,title.as_mut_ptr(),260);
     if n<=0{return 1;}
-    let mut pid=0u32;GetWindowThreadProcessId(hwnd,&mut pid);
-    if pid==0{return 1;}
     let process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,0,pid);
     let mut path=String::new();
     if !process.is_null() {

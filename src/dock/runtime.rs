@@ -56,6 +56,39 @@ mod tests {
     use super::*;
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId,IsWindow,IsWindowVisible};
     #[test]
+    #[ignore = "real Settings-owner HWND regression; explicitly run in CI"]
+    fn native_startup_never_synchronously_reads_own_settings_title() {
+        use windows_sys::Win32::{Foundation::*, UI::WindowsAndMessaging::*, System::LibraryLoader::GetModuleHandleW};
+        use std::sync::atomic::{AtomicUsize,Ordering};
+        static REQUESTS:AtomicUsize=AtomicUsize::new(0);
+        unsafe extern "system" fn proc(h:HWND,m:u32,w:WPARAM,l:LPARAM)->LRESULT {
+            if m==WM_GETTEXT {REQUESTS.fetch_add(1,Ordering::Relaxed);}
+            DefWindowProcW(h,m,w,l)
+        }
+        unsafe {
+            let name=crate::desktop::wide("DesklandOwnSettingsRegression");
+            let mut wc:WNDCLASSW=std::mem::zeroed();wc.lpfnWndProc=Some(proc);
+            wc.hInstance=GetModuleHandleW(std::ptr::null());wc.lpszClassName=name.as_ptr();
+            RegisterClassW(&wc);
+            let hwnd=CreateWindowExW(0,name.as_ptr(),crate::desktop::wide("Own Settings title must be excluded").as_ptr(),
+                WS_OVERLAPPEDWINDOW|WS_VISIBLE,10,10,320,160,std::ptr::null_mut(),std::ptr::null_mut(),wc.hInstance,std::ptr::null());
+            assert!(!hwnd.is_null());REQUESTS.store(0,Ordering::Relaxed);
+            let (tx,rx)=mpsc::channel();
+            let worker=std::thread::spawn(move||{let _=tx.send(Runtime::new(Options{enabled:true,..Default::default()},0));});
+            let started=std::time::Instant::now();
+            let runtime=loop {
+                if let Ok(result)=rx.try_recv(){break result.unwrap();}
+                assert!(started.elapsed()<std::time::Duration::from_secs(10),"Dock startup must finish while Settings exists");
+                let mut msg:MSG=std::mem::zeroed();
+                while PeekMessageW(&mut msg,std::ptr::null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            DestroyWindow(hwnd);worker.join().unwrap();drop(runtime);
+            assert_eq!(REQUESTS.load(Ordering::Relaxed),0,"Dock must exclude its Settings before cross-thread WM_GETTEXT");
+            UnregisterClassW(name.as_ptr(),wc.hInstance);
+        }
+    }
+    #[test]
     #[ignore = "real isolated Windows HWND/thread lifecycle; explicitly run in CI"]
     fn native_integrated_modules_toggle_suspend_and_cleanup() {
         // Never load/write a real profile or use the installed application.
