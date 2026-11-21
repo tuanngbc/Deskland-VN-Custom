@@ -1,4 +1,13 @@
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'dock-stage-workload.ps1')
+$stableStage = @('[999.500] DOCK_BENCH_STAGE 0 0', '[1000.000] DOCK_BENCH_STAGE 6 0')
+if (!(Test-DockStageWorkload $stableStage 1000 1125 6) -or
+    (Test-DockStageWorkload $stableStage 999 1125 6) -or
+    (Test-DockStageWorkload ($stableStage + '[1000.100] DOCK_BENCH_STAGE 6 1') 1000 1125 6) -or
+    (Test-DockStageWorkload ($stableStage + '[1045.100] DOCK_BENCH_STAGE 5 0' + '[1046.100] DOCK_BENCH_STAGE 6 0') 1000 1125 6) -or
+    !(Test-DockStageWorkload ($stableStage + '[1125.100] DOCK_BENCH_STAGE 0 0') 1000 1125 6)) {
+    throw 'Stage preview count and transition contract failed'
+}
 $root = Join-Path ([IO.Path]::GetTempPath()) ('deskland-counter-contract-' + [Guid]::NewGuid())
 $cases = @('control','dock') | ForEach-Object {
     (New-Item -ItemType Directory -Path (Join-Path $root $_)).FullName
@@ -68,6 +77,22 @@ try {
     Write-Manifest $cases[1]
     Expect-Invalid 'FixtureRect differs'
     $manifest.FixtureRect = '-300,100,100,330'
+    $manifest.PreviewFixtureCards = 6
+    Write-Manifest $cases[0]
+    $manifest.StageEnabled = $true
+    Write-Manifest $cases[1]
+    Expect-Invalid 'Stage lacks verified DWM fixture links'
+    $manifest.StageFixturePreviews = 6
+    Write-Manifest $cases[1]
+    Expect-Invalid 'both Stage workloads must be verified'
+    $manifest.StageEnabled = $false
+    $manifest.StageFixturePreviews = 0
+    Write-Manifest $cases[0]
+    $manifest.StageEnabled = $true
+    $manifest.StageFixturePreviews = 6
+    Write-Manifest $cases[1]
+    $result = & $summary -Baseline $cases[0] -Candidate $cases[1] | ConvertFrom-Json
+    if ($result.StageFixturePreviews.Baseline -ne 0 -or $result.StageFixturePreviews.Candidate -ne 6) { throw 'Stage link evidence missing from pair' }
     $manifest.State = 'INVALID'
     Write-Manifest $cases[1]
     Expect-Invalid 'INVALID interval:'

@@ -38,6 +38,9 @@ function ReadInterval($path) {
         $null -eq $m.SceneSeed -or $m.ObservedCoverage -cne $m.Coverage) {
         throw 'INVALID interval: missing control settings or fixture metadata'
     }
+    if ($m.StageEnabled -and ($m.StageFixturePreviews -lt 1 -or $m.PreviewFixtureCards -lt 1)) {
+        throw 'INVALID interval: Stage lacks verified DWM fixture links'
+    }
     $rows = @(Import-Csv -LiteralPath (Join-Path $path 'controlled-process.csv'))
     if ($rows.Count -ne $m.Actual -or $rows.Count -ne $m.Requested -or $rows.Count -lt 125) { throw 'Incomplete process data' }
     for ($i=0; $i -lt $rows.Count; $i++) {
@@ -83,6 +86,10 @@ function ReadInterval($path) {
 }
 $a = ReadInterval $Baseline
 $b = ReadInterval $Candidate
+if (($a.Metadata.StageEnabled -or $b.Metadata.StageEnabled) -and
+    ($null -eq $a.Metadata.StageFixturePreviews -or $null -eq $b.Metadata.StageFixturePreviews)) {
+    throw 'INVALID pair: both Stage workloads must be verified'
+}
 foreach ($field in 'Display','Coverage','Theme','Mode','SceneSeed','ControlSettingsSha256','FixtureRect','FixtureFullscreen','PreviewFixtureCards','SessionWebViewCount','LogicalCpus','WarmupSeconds','Requested') {
     if ($a.Metadata.$field -cne $b.Metadata.$field) { throw "INVALID pair: $field differs" }
 }
@@ -108,5 +115,6 @@ foreach ($role in 'Deskland','DWM') {
     BaselineSeconds=$a.Duration;CandidateSeconds=$b.Duration;Process=$metrics;PerEngineGPU=$engines;
     BaselineCounterWarnings=$a.Metadata.CounterWarnings;CandidateCounterWarnings=$b.Metadata.CounterWarnings;
     WallpaperFrameWindows=@{Baseline=$a.WallpaperFrames;Candidate=$b.WallpaperFrames};
+    StageFixturePreviews=@{Baseline=$a.Metadata.StageFixturePreviews;Candidate=$b.Metadata.StageFixturePreviews};
     CandidateAnimationTrialLifetimeTrace=$b.Frame
 } | ConvertTo-Json -Depth 10

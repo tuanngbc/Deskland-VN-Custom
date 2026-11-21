@@ -136,6 +136,9 @@ fn native_preview_relationships_survive_switches_and_release() {
         assert!(state.update(dst.0, &items, layout));
         assert_eq!(state.links.len(), 7);
         assert!(!state.includes(items[7].hwnd) && !state.includes(items[8].hwnd));
+        assert_eq!(state.benchmark_counts(fixture.0.id(), 0), (7, 0));
+        assert_eq!(state.benchmark_counts(fixture.0.id(), items[0].hwnd as usize), (6, 1));
+        assert_eq!(state.benchmark_counts(std::process::id(), 0), (0, 7));
         let key = items[0].hwnd as usize;
         let first = state.links[&key].area;
         let stable = state.links[&key].raw;

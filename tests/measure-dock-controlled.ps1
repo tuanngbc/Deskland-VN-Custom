@@ -5,11 +5,13 @@ param(
     [Parameter(Mandatory)][int]$CandidateId,
     [Parameter(Mandatory)][int]$SceneSeed,
     [ValidatePattern('^[A-F0-9]{64}$')][string]$ExpectedControlSettingsHash,
+    [ValidateRange(0,16)][int]$ExpectedStagePreviews,
     [string]$AbortMarker,
     [ValidateRange(15,600)][int]$Warmup = 15,
     [Alias('Samples')][ValidateRange(125,600)][int]$RequestedSamples = 125
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'dock-stage-workload.ps1')
 if ($BuildSha -cnotmatch '^[a-f0-9]{40}$') { throw 'Use the complete GitHub build commit' }
 $trial = (Resolve-Path -LiteralPath $TrialDir).Path
 if ((Get-Content -LiteralPath (Join-Path $trial '.tuanpc-desk-trial') -Raw).Trim() -cne 'tuanpc-desk isolated native smoke profile v1') { throw 'Trial marker mismatch' }
@@ -97,6 +99,7 @@ $log = Join-Path $build 'tuanpc-desk.log'
 $settings = Join-Path $trial 'settings.json'
 $settingsHash = (Get-FileHash -LiteralPath $settings -Algorithm SHA256).Hash
 $cfg = Get-Content -LiteralPath $settings -Raw | ConvertFrom-Json
+$verifyStage = $PSBoundParameters.ContainsKey('ExpectedStagePreviews')
 $controlCfg = Get-Content -LiteralPath $settings -Raw | ConvertFrom-Json
 $controlCfg.PSObject.Properties.Remove('dock')
 $controlJson = $controlCfg | ConvertTo-Json -Depth 100 -Compress -WarningAction Stop
@@ -141,6 +144,7 @@ $started = $null
 $counterErrors = $null
 $preflightCounterErrors = $null
 $observedCoverage = $null
+$observedStagePreviews = $null
 $observedSeed = if ($cfg.params -and $cfg.theme) { $cfg.params.PSObject.Properties[$cfg.theme].Value.seed }
 try {
     if (!$cfg.wallpaperEnabled -or $null -eq $observedSeed -or $observedSeed -ne $SceneSeed -or
@@ -148,6 +152,13 @@ try {
         $reasons.Add('configuration-must-have-wallpaper-fixed-scene-and-static-time-weather')
     }
     if ($ExpectedControlSettingsHash -and $ExpectedControlSettingsHash -cne $controlHash) { $reasons.Add('control-settings-differ-from-first-interval') }
+    if ($cfg.dock.stageEnabled -and !$verifyStage) { $reasons.Add('stage-workload-not-requested') }
+    if ($verifyStage) {
+        $stageMarker = Join-Path $trial 'dock-benchmark-stage.txt'
+        $marker = if (Test-Path -LiteralPath $stageMarker -PathType Leaf) { (Get-Content -LiteralPath $stageMarker -Raw).Trim() }
+        if ($marker -cne "$($fixture.PID) $($fixture.Hwnd)" -or $fixture.Cards -lt 1) { $reasons.Add('stage-fixture-marker-mismatch') }
+        if ([bool]$cfg.dock.stageEnabled -ne ($ExpectedStagePreviews -gt 0)) { $reasons.Add('stage-settings-workload-mismatch') }
+    }
     Start-Sleep -Seconds $Warmup
     $display = [DeskPerfCounters]::DisplaySnapshot()
     $web = (SessionWebView) -join ','
@@ -158,6 +169,9 @@ try {
     if (!$display) { $reasons.Add('two-display-geometry-or-dpi-unavailable') }
     $preflightTime = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0
     $observedCoverage = AssertCoverage $preflightTime $preflightTime
+    if ($verifyStage -and !(Test-DockStageWorkload -Lines (Get-Content -LiteralPath $log -Encoding utf8) -From $preflightTime -Through $preflightTime -Expected $ExpectedStagePreviews)) {
+        $reasons.Add('unverified-initial-stage-workload')
+    }
     if (!$reasons.Count) {
         # Check real PDH data, rather than just whether the counter set exists.
         $check = Get-Counter -Counter $counter -SampleInterval 1 -MaxSamples 2 -ErrorAction SilentlyContinue -ErrorVariable +preflightCounterErrors |
@@ -211,6 +225,13 @@ try {
     if ($samples.Count -lt $RequestedSamples -or $samples[-1].Epoch-$samples[0].Epoch -lt 120) { $reasons.Add('less-than-120-continuous-seconds') }
     if ($samples.Count) {
         $null = AssertCoverage $started $samples[-1].Epoch
+        if ($verifyStage) {
+            if (Test-DockStageWorkload -Lines (Get-Content -LiteralPath $log -Encoding utf8) -From $preflightTime -Through $samples[-1].Epoch -Expected $ExpectedStagePreviews) {
+                $observedStagePreviews = $ExpectedStagePreviews
+            } else {
+                $reasons.Add('stage-live-preview-workload-changed')
+            }
+        }
         $deactivated = Join-Path $Evidence 'fixture-deactivated.log'
         if (Test-Path -LiteralPath $deactivated) {
             $lost = @(Get-Content -LiteralPath $deactivated | Where-Object {
@@ -235,6 +256,7 @@ try {
         WarmupSeconds=$Warmup;Requested=$RequestedSamples;Actual=$samples.Count;LogicalCpus=$logical;Adapters=$adapters;
         Display=$display;Coverage=$expected;ObservedCoverage=$observedCoverage;Theme=$cfg.theme;Mode=$cfg.mode;ControlSettingsSha256=$controlHash;SceneSeed=$observedSeed;
         FixtureRect=$anchor.ToString();FixtureFullscreen=$fixture.Fullscreen;PreviewFixtureCards=$fixture.Cards;
+        StageFixturePreviews=$observedStagePreviews;
         DockEnabled=[bool]$cfg.dock.enabled;StageEnabled=[bool]$cfg.dock.stageEnabled;SessionWebViewCount=if($web){($web -split ',').Count}else{0};
         CounterWarnings=$counterErrors.Count
         PreflightCounterWarnings=$preflightCounterErrors.Count

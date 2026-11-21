@@ -664,6 +664,13 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         }
         if changed{InvalidateRect(stage.hwnd,ptr::null(),0);}
     }
+    if let Some((pid, anchor)) = crate::trial::benchmark_stage_fixture() {
+        let (fixture, other) = state.stages.iter()
+            .filter(|s| s.preview_visible && IsWindowVisible(s.preview_hwnd) != 0)
+            .map(|s| s.previews.benchmark_counts(pid, anchor))
+            .fold((0, 0), |(a, b), (c, d)| (a + c, b + d));
+        crate::trial::benchmark_stage_links(fixture, other);
+    }
     // Pick at most one cacheful across both modules; otherwise icon-complete
     // messages could continually evict and re-request visible icons.
     ATLAS.with(|a|{

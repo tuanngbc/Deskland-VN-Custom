@@ -21,6 +21,10 @@ impl Previews {
         areas
     }
     pub fn includes(&self,hwnd:HWND)->bool{self.links.contains_key(&(hwnd as usize))}
+    pub fn benchmark_counts(&self, pid: u32, anchor: usize) -> (usize, usize) {
+        let fixture = self.links.iter().filter(|&(&source, link)| source != anchor && link.pid == pid).count();
+        (fixture, self.links.len() - fixture)
+    }
     pub unsafe fn update(&mut self,dst:HWND,items:&[Item],layout:Layout)->bool{
         // A thumbnail is bound to its original DWM destination. Changing
         // hosts must not reuse registrations even if the source list matches.

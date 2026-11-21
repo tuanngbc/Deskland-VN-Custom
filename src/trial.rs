@@ -16,6 +16,29 @@ pub fn benchmark_active() -> bool {
         .is_ok_and(|flag| flag.trim() == "tuanpc-desk dock benchmark v1"))
 }
 
+/// Read once from the isolated profile, before the first Dock refresh.
+/// The foreground anchor is part of the fixture process but is not a card.
+pub fn benchmark_stage_fixture() -> Option<(u32, usize)> {
+    static FIXTURE: OnceLock<Option<(u32, usize)>> = OnceLock::new();
+    if !benchmark_active() { return None; }
+    *FIXTURE.get_or_init(|| {
+        let contents = std::fs::read_to_string(data_dir()?.join("dock-benchmark-stage.txt")).ok()?;
+        let mut fields = contents.split_whitespace();
+        let pid = fields.next()?.parse::<u32>().ok()?;
+        let anchor = fields.next()?.parse::<usize>().ok()?;
+        (pid != 0 && anchor != 0 && fields.next().is_none()).then_some((pid, anchor))
+    })
+}
+
+pub fn benchmark_stage_links(fixture: usize, other: usize) {
+    thread_local! { static LAST: std::cell::Cell<Option<(usize, usize)>> = const { std::cell::Cell::new(None) }; }
+    LAST.with(|last| {
+        if last.replace(Some((fixture, other))) != Some((fixture, other)) {
+            crate::log!("DOCK_BENCH_STAGE {fixture} {other}");
+        }
+    });
+}
+
 pub fn benchmark_coverage(screens: &[windows_sys::Win32::Foundation::RECT], covered: &[bool]) {
     if !benchmark_active() { return; }
     thread_local! { static LAST: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) }; }
