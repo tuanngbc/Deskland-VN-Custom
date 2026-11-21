@@ -18,6 +18,12 @@ public static class DeskPerfFixture {
     [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
     [StructLayout(LayoutKind.Sequential)] struct Rect { public int l,t,r,b; }
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window, out Rect rect);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
+    [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr window, uint command);
+    [DllImport("user32.dll", EntryPoint="GetWindowLongW")] public static extern int GetWindowLong(IntPtr window, int index);
+    [DllImport("user32.dll")] public static extern bool GetWindowDisplayAffinity(IntPtr window, out uint affinity);
+    [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr window, uint attribute, out uint value, uint size);
     public static string WindowRect(IntPtr window) {
         Rect r;
         if (!GetWindowRect(window, out r)) return null;
@@ -41,7 +47,9 @@ try {
         $forms.Add($form)
         $form.Text = "Bench card $i"
         $form.StartPosition = 'Manual'
-        $form.Bounds = [Drawing.Rectangle]::new($screen.Bounds.Left+205+($i%4)*24,$screen.Bounds.Top+160+($i%4)*58,365,225)
+        $row = [int][Math]::Floor($i / 2) % 2
+        $column = [int][Math]::Floor($i / 4)
+        $form.Bounds = [Drawing.Rectangle]::new($screen.Bounds.Left+205+$column*370,$screen.Bounds.Top+160+$row*240,355,215)
         $form.BackColor = [Drawing.Color]::FromArgb(42+$i*12,101,154)
         # WinForms uses a layered source when Opacity is below 1.0. This
         # permits a verified display-affinity query on Windows 11.
@@ -64,7 +72,8 @@ try {
     }.GetNewClosure())
     $screen = if ($Fullscreen -eq 'secondary') { $screens[1] } else { $screens[0] }
     if ($Fullscreen -eq 'none') {
-        $control.Bounds = [Drawing.Rectangle]::new($screen.Bounds.Left+475,$screen.Bounds.Top+100,400,230)
+        $offset = if ($Cards -gt 0) { [Math]::Min(605, $screen.Bounds.Width-400) } else { 475 }
+        $control.Bounds = [Drawing.Rectangle]::new($screen.Bounds.Left+$offset,$screen.Bounds.Top+100,400,230)
     } else {
         $control.FormBorderStyle = 'None'
         $control.Bounds = $screen.Bounds
@@ -84,6 +93,28 @@ try {
     }
     foreach ($form in $forms) { $form.Show() }
     $control.Activate()
+    if ($Cards -gt 0) {
+        [Windows.Forms.Application]::DoEvents()
+        $sources = @(for ($i=0; $i -lt $Cards; $i++) {
+            $source = $forms[$i].Handle
+            [uint32]$affinity = 0
+            [uint32]$cloaked = 0
+            $affinityOk = [DeskPerfFixture]::GetWindowDisplayAffinity($source,[ref]$affinity)
+            $cloakOk = [DeskPerfFixture]::DwmGetWindowAttribute($source,14,[ref]$cloaked,4) -ge 0
+            [pscustomobject]@{
+                Card=$i;Rect=[DeskPerfFixture]::WindowRect($source)
+                Visible=[DeskPerfFixture]::IsWindowVisible($source);Minimized=[DeskPerfFixture]::IsIconic($source)
+                Unowned=[DeskPerfFixture]::GetWindow($source,4) -eq [IntPtr]::Zero
+                ToolWindow=([DeskPerfFixture]::GetWindowLong($source,-20) -band 0x80) -ne 0
+                AffinityOk=$affinityOk;Affinity=$affinity;CloakOk=$cloakOk;Cloaked=$cloaked
+            }
+        })
+        ConvertTo-Json -InputObject $sources | Set-Content -LiteralPath (Join-Path $Evidence 'fixture-card-check.json')
+        if (@($sources | Where-Object { !$_.Rect -or !$_.Visible -or $_.Minimized -or !$_.Unowned -or $_.ToolWindow -or
+                    !$_.AffinityOk -or $_.Affinity -ne 0 -or !$_.CloakOk -or $_.Cloaked -ne 0 }).Count) {
+            throw 'A test-owned card failed the Win32 preview source checks'
+        }
+    }
     $controlRect = [DeskPerfFixture]::WindowRect($control.Handle)
     if (!$controlRect -or $control.WindowState -ne 'Normal') { throw 'Expected ordinary owned fixture geometry' }
     $next = Join-Path $Evidence 'fixture-ready.next'
