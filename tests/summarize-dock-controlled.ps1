@@ -8,11 +8,34 @@ function Percentile($values,[double]$p) {
     if (!$ordered.Count) { return $null }
     $ordered[[int][Math]::Max(0,[Math]::Ceiling($p*$ordered.Count)-1)]
 }
+function WallpaperFrameWindows($path,[double]$start,[double]$end) {
+    $log = Join-Path $path 'tuanpc-desk.log'
+    if (!(Test-Path -LiteralPath $log -PathType Leaf)) { return $null }
+    $windows = @(Get-Content -LiteralPath $log -Encoding utf8 | ForEach-Object {
+        if ($_ -match '^\[(\d+\.\d+)\].+\| (\d+\.\d+) khung/giây, CPU vẽ (\d+\.\d+) ms/khung$') {
+            $numbers = $Matches
+            $stamp = [double]::Parse($numbers[1],[Globalization.CultureInfo]::InvariantCulture)
+            if ($stamp - 10 -ge $start -and $stamp -le $end) {
+                [pscustomobject]@{
+                    Fps=[double]::Parse($numbers[2],[Globalization.CultureInfo]::InvariantCulture)
+                    ClientMs=[double]::Parse($numbers[3],[Globalization.CultureInfo]::InvariantCulture)
+                }
+            }
+        }
+    })
+    if (!$windows.Count) { return $null }
+    [ordered]@{
+        Count=$windows.Count
+        MedianWindowFps=Percentile $windows.Fps .5
+        MedianWindowMeanClientMs=Percentile $windows.ClientMs .5
+    }
+}
 function ReadInterval($path) {
     $m = Get-Content -LiteralPath (Join-Path $path 'verdict.json') -Raw | ConvertFrom-Json
     if ($m.State -cne 'VALID_INTERVAL') { throw "INVALID interval: $($m.Reasons -join ', ')" }
     if ($m.Schema -ne 2 -or $m.ControlSettingsSha256 -cnotmatch '^[A-F0-9]{64}$' -or
-        $m.FixtureRect -notmatch '^-?\d+,-?\d+,-?\d+,-?\d+$' -or $m.FixtureFullscreen -notin 'none','primary','secondary') {
+        $m.FixtureRect -notmatch '^-?\d+,-?\d+,-?\d+,-?\d+$' -or $m.FixtureFullscreen -notin 'none','primary','secondary' -or
+        $null -eq $m.SceneSeed -or $m.ObservedCoverage -cne $m.Coverage) {
         throw 'INVALID interval: missing control settings or fixture metadata'
     }
     $rows = @(Import-Csv -LiteralPath (Join-Path $path 'controlled-process.csv'))
@@ -55,11 +78,12 @@ function ReadInterval($path) {
             [ordered]@{Output=$_.Name;Submissions=$_.Count;CadenceMs=@((Percentile $gaps .5),(Percentile $gaps .95),(Percentile $gaps .99));PaintMs=@((Percentile $paint .5),(Percentile $paint .95),(Percentile $paint .99))}
         })
     }
-    @{Metadata=$m;Process=$process;GPU=$gpu;Frame=$frame;Duration=$time}
+    @{Metadata=$m;Process=$process;GPU=$gpu;Frame=$frame;Duration=$time;
+        WallpaperFrames=(WallpaperFrameWindows $path ([double]$start.Epoch) ([double]$end.Epoch))}
 }
 $a = ReadInterval $Baseline
 $b = ReadInterval $Candidate
-foreach ($field in 'Display','Coverage','Theme','Mode','ControlSettingsSha256','FixtureRect','FixtureFullscreen','PreviewFixtureCards','SessionWebViewCount','LogicalCpus','WarmupSeconds','Requested') {
+foreach ($field in 'Display','Coverage','Theme','Mode','SceneSeed','ControlSettingsSha256','FixtureRect','FixtureFullscreen','PreviewFixtureCards','SessionWebViewCount','LogicalCpus','WarmupSeconds','Requested') {
     if ($a.Metadata.$field -cne $b.Metadata.$field) { throw "INVALID pair: $field differs" }
 }
 if (($a.Metadata.Adapters | ConvertTo-Json -Compress) -cne ($b.Metadata.Adapters | ConvertTo-Json -Compress)) {
@@ -83,5 +107,6 @@ foreach ($role in 'Deskland','DWM') {
     State='VALID_PAIR';BaselineBuild=$a.Metadata.Build;CandidateBuild=$b.Metadata.Build;
     BaselineSeconds=$a.Duration;CandidateSeconds=$b.Duration;Process=$metrics;PerEngineGPU=$engines;
     BaselineCounterWarnings=$a.Metadata.CounterWarnings;CandidateCounterWarnings=$b.Metadata.CounterWarnings;
+    WallpaperFrameWindows=@{Baseline=$a.WallpaperFrames;Candidate=$b.WallpaperFrames};
     CandidateAnimationTrialLifetimeTrace=$b.Frame
 } | ConvertTo-Json -Depth 10

@@ -1179,7 +1179,14 @@ impl App {
         let seed = self.seed();
         let p = self.cfg.params.get(&self.cfg.theme);
         let now = self.now();
-        let rs = 0x5EED_0000 + idx as u64 * 7919 + self.start.elapsed().as_nanos() as u64;
+        // In a marked benchmark replay the same actor RNG as well as the same
+        // terrain seed. Leave the normal desktop's varying actor paths alone.
+        let actor_salt = if trial::benchmark_active() {
+            u64::from(seed as u32)
+        } else {
+            self.start.elapsed().as_nanos() as u64
+        };
+        let rs = (0x5EED_0000 + idx as u64 * 7919).wrapping_add(actor_salt);
         match self.cfg.theme.as_str() {
             "meadow" => Box::new(themes::meadow::Meadow::new(gl, w, h, buf_w, buf_h, scale, seed, themes::meadow::Params::from_json(p), rs, now)),
             "beach-turquoise" => Box::new(themes::maldives::Maldives::new(gl, w, h, buf_w, buf_h, scale, seed, themes::maldives::Params::from_json(p), rs, now)),
@@ -2121,6 +2128,26 @@ fn main() {
         // Report only to an explicit, marked trial profile selected by the caller.
         unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2); }
         if std::fs::write(dir.join("dock-displays.json"), dock::display_json().to_string()).is_err() {
+            std::process::exit(3);
+        }
+        return;
+    }
+    if args.iter().any(|a| a == "--trial-benchmark-coverage-probe") {
+        let Some(dir) = trial::data_dir() else { std::process::exit(2); };
+        if !trial::benchmark_active() { std::process::exit(2); }
+        // This path only inspects HWND geometry. It does not acquire or signal
+        // the application's singleton, change focus or start a module.
+        unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2); }
+        let screens = monitors();
+        if screens.is_empty() { std::process::exit(3); }
+        let own = arg_value(&args, "--benchmark-wallpaper-pid").and_then(|v| v.parse::<u32>().ok()).filter(|&id| id != 0);
+        let bounds: Vec<_> = screens.iter().map(|m| m.rect).collect();
+        let reasons = desktop::probe_coverage(&bounds, own);
+        let outputs: Vec<_> = screens.iter().zip(reasons).map(|(m, reason)| serde_json::json!({
+            "rect": [m.rect.left, m.rect.top, m.rect.right, m.rect.bottom],
+            "primary": m.primary, "covered": reason.is_some(), "reason": reason
+        })).collect();
+        if std::fs::write(dir.join("wallpaper-coverage.json"), serde_json::json!({"outputs":outputs}).to_string()).is_err() {
             std::process::exit(3);
         }
         return;

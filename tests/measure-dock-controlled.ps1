@@ -3,6 +3,9 @@ param(
     [Parameter(Mandatory)][string]$Evidence,
     [Parameter(Mandatory)][string]$BuildSha,
     [Parameter(Mandatory)][int]$CandidateId,
+    [Parameter(Mandatory)][int]$SceneSeed,
+    [ValidatePattern('^[A-F0-9]{64}$')][string]$ExpectedControlSettingsHash,
+    [string]$AbortMarker,
     [ValidateRange(15,600)][int]$Warmup = 15,
     [Alias('Samples')][ValidateRange(125,600)][int]$RequestedSamples = 125
 )
@@ -42,8 +45,33 @@ public static class DeskPerfCounters {
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
     [DllImport("user32.dll")] public static extern uint GetGuiResources(IntPtr process, uint flags);
-    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Rect rect);
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window, out Rect rect);
+    [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern IntPtr FindWindowExW(IntPtr parent, IntPtr after, string cls, string title);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+    public static bool PhysicalWindowRect(IntPtr window, out Rect rect) {
+        var previous = SetThreadDpiAwarenessContext((IntPtr)(-4));
+        if (previous == IntPtr.Zero) { rect = default(Rect); return false; }
+        try { return GetWindowRect(window, out rect); }
+        finally { SetThreadDpiAwarenessContext(previous); }
+    }
+    public static bool SettingsVisible(uint expectedPid) {
+        foreach (var cls in new[] {"TuanpcDeskSettings", "TuanpcDeskWebSettings"}) {
+            var win = IntPtr.Zero;
+            while ((win = FindWindowExW(IntPtr.Zero, win, cls, null)) != IntPtr.Zero) {
+                GetWindowThreadProcessId(win, out uint pid);
+                if (pid == expectedPid && IsWindowVisible(win)) return true;
+            }
+        }
+        return false;
+    }
     public static string DisplaySnapshot() {
+        var previous = SetThreadDpiAwarenessContext((IntPtr)(-4));
+        if (previous == IntPtr.Zero) return null;
+        try { return ReadDisplays(); }
+        finally { SetThreadDpiAwarenessContext(previous); }
+    }
+    static string ReadDisplays() {
         var all = new List<string>();
         bool bad = false;
         bool ok = EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr h, IntPtr dc, ref Rect bounds, IntPtr data) => {
@@ -97,6 +125,7 @@ function AssertCoverage($from,$through) {
     if (@($coverage | Where-Object {$_.Timestamp -gt $from -and $_.Timestamp -le $through -and $_.State -cne $expected}).Count) {
         $reasons.Add('wallpaper-coverage-changed')
     }
+    $before.State
 }
 
 $counter = @('\GPU Engine(*)\Utilization Percentage','\Process(dwm*)\ID Process','\Process(dwm*)\% Processor Time')
@@ -110,26 +139,54 @@ $display = $null
 $web = $null
 $started = $null
 $counterErrors = $null
+$preflightCounterErrors = $null
+$observedCoverage = $null
+$observedSeed = if ($cfg.params -and $cfg.theme) { $cfg.params.PSObject.Properties[$cfg.theme].Value.seed }
 try {
+    if (!$cfg.wallpaperEnabled -or $null -eq $observedSeed -or $observedSeed -ne $SceneSeed -or
+        $cfg.environment.time -ne $false -or $cfg.environment.weather -ne $false) {
+        $reasons.Add('configuration-must-have-wallpaper-fixed-scene-and-static-time-weather')
+    }
+    if ($ExpectedControlSettingsHash -and $ExpectedControlSettingsHash -cne $controlHash) { $reasons.Add('control-settings-differ-from-first-interval') }
     Start-Sleep -Seconds $Warmup
     $display = [DeskPerfCounters]::DisplaySnapshot()
     $web = (SessionWebView) -join ','
-    $started = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0
     if ([DeskPerfCounters]::GetForegroundWindow() -ne $fixtureHwnd) { $reasons.Add('fixture-not-foreground') }
-    if (![DeskPerfCounters]::GetWindowRect($fixtureHwnd,[ref]$anchor)) { $reasons.Add('fixture-window-gone') }
+    if (![DeskPerfCounters]::PhysicalWindowRect($fixtureHwnd,[ref]$anchor)) { $reasons.Add('fixture-window-gone') }
+    if ($anchor.ToString() -cne $fixture.Rect) { $reasons.Add('fixture-not-in-declared-geometry') }
+    if ([DeskPerfCounters]::SettingsVisible($CandidateId)) { $reasons.Add('candidate-settings-visible') }
     if (!$display) { $reasons.Add('two-display-geometry-or-dpi-unavailable') }
-    AssertCoverage $started $started
+    $preflightTime = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0
+    $observedCoverage = AssertCoverage $preflightTime $preflightTime
+    if (!$reasons.Count) {
+        # Check real PDH data, rather than just whether the counter set exists.
+        $check = Get-Counter -Counter $counter -SampleInterval 1 -MaxSamples 2 -ErrorAction SilentlyContinue -ErrorVariable +preflightCounterErrors |
+            Select-Object -Last 1
+        foreach ($id in $CandidateId,$dwmId) {
+            $prefix = '^pid_' + $id + '_luid_[a-f0-9x]+_[a-f0-9x]+_phys_\d+_eng_\d+_engtype_.+$'
+            if (!@($check.CounterSamples | Where-Object {$_.Status -eq 0 -and $_.InstanceName -match $prefix -and
+                      ![double]::IsInfinity($_.CookedValue) -and $_.CookedValue -ge 0}).Count) {
+                $reasons.Add($(if ($id -eq $CandidateId) {'preflight-deskland-gpu-unavailable'}else{'preflight-dwm-gpu-unavailable'}))
+            }
+        }
+        $started = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0
+        $observedCoverage = AssertCoverage $preflightTime $started
+        if ([DeskPerfCounters]::GetForegroundWindow() -ne $fixtureHwnd) { $reasons.Add('fixture-lost-foreground-during-preflight') }
+        if ((Get-FileHash -LiteralPath $settings -Algorithm SHA256).Hash -cne $settingsHash) { $reasons.Add('trial-settings-changed-during-preflight') }
+    }
     if (!$reasons.Count) {
         Get-Counter -Counter $counter -SampleInterval 1 -MaxSamples $RequestedSamples -ErrorAction SilentlyContinue -ErrorVariable +counterErrors | ForEach-Object {
             $pdh = $_.CounterSamples
             $utc = [DateTimeOffset]$_.Timestamp
             $epoch = $utc.ToUnixTimeMilliseconds() / 1000.0
             $i = $samples.Count
+            if ($AbortMarker -and (Test-Path -LiteralPath $AbortMarker -PathType Leaf)) { throw [OperationCanceledException]::new('Controlled test canceled') }
             if ($app.HasExited) { $reasons.Add("candidate-exited:$i"); return }
             $app.Refresh()
             if ([DeskPerfCounters]::GetForegroundWindow() -ne $fixtureHwnd) { $reasons.Add("foreground-changed:$i") }
             [DeskPerfCounters+Rect]$now = [DeskPerfCounters+Rect]::new()
-            if (![DeskPerfCounters]::GetWindowRect($fixtureHwnd,[ref]$now) -or $now.ToString() -cne $anchor.ToString()) { $reasons.Add("fixture-geometry-changed:$i") }
+            if (![DeskPerfCounters]::PhysicalWindowRect($fixtureHwnd,[ref]$now) -or $now.ToString() -cne $anchor.ToString()) { $reasons.Add("fixture-geometry-changed:$i") }
+            if ([DeskPerfCounters]::SettingsVisible($CandidateId)) { $reasons.Add("candidate-settings-opened:$i") }
             if ([DeskPerfCounters]::DisplaySnapshot() -cne $display) { $reasons.Add("display-geometry-or-dpi-changed:$i") }
             if (((SessionWebView) -join ',') -cne $web) { $reasons.Add("session-webview-set-changed:$i") }
             if ($i -and ($epoch - $samples[$i-1].Epoch -gt 1.75 -or $epoch -le $samples[$i-1].Epoch)) { $reasons.Add("missing-or-nonmonotonic-sample:$i") }
@@ -153,7 +210,7 @@ try {
     }
     if ($samples.Count -lt $RequestedSamples -or $samples[-1].Epoch-$samples[0].Epoch -lt 120) { $reasons.Add('less-than-120-continuous-seconds') }
     if ($samples.Count) {
-        AssertCoverage $started $samples[-1].Epoch
+        $null = AssertCoverage $started $samples[-1].Epoch
         $deactivated = Join-Path $Evidence 'fixture-deactivated.log'
         if (Test-Path -LiteralPath $deactivated) {
             $lost = @(Get-Content -LiteralPath $deactivated | Where-Object {
@@ -176,9 +233,10 @@ try {
     [ordered]@{
         Schema=2;State=if($reasons.Count){'INVALID'}else{'VALID_INTERVAL'};Reasons=@($reasons.ToArray());Build=$BuildSha;
         WarmupSeconds=$Warmup;Requested=$RequestedSamples;Actual=$samples.Count;LogicalCpus=$logical;Adapters=$adapters;
-        Display=$display;Coverage=$expected;Theme=$cfg.theme;Mode=$cfg.mode;ControlSettingsSha256=$controlHash;
-        FixtureRect=if($started){$anchor.ToString()};FixtureFullscreen=$fixture.Fullscreen;PreviewFixtureCards=$fixture.Cards;
+        Display=$display;Coverage=$expected;ObservedCoverage=$observedCoverage;Theme=$cfg.theme;Mode=$cfg.mode;ControlSettingsSha256=$controlHash;SceneSeed=$observedSeed;
+        FixtureRect=$anchor.ToString();FixtureFullscreen=$fixture.Fullscreen;PreviewFixtureCards=$fixture.Cards;
         DockEnabled=[bool]$cfg.dock.enabled;StageEnabled=[bool]$cfg.dock.stageEnabled;SessionWebViewCount=if($web){($web -split ',').Count}else{0};
         CounterWarnings=$counterErrors.Count
+        PreflightCounterWarnings=$preflightCounterErrors.Count
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $Evidence 'verdict.json')
 }

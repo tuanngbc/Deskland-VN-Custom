@@ -14,10 +14,19 @@ using System;
 using System.Runtime.InteropServices;
 public static class DeskPerfFixture {
     [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr context);
-    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+    [StructLayout(LayoutKind.Sequential)] struct Rect { public int l,t,r,b; }
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window, out Rect rect);
+    public static string WindowRect(IntPtr window) {
+        Rect r;
+        if (!GetWindowRect(window, out r)) return null;
+        return string.Format("{0},{1},{2},{3}",r.l,r.t,r.r,r.b);
+    }
 }
 '@
 [void][DeskPerfFixture]::SetProcessDpiAwarenessContext([IntPtr](-4))
+$previousDpi = [DeskPerfFixture]::SetThreadDpiAwarenessContext([IntPtr](-4))
+if ($previousDpi -eq [IntPtr]::Zero) { throw 'PMv2 fixture geometry unavailable' }
 $screens = @([Windows.Forms.Screen]::AllScreens | Sort-Object Primary -Descending)
 if ($screens.Count -ne 2) { throw 'This scenario requires two physical displays' }
 $forms = [Collections.Generic.List[Windows.Forms.Form]]::new()
@@ -56,6 +65,8 @@ try {
     }
     $control.Show()
     $control.Activate()
+    $controlRect = [DeskPerfFixture]::WindowRect($control.Handle)
+    if (!$controlRect -or $control.WindowState -ne 'Normal') { throw 'Expected ordinary owned fixture geometry' }
     $next = Join-Path $Evidence 'fixture-ready.next'
     $ready = Join-Path $Evidence 'fixture-ready.json'
     $expected = ($screens | Sort-Object {$_.Bounds.Left}, {$_.Bounds.Top} | ForEach-Object {
@@ -64,7 +75,7 @@ try {
         $covered = ($side -eq $Fullscreen) -or ($side -in $BackgroundCovered)
         '{0},{1},{2},{3}:{4}' -f $b.Left,$b.Top,$b.Right,$b.Bottom,[int]$covered
     }) -join ';'
-    [ordered]@{PID=$PID;Hwnd=$control.Handle.ToInt64();Cards=$Cards;Coverage=$expected;Fullscreen=$Fullscreen;BackgroundCovered=$BackgroundCovered} |
+    [ordered]@{PID=$PID;Hwnd=$control.Handle.ToInt64();Rect=$controlRect;Cards=$Cards;Coverage=$expected;Fullscreen=$Fullscreen;BackgroundCovered=$BackgroundCovered} |
         ConvertTo-Json | Set-Content -LiteralPath $next
     Move-Item -LiteralPath $next -Destination $ready
     while ($clock.Elapsed.TotalSeconds -lt $TimeoutSeconds -and !(Test-Path -LiteralPath $stop) -and !$control.IsDisposed) {
@@ -73,4 +84,5 @@ try {
     }
 } finally {
     foreach ($form in $forms) { $form.Dispose() }
+    [void][DeskPerfFixture]::SetThreadDpiAwarenessContext($previousDpi)
 }

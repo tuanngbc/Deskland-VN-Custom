@@ -7,7 +7,7 @@ $summary = Join-Path $PSScriptRoot 'summarize-dock-controlled.ps1'
 $manifest = [ordered]@{
     Schema=2;State='VALID_INTERVAL';Build=('a'*40);Requested=125;Actual=125;
     WarmupSeconds=15;LogicalCpus=4;Adapters=@(@{Name='Fixture GPU';DriverVersion='1'});
-    Display='fixture-display';Coverage='fixture-coverage';Theme='beach';Mode='panorama';
+    Display='fixture-display';Coverage='fixture-coverage';ObservedCoverage='fixture-coverage';Theme='beach';Mode='panorama';SceneSeed=32600;
     ControlSettingsSha256=('A'*64);FixtureRect='-300,100,100,330';FixtureFullscreen='none';
     PreviewFixtureCards=0;SessionWebViewCount=0;CounterWarnings=0
 }
@@ -38,16 +38,32 @@ try {
             [pscustomobject]@{Sequence=$_;Role='Deskland';Engine='adapter-b copy';Value=9;Status=0}
         }
         $engines | Export-Csv -LiteralPath (Join-Path $dir 'controlled-engines.csv') -NoTypeInformation
+        @(
+            '[1005.000] RAM riêng 50.0 MB, working set 40.0 MB | 90.0 khung/giây, CPU vẽ 9.20 ms/khung'
+            '[1020.000] RAM riêng 50.0 MB, working set 40.0 MB | 30.0 khung/giây, CPU vẽ 1.80 ms/khung'
+            '[1125.000] RAM riêng 50.0 MB, working set 40.0 MB | 90.0 khung/giây, CPU vẽ 9.20 ms/khung'
+        ) | Set-Content -LiteralPath (Join-Path $dir 'tuanpc-desk.log') -Encoding utf8
         Write-Manifest $dir
     }
     $result = & $summary -Baseline $cases[0] -Candidate $cases[1] | ConvertFrom-Json
     if ($result.State -cne 'VALID_PAIR' -or $result.PerEngineGPU.'Deskland, adapter-a 3D'.MedianDelta -ne 1 -or
         $result.PerEngineGPU.'DWM, adapter-a 3D'.MedianDelta -ne 0 -or
         $result.PerEngineGPU.'Deskland, adapter-b copy'.MedianDelta -ne 0) { throw 'Matched engine contract failed' }
+    if ($result.WallpaperFrameWindows.Baseline.Count -ne 1 -or
+        $result.WallpaperFrameWindows.Baseline.MedianWindowFps -ne 30 -or
+        $result.WallpaperFrameWindows.Baseline.MedianWindowMeanClientMs -ne 1.8) { throw 'Wallpaper frame sample exceeded measurement interval' }
     $manifest.ControlSettingsSha256 = 'B'*64
     Write-Manifest $cases[1]
     Expect-Invalid 'ControlSettingsSha256 differs'
     $manifest.ControlSettingsSha256 = 'A'*64
+    $manifest.SceneSeed = 79500
+    Write-Manifest $cases[1]
+    Expect-Invalid 'SceneSeed differs'
+    $manifest.SceneSeed = 32600
+    $manifest.ObservedCoverage = 'wrong-coverage'
+    Write-Manifest $cases[1]
+    Expect-Invalid 'missing control settings or fixture metadata'
+    $manifest.ObservedCoverage = 'fixture-coverage'
     $manifest.FixtureRect = '-299,100,101,330'
     Write-Manifest $cases[1]
     Expect-Invalid 'FixtureRect differs'
@@ -64,7 +80,7 @@ try {
 } finally {
     # Remove only the fixture files created above, without a recursive delete.
     foreach ($dir in $cases) {
-        foreach ($name in 'verdict.json','controlled-process.csv','controlled-engines.csv') {
+        foreach ($name in 'verdict.json','controlled-process.csv','controlled-engines.csv','tuanpc-desk.log') {
             $path = Join-Path $dir $name
             if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path }
         }
