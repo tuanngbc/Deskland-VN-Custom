@@ -169,6 +169,18 @@ mod tests {
             }
             handles()
         };
+        // Calibrate the probe itself. Cold Windows/COM/runtime initialization
+        // can continue after the first modules are off, before the fixture
+        // makes any active toggles. Keep that measurement in the CI log.
+        let cold=handles();
+        for _ in 0..100 {
+            runtime.configure(off.clone());
+            assert!(runtime.inspect().is_empty());
+            runtime.configure(off.clone());
+            assert!(runtime.inspect().is_empty());
+        }
+        let calibrated=measure(cold);
+        eprintln!("Cold controller calibration (modules OFF): {cold} -> {calibrated} handles");
         let mut results=Vec::new();
         for (label,dock,stage) in [("control",false,false),("stage-only",false,true),
             ("dock-only",true,false),("both",true,true)] {
@@ -190,7 +202,25 @@ mod tests {
         let controller=runtime.control;
         drop(runtime);
         assert_eq!(unsafe{IsWindow(controller as _)},0);
-        eprintln!("After runtime shutdown: {} process handles",handles());
+        // The real app drops the controller when both modules are disabled.
+        // Verify that path separately from live reconfiguration.
+        let cold_restart=handles();
+        for _ in 0..5 {drop(Runtime::new(on.clone(),0).unwrap());}
+        let resumed=measure(cold_restart);
+        eprintln!("Controller restart warm-up: {cold_restart} -> {resumed} handles");
+        let t=Instant::now();
+        for _ in 0..100 {
+            let runtime=Runtime::new(on.clone(),0).unwrap();
+            let controller=runtime.control;
+            let active=runtime.inspect();
+            assert!(!active.is_empty());
+            drop(runtime);
+            assert_eq!(unsafe{IsWindow(controller as _)},0);
+            assert!(active.iter().all(|h| unsafe{IsWindow(*h as _)}==0));
+        }
+        let after=measure(resumed);
+        eprintln!("100 full controller restarts in {:?}; process handles {resumed} -> {after}",t.elapsed());
+        results.push(("full-restart",resumed,after));
         assert!(results.iter().all(|(_,start,after)|*after<=start+8),
             "process handles must not accumulate after module OFF: {results:?}");
     }

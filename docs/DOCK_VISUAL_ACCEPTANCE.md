@@ -6,7 +6,7 @@ Use the [macOS Dock controls](https://support.apple.com/en-us/guide/mac-help/mch
 
 The isolated probe compares the documented [DWM Desktop Acrylic backdrop](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwm_systembackdrop_type) to a premultiplied alpha capsule over the same sharp reference stripes. The latter provides real desktop transparency, fractional edges and a soft shadow, but does not blur the desktop. Do not label a successful DWM attribute call or the fallback surface as proof of true blur. Verify by examining the actual rendered pixels and measure before choosing the production path.
 
-Stage still needs [DWM thumbnail relationships](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/nf-dwmapi-dwmregisterthumbnail), fallback for unavailable previews and workspace behavior. Required evidence is actual Windows screenshots and motion capture, scoped to the trial fixture. VISUAL_PASS requires owner review of that evidence; OWNER_NATIVE_ACCEPTED remains separate.
+Stage now uses [DWM thumbnail relationships](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/nf-dwmapi-dwmregisterthumbnail), with fallbacks and explicit window groups. Native fixture evidence verifies content; sidebar composition and motion still require visual review. Required evidence is actual Windows screenshots and motion capture, scoped to the trial fixture. VISUAL_PASS requires owner review of that evidence; OWNER_NATIVE_ACCEPTED remains separate.
 
 ## Native render checkpoint
 

@@ -10,7 +10,7 @@ Updated after owner smoke at `fa93c16`, CI 44852504957, 2026-11-21. See [native 
 | K04 | Per-bar polling/paint extraction | Replaced by coalesced hooks, one recovery timer, change-only invalidation and bounded icon cache. First icon extraction still synchronous; D2 worker/cache refinement pending |
 | K05 | Packaged/AUMID identity incomplete | High, D1; cloaked filtering and minimized monitor fallback implemented, native real apps pending |
 | K06 | Dynamic DPI/stable per-monitor preferences incomplete | High, D5; work-area geometry now reconciled |
-| K07 | Stage lacks DWM previews/workspaces/placement restoration | High, D3 |
+| K07 | Stage cross-monitor movement, exact Z-order and advanced workspace editing are not yet verified | High, D3 |
 | K08 | Opaque UI, limited items, no real magnification/keyboard/reorder | D2 |
 | K09 | Borderless is resize, no original placement saved | D4; never call true fullscreen |
 | K10 | Settings links are not status widgets/native flyouts | D6, WINDOWS_DELEGATED |

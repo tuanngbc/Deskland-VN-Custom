@@ -9,7 +9,7 @@ Vocabulary: NOT_STARTED, IN_PROGRESS, IMPLEMENTED_UNVERIFIED, CI_PASS, CI_FAIL, 
 | D0 | Lifecycle/resource/API audit, benchmark protocol, CI | CI_PASS at 45bacf4, run 44844337708 | NATIVE_PENDING |
 | D1 | Identity/filtering/local activation, multiple windows, pin/order, events | Coalesced hooks, cloaked/minimized handling, local/global regression; EXE identity still incomplete | NATIVE_PENDING |
 | D2 | Glass, crisp icons, magnification, auto-hide, keyboard/drag, idle budget | GDI scaffold, bounded icon cache; actual glass/motion/drag pending | NATIVE_PENDING |
-| D3 | Real previews, group switch/restore, privacy | Sidebar only | NATIVE_PENDING |
+| D3 | Real previews, group switch/restore, privacy | d708b09 owner-host fixture verified content updates, one protected source, two groups and Stage OFF restoration; full gate pending | NATIVE_PENDING |
 | D4 | Reversible snap/quadrants/move; explicit fullscreen limits | Basic controls; no saved geometry | NATIVE_PENDING |
 | D5 | Negative coords/work-area/DPI/hotplug/stable display preferences | Pure geometry tests, manifest PerMonitorV2 | NATIVE_PENDING |
 | D6 | Accurate states/controls with explicit classification | Settings links WINDOWS_DELEGATED; remaining statuses PENDING | NATIVE_PENDING |
@@ -44,7 +44,7 @@ Stage moving previews must be real; independent groups restore minimized/maximiz
 | M1 | c2a589b CI and owner-host HWND geometry for primary Dock/all-display Stage; real WebView layout captured | Exact latest artifact, secondary-only and Custom tests, Settings/Win32 persistence, hotplug and mixed DPI |
 | M2 | Native glass/layered proof prepared; [visual notes](DOCK_VISUAL_ACCEPTANCE.md) | Hardware evidence and production integration, DPI/quality/icons |
 | M3 | Existing basic activations only | Animated layout and hit testing, auto-hide, reorder, keyboard and feedback |
-| M4 | Existing app sidebar only | Live DWM previews, privacy, groups/restoration, per-screen behavior |
+| M4 | Live DWM previews, two-group activation/restoration and separate 96-DPI side/scale observed | Full privacy matrix, richer group editing, display moves, mixed DPI and Z-order |
 | M5 | Raw pre-refactor samples started | Matched 12-scenario results, animation times, 100 toggles and leak checks |
 | M6 | No RC or owner visual/native acceptance | Native mixed-DPI/recovery/rollback and four-hour run |
 
@@ -54,4 +54,4 @@ Stage moving previews must be real; independent groups restore minimized/maximiz
 |---|---|---|
 | M2 | Owner-host alpha composite and real capsule still; Spotlight click | True blur, light/dark wallpaper matrix, DPI, animation pacing |
 | M3 | Windows CI for rail, keyboard plumbing and reorder model | Native reveal/focus/drag, accessibility, transition quality |
-| M4 | Windows CI for preview geometry, development code for explicit session-local group switching | Actual preview pixels/privacy matrix, owner desktop groups, mixed DPI, Z-order and display loss |
+| M4 | d708b09 CI + native source-content change, two groups, normal placement and Stage OFF | Full privacy matrix, mixed DPI, Z-order and display loss |
