@@ -1,5 +1,7 @@
 # Acceptance matrix D0-D9
 
+Current P0 build and scoped native evidence: [Dock P0 verification](DOCK_P0_VERIFICATION.md). The full owner acceptance gates remain pending.
+
 Vocabulary: NOT_STARTED, IN_PROGRESS, IMPLEMENTED_UNVERIFIED, CI_PASS, CI_FAIL, NATIVE_PENDING, NATIVE_PASS, OWNER_NATIVE_ACCEPTED, BLOCKED. CI_PASS never implies native acceptance.
 
 2026-11-21 owner smoke at fa93c16 added partial native evidence: eight module combinations via Win32 Settings, selected WebView controls, same-PID/negative-coordinate geometry, saved configuration/startup and normal cleanup. See [case results](DOCK_NATIVE_SMOKE_REPORT.md). NATIVE_PENDING below still applies to each complete milestone; do not erase narrower PASS or promote it to whole-gate PASS.

@@ -1,5 +1,7 @@
 # Durable development handoff
 
+Current P0 build and scoped native evidence: [Dock P0 verification](DOCK_P0_VERIFICATION.md). The full owner acceptance gates remain pending.
+
 Checkpoint 2026-11-21 02:10 UTC. Only codex/rust-dock, [Draft PR #1](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1), base codex/rust-test. Stable source a604519 remains clean in E:\deskland. No merge or production replacement; owner alone grants OWNER_NATIVE_ACCEPTED.
 
 Latest owner attachment authorized download, isolated native smoke, fixes, push and GitHub-only builds. It superseded the former no-download/no-run restriction for that test; it did not authorize candidate deployment. Prior AI writer was paused. Fetch and verify HEAD before changes; never reset/rebase/force-push over another writer. Push only owner repository, never upstream origin.

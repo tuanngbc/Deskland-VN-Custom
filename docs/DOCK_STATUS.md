@@ -1,5 +1,7 @@
 # Deskland Rust Dock + Stage Manager — execution status
 
+Current P0 build and scoped native evidence: [Dock P0 verification](DOCK_P0_VERIFICATION.md). The full owner acceptance gates remain pending.
+
 Checkpoint: 2026-11-21 02:10 UTC. Development only on `codex/rust-dock`, [Draft PR #1](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1).
 Accepted source baseline remains `a604519acaf4d5881b9e13e5476d52f97ac29c0f` on `codex/rust-test`, clean. Owner subsequently authorized isolated native smoke, fixes and CI, without production replacement or merge. See [native report](DOCK_NATIVE_SMOKE_REPORT.md). Installed EXE bytes were preserved; their source lineage lacks a BUILD-COMMIT marker and is not independently confirmed.
 

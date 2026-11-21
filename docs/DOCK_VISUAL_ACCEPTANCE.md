@@ -1,5 +1,7 @@
 # Visual acceptance evidence
 
+Current P0 build and scoped native evidence: [Dock P0 verification](DOCK_P0_VERIFICATION.md). The full owner acceptance gates remain pending.
+
 Status: **VISUAL_PENDING**. The owner rejected the previous GDI appearance. M1 Settings preview is a placement diagram and does not certify the Dock or Stage appearance.
 
 Use the [macOS Dock controls](https://support.apple.com/en-us/guide/mac-help/mchlp1119/mac) as a behavior reference. Build an original native design with Windows app icons and no Apple artwork. At 100%, 125%, 150% and 200% DPI, capture a landscape and a portrait screen on light and dark wallpapers. Compare capsule proportions, corners, sheen, shadow, icon clarity, spacing, state indicators, pointer magnification and input, hiding/reveal, thumbnails and group transitions.
