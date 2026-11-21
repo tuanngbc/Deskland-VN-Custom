@@ -143,8 +143,12 @@ impl Workspaces{
             }
         }
         self.detaching.retain_mut(|member| {
-            member.advance();
-            member.pending()
+            if member.pending() { member.advance(); }
+            // An unresponsive app can miss the restore deadline. Keep the
+            // placement for Exit rather than silently forgetting a window.
+            // A settled failure does not keep the fast timer running.
+            member.hidden.is_some() && member.key.live() &&
+                (member.pending() || IsIconic(member.key.handle())!=0)
         });
         self.pending()
     }
@@ -204,7 +208,7 @@ impl Workspaces{
             if let Some(i)=g.members.iter().position(|m|m.key==key){
                 let mut member=g.members.remove(i);
                 member.reveal();
-                if member.pending(){self.detaching.push(member);}
+                if member.hidden.is_some(){self.detaching.push(member);}
             }
         }
         self.prune();
@@ -216,7 +220,7 @@ impl Workspaces{
         if let Some(i)=self.groups.iter().position(|g|g.id==id){
             for mut member in self.groups.remove(i).members {
                 member.reveal();
-                if member.pending(){self.detaching.push(member);}
+                if member.hidden.is_some(){self.detaching.push(member);}
             }
         }
         self.active.retain(|_,active|*active!=id);
@@ -244,6 +248,15 @@ impl Workspaces{
             }
         }
         self.active.retain(|screen,_|enabled.contains(screen));
+    }
+    pub unsafe fn dissolve_missing_displays<'a>(&mut self,attached:impl IntoIterator<Item=&'a str>){
+        let attached=attached.into_iter().collect::<HashSet<_>>();
+        // Treat a failed/empty inventory as unknown. A display selection in
+        // Settings is not a disconnect and must not destroy its groups.
+        if attached.is_empty(){return;}
+        let detached=self.groups.iter().filter(|g|!attached.contains(g.screen.as_str()))
+            .map(|g|g.id).collect::<Vec<_>>();
+        for id in detached{self.dissolve(id);}
     }
     pub fn cards(&self,screen:&str,bounds:RECT,windows:&[AppWindow],global:bool)->(Vec<Item>,Vec<Option<u64>>){
         let mut items=Vec::new();
@@ -395,6 +408,21 @@ mod tests {
             model.prune();
             assert_eq!(IsIconic(second_group), 0);
             model.switch("primary", b);
+            until(|| { model.advance(); IsIconic(normal) != 0 && IsIconic(maximized) != 0 });
+            model.dissolve_missing_displays(std::iter::empty::<&str>());
+            assert_eq!(model.active("primary"),Some(b));
+            model.dissolve_missing_displays(["portrait"]);
+            assert!(model.members(a).is_empty() && model.members(b).is_empty());
+            assert!(model.active("primary").is_none());
+            assert!(model.active("portrait").is_some());
+            until(|| { model.advance(); IsIconic(normal) == 0 && IsZoomed(maximized) != 0 });
+            assert!(super::super::same_rect(placement(normal).unwrap().rcNormalPosition,original));
+            assert_eq!(IsIconic(other_display),0);
+
+            // Keep the separate Exit recovery check with fresh groups.
+            model.create("primary",normal).unwrap();
+            model.add("primary",maximized);
+            model.create("primary",second_group).unwrap();
             until(|| { model.advance(); IsIconic(normal) != 0 && IsIconic(maximized) != 0 });
             drop(model);
             until(|| IsIconic(normal) == 0 && IsZoomed(maximized) != 0);

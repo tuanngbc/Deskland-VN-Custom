@@ -584,7 +584,10 @@ unsafe fn recreate(state:&mut State) {
     state.workspaces.restore_offscreen(&active_outputs);
 }
 unsafe fn refresh(state:&mut State, topology:bool) {
-    if topology || state.screens.is_empty() { state.screens = displays(); }
+    if topology || state.screens.is_empty() {
+        state.screens = displays();
+        state.workspaces.dissolve_missing_displays(state.screens.iter().map(|s|s.id.as_str()));
+    }
     let material_changed=if topology||state.material.is_none(){
         let style=&state.prefs.appearance;
         let material=surface::Material::system(style.theme,style.transparency,style.reduced_motion);
