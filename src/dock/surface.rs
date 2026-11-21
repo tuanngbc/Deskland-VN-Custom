@@ -28,6 +28,19 @@ impl Surface {
     pub fn set_material(&mut self,value:Material){
         if self.material!=value{self.material=value;self.static_pixels.clear();}
     }
+    pub unsafe fn rail(&mut self,hwnd:HWND,layout:&Layout)->bool{
+        let (w,h)=self.layer.size;
+        let data=self.layer.pixels();data.fill(0);
+        let scale=layout.scale;
+        let area=layout.glass;
+        let rail=match layout.side{
+            super::DockSide::Bottom=>Rect{x:area.x+area.w*0.19,y:area.y+area.h-4.0*scale,w:area.w*0.62,h:4.0*scale},
+            super::DockSide::Left=>Rect{x:area.x,y:area.y+area.h*0.19,w:4.0*scale,h:area.h*0.62},
+            super::DockSide::Right=>Rect{x:area.x+area.w-4.0*scale,y:area.y+area.h*0.19,w:4.0*scale,h:area.h*0.62},
+        };
+        rounded(data,w,h,rail,rail.w.min(rail.h)*0.5,if self.material.dark{[232,236,244]}else{[31,43,51]},90);
+        self.layer.present(hwnd)
+    }
     pub unsafe fn paint(&mut self,hwnd:HWND,layout:&Layout,items:&[super::Item],atlas:&Atlas,active:isize,hover:Option<usize>)->bool{
         let (w,h)=self.layer.size;
         let scale=layout.scale;
@@ -73,6 +86,7 @@ impl Surface {
         }
         let scan=layout.scan;
         let tint=if self.material.dark{[238,244,252]}else{[43,53,64]};
+        if hover==Some(items.len()){rounded(data,w,h,scan,scan.w*0.22,tint,50);}
         let center=(scan.x+0.45*scan.w,scan.y+0.44*scan.h);
         let radius=scan.w*0.19;
         draw(data,w,h,scan,|x,y|{

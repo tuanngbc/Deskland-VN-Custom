@@ -66,13 +66,19 @@ pub struct Options {
 }
 #[derive(Debug)]
 pub enum Edit {
-    Pin(String), Unpin(String), AllWindows(bool), StageSide(String), DockEnabled(bool), StageEnabled(bool),
+    Pin(String), Unpin(String), MovePin(String,String), AllWindows(bool), StageSide(String), DockEnabled(bool), StageEnabled(bool),
 }
 impl Edit {
     pub fn apply(self, options: &mut Options) {
         match self {
             Self::Pin(path)=>{if options.pinned.len()<32 && !path.is_empty() && path.len()<=32760 && !path.contains('\0') && !options.pinned.iter().any(|p|p.eq_ignore_ascii_case(&path)){options.pinned.push(path);}}
             Self::Unpin(path)=>options.pinned.retain(|p|!p.eq_ignore_ascii_case(&path)),
+            Self::MovePin(path,target)=>{
+                if let (Some(from),Some(to))=(options.pinned.iter().position(|p|p.eq_ignore_ascii_case(&path)),
+                    options.pinned.iter().position(|p|p.eq_ignore_ascii_case(&target))){
+                    if from!=to{let pin=options.pinned.remove(from);options.pinned.insert(to,pin);}
+                }
+            }
             Self::AllWindows(on)=>options.all_windows=on,
             Self::StageSide(side)=>{if side=="left"||side=="right" {options.stage_side=side;options.stage_enabled=true;}}
             Self::DockEnabled(on)=>options.enabled=on,
@@ -160,6 +166,14 @@ mod tests {
         assert_eq!(custom.outputs(normal),vec![1]);
         assert_eq!(custom.outputs([]),Vec::<usize>::new());
         assert_eq!(Options::migrate(&json!({"dock":{"allWindows":false}}),None).dock_display.outputs(normal),vec![0,1]);
+    }
+    #[test]
+    fn drag_reorders_only_existing_pins_and_roundtrips() {
+        let mut options=Options{pinned:vec!["first.exe".into(),"second.exe".into(),"third.exe".into()],..Default::default()};
+        Edit::MovePin("first.exe".into(),"third.exe".into()).apply(&mut options);
+        Edit::MovePin("unpinned.exe".into(),"third.exe".into()).apply(&mut options);
+        assert_eq!(options.pinned,["second.exe","third.exe","first.exe"]);
+        assert_eq!(Options::from_json(&options.json()),options);
     }
     #[test]
     fn queued_edits_do_not_overwrite_other_modules_or_newer_preferences() {

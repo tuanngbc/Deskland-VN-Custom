@@ -6,6 +6,7 @@ pub(super) enum Command {
     Configure(Options),
     Suspend(bool),
     Stop,
+    Focus,
     #[cfg(test)] Inspect(Sender<Vec<usize>>),
 }
 #[derive(Debug)]
@@ -35,6 +36,7 @@ impl Runtime {
         }
     }
     pub fn configure(&self,options:Options) {self.send(Command::Configure(options));}
+    pub fn focus(&self){self.send(Command::Focus);}
     pub fn suspend(&self,on:bool) {self.send(Command::Suspend(on));}
     pub fn take_events(&self)->Vec<Event> {self.events.try_iter().collect()}
     pub fn finished(&self)->bool {self.thread.as_ref().is_none_or(JoinHandle::is_finished)}

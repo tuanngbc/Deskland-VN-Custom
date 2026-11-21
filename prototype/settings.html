@@ -164,6 +164,7 @@
     </select></label>
     <label class="setting-row"><b data-i18n="dockTheme">Màu sắc</b><select id="dockLook_theme"><option value="auto" data-i18n="appearanceSystem">Theo hệ thống</option><option value="light" data-i18n="launcherLight">Sáng</option><option value="dark" data-i18n="launcherDark">Tối</option></select></label>
     <label class="setting-row switch-row"><b data-i18n="dockReducedMotion">Giảm chuyển động</b><input type="checkbox" id="dockLook_reducedMotion" role="switch"><i class="switch" aria-hidden="true"></i></label>
+    <label class="setting-row switch-row"><b data-i18n="dockAutoHide">Tự ẩn Dock</b><input type="checkbox" id="dockLook_autoHide" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <p class="monitor-detail" data-i18n="dockAlphaHint">Bề mặt trong suốt theo từng điểm ảnh. Bản này chưa làm mờ nền phía sau.</p>
   </section>
   <section class="setting-card">
@@ -753,14 +754,15 @@ const dockFallbackText={
   dockDisplayNone:'Chưa có màn hình',dockDisplayOff:'Đã tắt',dockDisplayTarget:'Màn hình hiển thị'
 };
 const dockText=key=>{const value=t(key);return value===key?dockFallbackText[key]||value:value;};
-const dockLookDefaults={iconSize:44,spacing:10,transparency:36,position:'bottom',theme:'auto',magnification:38,animationSpeed:100,reducedMotion:false};
+const dockLookDefaults={iconSize:44,spacing:10,transparency:36,position:'bottom',theme:'auto',magnification:38,animationSpeed:100,reducedMotion:false,autoHide:false};
 const dockLookRanges=['iconSize','spacing','transparency','magnification','animationSpeed'];
-const dockLookKeys=[...dockLookRanges,'position','theme','reducedMotion'];
+const dockLookSwitches=['reducedMotion','autoHide'];
+const dockLookKeys=[...dockLookRanges,'position','theme',...dockLookSwitches];
 function showDockAppearance(){
   const appearance={...dockLookDefaults,...dockOptions.appearance};
   for(const key of dockLookKeys){
     const control=$('dockLook_'+key);
-    if(key==='reducedMotion')control.checked=!!appearance[key];
+    if(dockLookSwitches.includes(key))control.checked=!!appearance[key];
     else control.value=String(appearance[key]);
     if(dockLookRanges.includes(key))$('dockValue_'+key).textContent=appearance[key]+(['iconSize','spacing'].includes(key)?' px':'%');
   }
@@ -772,7 +774,7 @@ for(const key of dockLookKeys){
   });
   $(id).addEventListener('change',()=>{
     const control=$(id);
-    const value=key==='reducedMotion'?control.checked:dockLookRanges.includes(key)?Number(control.value):control.value;
+    const value=dockLookSwitches.includes(key)?control.checked:dockLookRanges.includes(key)?Number(control.value):control.value;
     dockOptions.appearance={...dockLookDefaults,...dockOptions.appearance,[key]:value};
     renderDockPlacement();
     send({t:'dock',appearance:dockOptions.appearance});

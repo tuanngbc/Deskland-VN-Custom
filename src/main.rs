@@ -102,6 +102,7 @@ const CMD_RECORD: usize = 132;
 const CMD_SYSTEM_MONITOR: usize = 133;
 const CMD_DOCK: usize = 134;
 const CMD_STAGE: usize = 135;
+const CMD_DOCK_FOCUS:usize = 139;
 const CMD_WALLPAPER: usize = 136;
 const WM_OPEN_SETTINGS: u32 = WM_APP + 2;
 const WM_OPEN_LAUNCHER: u32 = WM_APP + 3;
@@ -316,6 +317,7 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
                 AppendMenuW(menu, MF_STRING, CMD_LAUNCHER, wide(&launcher_label).as_ptr());
                 AppendMenuW(menu, MF_STRING | if menu_cfg.wallpaper_enabled { MF_CHECKED } else { 0 }, CMD_WALLPAPER, wide("Hình nền động").as_ptr());
                 AppendMenuW(menu, MF_STRING | if menu_cfg.dock.enabled { MF_CHECKED } else { 0 }, CMD_DOCK, wide("Dock").as_ptr());
+                if menu_cfg.dock.enabled { AppendMenuW(menu, MF_STRING, CMD_DOCK_FOCUS, wide("Điều khiển Dock bằng bàn phím").as_ptr()); }
                 AppendMenuW(menu, MF_STRING | if menu_cfg.dock.stage_enabled { MF_CHECKED } else { 0 }, CMD_STAGE, wide("Stage Manager").as_ptr());
                 AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
                 let capture_label = format!("Chụp vùng và chỉnh sửa…\t{}", mini_tools::hotkey_text(menu_cfg.tools.capture_mods, menu_cfg.tools.capture_key));
@@ -3015,6 +3017,7 @@ fn main() {
             match cmd {
                 CMD_EXIT => break,
                 CMD_DOCK => {app.cfg.dock.enabled=!app.cfg.dock.enabled;app.configure_dock();}
+                CMD_DOCK_FOCUS => {if let Some(runtime)=app.dock_runtime.as_ref(){runtime.focus();}}
                 CMD_STAGE => {app.cfg.dock.stage_enabled=!app.cfg.dock.stage_enabled;app.configure_dock();}
                 CMD_WALLPAPER => {
                     if let Err(error)=app.set_wallpaper_enabled(!app.cfg.wallpaper_enabled){app.dock_error=Some(error);}

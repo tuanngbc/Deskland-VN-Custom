@@ -27,10 +27,11 @@ pub struct Appearance {
     pub magnification:u32,
     pub animation_speed:u32,
     pub reduced_motion:bool,
+    pub auto_hide:bool,
 }
 impl Default for Appearance {
     fn default()->Self{Self{icon_size:44,spacing:10,transparency:36,position:DockSide::Bottom,theme:Theme::Auto,
-        magnification:38,animation_speed:100,reduced_motion:false}}
+        magnification:38,animation_speed:100,reduced_motion:false,auto_hide:false}}
 }
 impl Appearance {
     pub fn from_json(v:&Value)->Self {
@@ -47,11 +48,12 @@ impl Appearance {
             magnification:bounded(&v["magnification"],old.magnification,0,55),
             animation_speed:bounded(&v["animationSpeed"],old.animation_speed,50,170),
             reduced_motion:v["reducedMotion"].as_bool().unwrap_or(false),
+            auto_hide:v["autoHide"].as_bool().unwrap_or(false),
         }
     }
     pub fn json(&self)->Value {
         json!({"iconSize":self.icon_size,"spacing":self.spacing,"transparency":self.transparency,
             "position":self.position.key(),"theme":self.theme.key(),"magnification":self.magnification,
-            "animationSpeed":self.animation_speed,"reducedMotion":self.reduced_motion})
+            "animationSpeed":self.animation_speed,"reducedMotion":self.reduced_motion,"autoHide":self.auto_hide})
     }
 }
