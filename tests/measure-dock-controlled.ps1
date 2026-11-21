@@ -106,6 +106,11 @@ $controlJson = $controlCfg | ConvertTo-Json -Depth 100 -Compress -WarningAction 
 $sha256 = [Security.Cryptography.SHA256]::Create()
 try {
     $controlHash = [BitConverter]::ToString($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($controlJson))).Replace('-','')
+    $dockJson = $cfg.dock | ConvertTo-Json -Depth 100 -Compress -WarningAction Stop
+    $dockCopy = $dockJson | ConvertFrom-Json
+    foreach ($key in 'stageEnabled','stageDisplay','stageSide','stageStyles') { $dockCopy.PSObject.Properties.Remove($key) }
+    $nonStageJson = $dockCopy | ConvertTo-Json -Depth 100 -Compress -WarningAction Stop
+    $nonStageHash = [BitConverter]::ToString($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($nonStageJson))).Replace('-','')
 } finally { $sha256.Dispose() }
 $app = Get-Process -Id $CandidateId
 $session = $app.SessionId
@@ -145,6 +150,7 @@ $counterErrors = $null
 $preflightCounterErrors = $null
 $observedCoverage = $null
 $observedStagePreviews = $null
+$stageSourceGeometry = $null
 $observedSeed = if ($cfg.params -and $cfg.theme) { $cfg.params.PSObject.Properties[$cfg.theme].Value.seed }
 try {
     if (!$cfg.wallpaperEnabled -or $null -eq $observedSeed -or $observedSeed -ne $SceneSeed -or
@@ -158,6 +164,21 @@ try {
         $marker = if (Test-Path -LiteralPath $stageMarker -PathType Leaf) { (Get-Content -LiteralPath $stageMarker -Raw).Trim() }
         if ($marker -cne "$($fixture.PID) $($fixture.Hwnd)" -or $fixture.Cards -lt 1) { $reasons.Add('stage-fixture-marker-mismatch') }
         if ([bool]$cfg.dock.stageEnabled -ne ($ExpectedStagePreviews -gt 0)) { $reasons.Add('stage-settings-workload-mismatch') }
+        if (!$cfg.dock.enabled -or $cfg.dock.allWindows -ne $true -or $cfg.dock.stageDisplay.mode -cne 'all' -or
+            ($cfg.dock.stageEnabled -and $ExpectedStagePreviews -ne 2*$fixture.Cards)) {
+            $reasons.Add('stage-requires-all-verified-fixture-cards-on-both-displays')
+        }
+        $sourceCheck = Join-Path $Evidence 'fixture-card-check.json'
+        $sources = if (Test-Path -LiteralPath $sourceCheck -PathType Leaf) { Get-Content -LiteralPath $sourceCheck -Raw | ConvertFrom-Json }
+        $ordinalSet = @($sources | Where-Object { $null -ne $_ } | Select-Object -ExpandProperty Card | Sort-Object)
+        if (($ordinalSet -join ',') -cne ((0..($fixture.Cards-1)) -join ',') -or
+            @($sources | Where-Object { $_.Visible -and !$_.Minimized -and $_.Unowned -and !$_.ToolWindow -and
+                $_.CloakOk -and $_.Cloaked -eq 0 -and $_.AffinityOk -and $_.Affinity -eq 0 -and
+                $_.Output -in 'primary','secondary' -and $_.Rect -match '^-?\d+,-?\d+,-?\d+,-?\d+$' }).Count -ne $fixture.Cards) {
+            $reasons.Add('stage-source-model-not-verified')
+        }else{
+            $stageSourceGeometry = ($sources | Sort-Object Card | ForEach-Object { "$($_.Output):$($_.Rect)" }) -join ';'
+        }
     }
     Start-Sleep -Seconds $Warmup
     $display = [DeskPerfCounters]::DisplaySnapshot()
@@ -256,7 +277,7 @@ try {
         WarmupSeconds=$Warmup;Requested=$RequestedSamples;Actual=$samples.Count;LogicalCpus=$logical;Adapters=$adapters;
         Display=$display;Coverage=$expected;ObservedCoverage=$observedCoverage;Theme=$cfg.theme;Mode=$cfg.mode;ControlSettingsSha256=$controlHash;SceneSeed=$observedSeed;
         FixtureRect=$anchor.ToString();FixtureFullscreen=$fixture.Fullscreen;PreviewFixtureCards=$fixture.Cards;
-        StageFixturePreviews=$observedStagePreviews;
+        StageFixturePreviews=$observedStagePreviews;StageSourceGeometry=$stageSourceGeometry;NonStageSettingsSha256=$nonStageHash;
         DockEnabled=[bool]$cfg.dock.enabled;StageEnabled=[bool]$cfg.dock.stageEnabled;SessionWebViewCount=if($web){($web -split ',').Count}else{0};
         CounterWarnings=$counterErrors.Count
         PreflightCounterWarnings=$preflightCounterErrors.Count

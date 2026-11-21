@@ -77,7 +77,10 @@ try {
     Write-Manifest $cases[1]
     Expect-Invalid 'FixtureRect differs'
     $manifest.FixtureRect = '-300,100,100,330'
-    $manifest.PreviewFixtureCards = 6
+    $manifest.PreviewFixtureCards = 3
+    $manifest.DockEnabled = $true
+    $manifest.NonStageSettingsSha256 = 'D'*64
+    $manifest.StageSourceGeometry = 'primary:10,10,80,80;secondary:-300,10,-100,80;primary:10,100,80,170'
     Write-Manifest $cases[0]
     $manifest.StageEnabled = $true
     Write-Manifest $cases[1]
@@ -93,6 +96,10 @@ try {
     Write-Manifest $cases[1]
     $result = & $summary -Baseline $cases[0] -Candidate $cases[1] | ConvertFrom-Json
     if ($result.StageFixturePreviews.Baseline -ne 0 -or $result.StageFixturePreviews.Candidate -ne 6) { throw 'Stage link evidence missing from pair' }
+    $manifest.NonStageSettingsSha256 = 'E'*64
+    Write-Manifest $cases[1]
+    Expect-Invalid 'Stage control settings, source geometry or build differ'
+    $manifest.NonStageSettingsSha256 = 'D'*64
     $manifest.State = 'INVALID'
     Write-Manifest $cases[1]
     Expect-Invalid 'INVALID interval:'

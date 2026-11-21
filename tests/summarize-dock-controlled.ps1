@@ -90,6 +90,18 @@ if (($a.Metadata.StageEnabled -or $b.Metadata.StageEnabled) -and
     ($null -eq $a.Metadata.StageFixturePreviews -or $null -eq $b.Metadata.StageFixturePreviews)) {
     throw 'INVALID pair: both Stage workloads must be verified'
 }
+if ($a.Metadata.StageEnabled -or $b.Metadata.StageEnabled) {
+    if (!$a.Metadata.DockEnabled -or !$b.Metadata.DockEnabled -or $a.Metadata.StageEnabled -or !$b.Metadata.StageEnabled -or
+        $a.Metadata.StageFixturePreviews -ne 0 -or $b.Metadata.StageFixturePreviews -ne 2*$b.Metadata.PreviewFixtureCards) {
+        throw 'INVALID pair: expected same Dock with Stage off/on and all verified previews'
+    }
+    if ($a.Metadata.NonStageSettingsSha256 -cnotmatch '^[A-F0-9]{64}$' -or
+        $a.Metadata.NonStageSettingsSha256 -cne $b.Metadata.NonStageSettingsSha256 -or
+        !$a.Metadata.StageSourceGeometry -or $a.Metadata.StageSourceGeometry -cne $b.Metadata.StageSourceGeometry -or
+        $a.Metadata.Build -cne $b.Metadata.Build) {
+        throw 'INVALID pair: Stage control settings, source geometry or build differ'
+    }
+}
 foreach ($field in 'Display','Coverage','Theme','Mode','SceneSeed','ControlSettingsSha256','FixtureRect','FixtureFullscreen','PreviewFixtureCards','SessionWebViewCount','LogicalCpus','WarmupSeconds','Requested') {
     if ($a.Metadata.$field -cne $b.Metadata.$field) { throw "INVALID pair: $field differs" }
 }
