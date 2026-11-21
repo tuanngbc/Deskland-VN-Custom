@@ -45,6 +45,7 @@ const MOTION_TIMER:usize=4;
 const HIDE_TIMER:usize=5;
 const WORKSPACE_TIMER:usize=6;
 const STAGE_MOTION_TIMER:usize=7;
+const STATUS_TIP_TIMER:usize=8;
 const WM_DOCK_MOUSELEAVE:u32=0x02A3;
 const ITEM_WIDTH:i32=66;
 const HEIGHT:i32=70;
@@ -84,7 +85,7 @@ struct Item { path:String, title:String, hwnd:HWND, count:usize, pinned:bool }
 struct Bar {
     hwnd:HWND, bounds:RECT, items:Vec<Item>, hovered:i32, hidden:bool,
     layout:Option<geometry::Layout>, pinned_widgets:Vec<UtilityWidget>, motion:Motion, collapsed:bool, auto_hide:bool,
-    pressed:Option<(String,i32,i32)>, keyboard:Option<usize>, previous_focus:isize, pointer:Option<(f32,f32)>,
+    status_hover:Option<Option<UtilityWidget>>, pressed:Option<(String,i32,i32)>, keyboard:Option<usize>, previous_focus:isize, pointer:Option<(f32,f32)>,
 }
 #[derive(Clone,Default)]
 struct Motion {
@@ -157,6 +158,7 @@ thread_local! {
     static STAGE_SURFACES:RefCell<HashMap<usize,stage_surface::Panel>>=RefCell::new(HashMap::new());
     static UTILITIES:RefCell<Option<utilities::Provider>>=const{RefCell::new(None)};
     static UTILITY_ANCHOR:Cell<Option<(usize,POINT,Option<UtilityWidget>)>>=const{Cell::new(None)};
+    static STATUS_TIP:RefCell<Option<StatusTip>>=const{RefCell::new(None)};
     static ATLAS:RefCell<Option<icon_atlas::Worker>>=const{RefCell::new(None)};
 }
 
@@ -284,13 +286,15 @@ fn covers_display(class:&str,window:RECT,screen:RECT)->bool {
     !is_shell_class(class) && window.left<=screen.left && window.top<=screen.top
         && window.right>=screen.right && window.bottom>=screen.bottom
 }
+fn fullscreen_style(style:u32,zoomed:bool)->bool{
+    style&WS_CAPTION!=WS_CAPTION&&(!zoomed||style&WS_THICKFRAME==0)
+}
 /// A maximized framed window can have invisible resize borders extending
 /// beyond rcMonitor. Check its visible DWM bounds and its native show state.
 unsafe fn window_fullscreen(hwnd:HWND,screen:RECT)->bool {
     if hwnd.is_null()||IsIconic(hwnd)!=0||!stage_window_is_local(hwnd,screen){return false;}
     let style=GetWindowLongW(hwnd,GWL_STYLE) as u32;
-    if style&WS_CAPTION==WS_CAPTION{return false;}
-    if IsZoomed(hwnd)!=0&&style&WS_THICKFRAME!=0{return false;}
+    if !fullscreen_style(style,IsZoomed(hwnd)!=0){return false;}
     let mut pid=0;
     GetWindowThreadProcessId(hwnd,&mut pid);
     if pid==std::process::id(){return false;}
@@ -491,7 +495,7 @@ unsafe fn recreate(state:&mut State) {
             r.left,r.top,r.right-r.left,r.bottom-r.top,
             ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
         if !hwnd.is_null(){
-        state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:true,layout:Some(layout),pinned_widgets,motion:Motion::default(),collapsed:state.prefs.dock_auto_hide(&screen.id),auto_hide:state.prefs.dock_auto_hide(&screen.id),pressed:None,keyboard:None,previous_focus:0,pointer:None});
+        state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:true,layout:Some(layout),pinned_widgets,motion:Motion::default(),collapsed:state.prefs.dock_auto_hide(&screen.id),auto_hide:state.prefs.dock_auto_hide(&screen.id),status_hover:None,pressed:None,keyboard:None,previous_focus:0,pointer:None});
         }else{emit(Event::Error(format!("Create Dock window: {}",GetLastError())));}
         }
         if stage_targets.contains(&i) && !state.stages.iter().any(|s|same_rect(s.bounds,screen.bounds)) {
@@ -550,12 +554,15 @@ unsafe fn refresh(state:&mut State, topology:bool) {
                 let r=layout.window;b.layout=Some(layout);r
             }else{bar_rect(&placed,b.items.len())};
             let mut actual:RECT=mem::zeroed();
-            if GetWindowRect(b.hwnd,&mut actual)==0 || !same_rect(r,actual){SetWindowPos(b.hwnd,HWND_TOPMOST,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE);}
+            if GetWindowRect(b.hwnd,&mut actual)==0 || !same_rect(r,actual){
+                KillTimer(b.hwnd,STATUS_TIP_TIMER);close_status_tip(b.hwnd);b.status_hover=None;
+                SetWindowPos(b.hwnd,HWND_TOPMOST,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE);
+            }
         }
         let fullscreen=state.suspended || screen.is_some_and(|s|fullscreen_outputs.contains(&s.id));
         if b.hidden!=fullscreen {
             ShowWindow(b.hwnd,if fullscreen{SW_HIDE}else{SW_SHOWNOACTIVATE});b.hidden=fullscreen;
-            if fullscreen{KillTimer(b.hwnd,MOTION_TIMER);KillTimer(b.hwnd,HIDE_TIMER);b.motion=Motion::default();b.hovered=-1;b.keyboard=None;b.pressed=None;b.pointer=None;b.collapsed=b.auto_hide;}
+            if fullscreen{close_status_tip(b.hwnd);KillTimer(b.hwnd,STATUS_TIP_TIMER);b.status_hover=None;KillTimer(b.hwnd,MOTION_TIMER);KillTimer(b.hwnd,HIDE_TIMER);b.motion=Motion::default();b.hovered=-1;b.keyboard=None;b.pressed=None;b.pointer=None;b.collapsed=b.auto_hide;}
             changed=true;
         }
         if changed{InvalidateRect(b.hwnd,ptr::null(),0);}
@@ -679,6 +686,39 @@ unsafe fn label(hdc:HDC,x:i32,y:i32,width:i32,text:&str,color:u32) {
 fn color(seed:&str)->u32 {
     let n=seed.bytes().fold(0x811c9dc5u32,|x,b|(x^b as u32).wrapping_mul(0x01000193));
     0x00353535|((n&0x3f)<<16)|(((n>>8)&0x3f)<<8)
+}
+struct StatusTip{owner:HWND,window:HWND,_label:Vec<u16>}
+impl Drop for StatusTip {
+    fn drop(&mut self){unsafe{DestroyWindow(self.window);}}
+}
+fn close_status_tip(owner:HWND){
+    let old=STATUS_TIP.with(|tip|{
+        let mut tip=tip.borrow_mut();
+        if owner.is_null()||tip.as_ref().is_some_and(|t|t.owner==owner){tip.take()}else{None}
+    });
+    drop(old);
+}
+unsafe fn show_status_tip(owner:HWND){
+    use windows_sys::Win32::UI::Controls::*;
+    let item=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==owner&&!b.hidden&&!b.collapsed).and_then(|b|b.status_hover));
+    let Some(item)=item else{return;};
+    close_status_tip(ptr::null_mut());
+    let mut tip=StatusTip{
+        owner,window:CreateWindowExW(WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW|WS_EX_TOPMOST,
+            wide("tooltips_class32").as_ptr(),ptr::null(),WS_POPUP|TTS_NOPREFIX|TTS_ALWAYSTIP,
+            CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,owner,ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null()),
+        _label:wide(item.map_or("Bảng tiện ích",UtilityWidget::title))
+    };
+    if tip.window.is_null(){return;}
+    let mut tool:TTTOOLINFOW=mem::zeroed();
+    tool.cbSize=mem::size_of_val(&tool) as u32;
+    tool.uFlags=TTF_TRACK|TTF_ABSOLUTE;tool.hwnd=owner;tool.uId=1;tool.lpszText=tip._label.as_mut_ptr();
+    if SendMessageW(tip.window,TTM_ADDTOOLW,0,(&tool as *const TTTOOLINFOW) as isize)==0{return;}
+    let mut pt=POINT{x:0,y:0};GetCursorPos(&mut pt);
+    let coords=(((pt.y+18) as u16 as u32)<<16)|((pt.x+14) as u16 as u32);
+    SendMessageW(tip.window,TTM_TRACKPOSITION,0,coords as isize);
+    SendMessageW(tip.window,TTM_TRACKACTIVATE,1,(&tool as *const TTTOOLINFOW) as isize);
+    STATUS_TIP.with(|value|value.replace(Some(tip)));
 }
 unsafe fn paint(hwnd:HWND){
     let layered=STATE.with(|s|{
@@ -1039,12 +1079,14 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_NCDESTROY=>{
+            close_status_tip(hwnd);
             perf::forget(hwnd as usize);
             STAGE_SURFACES.with(|s|s.borrow_mut().remove(&(hwnd as usize)));
             SURFACES.with(|s|s.borrow_mut().remove(&(hwnd as usize)));
             DefWindowProcW(hwnd,msg,w,l)
         },
         WM_DOCK_MOUSELEAVE=>{
+            KillTimer(hwnd,STATUS_TIP_TIMER);close_status_tip(hwnd);
             let stage=STATE.with(|s|{
                 let mut state=s.borrow_mut();
                 let reduced=state.prefs.appearance.reduced_motion;
@@ -1063,7 +1105,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let mut state=s.borrow_mut();
                 let animate=!state.prefs.appearance.reduced_motion;
                 if let Some(b)=state.bars.iter_mut().find(|b|b.hwnd==hwnd){
-                    b.hovered=-1;b.motion.target=None;b.pressed=None;b.pointer=None;
+                    b.hovered=-1;b.status_hover=None;b.motion.target=None;b.pressed=None;b.pointer=None;
                     if !animate{b.motion=Motion::default();}
                     let start=animate&&b.layout.is_some()&&!b.motion.scheduled&&b.motion.amount>0.001;
                     b.motion.scheduled|=start;
@@ -1089,12 +1131,13 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if step!=Some(true){KillTimer(hwnd,STAGE_MOTION_TIMER);}
             0
         },
+        WM_TIMER if w==STATUS_TIP_TIMER=>{KillTimer(hwnd,STATUS_TIP_TIMER);show_status_tip(hwnd);0},
         WM_TIMER if w==HIDE_TIMER=>{
             KillTimer(hwnd,HIDE_TIMER);
-            let mut point=POINT{x:0,y:0};GetCursorPos(&mut point);
-            let mut bounds:RECT=mem::zeroed();GetWindowRect(hwnd,&mut bounds);
             let stage=STATE.with(|state|state.borrow().stages.iter().any(|p|p.hwnd==hwnd&&p.auto_hide&&p.keyboard.is_none()));
             if stage{
+                let mut point=POINT{x:0,y:0};GetCursorPos(&mut point);
+                let mut bounds:RECT=mem::zeroed();GetWindowRect(hwnd,&mut bounds);
                 if point.x>=bounds.left&&point.x<bounds.right&&point.y>=bounds.top&&point.y<bounds.bottom{return 0;}
                 update_state(|s|{if let Some(p)=s.stages.iter_mut().find(|p|p.hwnd==hwnd){p.collapsed=true;}refresh(s,false);});
                 return 0;
@@ -1177,12 +1220,27 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 KillTimer(hwnd,HIDE_TIMER);
                 let mut event=TRACKMOUSEEVENT{cbSize:mem::size_of::<TRACKMOUSEEVENT>() as u32,dwFlags:TME_LEAVE,hwndTrack:hwnd,dwHoverTime:0};
                 TrackMouseEvent(&mut event);
+                let change=STATE.with(|s|{
+                    let mut s=s.borrow_mut();
+                    let b=s.bars.iter_mut().find(|b|b.hwnd==hwnd)?;
+                    let layout=b.layout.as_ref()?;
+                    let status=if layout.is_utility_button(x as f32,y as f32){Some(None)}
+                        else{layout.inline_at(x as f32,y as f32).map(Some)};
+                    if b.status_hover==status{return None;}
+                    b.status_hover=status;
+                    Some(status.is_some())
+                });
+                if let Some(show)=change{
+                    KillTimer(hwnd,STATUS_TIP_TIMER);close_status_tip(hwnd);
+                    if show{SetTimer(hwnd,STATUS_TIP_TIMER,650,None);}
+                }
             }
             if animate{SetTimer(hwnd,MOTION_TIMER,16,None);}
             if changed{InvalidateRect(hwnd,ptr::null(),0);}
             0
         }
         WM_LBUTTONDOWN=>{
+            KillTimer(hwnd,STATUS_TIP_TIMER);close_status_tip(hwnd);
             let (x,y)=(l as i16 as i32,(l>>16) as i16 as i32);
             STATE.with(|s|{
                 let mut state=s.borrow_mut();
@@ -1194,7 +1252,9 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_KILLFOCUS=>{
-            STATE.with(|s|{if let Some(p)=s.borrow_mut().stages.iter_mut().find(|p|p.hwnd==hwnd){p.keyboard=None;}});
+            let stage_auto=STATE.with(|s|s.borrow_mut().stages.iter_mut().find(|p|p.hwnd==hwnd)
+                .is_some_and(|p|{p.keyboard=None;p.auto_hide&&!p.hidden}));
+            if stage_auto{SetTimer(hwnd,HIDE_TIMER,650,None);}
             let collapse=STATE.with(|s|{
                 let mut state=s.borrow_mut();
                 if let Some(bar)=state.bars.iter_mut().find(|b|b.hwnd==hwnd&&b.keyboard.is_some()){
@@ -1305,6 +1365,11 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 stage_menu(hwnd,l as i16 as i32,(l>>16) as i16 as i32);return 0;
             }
             let x=(l as u32&0xffff) as i16 as i32;
+            let y=(l>>16) as i16 as i32;
+            let on_status=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd&&!b.collapsed)
+                .and_then(|b|b.layout.as_ref())
+                .is_some_and(|layout|layout.is_utility_button(x as f32,y as f32)||layout.inline_at(x as f32,y as f32).is_some()));
+            if on_status{KillTimer(hwnd,STATUS_TIP_TIMER);close_status_tip(hwnd);request_utilities(hwnd,None);return 0;}
             let (bar,index)=STATE.with(|s|{let a=s.borrow();let i=a.bars.iter().position(|b|b.hwnd==hwnd).unwrap_or(0);
               let y=(l>>16) as i16 as f32;
               let hit=a.bars.get(i).and_then(|b|
@@ -1357,6 +1422,8 @@ unsafe fn drain_commands() {
     for command in commands {
         match command {
             Command::Configure(options)=>update_state(|state|{
+                close_status_tip(ptr::null_mut());
+                for b in &mut state.bars{KillTimer(b.hwnd,STATUS_TIP_TIMER);b.status_hover=None;}
                 let repaint=state.prefs.appearance!=options.appearance;
                 if repaint{state.material=None;}
                 if repaint { for b in &mut state.bars{
@@ -1461,6 +1528,12 @@ mod tests{
         for class in ["Progman","WorkerW",CLASS,"Shell_TrayWnd","Shell_SecondaryTrayWnd"]{assert!(!covers_display(class,desktop,screen),"{class}");}
         assert!(covers_display("RealApp",screen,screen));
         assert!(!covers_display("RealApp",rect([-1920,-120,0,1040]),screen));
+    }
+    #[test] fn maximized_resize_borders_are_not_fullscreen() {
+        assert!(!fullscreen_style(WS_OVERLAPPEDWINDOW,true));
+        assert!(!fullscreen_style(WS_THICKFRAME,true));
+        assert!(fullscreen_style(WS_POPUP,false));
+        assert!(fullscreen_style(WS_POPUP,true));
     }
     #[test] fn mixed_coordinate_overlap(){assert!(rect_intersects(rect([-1200,-200,0,900]),rect([-100,0,100,100])));assert!(!rect_intersects(rect([-1200,-200,0,900]),rect([0,0,100,100])));}
     #[test] fn distinct_monitor_geometry(){let s=Screen{bounds:rect([-1920,0,0,1080]),work:rect([-1920,0,0,1040]),primary:false,id:"test".into(),name:"Test".into(),dpi:96};let r=bar_rect(&s,5);assert!(r.left<0 && r.right<=0 && r.bottom<=1040);}

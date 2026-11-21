@@ -308,6 +308,16 @@ fn normalize_shell_alpha(pixels: &mut [u8]) {
     }
 }
 
+#[cfg(test)]
+#[test]
+fn shell_pixels_keep_premultiplied_bgra_without_colored_transparent_edges() {
+    let mut straight=[30,60,240,128,200,200,200,0,3,220,120,255];
+    normalize_shell_alpha(&mut straight);
+    assert_eq!(straight,[15,30,120,128,0,0,0,0,3,220,120,255]);
+    let mut premultiplied=[15,30,120,128,0,0,0,0,3,220,120,255];
+    normalize_shell_alpha(&mut premultiplied);
+    assert_eq!(premultiplied,straight);
+}
 fn icon_for(hwnd: HWND, path: &Path, size: i32) -> Option<IconPixels> {
     let (icon, pending) = STATE.with(|c| {
         let mut g = c.borrow_mut(); let s = g.as_mut()?;
