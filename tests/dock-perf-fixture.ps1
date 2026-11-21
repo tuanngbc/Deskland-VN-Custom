@@ -5,6 +5,7 @@ param(
     [ValidateSet('primary','secondary')][string[]]$BackgroundCovered = @(),
     [switch]$WaitForShow,
     [switch]$StageDiagnostic,
+    [switch]$SourceSmoke,
     [ValidateRange(30,900)][int]$TimeoutSeconds = 180
 )
 $ErrorActionPreference = 'Stop'
@@ -20,6 +21,7 @@ public static class DeskPerfFixture {
     [StructLayout(LayoutKind.Sequential)] struct Rect { public int l,t,r,b; }
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window, out Rect rect);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int cx, int cy, uint flags);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
     [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr window, uint command);
     [DllImport("user32.dll", EntryPoint="GetWindowLongW")] public static extern int GetWindowLong(IntPtr window, int index);
@@ -36,14 +38,16 @@ public static class DeskPerfFixture {
 $previousDpi = [DeskPerfFixture]::SetThreadDpiAwarenessContext([IntPtr](-4))
 if ($previousDpi -eq [IntPtr]::Zero) { throw 'PMv2 fixture geometry unavailable' }
 $screens = @([Windows.Forms.Screen]::AllScreens | Sort-Object Primary -Descending)
-if ($screens.Count -ne 2) { throw 'This scenario requires two physical displays' }
+if ($SourceSmoke) {
+    if (!$screens.Count -or $Cards -lt 1 -or $WaitForShow -or $Fullscreen -ne 'none') { throw 'Invalid source smoke configuration' }
+} elseif ($screens.Count -ne 2) { throw 'This scenario requires two physical displays' }
 $forms = [Collections.Generic.List[Windows.Forms.Form]]::new()
 $clock = [Diagnostics.Stopwatch]::StartNew()
 $stop = Join-Path $Evidence 'fixture-stop'
 try {
     # Test-owned, ordinary small windows. No resizing or hiding unrelated apps.
     for ($i=0; $i -lt $Cards; $i++) {
-        $screen = $screens[$i % 2]
+        $screen = $screens[$i % $screens.Count]
         $form = [Windows.Forms.Form]::new()
         $forms.Add($form)
         $form.Text = "Bench card $i"
@@ -94,12 +98,22 @@ try {
         }
     }
     foreach ($form in $forms) { $form.Show() }
-    $control.Activate()
+    if (!$SourceSmoke) { $control.Activate() }
     if ($Cards -gt 0) {
         [Windows.Forms.Application]::DoEvents()
         $sources = @(for ($i=0; $i -lt $Cards; $i++) {
             $source = $forms[$i].Handle
             if ($StageDiagnostic -and $source.ToInt64() -ne @($sourceHandles)[$i]) { throw "Fixture card $i recreated its HWND on show" }
+            # A hidden launcher can override the first ShowWindow call with
+            # SW_HIDE. Enforce visibility on the test-owned HWND without
+            # activation, movement, resize, or raising it above other apps.
+            $initiallyVisible = [DeskPerfFixture]::IsWindowVisible($source)
+            if (!$initiallyVisible) {
+                $flags = 0x0040 -bor 0x0010 -bor 0x0004 -bor 0x0002 -bor 0x0001
+                if (![DeskPerfFixture]::SetWindowPos($source,[IntPtr]::Zero,0,0,0,0,$flags)) {
+                    throw "Failed to show test card $i"
+                }
+            }
             [uint32]$affinity = 0
             [uint32]$cloaked = 0
             $affinityOk = [DeskPerfFixture]::GetWindowDisplayAffinity($source,[ref]$affinity)
@@ -107,7 +121,7 @@ try {
             [pscustomobject]@{
                 Card=$i;Rect=[DeskPerfFixture]::WindowRect($source)
                 Output=if([Windows.Forms.Screen]::FromHandle($source).Primary){'primary'}else{'secondary'}
-                Visible=[DeskPerfFixture]::IsWindowVisible($source);Minimized=[DeskPerfFixture]::IsIconic($source)
+                InitiallyVisible=$initiallyVisible;Visible=[DeskPerfFixture]::IsWindowVisible($source);Minimized=[DeskPerfFixture]::IsIconic($source)
                 Unowned=[DeskPerfFixture]::GetWindow($source,4) -eq [IntPtr]::Zero
                 ToolWindow=([DeskPerfFixture]::GetWindowLong($source,-20) -band 0x80) -ne 0
                 AffinityOk=$affinityOk;Affinity=$affinity;CloakOk=$cloakOk;Cloaked=$cloaked
@@ -119,6 +133,7 @@ try {
             throw 'A test-owned card failed the Win32 preview source checks'
         }
     }
+    if ($SourceSmoke) { return }
     $controlRect = [DeskPerfFixture]::WindowRect($control.Handle)
     if (!$controlRect -or $control.WindowState -ne 'Normal') { throw 'Expected ordinary owned fixture geometry' }
     $next = Join-Path $Evidence 'fixture-ready.next'

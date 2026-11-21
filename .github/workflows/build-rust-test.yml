@@ -78,6 +78,7 @@ jobs:
           node tests/dock-settings-contract.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./tests/dock-benchmark-contract.ps1
+          ./tests/dock-fixture-native.ps1
 
       - name: Package Rust native build
         run: |
