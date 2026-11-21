@@ -21,6 +21,7 @@ mod appearance;
 mod geometry;
 mod surface;
 mod icon_atlas;
+mod previews;
 pub use glass_probe::probe as glass_probe;
 pub use appearance::{Appearance,DockSide};
 pub use options::{Options,Edit,DisplayMode,DisplayTarget};
@@ -94,8 +95,7 @@ impl Motion {
         unsettled
     }
 }
-#[derive(Clone)]
-struct Stage { hwnd:HWND, bounds:RECT, items:Vec<Item>, hidden:bool }
+struct Stage { hwnd:HWND, bounds:RECT, items:Vec<Item>, hidden:bool, previews:previews::Previews }
 #[derive(Default)]
 struct State { bars:Vec<Bar>, stages:Vec<Stage>, windows:Vec<AppWindow>, prefs:Preferences, screens:Vec<Screen>, suspended:bool, foreground:isize }
 thread_local! {
@@ -310,11 +310,14 @@ fn stage_item_list(all:&[AppWindow],screen:RECT,all_windows:bool)->Vec<Item>{
     result
 }
 fn stage_rect(screen:&Screen,side:&str)->RECT {
-    let width=120.min(((screen.work.right-screen.work.left)/5).max(56));
-    let edge=if side=="right"{screen.work.right-width-8}else{screen.work.left+8};
-    let top=screen.work.top+((screen.work.bottom-screen.work.top)/6).min(160);
-    let height=((screen.work.bottom-screen.work.top)-200).clamp(90,560);
-    RECT{left:edge,top,right:edge+width,bottom:(top+height).min(screen.work.bottom-8)}
+    let scale=(screen.dpi as f32/96.0).clamp(0.75,3.0);
+    let px=|n:f32|(n*scale).round() as i32;
+    let width=px(160.0).min(((screen.work.right-screen.work.left)/5).max(62));
+    let margin=px(8.0);
+    let edge=if side=="right"{screen.work.right-width-margin}else{screen.work.left+margin};
+    let top=screen.work.top+((screen.work.bottom-screen.work.top)/6).min(px(125.0));
+    let height=((screen.work.bottom-screen.work.top)-px(150.0)).clamp(px(112.0),px(650.0));
+    RECT{left:edge,top,right:edge+width,bottom:(top+height).min(screen.work.bottom-margin)}
 }
 fn bar_rect(screen:&Screen,items:usize)->RECT {
     let width=(items.min(MAX_ITEMS) as i32*ITEM_WIDTH+220).clamp(296,(screen.bounds.right-screen.bounds.left-24).max(296));
@@ -332,9 +335,9 @@ unsafe fn recreate(state:&mut State) {
         if !keep { DestroyWindow(b.hwnd); }
         keep
     });
-    state.stages.retain(|s| {
+    state.stages.retain_mut(|s| {
         let keep = stage_targets.iter().any(|&i| same_rect(screens[i].bounds, s.bounds));
-        if !keep { DestroyWindow(s.hwnd); }
+        if !keep { s.previews.clear();DestroyWindow(s.hwnd); }
         keep
     });
     let class=wide(CLASS);
@@ -358,7 +361,8 @@ unsafe fn recreate(state:&mut State) {
                 r.left,r.top,r.right-r.left,r.bottom-r.top,
                 ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
             if !stage_hwnd.is_null(){
-                state.stages.push(Stage{hwnd:stage_hwnd,bounds:screen.bounds,items:Vec::new(),hidden:true});
+                previews::style_destination(stage_hwnd);
+                state.stages.push(Stage{hwnd:stage_hwnd,bounds:screen.bounds,items:Vec::new(),hidden:true,previews:previews::Previews::default()});
             } else { emit(Event::Error(format!("Create Stage window: {}",GetLastError()))); }
         }
     }
@@ -401,9 +405,20 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             if GetWindowRect(stage.hwnd,&mut actual)==0 || !same_rect(r,actual){SetWindowPos(stage.hwnd,HWND_TOPMOST,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE);}
         }
         let items=stage_item_list(&state.windows,stage.bounds,state.prefs.all_windows);
-        let changed=stage.items!=items || active_changed;stage.items=items;
-        let hide=state.suspended || foreground_fullscreen(stage.bounds);
-        if hide!=stage.hidden{ShowWindow(stage.hwnd,if hide{SW_HIDE}else{SW_SHOWNOACTIVATE});stage.hidden=hide;}
+        let mut changed=stage.items!=items || active_changed;stage.items=items;
+        // Handle fullscreen on the local monitor even while the foreground
+        // window is on another screen. The top local app must cover the output.
+        let local_fullscreen=state.windows.iter().find(|w|rect_intersects(w.rect,stage.bounds)&&IsIconic(w.hwnd)==0)
+            .is_some_and(|w|covers_display("",w.rect,stage.bounds));
+        let hide=state.suspended || foreground_fullscreen(stage.bounds) || local_fullscreen;
+        if hide!=stage.hidden{ShowWindow(stage.hwnd,if hide{SW_HIDE}else{SW_SHOWNOACTIVATE});stage.hidden=hide;changed=true;}
+        if hide{changed|=stage.previews.clear();}
+        else {
+            let mut area:RECT=mem::zeroed();
+            if GetClientRect(stage.hwnd,&mut area)!=0{
+                changed|=stage.previews.update(stage.hwnd,&stage.items,area.right,area.bottom);
+            }
+        }
         if changed{InvalidateRect(stage.hwnd,ptr::null(),0);}
     }
 }
@@ -470,24 +485,32 @@ unsafe fn paint(hwnd:HWND){
     }
     let mut area:RECT=mem::zeroed();GetClientRect(hwnd,&mut area);
     fill(dc,area,0x00201b18);
-    let stage=STATE.with(|cell|cell.borrow().stages.iter().find(|stage|stage.hwnd==hwnd).cloned());
-        if let Some(stage)=stage {
-            let foreground=GetForegroundWindow();
-            let slot=((area.bottom-28)/5).clamp(24,95);
-            label(dc,6,7,area.right-12,"STAGE",0x00eeeeee);
-            for (i,item) in stage.items.iter().enumerate() {
-                let y=34+i as i32*slot;
-                fill(dc,RECT{left:7,top:y,right:area.right-7,bottom:y+slot-5},
-                    if item.hwnd==foreground {0x007d655a}else{0x00332d28});
-                let icon=icon(&item.path,true);
-                if !icon.is_null(){
-                    DrawIconEx(dc,13,y+5,icon,20,20,0,ptr::null_mut(),DI_NORMAL);
-                }
-                let n=basename(&item.path);
-                label(dc,7,y+29,area.right-14,&n,0x00eeeeee);
-                if item.count>1{label(dc,area.right-29,y+3,22,&item.count.to_string(),0x00ffffff);}
+    let stage=STATE.with(|cell|{
+        let state=cell.borrow();
+        let stage=state.stages.iter().find(|stage|stage.hwnd==hwnd)?;
+        let ready=stage.items.iter().map(|item|stage.previews.includes(item.hwnd)).collect::<Vec<_>>();
+        Some((stage.items.clone(),ready,state.foreground))
+    });
+    if let Some((items,ready,foreground))=stage {
+        label(dc,6,4,area.right-12,"Stage Manager",0x00eae9e7);
+        for (i,item) in items.iter().enumerate(){
+            let tile=previews::tile(area.right,area.bottom,i);
+            if tile.bottom-tile.top<22{continue;}
+            let selected=item.hwnd as isize==foreground;
+            let brush=CreateSolidBrush(if selected{0x00614936}else{0x00362923});
+            let pen=CreatePen(PS_SOLID as i32,1,if selected{0x00c29a63}else{0x0053493f});
+            let pb=SelectObject(dc,brush);let pp=SelectObject(dc,pen);
+            RoundRect(dc,tile.left,tile.top,tile.right,tile.bottom,14,14);
+            SelectObject(dc,pb);SelectObject(dc,pp);DeleteObject(brush);DeleteObject(pen);
+            if !ready[i] {
+                let image=LoadIconW(ptr::null_mut(),IDI_APPLICATION);
+                DrawIconEx(dc,(area.right-24)/2,tile.top+(tile.bottom-tile.top-40).max(8)/2,
+                    image,24,24,0,ptr::null_mut(),DI_NORMAL);
             }
+            label(dc,tile.left+6,tile.bottom-25,tile.right-tile.left-12,&basename(&item.path),0x00eeeeee);
         }
+        EndPaint(hwnd,&ps);return;
+    }
     let bar=STATE.with(|cell|cell.borrow().bars.iter().find(|b|b.hwnd==hwnd).cloned());
     if let Some(bar)=bar{
         for (i,item) in bar.items.iter().enumerate() {
@@ -751,12 +774,13 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_LBUTTONUP=>{
-            let y=((l as u32>>16)&0xffff) as i16 as i32;
-            let mut area:RECT=mem::zeroed();GetClientRect(hwnd,&mut area);let slot=((area.bottom-28)/5).clamp(24,95);
+            let y=(l>>16) as i16 as i32;
+            let px=l as i16 as i32;
+            let mut area:RECT=mem::zeroed();GetClientRect(hwnd,&mut area);
             let stage_item=STATE.with(|s|{
-                let a=s.borrow();a.stages.iter().find(|stage|stage.hwnd==hwnd).and_then(|stage|{
-                    if y<34 {None}else{stage.items.get(((y-34)/slot) as usize).cloned()}
-                })
+                let a=s.borrow();
+                let stage=a.stages.iter().find(|stage|stage.hwnd==hwnd)?;
+                previews::slot_at(area.right,area.bottom,px,y,stage.items.len()).and_then(|i|stage.items.get(i)).cloned()
             });
             if let Some(item)=stage_item {activate(&item);return 0;}
             let is_stage=STATE.with(|s|s.borrow().stages.iter().any(|stage|stage.hwnd==hwnd));
@@ -887,7 +911,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         let mut msg:MSG=mem::zeroed();
         while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0{TranslateMessage(&msg);DispatchMessageW(&msg);}
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
-        update_state(|s|{for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for b in s.stages.drain(..){DestroyWindow(b.hwnd);}});
+        update_state(|s|{for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){b.previews.clear();DestroyWindow(b.hwnd);}});
         ICONS.with(|c|{for (_,icon) in c.borrow_mut().drain(){if !icon.is_null(){DestroyIcon(icon);}}});
         SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
         CONTROL.with(|c|c.set(ptr::null_mut()));DestroyWindow(control);
