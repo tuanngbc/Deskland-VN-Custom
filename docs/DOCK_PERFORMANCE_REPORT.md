@@ -40,6 +40,19 @@ A short owner-host [bc19ba4 diagnostic](https://github.com/tuanngbc/Deskland-VN-
 
 The hidden-launch helper supplies Windows with an initial hidden show state, which can override the first `ShowWindow` request ([Win32 documentation](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showwindow)). The fixture now checks actual visibility after startup and, if necessary, shows its own hidden window without moving, resizing or activating it. The real fixture smoke in CI requires three visible, unprotected and uncloaked windows from a hidden child process. Stage still rejects hidden, minimized, cloaked and protected sources.
 
+**Native source regression: six live DWM links.** The owner Windows 11 probe used the verified [ddaff28 artifact](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44907369233/artifacts/14709220164) with the corrected fixture. The first source again started hidden, then became visible through the fixture correction. Both Stage surfaces ran in All mode with All application scope; group limit 5, four cards in the model, one page, three preview sources. Both preview hosts were visible and clipped successfully.
+
+| Stage output | Fixture source / home output | Visible / local / eligible | Card index / page (zero based) | DWM stage | Final link |
+| --- | --- | --- | --- | --- | --- |
+| Primary | 0 / primary | yes / yes / yes | 3 / 0 | Linked | yes |
+| Primary | 1 / secondary | yes / no / yes | 2 / 0 | Linked | yes |
+| Primary | 2 / primary | yes / yes / yes | 1 / 0 | Linked | yes |
+| Secondary | 0 / primary | yes / no / yes | 3 / 0 | Linked | yes |
+| Secondary | 1 / secondary | yes / yes / yes | 2 / 0 | Linked | yes |
+| Secondary | 2 / primary | yes / no / yes | 1 / 0 | Linked | yes |
+
+The fourth card had no live DWM relationship; the trace reported six fixture and zero other links. The following performance attempt again reached six, but Windows did not activate the fixture anchor before the foreground check. It was **INVALID with zero samples**. For Stage pairs, hold one fixture process and foreground anchor across all intervals and use one shared focus transition log; a focus mismatch still rejects the measurement. Require the same executable, non-Stage Dock settings, source geometry, and the expected two links per verified fixture source across the two surfaces. Probe diagnostics must stay off during timed sampling.
+
 [dddd812 Windows CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44885050608) passed the 100-toggle threshold: controller 451→451, Stage-only 451→453, Dock-only 453→453, both 453→451; 100 full controller restarts were 448→450. This is a CI process-handle regression check. The adaptive icon cache caps source storage at 5 MiB and per-surface stored raster variants at 384 KiB; a miss is cached, and there is no periodic icon fetch. [78bc892](https://github.com/tuanngbc/Deskland-VN-Custom/commit/78bc892538c6b4b66e9f81824f6b190e2d596bf4) retains the capacity of the bounded preview relationship maps while still unregistering stale links and querying current source dimensions. These bounds do not measure memory used by DWM, the Shell, or the GPU driver.
 
 Owner Windows 11, 4b37064: 125 valid samples per mode, 15 s warmup, same candidate PID and panorama profile, Stage off. A native Settings toggle switched from Dock enabled in reserve mode on both displays to wallpaper only. The Dock interval kept the trial process foreground for all 125 samples; the wallpaper interval had three foreground PIDs, with its first change at sample 7. **Reject this pair for regression or improvement attribution.** It does not explain the earlier DWM delta. Raw counters are private. Repeat with a scripted owned foreground fixture and independent assertions for foreground window, wallpaper coverage and GPU engine identity across each matched interval.

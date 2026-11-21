@@ -6,7 +6,7 @@ param(
     [switch]$WaitForShow,
     [switch]$StageDiagnostic,
     [switch]$SourceSmoke,
-    [ValidateRange(30,900)][int]$TimeoutSeconds = 180
+    [ValidateRange(30,1200)][int]$TimeoutSeconds = 180
 )
 $ErrorActionPreference = 'Stop'
 if (!(Test-Path -LiteralPath $Evidence -PathType Container)) { throw 'Existing private evidence folder required' }

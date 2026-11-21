@@ -19,6 +19,6 @@ try {
     Write-Output "Native source smoke: three visible/eligible HWNDs; initially hidden: $(@($sources | Where-Object { !$_.InitiallyVisible }).Count)"
 } finally {
     $check = Join-Path $evidence 'fixture-card-check.json'
-    if (Test-Path -LiteralPath $check) { Remove-Item -LiteralPath $check }
-    Remove-Item -LiteralPath $evidence
+    [IO.File]::Delete($check)
+    [IO.Directory]::Delete($evidence, $false)
 }

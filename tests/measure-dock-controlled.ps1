@@ -7,6 +7,7 @@ param(
     [ValidatePattern('^[A-F0-9]{64}$')][string]$ExpectedControlSettingsHash,
     [ValidateRange(0,16)][int]$ExpectedStagePreviews,
     [string]$AbortMarker,
+    [string]$FixtureEvidence = $Evidence,
     [ValidateRange(15,600)][int]$Warmup = 15,
     [Alias('Samples')][ValidateRange(125,600)][int]$RequestedSamples = 125
 )
@@ -21,7 +22,7 @@ if (!$candidate -or $candidate.Name -ne 'tuanpc-desk.exe' -or !$candidate.Comman
 $build = Split-Path -Parent $candidate.ExecutablePath
 if ((Get-Content -LiteralPath (Join-Path $build 'BUILD-COMMIT.txt') -Raw).Trim() -cne $BuildSha) { throw 'Candidate build mismatch' }
 if (Test-Path -LiteralPath (Join-Path $Evidence 'verdict.json')) { throw 'Select an unused evidence directory' }
-$fixture = Get-Content -LiteralPath (Join-Path $Evidence 'fixture-ready.json') -Raw | ConvertFrom-Json
+$fixture = Get-Content -LiteralPath (Join-Path $FixtureEvidence 'fixture-ready.json') -Raw | ConvertFrom-Json
 $fixtureProcess = Get-Process -Id $fixture.PID
 $expected = [string]$fixture.Coverage
 if ($expected -notmatch '^-?\d+,-?\d+,-?\d+,-?\d+:[01];-?\d+,-?\d+,-?\d+,-?\d+:[01]$') { throw 'Two-output fixture coverage contract mismatch' }
@@ -168,7 +169,7 @@ try {
             ($cfg.dock.stageEnabled -and $ExpectedStagePreviews -ne 2*$fixture.Cards)) {
             $reasons.Add('stage-requires-all-verified-fixture-cards-on-both-displays')
         }
-        $sourceCheck = Join-Path $Evidence 'fixture-card-check.json'
+        $sourceCheck = Join-Path $FixtureEvidence 'fixture-card-check.json'
         $sources = if (Test-Path -LiteralPath $sourceCheck -PathType Leaf) { Get-Content -LiteralPath $sourceCheck -Raw | ConvertFrom-Json }
         $ordinalSet = @($sources | Where-Object { $null -ne $_ } | Select-Object -ExpandProperty Card | Sort-Object)
         if (($ordinalSet -join ',') -cne ((0..($fixture.Cards-1)) -join ',') -or
@@ -253,7 +254,7 @@ try {
                 $reasons.Add('stage-live-preview-workload-changed')
             }
         }
-        $deactivated = Join-Path $Evidence 'fixture-deactivated.log'
+        $deactivated = Join-Path $FixtureEvidence 'fixture-deactivated.log'
         if (Test-Path -LiteralPath $deactivated) {
             $lost = @(Get-Content -LiteralPath $deactivated | Where-Object {
                 $_ -match '^\d+$' -and [long]$_ -ge $started*1000 -and [long]$_ -le $samples[-1].Epoch*1000
