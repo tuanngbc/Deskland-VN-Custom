@@ -1,6 +1,7 @@
 //! Small native rendering proof: live DWM backdrop versus a per-pixel
 //! premultiplied surface. No production overlay setting selects this yet.
 use std::{mem, ptr};
+use windows_sys::core::HRESULT;
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::{Dwm::*, Gdi::*},
