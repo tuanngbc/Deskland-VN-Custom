@@ -103,12 +103,12 @@ fn segment_distance(x:f32,y:f32,ax:f32,ay:f32,bx:f32,by:f32)->f32{
     let t=(((x-ax)*dx+(y-ay)*dy)/(dx*dx+dy*dy).max(0.001)).clamp(0.0,1.0);
     (x-ax-dx*t).hypot(y-ay-dy*t)
 }
-fn distance(rect:Rect,r:f32,x:f32,y:f32)->f32{
+pub(super) fn distance(rect:Rect,r:f32,x:f32,y:f32)->f32{
     let qx=(x-rect.x-rect.w*0.5).abs()-(rect.w*0.5-r);
     let qy=(y-rect.y-rect.h*0.5).abs()-(rect.h*0.5-r);
     qx.max(0.0).hypot(qy.max(0.0))+qx.max(qy).min(0.0)-r
 }
-fn draw(data:&mut [u8],w:i32,h:i32,r:Rect,f:impl Fn(f32,f32)->Option<([u8;3],f32)>){
+pub(super) fn draw(data:&mut [u8],w:i32,h:i32,r:Rect,f:impl Fn(f32,f32)->Option<([u8;3],f32)>){
     for y in (r.y.floor() as i32).clamp(0,h)..((r.y+r.h).ceil() as i32).clamp(0,h){
         for x in (r.x.floor() as i32).clamp(0,w)..((r.x+r.w).ceil() as i32).clamp(0,w){
             let Some((rgb,a))=f(x as f32+0.5,y as f32+0.5) else{continue};

@@ -74,6 +74,7 @@ impl Layer {
     pub(super) fn pixels(&mut self) -> &mut [u8] {
         unsafe {std::slice::from_raw_parts_mut(self.bits,self.size.0 as usize*self.size.1 as usize*4)}
     }
+    pub(super) fn dc(&self)->HDC{self.dc}
     pub(super) unsafe fn present(&self, hwnd:HWND) -> bool {
         let size=SIZE{cx:self.size.0,cy:self.size.1};
         let origin=POINT{x:0,y:0};

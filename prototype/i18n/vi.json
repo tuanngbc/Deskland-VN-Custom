@@ -36,6 +36,7 @@
     "stageScale": "Kích thước Stage",
     "stageSpacing": "Khoảng cách thẻ Stage",
     "stageGroupLimit": "Số thẻ Stage mỗi trang",
+    "stageOpacity": "Độ đậm của thẻ Stage",
     "dockStageSide": "Vị trí Stage Manager",
     "dockLeft": "Bên trái",
     "dockRight": "Bên phải",

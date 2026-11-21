@@ -158,6 +158,7 @@
       <label class="setting-row"><b data-i18n="stageScale">Kích thước Stage</b><span><input type="range" id="stageStyle_scale" min="75" max="140" step="1"><output id="stageValue_scale"></output></span></label>
       <label class="setting-row"><b data-i18n="stageSpacing">Khoảng cách thẻ Stage</b><span><input type="range" id="stageStyle_spacing" min="2" max="20" step="1"><output id="stageValue_spacing"></output></span></label>
       <label class="setting-row"><b data-i18n="stageGroupLimit">Số thẻ Stage mỗi trang</b><span><input type="range" id="stageStyle_groupLimit" min="1" max="8" step="1"><output id="stageValue_groupLimit"></output></span></label>
+      <label class="setting-row"><b data-i18n="stageOpacity">Độ đậm của thẻ Stage</b><span><input type="range" id="stageStyle_opacity" min="35" max="100" step="1"><output id="stageValue_opacity"></output></span></label>
     </div>
   </section>
   <section class="setting-card"><h3 data-i18n="dockAppearanceTitle">Kiểu hiển thị Dock</h3>
@@ -794,10 +795,10 @@ function requestedDisplays(target){
 }
 const defaultDisplay=()=>dockDisplays.find(d=>d.primary)||dockDisplays[0];
 const displayLabel=d=>d.name+' · '+d.w+' × '+d.h+' · '+d.dpi+' DPI'+(d.primary?' · '+dockText('primaryMonitor'):'');
-const stageStyleDefaults={side:'default',scale:100,spacing:6,groupLimit:5};
+const stageStyleDefaults={side:'default',scale:100,spacing:6,groupLimit:5,opacity:76};
 const stageStyleFor=id=>({...stageStyleDefaults,...(Object.hasOwn(dockOptions.stageStyles||{},id)?dockOptions.stageStyles[id]:{})});
 const stageRight=id=>{const side=stageStyleFor(id).side;return (side==='default'?dockOptions.stageSide:side)==='right';};
-const stageUnits={scale:'%',spacing:' px',groupLimit:''};
+const stageUnits={scale:'%',spacing:' px',groupLimit:'',opacity:'%'};
 function showStageStyle(){
   const control=$('stageStyleDisplay');
   const markup=dockDisplays.map(d=>'<option value="'+esc(d.id)+'">'+esc(displayLabel(d))+'</option>').join('');
@@ -807,13 +808,13 @@ function showStageStyle(){
   control.disabled=!stageStyleDisplay;
   $('stageStyleControls').hidden=!stageStyleDisplay;
   const style=stageStyleFor(stageStyleDisplay);
-  for(const key of ['side','scale','spacing','groupLimit']){
+  for(const key of ['side','scale','spacing','groupLimit','opacity']){
     $('stageStyle_'+key).value=String(style[key]);
     if(Object.hasOwn(stageUnits,key))$('stageValue_'+key).textContent=style[key]+stageUnits[key];
   }
 }
 $('stageStyleDisplay').addEventListener('change',e=>{stageStyleDisplay=e.target.value;showStageStyle();});
-for(const key of ['side','scale','spacing','groupLimit']){
+for(const key of ['side','scale','spacing','groupLimit','opacity']){
   const control=$('stageStyle_'+key),unit=stageUnits[key];
   if(unit!==undefined)control.addEventListener('input',()=>$('stageValue_'+key).textContent=control.value+unit);
   control.addEventListener('change',()=>{

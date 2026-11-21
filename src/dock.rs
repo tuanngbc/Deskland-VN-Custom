@@ -33,6 +33,7 @@ use runtime::Command;
 type Preferences=Options;
 
 const CLASS:&str="TuanpcDeskNativeDock";
+const PREVIEW_CLASS:&str="TuanpcDeskStagePreview";
 const WM_TICK:u32=WM_APP+50;
 const WM_CONFIG:u32=WM_APP+51;
 const WM_ICON_CHANGED:u32=WM_APP+52;
@@ -99,7 +100,7 @@ impl Motion {
         unsettled
     }
 }
-struct Stage { hwnd:HWND, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews }
+struct Stage { hwnd:HWND, preview_hwnd:HWND, preview_boxes:Vec<RECT>, preview_visible:bool, layered:bool, opacity:u32, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews }
 #[derive(Default)]
 struct State { bars:Vec<Bar>, stages:Vec<Stage>, windows:Vec<AppWindow>, prefs:Preferences, screens:Vec<Screen>, suspended:bool, foreground:isize, workspaces:workspaces::Workspaces, material:Option<surface::Material> }
 thread_local! {
@@ -331,6 +332,11 @@ fn bar_rect(screen:&Screen,items:usize)->RECT {
     let bottom=screen.work.bottom-7;
     RECT{left:x,top:bottom-HEIGHT,right:x+width,bottom}
 }
+unsafe fn destroy_stage(stage:&mut Stage){
+    stage.previews.clear();
+    if !stage.preview_hwnd.is_null(){DestroyWindow(stage.preview_hwnd);}
+    DestroyWindow(stage.hwnd);
+}
 unsafe fn recreate(state:&mut State) {
     let screens = &state.screens;
     let dock_targets = if state.prefs.enabled { state.prefs.dock_display.outputs(screens.iter().map(|s| (s.id.as_str(), s.primary))) } else { Vec::new() };
@@ -342,7 +348,7 @@ unsafe fn recreate(state:&mut State) {
     });
     state.stages.retain_mut(|s| {
         let keep = stage_targets.iter().any(|&i| screens[i].id==s.display&&same_rect(screens[i].bounds, s.bounds));
-        if !keep { s.previews.clear();DestroyWindow(s.hwnd); }
+        if !keep { destroy_stage(s); }
         keep
     });
     let class=wide(CLASS);
@@ -360,15 +366,22 @@ unsafe fn recreate(state:&mut State) {
         }else{emit(Event::Error(format!("Create Dock window: {}",GetLastError())));}
         }
         if stage_targets.contains(&i) && !state.stages.iter().any(|s|same_rect(s.bounds,screen.bounds)) {
-            let style=state.prefs.stage_style(&screen.id);
             let r=stage_rect(screen,style);
-            let stage_hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,
+            let stage_hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|WS_EX_LAYERED,
                 class.as_ptr(),wide("tuanpc-desk Stage Manager").as_ptr(),WS_POPUP,
                 r.left,r.top,r.right-r.left,r.bottom-r.top,
                 ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
             if !stage_hwnd.is_null(){
-                previews::style_destination(stage_hwnd);
-                state.stages.push(Stage{hwnd:stage_hwnd,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),selected:None,layout:None,page:0,pages:1,hidden:true,hover:None,keyboard:None,previous_focus:0,previews:previews::Previews::default()});
+                let preview_hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,
+                    wide(PREVIEW_CLASS).as_ptr(),ptr::null(),WS_POPUP,
+                    r.left,r.top,r.right-r.left,r.bottom-r.top,
+                    stage_hwnd,ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
+                let layered=!preview_hwnd.is_null();
+                if !layered{
+                    SetWindowLongPtrW(stage_hwnd,GWL_EXSTYLE,GetWindowLongPtrW(stage_hwnd,GWL_EXSTYLE)& !(WS_EX_LAYERED as isize));
+                    previews::style_destination(stage_hwnd);
+                }
+                state.stages.push(Stage{hwnd:stage_hwnd,preview_hwnd,preview_boxes:Vec::new(),preview_visible:false,layered,opacity:style.opacity,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),selected:None,layout:None,page:0,pages:1,hidden:true,hover:None,keyboard:None,previous_focus:0,previews:previews::Previews::default()});
             } else { emit(Event::Error(format!("Create Stage window: {}",GetLastError()))); }
         }
     }
@@ -416,15 +429,20 @@ unsafe fn refresh(state:&mut State, topology:bool) {
     for stage in &mut state.stages {
         let mut placement_changed=false;
         let Some(screen)=state.screens.iter().find(|s|s.id==stage.display) else{continue;};
+        let style=state.prefs.stage_style(&screen.id);
         {
-            let style=state.prefs.stage_style(&screen.id);
             let r=stage_rect(screen,style);let mut actual:RECT=mem::zeroed();
-            if GetWindowRect(stage.hwnd,&mut actual)==0 || !same_rect(r,actual){SetWindowPos(stage.hwnd,HWND_TOPMOST,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE);placement_changed=true;}
+                        if GetWindowRect(stage.hwnd,&mut actual)==0 || !same_rect(r,actual){
+                SetWindowPos(stage.hwnd,ptr::null_mut(),r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_NOZORDER);
+                if !stage.preview_hwnd.is_null(){
+                    SetWindowPos(stage.preview_hwnd,ptr::null_mut(),r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_NOZORDER);
+                }
+                placement_changed=true;
+            }
         }
         let mut area:RECT=mem::zeroed();
         GetClientRect(stage.hwnd,&mut area);
         let (items,groups)=state.workspaces.cards(&stage.display,stage.bounds,&state.windows,state.prefs.all_windows);
-        let style=state.prefs.stage_style(&screen.id);
         let mut layout=stage_surface::Layout::new(area.right,area.bottom,screen.dpi,stage_gap(screen,style),
             style.group_limit as usize,items.len(),style.right==Some(true));
         let rows=layout.rows;
@@ -436,6 +454,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let items:Vec<_>=items.into_iter().skip(start).take(rows).collect();
         let groups:Vec<_>=groups.into_iter().skip(start).take(rows).collect();
         let mut changed=placement_changed||stage.items!=items||stage.groups!=groups||stage.selected!=selected||active_changed||material_changed||old_pages!=stage.pages;
+        changed|=stage.opacity!=style.opacity;stage.opacity=style.opacity;
         layout.count=items.len();
         layout.stack=(0..items.len()).filter(|&i|items[i].count>1).fold(0u8,|bits,i|bits|(1<<i));
         if stage.items!=items {
@@ -444,7 +463,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         }
         stage.items=items;stage.groups=groups;stage.selected=selected;
         if stage.layout!=Some(layout){
-            stage.layout=if layout.apply(stage.hwnd){Some(layout)}else{None};
+            stage.layout=if stage.layered||layout.apply(stage.hwnd){Some(layout)}else{None};
             changed=true;
         }
         // Handle fullscreen on the local monitor even while the foreground
@@ -454,10 +473,22 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let hide=stage.layout.is_none() || stage.items.is_empty() || state.suspended || foreground_fullscreen(stage.bounds) || local_fullscreen;
         if hide!=stage.hidden{ShowWindow(stage.hwnd,if hide{SW_HIDE}else{SW_SHOWNOACTIVATE});stage.hidden=hide;changed=true;}
         if hide{stage.hover=None;stage.keyboard=None;changed|=stage.previews.clear();}
-        else {
-            if area.right>0&&area.bottom>0{
-                changed|=stage.previews.update(stage.hwnd,&stage.items,layout);
+        else if area.right>0&&area.bottom>0{
+            let host=if stage.preview_hwnd.is_null(){stage.hwnd}else{stage.preview_hwnd};
+            changed|=stage.previews.update(host,&stage.items,layout);
+        }
+        if !stage.preview_hwnd.is_null(){
+            let areas=stage.previews.areas();
+            let reshape=areas.len()!=stage.preview_boxes.len()||areas.iter().zip(&stage.preview_boxes).any(|(&a,&b)|!same_rect(a,b));
+            let clipped=!reshape||previews::clip_destination(stage.preview_hwnd,&areas);
+            let show=clipped&&!areas.is_empty()&&!hide;
+            if clipped&&reshape{stage.preview_boxes=areas;}
+            if stage.preview_visible!=show{
+                ShowWindow(stage.preview_hwnd,if show{SW_SHOWNOACTIVATE}else{SW_HIDE});
+                stage.preview_visible=show;
+                changed=true;
             }
+            if !clipped {changed|=stage.previews.clear();}
         }
         if changed{InvalidateRect(stage.hwnd,ptr::null(),0);}
     }
@@ -516,12 +547,12 @@ unsafe fn paint(hwnd:HWND){
     let stage=STATE.with(|cell|{
         let state=cell.borrow();
         let stage=state.stages.iter().find(|stage|stage.hwnd==hwnd)?;
-        let ready=stage.items.iter().map(|item|stage.previews.includes(item.hwnd)).collect::<Vec<_>>();
+        let ready=stage.items.iter().map(|item|(stage.preview_hwnd.is_null()||stage.preview_visible)&&stage.previews.includes(item.hwnd)).collect::<Vec<_>>();
         let dpi=state.screens.iter().find(|s|s.id==stage.display).map_or(96,|s|s.dpi);
         let dark=state.material.is_none_or(|m|m.dark);
-        Some((stage.items.clone(),ready,stage.groups.clone(),stage.selected,stage.layout?,stage.page,stage.pages,state.foreground,dpi,dark,stage.keyboard.or(stage.hover)))
+        Some((stage.items.clone(),ready,stage.groups.clone(),stage.selected,stage.layout?,stage.page,stage.pages,state.foreground,dpi,dark,stage.keyboard.or(stage.hover),stage.layered,stage.opacity))
     });
-    if let Some((items,ready,groups,active,layout,page,pages,foreground,dpi,dark,hover))=stage {
+    if let Some((items,ready,groups,active,layout,page,pages,foreground,dpi,dark,hover,layered,opacity))=stage {
         let key=hwnd as usize;
         let size=(area.right,area.bottom,dpi);
         let panel=STAGE_SURFACES.with(|s|s.borrow_mut().remove(&key));
@@ -529,19 +560,32 @@ unsafe fn paint(hwnd:HWND){
         let selected=|i:usize|items[i].hwnd as isize==foreground || (active.is_some()&&active==groups[i]);
         let active_mask=(0..items.len()).filter(|&i|selected(i)).fold(0u8,|bits,i|bits|(1<<i));
         let atlas=ATLAS.with(|a|a.borrow_mut().as_mut().map(|w|w.request(&items)).unwrap_or_default());
-        let look=stage_surface::Look{dark,layout,active:active_mask,hover};
-        let rendered=panel.as_mut().is_some_and(|p|p.paint(dc,look,&items,&atlas,&ready));
+        let labels=items.iter().enumerate().map(|(i,item)|{
+            let app=basename(&item.path).trim_end_matches(".exe").to_owned();
+            let same_app=items.iter().enumerate().any(|(j,other)|j!=i&&other.path==item.path);
+            let name=if app.is_empty()||same_app{&item.title}else{&app};
+            if groups[i].is_some(){format!("{name} · {}",item.count)}else{name.to_owned()}
+        }).collect::<Vec<_>>();
+        let look=stage_surface::Look{dark,layout,active:active_mask,hover,alpha:layered.then_some((opacity*255/100) as u8)};
+        let rendered=panel.as_mut().is_some_and(|p|p.paint(dc,look,&items,&atlas,&ready,layered.then_some((hwnd,&labels[..],page,pages))));
+        if layered{
+            EndPaint(hwnd,&ps);
+            if rendered{
+                if let Some(panel)=panel{STAGE_SURFACES.with(|s|s.borrow_mut().insert(key,panel));}
+            }else{
+                // Preserve input and live previews when a driver rejects ULW_ALPHA.
+                STATE.with(|s|{if let Some(p)=s.borrow_mut().stages.iter_mut().find(|p|p.hwnd==hwnd){p.layered=false;p.layout=None;}});
+                SetWindowLongPtrW(hwnd,GWL_EXSTYLE,GetWindowLongPtrW(hwnd,GWL_EXSTYLE)& !(WS_EX_LAYERED as isize));
+                queue_refresh();
+            }
+            return;
+        }
         if !rendered{fill(dc,area,if dark{0x00201b18}else{0x00f4f2ee});}
         let font=panel.as_ref().map_or(ptr::null_mut(),stage_surface::Panel::font);
         let previous=if font.is_null(){ptr::null_mut()}else{SelectObject(dc,font)};
         let ink=if dark{0x00f1ebe7}else{0x00342823};
         let muted=if dark{0x00a09d98}else{0x007e7268};
-        for (i,item) in items.iter().enumerate(){
-            let app=basename(&item.path).trim_end_matches(".exe").to_owned();
-            let name=if app.is_empty(){&item.title}else{&app};
-            let title=if groups[i].is_some(){format!("{name} · {}",item.count)}else{name.to_owned()};
-            stage_surface::caption(dc,layout,i,&title,ink);
-        }
+        for (i,title) in labels.iter().enumerate(){stage_surface::caption(dc,layout,i,title,ink);}
         if let Some(nav)=layout.nav(){
             let segment=(nav.w/4).max(1);
             stage_surface::nav_label(dc,stage_surface::Box2{w:segment,..nav},"‹",if page>0{ink}else{muted});
@@ -1090,6 +1134,10 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         if RegisterClassExW(&wc)==0 && GetLastError()!=ERROR_CLASS_ALREADY_EXISTS{
             let _=ready.send(Err(format!("Register Dock class: {}",GetLastError())));if com.is_ok(){CoUninitialize();}return;
         }
+        let preview_class=wide(PREVIEW_CLASS);
+        wc.lpszClassName=preview_class.as_ptr();wc.lpfnWndProc=Some(previews::destination_proc);
+        // Failure here uses the single non-layered Stage path.
+        RegisterClassExW(&wc);
         let control=CreateWindowExW(WS_EX_TOOLWINDOW,class.as_ptr(),wide("Deskland Dock controller").as_ptr(),WS_POPUP,0,0,0,0,ptr::null_mut(),ptr::null_mut(),wc.hInstance,ptr::null());
         if control.is_null(){let _=ready.send(Err(format!("Create Dock controller: {}",GetLastError())));if com.is_ok(){CoUninitialize();}return;}
         CONTROL.with(|c|c.set(control));DIRTY.with(|c|c.set(false));
@@ -1110,7 +1158,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         let mut msg:MSG=mem::zeroed();
         while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0{TranslateMessage(&msg);DispatchMessageW(&msg);}
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
-        update_state(|s|{s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){b.previews.clear();DestroyWindow(b.hwnd);}});
+        update_state(|s|{s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){destroy_stage(&mut b);}});
         SURFACES.with(|s|s.borrow_mut().clear());STAGE_SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
         CONTROL.with(|c|c.set(ptr::null_mut()));DestroyWindow(control);
         OWNER.with(|o|o.set(ptr::null_mut()));

@@ -36,6 +36,7 @@
     "stageScale": "Stage size",
     "stageSpacing": "Stage card spacing",
     "stageGroupLimit": "Stage cards per page",
+    "stageOpacity": "Stage card opacity",
     "dockStageSide": "Stage Manager position",
     "dockLeft": "Left",
     "dockRight": "Right",

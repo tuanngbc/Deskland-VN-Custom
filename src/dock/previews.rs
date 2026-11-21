@@ -2,7 +2,7 @@
 //! capture. Every relationship is released on hide, detach, or teardown.
 use super::{Item,same_rect,stage_surface::Layout};
 use std::{collections::HashMap,mem};
-use windows_sys::Win32::{Foundation::*,Graphics::Dwm::*,UI::WindowsAndMessaging::*};
+use windows_sys::Win32::{Foundation::*,Graphics::{Dwm::*,Gdi::*},UI::WindowsAndMessaging::*};
 
 pub struct Link { raw:isize, pid:u32, area:RECT }
 impl Drop for Link {fn drop(&mut self){unsafe{DwmUnregisterThumbnail(self.raw);}}}
@@ -12,6 +12,11 @@ pub struct Previews { links:HashMap<usize,Link> }
 impl Previews {
     pub fn clear(&mut self)->bool{
         let changed=!self.links.is_empty();self.links.clear();changed
+    }
+    pub fn areas(&self)->Vec<RECT>{
+        let mut areas=self.links.values().map(|link|link.area).collect::<Vec<_>>();
+        areas.sort_unstable_by_key(|r|(r.top,r.left,r.bottom,r.right));
+        areas
     }
     pub fn includes(&self,hwnd:HWND)->bool{self.links.contains_key(&(hwnd as usize))}
     pub unsafe fn update(&mut self,dst:HWND,items:&[Item],layout:Layout)->bool{
@@ -80,6 +85,30 @@ fn fit(slot:RECT,source:SIZE)->Option<RECT>{
     let th=((source.cy as f32*factor).round() as i32).clamp(1,h);
     let x=slot.left+(w-tw)/2;let y=slot.top+(h-th)/2;
     Some(RECT{left:x,top:y,right:x+tw,bottom:y+th})
+}
+
+// This non-layered DWM destination is visible only where a registered
+// thumbnail is drawn. The layered Stage surface under it draws the cards.
+pub unsafe fn clip_destination(window:HWND,areas:&[RECT])->bool{
+    let combined=CreateRectRgn(0,0,0,0);
+    if combined.is_null(){return false;}
+    for a in areas {
+        let tile=CreateRectRgn(a.left,a.top,a.right,a.bottom);
+        if tile.is_null(){DeleteObject(combined);return false;}
+        let ok=CombineRgn(combined,combined,tile,RGN_OR)!=0;
+        DeleteObject(tile);
+        if !ok{DeleteObject(combined);return false;}
+    }
+    if SetWindowRgn(window,combined,1)!=0{true}else{DeleteObject(combined);false}
+}
+
+pub unsafe extern "system" fn destination_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT {
+    match msg {
+        WM_NCHITTEST=>HTTRANSPARENT as LRESULT,
+        WM_MOUSEACTIVATE=>MA_NOACTIVATE as LRESULT,
+        WM_ERASEBKGND=>1,
+        _=>DefWindowProcW(hwnd,msg,w,l),
+    }
 }
 
 pub unsafe fn style_destination(window:HWND){

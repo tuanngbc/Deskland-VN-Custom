@@ -619,6 +619,12 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
                     AppendMenuW(submenu, MF_STRING | if base.group_limit == group_limit {MF_CHECKED} else {0},
                         500+edits.len()-1, wide(&format!("{group_limit} thẻ Stage mỗi trang")).as_ptr());
                 }
+                AppendMenuW(submenu, MF_SEPARATOR, 0, std::ptr::null());
+                for opacity in [45,60,76,100] {
+                    edits.push((d.id.clone(), StageStyle {opacity,..base}));
+                    AppendMenuW(submenu, MF_STRING | if base.opacity == opacity {MF_CHECKED} else {0},
+                        500+edits.len()-1, wide(&format!("Độ đậm của thẻ {opacity}%")).as_ptr());
+                }
                 if AppendMenuW(layouts, MF_POPUP, submenu as usize, wide(&d.name.replace('&',"&&")).as_ptr()) == 0 {
                     DestroyMenu(submenu);
                 }

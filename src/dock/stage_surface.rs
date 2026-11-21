@@ -1,6 +1,6 @@
-//! Floating Stage geometry and paint. A disconnected Win32 region gives the
-//! gaps real desktop transparency without changing the DWM destination type.
-use super::{geometry::Rect,surface::{rounded, icon_on, fallback_icon, Atlas},glass_probe::Layer,Item};
+//! The layered Stage surface paints premultiplied cards and caption masks.
+//! A regular owned HWND displays the live DWM rectangles above it.
+use super::{geometry::Rect,surface::{rounded,draw,distance,icon_on,fallback_icon,Atlas},glass_probe::Layer,Item};
 use crate::desktop::wide;
 use windows_sys::Win32::{Foundation::{HWND,RECT},Graphics::Gdi::*};
 
@@ -24,7 +24,7 @@ impl Layout {
         let nav_h=px(25);
         let gap=gap.max(px(5));
         let min_h=px(48);
-        let rows_for=|nav|((height-inset*2-nav+gap)/(min_h+gap)).max(1) as usize;
+        let rows_for=|nav:i32|((height-inset*2-nav+gap)/(min_h+gap)).max(1) as usize;
         let limit=limit.clamp(1,8);
         let paged=total>rows_for(0).min(limit);
         let reserve=if paged{nav_h+gap}else{0};
@@ -86,32 +86,41 @@ impl Layout {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Look {pub dark:bool,pub layout:Layout,pub active:u8,pub hover:Option<usize>}
+pub(super) struct Look {pub dark:bool,pub layout:Layout,pub active:u8,pub hover:Option<usize>,pub alpha:Option<u8>}
 
-pub(super) struct Panel {layer:Layer,look:Option<Look>,static_pixels:Vec<u8>,font:HFONT,dpi:u32}
+pub(super) struct Panel {layer:Layer,look:Option<Look>,static_pixels:Vec<u8>,mask:Option<Layer>,font:HFONT,dpi:u32}
 impl Panel {
     pub unsafe fn new(w:i32,h:i32,dpi:u32)->Option<Self>{
         let layer=Layer::new(w,h)?;
         let font_height=((12*dpi.clamp(72,288)+48)/96) as i32;
         let font=CreateFontW(-font_height,0,0,0,500,0,0,0,DEFAULT_CHARSET as u32,0,0,
             ANTIALIASED_QUALITY as u32,DEFAULT_PITCH as u32,wide("Segoe UI Variable").as_ptr());
-        Some(Self{layer,look:None,static_pixels:Vec::new(),font,dpi})
+        Some(Self{layer,look:None,static_pixels:Vec::new(),mask:None,font,dpi})
     }
     pub fn geometry(&self)->(i32,i32,u32){(self.layer.size.0,self.layer.size.1,self.dpi)}
     pub fn font(&self)->HFONT{self.font}
-    pub unsafe fn paint(&mut self,target:HDC,look:Look,items:&[Item],atlas:&Atlas,ready:&[bool])->bool {
+    pub unsafe fn paint(&mut self,target:HDC,look:Look,items:&[Item],atlas:&Atlas,ready:&[bool],layered:Option<(HWND,&[String],usize,usize)>)->bool {
         let (w,h)=self.layer.size;
         let layout=look.layout;
         if self.look!=Some(look){
             self.static_pixels.resize(w as usize*h as usize*4,0);
             self.static_pixels.fill(0);
             let data=&mut self.static_pixels;
+            let alpha=look.alpha.unwrap_or(255);
             for i in 0..layout.count {
                 let b=layout.card(i).rect();
                 let radius=(layout.radius as f32).min(b.h/2.0);
+                if look.alpha.is_some(){
+                    let k=(layout.inset as f32*0.82).max(2.0);
+                    let spread=Rect{x:b.x-k,y:b.y-k,w:b.w+2.0*k,h:b.h+2.0*k};
+                    draw(data,w,h,spread,|x,y|{
+                        let d=distance(b,radius,x,y-1.8);
+                        Some(([6,5,4],58.0*(1.0-d.max(0.0)/k).clamp(0.0,1.0).powi(2)))
+                    });
+                }
                 if layout.stack&(1<<i)!=0 {
-                    rounded(data,w,h,layout.rear(i,3).rect(),radius,if look.dark{[66,56,51]}else{[166,153,145]},255);
-                    rounded(data,w,h,layout.rear(i,2).rect(),radius,if look.dark{[89,80,73]}else{[208,199,192]},255);
+                    rounded(data,w,h,layout.rear(i,3).rect(),radius,if look.dark{[66,56,51]}else{[166,153,145]},alpha);
+                    rounded(data,w,h,layout.rear(i,2).rect(),radius,if look.dark{[89,80,73]}else{[208,199,192]},alpha);
                 }
                 let active=look.active&(1<<i)!=0;
                 let hover=look.hover==Some(i);
@@ -120,20 +129,27 @@ impl Panel {
                     (true,false,true)=>[182,161,145],(false,false,true)=>[173,141,112],
                     (true,false,false)=>[94,83,75],(false,false,false)=>[196,185,178],
                 };
-                rounded(data,w,h,b,radius,edge,255);
-                let inner=Rect{x:b.x+1.0,y:b.y+1.0,w:b.w-2.0,h:b.h-2.0};
-                if inner.w>0.0&&inner.h>0.0 {
-                    rounded(data,w,h,inner,(radius-1.0).max(0.0),if look.dark{[47,41,39]}else{[244,239,235]},255);
-                }
+                let tint:[u8;3]=if look.dark{[40,35,32]}else{[238,233,228]};
+                draw(data,w,h,b,|x,y|{
+                    let d=distance(b,radius,x,y);
+                    let coverage=(0.5-d).clamp(0.0,1.0);
+                    let line=(1.1+d).clamp(0.0,1.0);
+                    let shine=(1.0-((y-b.y)/b.h).clamp(0.0,1.0)).powi(4);
+                    let rgb=std::array::from_fn(|i|{
+                        let base=(tint[i] as f32+shine*if look.dark{29.0}else{13.0}).min(255.0);
+                        (base+(edge[i] as f32-base)*line).round() as u8
+                    });
+                    Some((rgb,coverage*(alpha as f32+40.0*line+14.0*shine).min(255.0)))
+                });
                 // Recessed neutral well stays behind aspect-fit previews.
                 let slot=layout.preview(i);
                 let p=Rect{x:slot.left as f32,y:slot.top as f32,w:(slot.right-slot.left) as f32,h:(slot.bottom-slot.top) as f32};
                 if p.w>0.0&&p.h>0.0 {
-                    rounded(data,w,h,p,4.0,if look.dark{[32,29,27]}else{[224,218,213]},255);
+                    rounded(data,w,h,p,4.0,if look.dark{[32,29,27]}else{[224,218,213]},if look.alpha.is_some(){48}else{255});
                 }
             }
             if let Some(nav)=layout.nav(){
-                rounded(data,w,h,nav.rect(),nav.h as f32/2.0,if look.dark{[48,40,37]}else{[241,234,228]},255);
+                rounded(data,w,h,nav.rect(),nav.h as f32/2.0,if look.dark{[48,40,37]}else{[241,234,228]},alpha);
             }
             self.look=Some(look);
         }
@@ -155,16 +171,60 @@ impl Panel {
                 badge(Rect{x:(slot.left+slot.right) as f32/2.0-s/2.0,y:(slot.top+slot.bottom) as f32/2.0-s/2.0,w:s,h:s});
             }
         }
-        self.layer.blit(target)
+        if let Some((hwnd,labels,page,pages))=layered {
+            let mask_h=layout.caption.max(layout.nav_h);
+            if self.mask.as_ref().is_none_or(|m|m.size!=(w,mask_h)){self.mask=Layer::new(w,mask_h);}
+            if let Some(mask)=self.mask.as_mut(){
+                let ink=if look.dark{[247,244,240]}else{[49,37,31]};
+                for (i,title) in labels.iter().enumerate(){
+                    let r=caption_box(layout,i);
+                    draw_mask(data,w,h,mask,self.font,r,title,false,ink);
+                }
+                if let Some(nav)=layout.nav(){
+                    let segment=(nav.w/4).max(1);
+                    let muted=if look.dark{[161,154,148]}else{[125,114,103]};
+                    draw_mask(data,w,h,mask,self.font,Box2{w:segment,..nav},"‹",true,if page>0{ink}else{muted});
+                    draw_mask(data,w,h,mask,self.font,Box2{x:nav.x+nav.w-segment,w:segment,..nav},"›",true,if page+1<pages{ink}else{muted});
+                    draw_mask(data,w,h,mask,self.font,Box2{x:nav.x+segment,w:nav.w-2*segment,..nav},
+                        &format!("{} · {pages}",page+1),true,ink);
+                }
+            }
+            self.layer.present(hwnd)
+        } else {self.layer.blit(target)}
     }
 }
 impl Drop for Panel {
     fn drop(&mut self){if !self.font.is_null(){unsafe{DeleteObject(self.font);}}}
 }
-pub(super) unsafe fn caption(dc:HDC,layout:Layout,i:usize,text:&str,ink:u32){
+fn caption_box(layout:Layout,i:usize)->Box2{
     let c=layout.card(i);
-    let mut r=RECT{left:c.x+layout.inset+layout.caption,top:c.y+c.h-layout.caption,
-        right:c.x+c.w-layout.inset,bottom:c.y+c.h};
+    Box2{x:c.x+layout.inset+layout.caption,y:c.y+c.h-layout.caption,w:c.w-2*layout.inset-layout.caption,h:layout.caption}
+}
+unsafe fn draw_mask(data:&mut[u8],w:i32,h:i32,mask:&mut Layer,font:HFONT,b:Box2,text:&str,center:bool,ink:[u8;3]){
+    if b.w<1||b.h<1||b.x<0||b.y<0||b.x+b.w>w||b.y+b.h>h||b.w>mask.size.0||b.h>mask.size.1{return;}
+    mask.pixels().fill(0);
+    let dc=mask.dc();
+    let previous=if font.is_null(){std::ptr::null_mut()}else{SelectObject(dc,font)};
+    SetBkMode(dc,TRANSPARENT as i32);SetTextColor(dc,0x00ffffff);
+    let mut rect=RECT{left:0,top:0,right:b.w,bottom:b.h};
+    DrawTextW(dc,wide(text).as_ptr(),-1,&mut rect,DT_SINGLELINE|DT_END_ELLIPSIS|DT_VCENTER|DT_NOPREFIX|if center{DT_CENTER}else{0});
+    GdiFlush();
+    if !previous.is_null(){SelectObject(dc,previous);}
+    let stride=mask.size.0 as usize*4;
+    let mask=mask.pixels();
+    for y in 0..b.h as usize {
+        for x in 0..b.w as usize {
+            let a=mask[y*stride+x*4] as u32;
+            if a==0{continue;}
+            let at=((b.y as usize+y)*w as usize+b.x as usize+x)*4;
+            let d=&mut data[at..at+4];
+            for c in 0..3 {d[c]=((a*ink[c] as u32+(255-a)*d[c] as u32+127)/255) as u8;}
+            d[3]=(a+(255-a)*d[3] as u32/255) as u8;
+        }
+    }
+}
+pub(super) unsafe fn caption(dc:HDC,layout:Layout,i:usize,text:&str,ink:u32){
+    let mut r=caption_box(layout,i).win();
     if r.left>=r.right{return;}
     SetTextColor(dc,ink);SetBkMode(dc,TRANSPARENT as i32);
     DrawTextW(dc,wide(text).as_ptr(),-1,&mut r,DT_SINGLELINE|DT_END_ELLIPSIS|DT_VCENTER|DT_NOPREFIX);
