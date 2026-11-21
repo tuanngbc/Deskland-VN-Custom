@@ -30,7 +30,7 @@ mod utilities;
 mod appbar;
 pub use utilities::{HostAction,Profile as UtilityProfile,Widget as UtilityWidget};
 pub use glass_probe::probe as glass_probe;
-pub use appearance::{Appearance,DockSide};
+pub use appearance::{Appearance,DockSide,Theme};
 pub use options::{Options,Edit,DisplayMode,DisplayTarget,StageStyle,WindowMode,WindowPolicy};
 pub use runtime::{Runtime,Event};
 use runtime::Command;
@@ -71,6 +71,8 @@ const MENU_RESTORE:usize=516;
 const MENU_SNAP_LEFT:usize=517;
 const MENU_SNAP_RIGHT:usize=518;
 const MENU_EXPAND:usize=519;
+const MENU_WINDOW_FIRST:usize=2000;
+const MENU_MOVE_FIRST:usize=2100;
 const STAGE_RAIL_CLASS:&str="TuanpcDeskStageReveal";
 
 #[derive(Clone)]
@@ -1022,16 +1024,56 @@ unsafe fn activate(hwnd:HWND,item:&Item) {
 unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     let menu=CreatePopupMenu();if menu.is_null(){return;}
     let prefs=STATE.with(|s|s.borrow().prefs.clone());
-    let selected=STATE.with(|s|s.borrow().bars.get(bar_index).and_then(|b|b.items.get(item_index)).cloned());
+    let (selected,choices)=STATE.with(|s|{
+        let state=s.borrow();
+        let Some(bar)=state.bars.get(bar_index)else{return (None,Vec::new());};
+        let selected=bar.items.get(item_index).cloned();
+        let choices=selected.as_ref().map(|item|state.windows.iter().filter(|w|w.path.eq_ignore_ascii_case(&item.path)
+            &&(prefs.all_windows||rect_intersects(w.rect,bar.bounds))).take(24)
+            .map(|w|(w.clone(),window_owner(w.hwnd))).collect::<Vec<_>>()).unwrap_or_default();
+        (selected,choices)
+    });
+    let mut destinations=Vec::new();
+    let mut owner=None;
     if let Some(item)=selected.as_ref(){
         AppendMenuW(menu,MF_STRING,if item.pinned{MENU_UNPIN}else{MENU_PIN},wide(if item.pinned{"Bỏ ghim"}else{"Ghim ứng dụng"}).as_ptr());
         if !item.hwnd.is_null() {
+            owner=window_owner(item.hwnd);
+            if choices.len()>1{
+                let list=CreatePopupMenu();
+                if !list.is_null(){
+                    for (i,(window,_)) in choices.iter().enumerate(){
+                        let title=window.title.chars().take(83).collect::<String>().replace('&',"&&");
+                        let status=if IsIconic(window.hwnd)!=0{" · Đã thu nhỏ"}else{""};
+                        AppendMenuW(list,MF_STRING|if window.hwnd==GetForegroundWindow(){MF_CHECKED}else{0},
+                            MENU_WINDOW_FIRST+i,wide(&format!("{title}{status}")).as_ptr());
+                    }
+                    if AppendMenuW(menu,MF_POPUP,list as usize,wide("Chọn cửa sổ").as_ptr())==0{DestroyMenu(list);}
+                }
+            }
             AppendMenuW(menu,MF_STRING,MENU_MINIMIZE,wide("Thu nhỏ cửa sổ").as_ptr());
             AppendMenuW(menu,MF_STRING,MENU_MAXIMIZE,wide("Phóng to theo vùng làm việc").as_ptr());
             AppendMenuW(menu,MF_STRING,MENU_RESTORE,wide("Khôi phục kích thước").as_ptr());
             AppendMenuW(menu,MF_STRING,MENU_SNAP_LEFT,wide("Chia nửa trái").as_ptr());
             AppendMenuW(menu,MF_STRING,MENU_SNAP_RIGHT,wide("Chia nửa phải").as_ptr());
-            AppendMenuW(menu,MF_STRING,MENU_EXPAND,wide("Mở rộng tới màn hình (giữ kiểu cửa sổ)").as_ptr());
+            AppendMenuW(menu,MF_STRING,MENU_EXPAND,wide("Lấp vùng làm việc (giữ kiểu cửa sổ)").as_ptr());
+            if owner.is_some()&&IsIconic(item.hwnd)==0&&IsZoomed(item.hwnd)==0{
+                let outputs=displays();
+                if let Some(source)=outputs.iter().find(|d|stage_window_is_local(item.hwnd,d.bounds)){
+                    if !window_fullscreen(item.hwnd,source.bounds){
+                        destinations=outputs.iter().filter(|d|d.id!=source.id).take(24).cloned().collect();
+                        if !destinations.is_empty(){
+                            let list=CreatePopupMenu();
+                            if !list.is_null(){
+                                for (i,d) in destinations.iter().enumerate(){
+                                    AppendMenuW(list,MF_STRING,MENU_MOVE_FIRST+i,wide(&d.name.replace('&',"&&")).as_ptr());
+                                }
+                                if AppendMenuW(menu,MF_POPUP,list as usize,wide("Chuyển cửa sổ sang màn hình").as_ptr())==0{DestroyMenu(list);}
+                            }
+                        }
+                    }
+                }
+            }
         }
         AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
     }
@@ -1063,6 +1105,20 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     let cmd=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,hwnd,ptr::null()) as usize;
     DestroyMenu(menu);
     match cmd {
+        id if (MENU_WINDOW_FIRST..MENU_WINDOW_FIRST+24).contains(&id)=>{
+            if let Some((window,expected))=choices.get(id-MENU_WINDOW_FIRST){
+                if expected.is_some()&&window_owner(window.hwnd)==*expected{
+                    activate(hwnd,&Item{path:window.path.clone(),title:window.title.clone(),hwnd:window.hwnd,count:1,pinned:false});
+                }
+            }
+        },
+        id if (MENU_MOVE_FIRST..MENU_MOVE_FIRST+24).contains(&id)=>{
+            if let Some((item,target))=selected.as_ref().zip(destinations.get(id-MENU_MOVE_FIRST)){
+                if owner.is_some()&&window_owner(item.hwnd)==owner{
+                    move_normal_window(item.hwnd,&target.id);
+                }
+            }
+        },
         MENU_ALL|MENU_LOCAL => emit(Event::Edit(Edit::AllWindows(cmd==MENU_ALL))),
         MENU_PIN|MENU_UNPIN => if let Some(item)=selected {
             emit(Event::Edit(if cmd==MENU_PIN{Edit::Pin(item.path)}else{Edit::Unpin(item.path)}));
@@ -1070,7 +1126,7 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
         MENU_STAGE_LEFT|MENU_STAGE_RIGHT=>emit(Event::Edit(Edit::StageSide(if cmd==MENU_STAGE_LEFT{"left"}else{"right"}.into()))),
         MENU_STAGE_OFF=>emit(Event::Edit(Edit::StageEnabled(false))),
         MENU_MINIMIZE|MENU_MAXIMIZE|MENU_RESTORE|MENU_SNAP_LEFT|MENU_SNAP_RIGHT|MENU_EXPAND=>if let Some(item)=selected{
-            if !item.hwnd.is_null()&&IsWindow(item.hwnd)!=0 {
+            if owner.is_some()&&window_owner(item.hwnd)==owner {
                 match cmd {
                     MENU_MINIMIZE=>{let ok=ShowWindowAsync(item.hwnd,SW_MINIMIZE)!=0;show_feedback(hwnd,&item,if ok{FeedbackKind::Minimize}else{FeedbackKind::Failed});}
                     MENU_MAXIMIZE=>{ShowWindowAsync(item.hwnd,SW_MAXIMIZE);}
@@ -1079,7 +1135,7 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
                         let screen=displays().into_iter().find(|s|stage_window_is_local(item.hwnd,s.bounds));
                         if let Some(screen)=screen {
                             ShowWindowAsync(item.hwnd,SW_RESTORE);
-                            let mut r=if cmd==MENU_EXPAND{screen.bounds}else{screen.work};
+                            let mut r=screen.work;
                             if cmd!=MENU_EXPAND{
                                 let middle=r.left+(r.right-r.left)/2;
                                 if cmd==MENU_SNAP_LEFT{r.right=middle;}else{r.left=middle;}
@@ -1098,6 +1154,24 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
         MENU_EXPLORER=>open("explorer.exe"),
         MENU_QUIT=>emit(Event::Edit(Edit::DockEnabled(false))),
         _=>{}
+    }
+}
+unsafe fn window_owner(hwnd:HWND)->Option<(u32,u32)>{
+    let mut process=0;
+    let thread=GetWindowThreadProcessId(hwnd,&mut process);
+    (process!=0&&thread!=0&&process!=std::process::id()).then_some((process,thread))
+}
+unsafe fn move_normal_window(hwnd:HWND,target_id:&str){
+    if IsIconic(hwnd)!=0||IsZoomed(hwnd)!=0||IsWindowVisible(hwnd)==0{return;}
+    let screens=displays();
+    let Some(source)=screens.iter().find(|d|stage_window_is_local(hwnd,d.bounds))else{return;};
+    let Some(target)=screens.iter().find(|d|d.id==target_id&&d.id!=source.id)else{return;};
+    if window_fullscreen(hwnd,source.bounds){return;}
+    let mut from:RECT=mem::zeroed();
+    if GetWindowRect(hwnd,&mut from)==0{return;}
+    if let Some(to)=geometry::transfer_window(from,source,target){
+        SetWindowPos(hwnd,ptr::null_mut(),to.left,to.top,to.right-to.left,to.bottom-to.top,
+            SWP_ASYNCWINDOWPOS|SWP_NOACTIVATE|SWP_NOZORDER);
     }
 }
 unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){

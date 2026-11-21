@@ -12,6 +12,24 @@ impl Rect {
     }
 }
 
+/// Preserve a normal window's logical size and relative position within its
+/// source work area. Target work area already excludes Windows and AppBars.
+pub(super) fn transfer_window(window:RECT,source:&Display,target:&Display)->Option<RECT>{
+    let relocate=|start:i32,end:i32,from_start:i32,from_end:i32,to_start:i32,to_end:i32|{
+        let size=end as f64-start as f64;
+        let from=from_end as f64-from_start as f64;
+        let to=to_end as f64-to_start as f64;
+        if size<=0.0||from<=0.0||to<=0.0{return None;}
+        let relative=((start as f64-from_start as f64)/(from-size).max(1.0)).clamp(0.0,1.0);
+        let size=(size*target.dpi.clamp(72,288) as f64/source.dpi.clamp(72,288) as f64).round().clamp(1.0,to);
+        let position=to_start as f64+((to-size)*relative).round();
+        Some((position as i32,(position+size) as i32))
+    };
+    let (left,right)=relocate(window.left,window.right,source.work.left,source.work.right,target.work.left,target.work.right)?;
+    let (top,bottom)=relocate(window.top,window.bottom,source.work.top,source.work.bottom,target.work.top,target.work.bottom)?;
+    Some(RECT{left,top,right,bottom})
+}
+
 #[derive(Clone)]
 pub struct Layout {
     pub window: RECT,
@@ -175,6 +193,17 @@ pub fn measure_widgets(display:&Display, style:&Appearance, count:usize, focus:O
 mod tests{
     use super::*;
     fn overlaps(a:Rect,b:Rect)->bool{a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y}
+    #[test]
+    fn window_transfer_respects_mixed_dpi_and_negative_work_area(){
+        let display=|work,dpi|Display{id:String::new(),name:String::new(),bounds:work,work,primary:false,dpi};
+        let from=display(RECT{left:0,top:0,right:1920,bottom:1000},96);
+        let to=display(RECT{left:-1100,top:-640,right:-30,bottom:1220},144);
+        let normal=transfer_window(RECT{left:600,top:300,right:1320,bottom:700},&from,&to).unwrap();
+        assert_eq!((normal.left,normal.top,normal.right,normal.bottom),(-1100,-10,-30,590));
+        let late=transfer_window(RECT{left:1680,top:870,right:2180,bottom:1100},&from,&to).unwrap();
+        assert_eq!((late.right,late.bottom),(-30,1220));
+        assert_eq!((late.right-late.left,late.bottom-late.top),(750,345));
+    }
     #[test]
     fn all_positions_remain_inside_negative_coordinate_work_area() {
         for dpi in [96,120,144,192] {
