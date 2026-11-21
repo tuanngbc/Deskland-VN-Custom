@@ -96,6 +96,8 @@ test('utility order, visibility and reset are isolated to the selected monitor',
   assert.equal(first.profile.order[0],'calendar');
   $('utilityRows').listeners.change({target:{checked:false,dataset:{utilityVisible:'audio'}}});
   assert.equal(messages.pop().profile.hidden[0],'audio');
+  $('utilityRows').listeners.click({target:{closest:s=>s==='[data-utility-pin]'?{dataset:{utilityPin:'calendar'}}:null}});
+  assert.equal(messages.pop().profile.inline[0],'calendar');
   $('utilityReset').listeners.click();
   assert.equal(messages.pop().profile.hidden.length,0);
   $('utilityDisplay').listeners.change({target:{value:'main'}});

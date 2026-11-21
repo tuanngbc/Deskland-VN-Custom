@@ -181,7 +181,7 @@ impl Options {
     }
     pub fn any_enabled(&self) -> bool { self.enabled || self.stage_enabled }
     pub fn utility_position(&self,id:&str)->Option<bool>{
-        match self.utility_profiles.get(id){Some(p) if !p.enabled=>None,Some(p)=>Some(p.leading),None=>Some(false)}
+        match self.utility_profiles.get(id){Some(p) if !p.enabled||p.hidden.len()==super::utilities::Widget::ALL.len()=>None,Some(p)=>Some(p.leading),None=>Some(false)}
     }
     pub fn stage_style(&self, id: &str) -> StageStyle {
         let mut settings = self.stage_styles.get(id).copied().unwrap_or_default();

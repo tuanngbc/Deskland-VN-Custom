@@ -43,6 +43,7 @@
     "utilityDetails": "Show information in the utility menu",
     "utilityReset": "Reset utilities",
     "utilityUp": "Move up",
+    "utilityPin": "Pin or unpin on Dock",
     "utilityDown": "Move down",
     "utilityItem_network": "Network",
     "utilityItem_audio": "Audio",

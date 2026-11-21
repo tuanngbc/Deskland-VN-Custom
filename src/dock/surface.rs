@@ -112,6 +112,16 @@ impl Surface {
             let group=divider(layout.slots[split],layout.slots[split+1]);
             rounded(data,w,h,group,scale*0.5,tint,58);
         }
+        for (i,(widget,slot)) in layout.inline.iter().copied().enumerate(){
+            if hover==Some(items.len()+2+i){rounded(data,w,h,slot,slot.w*0.22,tint,50);}
+            let strokes=widget.glyph();
+            draw(data,w,h,slot,|x,y|{
+                let d=strokes.iter().map(|&(ax,ay,bx,by)| segment_distance(x,y,
+                    slot.x+slot.w*ax,slot.y+slot.h*ay,slot.x+slot.w*bx,slot.y+slot.h*by))
+                    .fold(f32::INFINITY,f32::min);
+                Some((tint,(0.5+slot.w*0.019-d).clamp(0.0,1.0)*245.0))
+            });
+        }
         // Two native-looking control switches; vector coverage scales with DPI.
         draw(data,w,h,utility,|x,y|{
             let (x,y)=(x-utility.x,y-utility.y);

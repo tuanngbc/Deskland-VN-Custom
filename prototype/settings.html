@@ -21,7 +21,7 @@
 .dock-utility-settings{margin-top:.8rem;border-top:1px solid var(--line,#80808040);padding-top:.65rem}
 .dock-utility-settings summary{cursor:pointer;font-weight:650;padding:.4rem 0}
 .dock-utility-rows{display:grid;gap:.3rem;max-height:18rem;overflow:auto;margin:.4rem 0 .75rem;padding:0;list-style:none}
-.dock-utility-rows li{display:grid;grid-template-columns:1.1rem 1fr auto auto;align-items:center;gap:.4rem;border:1px solid var(--line,#80808040);border-radius:.55rem;padding:.32rem .45rem}
+.dock-utility-rows li{display:grid;grid-template-columns:1.1rem 1fr auto auto auto;align-items:center;gap:.4rem;border:1px solid var(--line,#80808040);border-radius:.55rem;padding:.32rem .45rem}
 .dock-utility-rows li>span{cursor:grab;opacity:.6}
 .dock-utility-rows button{min-width:2rem}
 </style>
@@ -853,7 +853,7 @@ const utilityLabels={
 };
 const utilityKeys=Object.keys(utilityLabels);
 let utilityDisplay=null,utilityDrag=null;
-const utilityDefault=()=>({enabled:true,side:'right',details:true,order:[...utilityKeys],hidden:[]});
+const utilityDefault=()=>({enabled:true,side:'right',details:true,order:[...utilityKeys],hidden:[],inline:[]});
 function utilityProfile(){
   const map=dockOptions.utilityProfiles||{};
   return {...utilityDefault(),...(Object.hasOwn(map,utilityDisplay)?map[utilityDisplay]:{})};
@@ -874,6 +874,7 @@ function renderUtilityControls(){
     const name=label==='utilityItem_'+key?utilityLabels[key]:label;
     return '<li draggable="true" data-widget="'+esc(key)+'"><span aria-hidden="true">⋮⋮</span><label>'+
       '<input type="checkbox" data-utility-visible="'+esc(key)+'"'+(p.hidden.includes(key)?'':' checked')+'> '+esc(name)+'</label>'+
+      '<button type="button" data-utility-pin="'+esc(key)+'" aria-pressed="'+(p.inline.includes(key)?'true':'false')+'" aria-label="'+esc(dockText('utilityPin')+': '+name)+'"'+(!p.inline.includes(key)&&p.inline.length>=5?' disabled':'')+'>'+(p.inline.includes(key)?'★':'☆')+'</button>'+
       '<button type="button" data-utility-move="-1" aria-label="'+esc(dockText('utilityUp')+': '+name)+'"'+(i===0?' disabled':'')+'>↑</button>'+
       '<button type="button" data-utility-move="1" aria-label="'+esc(dockText('utilityDown')+': '+name)+'"'+(i===p.order.length-1?' disabled':'')+'>↓</button></li>';
   }).join('');
@@ -903,6 +904,13 @@ utilityRows.addEventListener('change',e=>{
   saveUtilityProfile({...p,hidden:next});
 });
 utilityRows.addEventListener('click',e=>{
+  const pin=e.target.closest('[data-utility-pin]');
+  if(pin){
+    const p=utilityProfile(),key=pin.dataset.utilityPin;
+    const inline=p.inline.includes(key)?p.inline.filter(w=>w!==key):p.inline.length<5?[...p.inline,key]:p.inline;
+    saveUtilityProfile({...p,inline});
+    return;
+  }
   const button=e.target.closest('[data-utility-move]');
   if(!button)return;
   const key=button.closest('[data-widget]')?.dataset.widget;

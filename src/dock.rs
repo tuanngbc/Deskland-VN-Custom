@@ -81,7 +81,7 @@ struct Item { path:String, title:String, hwnd:HWND, count:usize, pinned:bool }
 #[derive(Clone)]
 struct Bar {
     hwnd:HWND, bounds:RECT, items:Vec<Item>, hovered:i32, hidden:bool,
-    layout:Option<geometry::Layout>, motion:Motion, collapsed:bool,
+    layout:Option<geometry::Layout>, pinned_widgets:Vec<UtilityWidget>, motion:Motion, collapsed:bool,
     pressed:Option<(String,i32,i32)>, keyboard:Option<usize>, previous_focus:isize, pointer:Option<(f32,f32)>,
 }
 #[derive(Clone,Default)]
@@ -151,7 +151,7 @@ thread_local! {
     static SURFACES:RefCell<HashMap<usize,surface::Surface>>=RefCell::new(HashMap::new());
     static STAGE_SURFACES:RefCell<HashMap<usize,stage_surface::Panel>>=RefCell::new(HashMap::new());
     static UTILITIES:RefCell<Option<utilities::Provider>>=const{RefCell::new(None)};
-    static UTILITY_ANCHOR:Cell<Option<(usize,POINT)>>=const{Cell::new(None)};
+    static UTILITY_ANCHOR:Cell<Option<(usize,POINT,Option<UtilityWidget>)>>=const{Cell::new(None)};
     static ATLAS:RefCell<Option<icon_atlas::Worker>>=const{RefCell::new(None)};
 }
 
@@ -393,14 +393,15 @@ unsafe fn recreate(state:&mut State) {
     for (i, screen) in screens.iter().enumerate() {
         if dock_targets.contains(&i) && !state.bars.iter().any(|b|same_rect(b.bounds,screen.bounds)) {
         let items=item_list(&state.windows,screen.bounds,&state.prefs);
-        let layout=geometry::measure_utilities(screen,&state.prefs.appearance,items.len(),None,0.0,state.prefs.utility_position(&screen.id));
+        let pinned_widgets=state.prefs.utility_profiles.get(&screen.id).map_or_else(Vec::new,UtilityProfile::pinned);
+        let layout=geometry::measure_widgets(screen,&state.prefs.appearance,items.len(),None,0.0,state.prefs.utility_position(&screen.id),&pinned_widgets);
         let r=layout.window;
         let hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|WS_EX_LAYERED,
             class.as_ptr(),wide("tuanpc-desk Dock").as_ptr(),WS_POPUP,
             r.left,r.top,r.right-r.left,r.bottom-r.top,
             ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
         if !hwnd.is_null(){
-        state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:true,layout:Some(layout),motion:Motion::default(),collapsed:state.prefs.appearance.auto_hide,pressed:None,keyboard:None,previous_focus:0,pointer:None});
+        state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:true,layout:Some(layout),pinned_widgets,motion:Motion::default(),collapsed:state.prefs.appearance.auto_hide,pressed:None,keyboard:None,previous_focus:0,pointer:None});
         }else{emit(Event::Error(format!("Create Dock window: {}",GetLastError())));}
         }
         if stage_targets.contains(&i) && !state.stages.iter().any(|s|same_rect(s.bounds,screen.bounds)) {
@@ -444,8 +445,10 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let screen=state.screens.iter().find(|s|same_rect(s.bounds,b.bounds));
         if let Some(screen)=screen {
             let r=if b.layout.is_some(){
-                let layout=geometry::measure_utilities(screen,&state.prefs.appearance,b.items.len(),b.motion.focus,b.motion.amount,state.prefs.utility_position(&screen.id));
-                changed|=b.layout.as_ref().is_some_and(|old|old.glass!=layout.glass||old.slots!=layout.slots||old.utility!=layout.utility);
+                b.pinned_widgets=state.prefs.utility_profiles.get(&screen.id).map_or_else(Vec::new,UtilityProfile::pinned);
+                let layout=geometry::measure_widgets(screen,&state.prefs.appearance,b.items.len(),b.motion.focus,b.motion.amount,
+                    state.prefs.utility_position(&screen.id),&b.pinned_widgets);
+                changed|=b.layout.as_ref().is_some_and(|old|old.glass!=layout.glass||old.slots!=layout.slots||old.utility!=layout.utility||old.inline!=layout.inline);
                 let r=layout.window;b.layout=Some(layout);r
             }else{bar_rect(screen,b.items.len())};
             let mut actual:RECT=mem::zeroed();
@@ -462,23 +465,11 @@ unsafe fn refresh(state:&mut State, topology:bool) {
     if state.bars.iter().all(|b|b.hidden)||state.suspended{utilities::close_audio();UTILITY_ANCHOR.with(|a|a.set(None));UTILITIES.with(|u|u.borrow_mut().take());}
     state.workspaces.prune();
     for stage in &mut state.stages {
-        let mut placement_changed=false;
         let Some(screen)=state.screens.iter().find(|s|s.id==stage.display) else{continue;};
         let style=state.prefs.stage_style(&screen.id);
-        {
-            let r=stage_rect(screen,style);let mut actual:RECT=mem::zeroed();
-            if GetWindowRect(stage.hwnd,&mut actual)==0 || !same_rect(r,actual){
-                SetWindowPos(stage.hwnd,ptr::null_mut(),r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_NOZORDER);
-                if !stage.preview_hwnd.is_null(){
-                    SetWindowPos(stage.preview_hwnd,ptr::null_mut(),r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_NOZORDER);
-                }
-                placement_changed=true;
-            }
-        }
-        let mut area:RECT=mem::zeroed();
-        GetClientRect(stage.hwnd,&mut area);
+        let mut bounds=stage_rect(screen,style);
         let (items,groups)=state.workspaces.cards(&stage.display,stage.bounds,&state.windows,state.prefs.all_windows);
-        let mut layout=stage_surface::Layout::new(area.right,area.bottom,screen.dpi,stage_gap(screen,style),
+        let mut layout=stage_surface::Layout::new(bounds.right-bounds.left,bounds.bottom-bounds.top,screen.dpi,stage_gap(screen,style),
             style.group_limit as usize,items.len(),style.right==Some(true));
         let rows=layout.rows;
         let selected=state.workspaces.active(&stage.display);
@@ -488,9 +479,20 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let start=stage.page*rows;
         let items:Vec<_>=items.into_iter().skip(start).take(rows).collect();
         let groups:Vec<_>=groups.into_iter().skip(start).take(rows).collect();
-        let mut changed=placement_changed||stage.items!=items||stage.groups!=groups||stage.selected!=selected||active_changed||material_changed||old_pages!=stage.pages;
+        let mut changed=stage.items!=items||stage.groups!=groups||stage.selected!=selected||active_changed||material_changed||old_pages!=stage.pages;
         changed|=stage.opacity!=style.opacity;stage.opacity=style.opacity;
         layout.count=items.len();
+        layout.height=layout.content_height();
+        bounds.bottom=bounds.top+layout.height;
+        let mut actual:RECT=mem::zeroed();
+        if GetWindowRect(stage.hwnd,&mut actual)==0 || !same_rect(bounds,actual){
+            for window in [stage.hwnd,stage.preview_hwnd]{
+                if !window.is_null(){
+                    SetWindowPos(window,ptr::null_mut(),bounds.left,bounds.top,layout.width,layout.height,SWP_NOACTIVATE|SWP_NOZORDER);
+                }
+            }
+            changed=true;
+        }
         layout.stack=(0..items.len()).filter(|&i|items[i].count>1).fold(0u8,|bits,i|bits|(1<<i));
         if stage.items!=items {
             stage.hover=None;stage.emphasis=StageEmphasis::default();KillTimer(stage.hwnd,STAGE_MOTION_TIMER);
@@ -511,7 +513,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             if stage.emphasis.start.is_some(){KillTimer(stage.hwnd,STAGE_MOTION_TIMER);}
             stage.hover=None;stage.emphasis=StageEmphasis::default();stage.keyboard=None;changed|=stage.previews.clear();
         }
-        else if area.right>0&&area.bottom>0{
+        else if layout.width>0&&layout.height>0{
             let host=if stage.preview_hwnd.is_null(){stage.hwnd}else{stage.preview_hwnd};
             changed|=stage.previews.update(host,&stage.items,layout);
         }
@@ -670,13 +672,20 @@ unsafe fn paint(hwnd:HWND){
     }
     EndPaint(hwnd,&ps);
 }
-unsafe fn request_utilities(hwnd:HWND){
-    if utility_profile(hwnd).is_none_or(|p|!p.enabled){return;}
+unsafe fn request_utilities(hwnd:HWND,widget:Option<UtilityWidget>){
+    if utility_profile(hwnd).is_none_or(|p|!p.enabled || widget.is_some_and(|w|p.hidden.contains(&w))){return;}
+    if let Some(action)=widget.and_then(UtilityWidget::simple){
+        match action {utilities::Action::Host(action)=>emit(Event::Utility(action)),_=>utilities::delegated(action)}
+        return;
+    }
     let mut point=POINT{x:0,y:0};
     let location=STATE.with(|s|{
         let state=s.borrow();
         let bar=state.bars.iter().find(|b|b.hwnd==hwnd&&!b.hidden)?;
-        bar.layout.as_ref().map(|l|(l.utility.x as i32,l.utility.y as i32-4))
+        bar.layout.as_ref().map(|l|{
+            let r=widget.and_then(|id|l.inline.iter().find(|(w,_)|*w==id).map(|(_,r)|*r)).unwrap_or(l.utility);
+            (r.x as i32,r.y as i32-4)
+        })
     });
     if let Some((x,y))=location{
         point.x=x;point.y=y;
@@ -684,7 +693,7 @@ unsafe fn request_utilities(hwnd:HWND){
     }else{GetCursorPos(&mut point);}
     let control=CONTROL.with(Cell::get);
     let submitted=UTILITIES.with(|u|u.borrow_mut().get_or_insert_with(utilities::Provider::new).read(control));
-    if submitted{UTILITY_ANCHOR.with(|a|a.set(Some((hwnd as usize,point))));}
+    if submitted{UTILITY_ANCHOR.with(|a|a.set(Some((hwnd as usize,point,widget))));}
 }
 fn utility_profile(hwnd:HWND)->Option<UtilityProfile>{
     STATE.with(|s|{
@@ -700,9 +709,14 @@ fn apply_audio(action:utilities::Action)->bool{
 unsafe fn show_utilities(){
     let snapshot=UTILITIES.with(|u|u.borrow().as_ref().and_then(utilities::Provider::take));
     let target=UTILITY_ANCHOR.with(|a|a.take());
-    let (Some(snapshot),Some((bar,point)))=(snapshot,target) else{return;};
+    let (Some(snapshot),Some((bar,point,widget)))=(snapshot,target) else{return;};
     let hwnd=bar as HWND;
-    let Some(profile)=utility_profile(hwnd).filter(|p|p.enabled) else{return;};
+    let Some(mut profile)=utility_profile(hwnd).filter(|p|p.enabled) else{return;};
+    if let Some(widget)=widget {
+        if profile.hidden.contains(&widget){return;}
+        if widget==UtilityWidget::Sound&&utilities::audio_from_snapshot(hwnd,point,&snapshot){return;}
+        profile.order.retain(|&w|w==widget);
+    }
     if let Some(action)=utilities::menu(hwnd,point,&snapshot,&profile){
         match action{
             utilities::Action::Host(action)=>emit(Event::Utility(action)),
@@ -966,7 +980,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 if b.hidden || b.layout.is_none(){return None;}
                 let display=screens.iter().find(|d|same_rect(d.bounds,b.bounds))?;
                 let again=b.motion.tick(prefs.appearance.animation_speed);
-                let layout=geometry::measure_utilities(display,&prefs.appearance,b.items.len(),b.motion.focus,b.motion.amount,prefs.utility_position(&display.id));
+                let layout=geometry::measure_widgets(display,&prefs.appearance,b.items.len(),b.motion.focus,b.motion.amount,prefs.utility_position(&display.id),&b.pinned_widgets);
                 b.hovered=b.pointer.and_then(|(x,y)|layout.hot(x,y)).map_or(-1,|i|i as i32);
                 b.layout=Some(layout);
                 Some(again)
@@ -1089,21 +1103,22 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let bar=state.bars.iter_mut().find(|b|b.hwnd==hwnd)?;
                 let current=bar.keyboard?;
                 let has_utilities=bar.layout.as_ref().is_none_or(|l|l.utility.w>0.0);
-                let max=bar.items.len()+usize::from(has_utilities);
+                let max=bar.items.len()+usize::from(has_utilities)+bar.layout.as_ref().map_or(0,|l|l.inline.len());
+                let current=current.min(max);
                 let next=match key{
                     VK_LEFT|VK_UP=>current.saturating_sub(1),VK_RIGHT|VK_DOWN=>(current+1).min(max),
                     VK_HOME=>0,VK_END=>max,
-                    VK_RETURN=>return Some((bar.items.get(current).cloned(),current==bar.items.len(),has_utilities&&current==max,0)),
-                    VK_ESCAPE=>return Some((None,false,false,bar.previous_focus)),
+                    VK_RETURN=>return Some((bar.items.get(current).cloned(),current==bar.items.len(),has_utilities&&current==bar.items.len()+1,bar.layout.as_ref().and_then(|l|l.inline.get(current.checked_sub(bar.items.len()+2)?)).map(|(w,_)|*w),0)),
+                    VK_ESCAPE=>return Some((None,false,false,None,bar.previous_focus)),
                     _=>return None,
                 };
                 bar.keyboard=Some(next);
-                Some((None,false,false,0))
+                Some((None,false,false,None,0))
             });
-            if let Some((item,search,utilities,previous))=action{
+            if let Some((item,search,utilities,widget,previous))=action{
                 if let Some(item)=item{activate(&item);}
                 if search {open_launcher();}
-                if utilities{request_utilities(hwnd);}
+                if utilities||widget.is_some(){request_utilities(hwnd,widget);}
                 if previous!=0 && IsWindow(previous as _)!=0{SetForegroundWindow(previous as _);}
                 InvalidateRect(hwnd,ptr::null(),0);
             }
@@ -1130,15 +1145,15 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let mut state=s.borrow_mut();let bar=state.bars.iter_mut().find(|b|b.hwnd==hwnd)?;
                 let layout=bar.layout.as_ref()?;
                 let item=layout.hit(x as f32,y as f32).and_then(|i|bar.items.get(i)).cloned();
-                Some((item,layout.is_launch_button(x as f32,y as f32),layout.is_utility_button(x as f32,y as f32),bar.pressed.take(),bar.collapsed))
+                Some((item,layout.is_launch_button(x as f32,y as f32),layout.is_utility_button(x as f32,y as f32),layout.inline_at(x as f32,y as f32),bar.pressed.take(),bar.collapsed))
             });
-            if let Some((item,search,utilities,pressed,collapsed))=rendered{
+            if let Some((item,search,utilities,widget,pressed,collapsed))=rendered{
                 if collapsed{return 0;}
                 if let Some((start,sx,sy))=pressed {
                     if (x-sx).abs()+(y-sy).abs()>9 {
                         if let Some(item)=item{if item.pinned {emit(Event::Edit(Edit::MovePin(start,item.path)));}}
                     }else if let Some(item)=item{if item.path==start{activate(&item);}}
-                }else if search{open_launcher();}else if utilities{request_utilities(hwnd);}
+                }else if search{open_launcher();}else if utilities||widget.is_some(){request_utilities(hwnd,widget);}
                 return 0;
             }
             let selected=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd).and_then(|b|b.items.get(((x-12).max(0)/ITEM_WIDTH) as usize)).cloned());
@@ -1146,7 +1161,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if x>=12 && (x-12)/ITEM_WIDTH <max as i32 {if let Some(item)=selected{activate(&item);}}
             else {
                 let mut area:RECT=mem::zeroed();GetClientRect(hwnd,&mut area);
-                if x>=area.right-52{request_utilities(hwnd);}
+                if x>=area.right-52{request_utilities(hwnd,None);}
             }
             0
         }

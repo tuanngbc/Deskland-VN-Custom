@@ -1,5 +1,5 @@
 //! DPI-aware dock geometry, independent of Win32 painting and input.
-use super::{Appearance, Display, DockSide};
+use super::{Appearance, Display, DockSide, UtilityWidget};
 use windows_sys::Win32::Foundation::RECT;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -20,6 +20,7 @@ pub struct Layout {
     pub scan: Rect,
     pub utility: Rect,
     pub utility_leading:bool,
+    pub inline:Vec<(UtilityWidget,Rect)>,
     pub indicators: Vec<(f32,f32)>,
     pub scale:f32,
     pub side:DockSide,
@@ -32,8 +33,11 @@ impl Layout {
         self.hit(x,y).or_else(||{
             if self.is_launch_button(x,y){Some(self.slots.len())}
             else if self.is_utility_button(x,y){Some(self.slots.len()+1)}
-            else{None}
+            else{self.inline.iter().position(|(_,r)|r.contains(x,y)).map(|i|self.slots.len()+2+i)}
         })
+    }
+    pub fn inline_at(&self,x:f32,y:f32)->Option<UtilityWidget>{
+        self.inline.iter().find(|(_,r)|r.contains(x,y)).map(|(w,_)|*w)
     }
     pub fn is_utility_button(&self,x:f32,y:f32)->bool{self.utility.contains(x,y)}
     pub fn is_launch_button(&self,x:f32,y:f32)->bool { self.scan.contains(x,y) }
@@ -44,7 +48,11 @@ impl Layout {
 pub fn measure(display:&Display,style:&Appearance,count:usize,focus:Option<f32>,amount:f32)->Layout{
     measure_utilities(display,style,count,focus,amount,Some(false))
 }
-pub fn measure_utilities(display:&Display, style:&Appearance, count:usize, focus:Option<f32>, amount:f32, utility_position:Option<bool>)->Layout {
+#[cfg(test)]
+pub fn measure_utilities(display:&Display,style:&Appearance,count:usize,focus:Option<f32>,amount:f32,utility_position:Option<bool>)->Layout{
+    measure_widgets(display,style,count,focus,amount,utility_position,&[])
+}
+pub fn measure_widgets(display:&Display, style:&Appearance, count:usize, focus:Option<f32>, amount:f32, utility_position:Option<bool>, pinned:&[UtilityWidget])->Layout {
     let oriented=style.position!=DockSide::Bottom;
     let scale=(display.dpi as f32/96.0).clamp(0.75,3.0);
     let spacing=style.spacing as f32*scale;
@@ -54,9 +62,15 @@ pub fn measure_utilities(display:&Display, style:&Appearance, count:usize, focus
     let margins=2.0*(edge+shadow);
     let max_span=if oriented {display.work.bottom-display.work.top} else {display.work.right-display.work.left};
     // A permanent search affordance opens the existing Deskland launcher.
-    let cells=count+1+usize::from(utility_position.is_some());
+
     let utility_leading=utility_position==Some(true);
     let max_span=max_span as f32-margins;
+    let base=count+1+usize::from(utility_position.is_some());
+    let cell_limit=((max_span-2.0*pad+spacing)/(28.0*scale+spacing)).floor().max(0.0) as usize;
+    let inline_count=if utility_position.is_some(){pinned.len().min(cell_limit.saturating_sub(base)).min(5)}else{0};
+    let cells=base+inline_count;
+    let spacing=spacing.min(((max_span-2.0*pad-cells as f32*8.0)/(cells-1).max(1) as f32).max(1.0));
+    let lead_count=if utility_leading{inline_count+1}else{0};
     let available=(max_span-2.0*pad-(cells-1) as f32*spacing).max(cells as f32*8.0);
     // Reserve enough room for the largest neighborhood before drawing the
     // first hover frame. Hit testing uses the actual rectangles below.
@@ -96,7 +110,7 @@ pub fn measure_utilities(display:&Display, style:&Appearance, count:usize, focus
             DockSide::Left=>shadow+13.0*scale,
         };
         let r=if oriented{Rect{x:cross_axis,y:cursor,w:size,h:size}}else{Rect{x:cursor,y:cross_axis,w:size,h:size}};
-        let item_index=i.checked_sub(usize::from(utility_leading));
+        let item_index=i.checked_sub(lead_count);
         if item_index.is_some_and(|index|index<count){
             let center=cursor+size*0.5;
             indicators.push(match style.position{
@@ -108,6 +122,9 @@ pub fn measure_utilities(display:&Display, style:&Appearance, count:usize, focus
         all.push(r);
         cursor+=size+spacing;
     }
+    let inline_rects=if utility_leading{all.drain(..inline_count).collect::<Vec<_>>()}
+        else{all.split_off(cells-inline_count)};
+    let inline=pinned.iter().copied().zip(inline_rects).collect();
     let utility=match utility_position{Some(true)=>all.remove(0),Some(false)=>all.pop().unwrap_or_default(),None=>Rect::default()};
     let scan=all.pop().unwrap_or_default();
     // The background follows the app row; empty hover slack remains alpha 0.
@@ -117,7 +134,7 @@ pub fn measure_utilities(display:&Display, style:&Appearance, count:usize, focus
         DockSide::Right=>Rect{x:total_cross-shadow-height,y:start,w:height,h:span},
         DockSide::Left=>Rect{x:shadow,y:start,w:height,h:span},
     };
-    Layout{window:RECT{left:x,top:y,right:x+w as i32,bottom:y+h as i32},glass,slots:all,scan,utility,utility_leading,indicators,scale,side:style.position}
+    Layout{window:RECT{left:x,top:y,right:x+w as i32,bottom:y+h as i32},glass,slots:all,scan,utility,utility_leading,inline,indicators,scale,side:style.position}
 }
 
 #[cfg(test)]
@@ -174,6 +191,19 @@ mod tests{
                 None=>assert_eq!(l.utility.w,0.0),
             }
             if side.is_some(){assert_eq!(l.hot(l.utility.x+1.0,l.utility.y+1.0),Some(11));}
+        }
+    }
+    #[test]
+    fn overflow_preserves_apps_and_launcher_when_inline_widgets_do_not_fit(){
+        for (width,dpi,expected) in [(1080,96,5),(440,192,0)]{
+            let work=RECT{left:-width,top:0,right:0,bottom:1040};
+            let d=Display{id:"display".into(),name:"Display".into(),bounds:work,work,primary:true,dpi};
+            let pins=&UtilityWidget::ALL[..5];
+            let l=measure_widgets(&d,&Appearance::default(),10,None,0.0,Some(false),pins);
+            assert_eq!(l.slots.len(),10);
+            assert_eq!(l.inline.len(),expected);
+            assert!(l.window.left>=work.left&&l.window.right<=work.right);
+            assert!(l.utility.w>0.0&&l.scan.w>0.0);
         }
     }
 }

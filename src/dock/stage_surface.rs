@@ -59,6 +59,12 @@ impl Layout {
         let y=c.y+c.h+self.gap;
         (y+self.nav_h<=self.height).then_some(Box2{x:c.x+(c.w-w)/2,y,w,h:self.nav_h})
     }
+    pub fn content_height(self)->i32{
+        let bottom=self.nav().map(|n|n.y+n.h)
+            .or_else(||self.count.checked_sub(1).map(|i|{let r=self.card(i);r.y+r.h}))
+            .unwrap_or(0);
+        (bottom+self.inset.max(7)).clamp(1,self.height.max(1))
+    }
     pub fn hit(self,x:i32,y:i32)->Option<usize>{
         (0..self.count).find(|&i|self.card(i).hit(x,y)||(self.stack&(1<<i)!=0&&self.rear(i,3).hit(x,y)))
     }

@@ -67,6 +67,6 @@ Stage moving previews must be real; independent groups restore minimized/maximiz
 | Date/calendar | NATIVE_IMPLEMENTED: local date/time at menu open | WINDOWS_DELEGATED: Windows calendar |
 | Notifications / Quick Settings | UNSUPPORTED: unread count or notifications from other apps | WINDOWS_DELEGATED: Windows panels |
 | Deskland | NATIVE_IMPLEMENTED: commands reuse existing Spotlight, capture/record, taskbar stats, wallpaper, Stage and Settings | WINDOWS_DELEGATED: Explorer, Show Desktop, Task View |
-| Utilities layout | Per-display enable/disable, leading/trailing button, menu details, order/visibility, reset; native Settings has essentials | Inline widgets with individual glyphs/status and per-widget spacing/size/opacity pending. D7 third-party tray stays out of scope. |
+| Utilities layout | Per-display enable/disable, leading/trailing button, menu details, order/visibility, reset; native Settings has essentials | Up to five individually pinned vector icons; narrow layouts keep overflow access. Always-visible inline live values and per-widget spacing/size/opacity pending. D7 third-party tray stays out of scope. |
 
 Implementation labels do not certify native interaction or full feature acceptance. P4 and OWNER_NATIVE_ACCEPTED remain pending.

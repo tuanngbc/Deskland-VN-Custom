@@ -186,15 +186,46 @@ impl Widget {
             Stats=>"Bật/tắt chỉ số taskbar",Wallpaper=>"Bật/tắt hình nền động",Stage=>"Bật/tắt Stage Manager",
             Settings=>"Cài đặt tuanpc-desk",Windows=>"Chuyển cửa sổ Windows"}
     }
+    pub(super) fn simple(self)->Option<Action>{
+        use Widget::*;
+        Some(match self{
+            Notifications=>Action::Notifications,QuickSettings=>Action::QuickSettings,
+            Spotlight=>Action::Host(HostAction::Launcher),Explorer=>Action::Explorer,Desktop=>Action::Desktop,
+            Capture=>Action::Host(HostAction::Capture),Record=>Action::Host(HostAction::Record),
+            Stats=>Action::Host(HostAction::SystemMonitor),Wallpaper=>Action::Host(HostAction::Wallpaper),
+            Stage=>Action::Host(HostAction::Stage),Settings=>Action::Host(HostAction::Settings),Windows=>Action::Windows,
+            _=>return None,
+        })
+    }
+    pub(super) fn glyph(self)->&'static [(f32,f32,f32,f32)]{
+        use Widget::*;
+        match self {
+            Network=>&[(0.20,0.39,0.34,0.29),(0.34,0.29,0.66,0.29),(0.66,0.29,0.80,0.39),(0.30,0.52,0.43,0.46),(0.43,0.46,0.57,0.46),(0.57,0.46,0.70,0.52),(0.41,0.64,0.50,0.60),(0.50,0.60,0.59,0.64),(0.49,0.75,0.51,0.75)],
+            Sound=>&[(0.20,0.43,0.34,0.43),(0.20,0.43,0.20,0.64),(0.20,0.64,0.34,0.64),(0.34,0.43,0.51,0.28),(0.51,0.28,0.51,0.79),(0.51,0.79,0.34,0.64),(0.62,0.41,0.72,0.54),(0.72,0.54,0.62,0.67),(0.72,0.29,0.83,0.54),(0.83,0.54,0.72,0.79)],
+            Bluetooth=>&[(0.50,0.18,0.50,0.82),(0.50,0.18,0.70,0.34),(0.70,0.34,0.31,0.68),(0.31,0.32,0.70,0.66),(0.70,0.66,0.50,0.82)],
+            Battery=>&[(0.18,0.35,0.73,0.35),(0.73,0.35,0.73,0.68),(0.73,0.68,0.18,0.68),(0.18,0.68,0.18,0.35),(0.79,0.45,0.79,0.58),(0.28,0.51,0.58,0.51)],
+            Calendar=>&[(0.24,0.30,0.76,0.30),(0.76,0.30,0.76,0.77),(0.76,0.77,0.24,0.77),(0.24,0.77,0.24,0.30),(0.24,0.45,0.76,0.45),(0.38,0.24,0.38,0.35),(0.62,0.24,0.62,0.35),(0.40,0.60,0.47,0.60),(0.54,0.60,0.61,0.60)],
+            Notifications=>&[(0.21,0.68,0.79,0.68),(0.24,0.65,0.34,0.51),(0.34,0.51,0.34,0.38),(0.34,0.38,0.50,0.27),(0.50,0.27,0.66,0.38),(0.66,0.38,0.66,0.51),(0.66,0.51,0.76,0.65),(0.44,0.77,0.56,0.77)],
+            QuickSettings|Settings=>&[(0.22,0.35,0.78,0.35),(0.22,0.65,0.78,0.65),(0.40,0.28,0.40,0.42),(0.61,0.58,0.61,0.72)],
+            Spotlight=>&[(0.30,0.38,0.40,0.28),(0.40,0.28,0.55,0.28),(0.55,0.28,0.65,0.38),(0.65,0.38,0.65,0.53),(0.65,0.53,0.55,0.63),(0.55,0.63,0.40,0.63),(0.40,0.63,0.30,0.53),(0.30,0.53,0.30,0.38),(0.61,0.59,0.77,0.76)],
+            Explorer=>&[(0.20,0.38,0.20,0.72),(0.20,0.72,0.80,0.72),(0.80,0.72,0.80,0.38),(0.80,0.38,0.48,0.38),(0.48,0.38,0.39,0.28),(0.39,0.28,0.20,0.28),(0.20,0.28,0.20,0.38),(0.20,0.45,0.80,0.45)],
+            Desktop|Wallpaper=>&[(0.20,0.28,0.80,0.28),(0.80,0.28,0.80,0.68),(0.80,0.68,0.20,0.68),(0.20,0.68,0.20,0.28),(0.50,0.68,0.50,0.79),(0.36,0.79,0.64,0.79)],
+            Capture=>&[(0.23,0.34,0.43,0.34),(0.23,0.34,0.23,0.70),(0.23,0.70,0.77,0.70),(0.77,0.70,0.77,0.34),(0.77,0.34,0.58,0.34),(0.43,0.34,0.49,0.26),(0.49,0.26,0.56,0.26),(0.56,0.26,0.58,0.34),(0.42,0.48,0.58,0.48),(0.42,0.48,0.42,0.60),(0.42,0.60,0.58,0.60),(0.58,0.60,0.58,0.48)],
+            Record=>&[(0.33,0.32,0.66,0.32),(0.66,0.32,0.75,0.41),(0.75,0.41,0.75,0.66),(0.75,0.66,0.66,0.73),(0.66,0.73,0.33,0.73),(0.33,0.73,0.25,0.66),(0.25,0.66,0.25,0.41),(0.25,0.41,0.33,0.32),(0.44,0.49,0.56,0.49),(0.44,0.55,0.56,0.55)],
+            Stats=>&[(0.24,0.73,0.76,0.73),(0.32,0.73,0.32,0.53),(0.50,0.73,0.50,0.39),(0.68,0.73,0.68,0.26)],
+            Stage=>&[(0.25,0.31,0.72,0.31),(0.72,0.31,0.72,0.68),(0.72,0.68,0.25,0.68),(0.25,0.68,0.25,0.31),(0.32,0.24,0.79,0.24),(0.79,0.24,0.79,0.59)],
+            Windows=>&[(0.22,0.34,0.56,0.34),(0.56,0.34,0.56,0.68),(0.56,0.68,0.22,0.68),(0.22,0.68,0.22,0.34),(0.61,0.34,0.78,0.34),(0.78,0.34,0.78,0.68),(0.78,0.68,0.61,0.68)],
+        }
+    }
     fn command(self)->usize{301+Self::ALL.iter().position(|v|*v==self).unwrap_or(0)}
 }
 #[derive(Clone,Debug,PartialEq,Eq)]
 pub struct Profile {
     pub enabled:bool,pub leading:bool,pub details:bool,
-    pub order:Vec<Widget>,pub hidden:Vec<Widget>,
+    pub order:Vec<Widget>,pub hidden:Vec<Widget>,pub inline:Vec<Widget>,
 }
 impl Default for Profile {
-    fn default()->Self{Self{enabled:true,leading:false,details:true,order:Widget::ALL.to_vec(),hidden:Vec::new()}}
+    fn default()->Self{Self{enabled:true,leading:false,details:true,order:Widget::ALL.to_vec(),hidden:Vec::new(),inline:Vec::new()}}
 }
 impl Profile {
     pub fn from_json(v:&Value)->Self{
@@ -210,13 +241,20 @@ impl Profile {
         let mut order=read("order");
         for w in Widget::ALL {if !order.contains(&w){order.push(w);}}
         let hidden=read("hidden");
+        let inline=read("inline").into_iter().take(5).collect();
         Self{enabled:v["enabled"].as_bool().unwrap_or(true),leading:v["side"]=="left",
-            details:v["details"].as_bool().unwrap_or(true),order,hidden}
+            details:v["details"].as_bool().unwrap_or(true),order,hidden,inline}
     }
     pub fn json(&self)->Value{
         json!({"enabled":self.enabled,"side":if self.leading{"left"}else{"right"},"details":self.details,
             "order":self.order.iter().map(|w|w.key()).collect::<Vec<_>>(),
-            "hidden":self.hidden.iter().map(|w|w.key()).collect::<Vec<_>>()})
+            "hidden":self.hidden.iter().map(|w|w.key()).collect::<Vec<_>>(),
+            "inline":self.inline.iter().map(|w|w.key()).collect::<Vec<_>>()})
+    }
+    pub fn pinned(&self)->Vec<Widget>{
+        if !self.enabled{return Vec::new();}
+        let show_battery=self.inline.contains(&Widget::Battery)&&unsafe{matches!(battery(),BatteryState::Present{..})};
+        self.order.iter().copied().filter(|w|self.inline.contains(w)&&!self.hidden.contains(w)&&(*w!=Widget::Battery||show_battery)).collect()
     }
     pub fn toggle(&mut self,widget:Widget){if self.hidden.contains(&widget){self.hidden.retain(|&w|w!=widget);}else{self.hidden.push(widget);}}
 }
@@ -346,6 +384,11 @@ thread_local! {
 pub(super) unsafe fn close_audio(){
     let hwnd=AUDIO_WINDOW.with(Cell::get);
     if !hwnd.is_null(){DestroyWindow(hwnd);}
+}
+pub(super) unsafe fn audio_from_snapshot(owner:HWND,point:POINT,snapshot:&Snapshot)->bool{
+    let Some(audio)=snapshot.audio.as_ref() else{return false;};
+    audio_panel(owner,point,audio.level,audio.muted);
+    true
 }
 pub(super) unsafe fn audio_panel(owner:HWND,point:POINT,level:u32,muted:bool){
     close_audio();
