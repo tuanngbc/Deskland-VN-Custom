@@ -8,10 +8,12 @@ pub struct Link { raw:isize, pid:u32, area:RECT }
 impl Drop for Link {fn drop(&mut self){unsafe{DwmUnregisterThumbnail(self.raw);}}}
 
 #[derive(Default)]
-pub struct Previews { links:HashMap<usize,Link>, next:HashMap<usize,Link> }
+pub struct Previews { links:HashMap<usize,Link>, next:HashMap<usize,Link>, destination:usize }
 impl Previews {
     pub fn clear(&mut self)->bool{
-        let changed=!self.links.is_empty();self.links.clear();changed
+        let changed=!self.links.is_empty()||!self.next.is_empty();
+        self.links.clear();self.next.clear();self.destination=0;
+        changed
     }
     pub fn areas(&self)->Vec<RECT>{
         let mut areas=self.links.values().map(|link|link.area).collect::<Vec<_>>();
@@ -20,11 +22,15 @@ impl Previews {
     }
     pub fn includes(&self,hwnd:HWND)->bool{self.links.contains_key(&(hwnd as usize))}
     pub unsafe fn update(&mut self,dst:HWND,items:&[Item],layout:Layout)->bool{
-        let mut changed=false;
+        // A thumbnail is bound to its original DWM destination. Changing
+        // hosts must not reuse registrations even if the source list matches.
+        let mut changed=self.destination!=dst as usize&&self.clear();
+        self.destination=dst as usize;
         for (i,item) in items.iter().enumerate(){
             let source=item.hwnd;
-            let Some(pid)=preview_pid(source) else{continue;};
             let key=source as usize;
+            if self.next.contains_key(&key){continue;}
+            let Some(pid)=preview_pid(source) else{continue;};
             let slot=layout.preview(i);
             if slot.right<=slot.left||slot.bottom<=slot.top{continue;}
             let existing=self.links.remove(&key);
@@ -133,3 +139,7 @@ mod tests{
     }
 
 }
+
+#[cfg(test)]
+#[path = "preview_tests.rs"]
+mod native_tests;
