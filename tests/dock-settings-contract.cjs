@@ -103,4 +103,15 @@ test('utility order, visibility and reset are isolated to the selected monitor',
   $('utilityDisplay').listeners.change({target:{value:'main'}});
   assert.equal($('utilityEnabled').checked,false);
 });
+test('window policy edits one output without overwriting its other module',()=>{
+  const main={id:'main',name:'Main',w:2560,h:1080,dpi:96,primary:true};
+  const portrait={...main,id:'portrait',primary:false};
+  context.syncDockSettings({dockDisplays:[main,portrait],dock:{windowPolicies:{main:{dock:'floating'},portrait:{stage:'autoHide'}}}});
+  $('dockPolicyDisplay').listeners.change({target:{value:'portrait'}});
+  assert.equal($('dockPolicy_stage').value,'autoHide');
+  $('dockPolicy_dock').value='reserve';$('dockPolicy_dock').listeners.change();
+  assert.equal(JSON.stringify(messages.pop()),JSON.stringify({t:'dockWindowPolicy',display:'portrait',policy:{dock:'reserve',stage:'autoHide'}}));
+  $('dockPolicyDisplay').listeners.change({target:{value:'main'}});
+  assert.equal($('dockPolicy_dock').value,'floating');
+});
 console.log('TOTAL: '+count+' PASS / 0 FAIL');

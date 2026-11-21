@@ -253,11 +253,31 @@ fn icon_worker() -> (std::sync::mpsc::Sender<(PathBuf, i32)>, std::sync::mpsc::R
     (tx, rx)
 }
 
-pub(crate) unsafe fn extract_icon(path: &Path, size: i32) -> Option<IconPixels> {
+unsafe fn extract_icon(path: &Path, size: i32) -> Option<IconPixels> {
+    let icon = shell_icon(path, (size * 2).clamp(64, 256))?;
+    let scale = size as f32 / icon.width.max(icon.height) as f32;
+    let width = (icon.width as f32 * scale).round().max(1.0) as i32;
+    let height = (icon.height as f32 * scale).round().max(1.0) as i32;
+    let image = image::RgbaImage::from_raw(icon.width as u32, icon.height as u32, icon.pixels)?;
+    let mut pixels = image::imageops::resize(&image, width as u32, height as u32, image::imageops::FilterType::Lanczos3).into_raw();
+    for p in pixels.chunks_exact_mut(4) { for c in 0..3 {p[c] = p[c].min(p[3]);} }
+    Some(IconPixels { width, height, pixels })
+}
+
+/// Preserve the shell bitmap dimensions. IconPixels are premultiplied BGRA
+/// (the order used by both Win32 renderers); resize only at the destination.
+pub(crate) unsafe fn shell_icon(path: &Path, source_size: i32) -> Option<IconPixels> {
     use windows::Win32::UI::Shell::{SHCreateItemFromParsingName, IShellItemImageFactory, SIIGBF_ICONONLY, SIIGBF_BIGGERSIZEOK};
-    let path = wide(&path.to_string_lossy());
-    let factory: IShellItemImageFactory = SHCreateItemFromParsingName(windows::core::PCWSTR(path.as_ptr()), None).ok()?;
-    let source_size = (size * 2).clamp(64, 256);
+    let name = path.to_string_lossy();
+    let factory_for = |name: &str| {
+        let path = wide(name);
+        { let item: windows::core::Result<IShellItemImageFactory> = SHCreateItemFromParsingName(windows::core::PCWSTR(path.as_ptr()), None); item }
+    };
+    let factory = factory_for(&name).or_else(|error| {
+        if let Some(id)=name.strip_prefix(r"shell:AppsFolder"){
+            factory_for(&format!(r"::{{4234d49b-0245-4df3-b780-3893943456e1}}\{id}"))
+        }else{Err(error)}
+    }).ok()?;
     let bitmap = factory.GetImage(windows::Win32::Foundation::SIZE { cx: source_size, cy: source_size }, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK).ok()?;
     let bitmap = bitmap.0;
     let mut object: BITMAP = std::mem::zeroed();
@@ -271,10 +291,21 @@ pub(crate) unsafe fn extract_icon(path: &Path, size: i32) -> Option<IconPixels> 
     let ok = GetDIBits(dc, bitmap, 0, h as u32, pixels.as_mut_ptr() as *mut _, &mut info, DIB_RGB_COLORS);
     DeleteDC(dc); DeleteObject(bitmap);
     if ok == 0 { return None; }
-    if pixels.chunks_exact(4).all(|p| p[3]==0) { for p in pixels.chunks_exact_mut(4) {p[3]=255;} }
-    let image = image::RgbaImage::from_raw(w as u32, h as u32, pixels)?;
-    let pixels = image::imageops::resize(&image, size as u32, size as u32, image::imageops::FilterType::Lanczos3).into_raw();
-    Some(IconPixels { width: size, height: size, pixels })
+    normalize_shell_alpha(&mut pixels);
+    Some(IconPixels { width: w, height: h, pixels })
+}
+
+fn normalize_shell_alpha(pixels: &mut [u8]) {
+    let alpha_missing = pixels.chunks_exact(4).all(|p| p[3] == 0);
+    let straight = !alpha_missing && pixels.chunks_exact(4).any(|p| p[3] > 0 && p[..3].iter().any(|&c| c > p[3]));
+    for p in pixels.chunks_exact_mut(4) {
+        if alpha_missing { p[3] = 255; }
+        else if p[3] == 0 { p[..3].fill(0); }
+        else if straight {
+            let a = p[3] as u32;
+            for c in &mut p[..3] { *c = ((*c as u32 * a + 127) / 255) as u8; }
+        }
+    }
 }
 
 fn icon_for(hwnd: HWND, path: &Path, size: i32) -> Option<IconPixels> {

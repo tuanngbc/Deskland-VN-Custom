@@ -50,35 +50,49 @@ pub fn measure(display:&Display,style:&Appearance,count:usize,focus:Option<f32>,
 }
 #[cfg(test)]
 pub fn measure_utilities(display:&Display,style:&Appearance,count:usize,focus:Option<f32>,amount:f32,utility_position:Option<bool>)->Layout{
-    measure_widgets(display,style,count,focus,amount,utility_position,&[])
+    measure_widgets(display,style,count,focus,amount,utility_position,&[],28)
 }
-pub fn measure_widgets(display:&Display, style:&Appearance, count:usize, focus:Option<f32>, amount:f32, utility_position:Option<bool>, pinned:&[UtilityWidget])->Layout {
+pub fn measure_widgets(display:&Display, style:&Appearance, count:usize, focus:Option<f32>, amount:f32, utility_position:Option<bool>, pinned:&[UtilityWidget],utility_cell:u32)->Layout {
     let oriented=style.position!=DockSide::Bottom;
     let scale=(display.dpi as f32/96.0).clamp(0.75,3.0);
-    let spacing=style.spacing as f32*scale;
     let edge=8.0*scale;
     let shadow=6.0*scale;
     let pad=12.0*scale;
-    let margins=2.0*(edge+shadow);
     let max_span=if oriented {display.work.bottom-display.work.top} else {display.work.right-display.work.left};
-    // A permanent search affordance opens the existing Deskland launcher.
-
+    let max_span=max_span as f32-2.0*(edge+shadow);
     let utility_leading=utility_position==Some(true);
-    let max_span=max_span as f32-margins;
-    let base=count+1+usize::from(utility_position.is_some());
-    let cell_limit=((max_span-2.0*pad+spacing)/(28.0*scale+spacing)).floor().max(0.0) as usize;
-    let inline_count=if utility_position.is_some(){pinned.len().min(cell_limit.saturating_sub(base)).min(5)}else{0};
-    let cells=base+inline_count;
-    let spacing=spacing.min(((max_span-2.0*pad-cells as f32*8.0)/(cells-1).max(1) as f32).max(1.0));
-    let lead_count=if utility_leading{inline_count+1}else{0};
-    let available=(max_span-2.0*pad-(cells-1) as f32*spacing).max(cells as f32*8.0);
-    // Reserve enough room for the largest neighborhood before drawing the
-    // first hover frame. Hit testing uses the actual rectangles below.
+    let host=usize::from(utility_position.is_some());
+    let app_cells=count+1; // The launcher uses an app-sized cell.
+    let status_gap=2.0*scale;
+    let group_gap=6.0*scale;
+    let ideal_icon=style.icon_size as f32*scale;
+    let min_icon=ideal_icon.min(28.0*scale);
+    let ideal_status=utility_cell.clamp(24,32) as f32*scale;
     let zoom_range=if style.reduced_motion {0.0}else{style.magnification as f32/100.0};
-    let magnify_reserve=(1.0+zoom_range*2.6/cells as f32).max(1.0);
-    let icon=(style.icon_size as f32*scale).min(available/cells as f32/magnify_reserve).max(8.0);
+    let extra=2.6*zoom_range;
+    let app_room=(max_span-2.0*pad).max(0.0);
+    let spacing=(style.spacing as f32*scale)
+        .min(((app_room-app_cells as f32*min_icon)/app_cells as f32).max(scale));
+    let app_gaps=count as f32*spacing;
+    let status_total=|n:usize,cell:f32| if n==0{0.0}else{group_gap+n as f32*cell+(n-1) as f32*status_gap};
+    let inline_count=if host==1 {
+        (0..=pinned.len().min(5)).rev().find(|&n| {
+            status_total(n+1,ideal_status)+app_gaps+min_icon*(app_cells as f32+extra)<=app_room
+        }).unwrap_or(0)
+    }else{0};
+    let status_count=host+inline_count;
+    let status=ideal_status.min((app_room-app_gaps-app_cells as f32*8.0).max(8.0));
+    let cells=app_cells+status_count;
+    let lead_count=if utility_leading{status_count}else{0};
+    let icon=ideal_icon.min(((app_room-status_total(status_count,status)-app_gaps)/(app_cells as f32+extra)).max(1.0));
+    let gap=|i:usize| {
+        if i+1==cells{return 0.0;}
+        let app=|k:usize|k>=lead_count&&k<lead_count+app_cells;
+        match (app(i),app(i+1)){(true,true)=>spacing,(false,false)=>status_gap,_=>group_gap}
+    };
+    let is_app=|i:usize| i>=lead_count&&i<lead_count+app_cells;
+    let base_span=icon*app_cells as f32+app_gaps+status_total(status_count,status)+2.0*pad;
     let cross=icon*(1.0+zoom_range)+20.0*scale;
-    let base_span=icon*cells as f32+(cells-1) as f32*spacing+2.0*pad;
     let reserved=(base_span+(icon*zoom_range*2.6).min(max_span-base_span).max(0.0)).ceil();
     let extent=reserved+2.0*shadow;
     let total_cross=(cross+2.0*shadow).ceil();
@@ -92,23 +106,29 @@ pub fn measure_widgets(display:&Display, style:&Appearance, count:usize, focus:O
         DockSide::Right=>(display.work.right-(edge+total_cross) as i32,display.work.top+(available_y-extent as i32)/2,
             total_cross,extent),
     };
-    let unscaled_start=(extent-base_span)*0.5+pad;
+    let mut unscaled=(extent-base_span)*0.5+pad;
     let widths:Vec<f32>=(0..cells).map(|i|{
-        let center=unscaled_start+(icon+spacing)*i as f32+icon*0.5;
+        let size=if is_app(i){icon}else{status};
+        let center=unscaled+size*0.5;
+        unscaled+=size+gap(i);
+        if !is_app(i){return size;}
         let delta=focus.map(|p|(center-p)/(icon+spacing)).unwrap_or(10.0);
         let weight=(-delta*delta/1.60).exp();
         icon*(1.0+amount.clamp(0.0,1.0)*zoom_range*weight)
     }).collect();
-    let span=widths.iter().sum::<f32>()+(cells-1) as f32*spacing+2.0*pad;
+    let span=widths.iter().sum::<f32>()+(0..cells).map(gap).sum::<f32>()+2.0*pad;
     let start=(extent-span)*0.5;
     let mut cursor=start+pad;
     let mut all=Vec::with_capacity(cells);
     let mut indicators=Vec::with_capacity(count);
     for (i,size) in widths.into_iter().enumerate(){
-        let cross_axis=match style.position{
+        let cross_axis=if is_app(i){match style.position{
             DockSide::Bottom|DockSide::Right=>total_cross-shadow-size-13.0*scale,
             DockSide::Left=>shadow+13.0*scale,
-        };
+        }}else{match style.position {
+            DockSide::Bottom|DockSide::Right=>total_cross-shadow-(icon+20.0*scale+size)*0.5,
+            DockSide::Left=>shadow+(icon+20.0*scale-size)*0.5,
+        }};
         let r=if oriented{Rect{x:cross_axis,y:cursor,w:size,h:size}}else{Rect{x:cursor,y:cross_axis,w:size,h:size}};
         let item_index=i.checked_sub(lead_count);
         if item_index.is_some_and(|index|index<count){
@@ -120,7 +140,7 @@ pub fn measure_widgets(display:&Display, style:&Appearance, count:usize, focus:O
             });
         }
         all.push(r);
-        cursor+=size+spacing;
+        cursor+=size+gap(i);
     }
     let inline_rects=if utility_leading{all.drain(..inline_count).collect::<Vec<_>>()}
         else{all.split_off(cells-inline_count)};
@@ -199,11 +219,19 @@ mod tests{
             let work=RECT{left:-width,top:0,right:0,bottom:1040};
             let d=Display{id:"display".into(),name:"Display".into(),bounds:work,work,primary:true,dpi};
             let pins=&UtilityWidget::ALL[..5];
-            let l=measure_widgets(&d,&Appearance::default(),10,None,0.0,Some(false),pins);
+            let l=measure_widgets(&d,&Appearance::default(),10,None,0.0,Some(false),pins,28);
             assert_eq!(l.slots.len(),10);
             assert_eq!(l.inline.len(),expected);
             assert!(l.window.left>=work.left&&l.window.right<=work.right);
             assert!(l.utility.w>0.0&&l.scan.w>0.0);
+            if expected>0{
+                assert_eq!(l.utility.w,28.0);
+                assert!(l.inline.iter().all(|(_,r)|r.w==28.0));
+                assert_eq!(l.slots[0].w,44.0);
+                let zoom=measure_widgets(&d,&Appearance::default(),10,Some(l.slots[3].x),1.0,Some(false),pins,28);
+                assert_eq!(zoom.inline[0].1.w,28.0);
+                assert!(zoom.slots[3].w>44.0);
+            }
         }
     }
 }

@@ -3,7 +3,7 @@
 //! cập nhật lại giao diện theo trạng thái thật.
 
 use crate::desktop::wide;
-use crate::dock::{Display, DisplayMode, DisplayTarget, StageStyle, UtilityProfile, UtilityWidget};
+use crate::dock::{Display, DisplayMode, DisplayTarget, StageStyle, UtilityProfile, UtilityWidget, WindowMode, WindowPolicy};
 use std::{cell::RefCell, collections::BTreeMap};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -32,6 +32,7 @@ pub enum Action {
     DockDisplay(bool, DisplayTarget),
     StageStyle(String, StageStyle),
     UtilityProfile(String, UtilityProfile),
+    WindowPolicy(String,WindowPolicy),
 }
 
 /// Trạng thái thật mà giao diện hiển thị.
@@ -297,6 +298,7 @@ struct Ui {
     dock_target:DisplayTarget,
     stage_target:DisplayTarget,
     stage_styles:BTreeMap<String,StageStyle>,
+    window_policies:BTreeMap<String,WindowPolicy>,
     utility_profiles:BTreeMap<String,UtilityProfile>,
     displays:Vec<Display>,
     note: HWND,
@@ -466,6 +468,7 @@ pub fn open(state: &State) {
             dock_target:DisplayTarget::default(),
             stage_target:DisplayTarget::default(),
             stage_styles:BTreeMap::new(),
+            window_policies:BTreeMap::new(),
             utility_profiles:BTreeMap::new(),
             displays:Vec::new(),
             saver_now: std::ptr::null_mut(),
@@ -555,6 +558,7 @@ pub fn sync(state: &State) {
             ui.dock_target=state.dock.dock_display.clone();
             ui.stage_target=state.dock.stage_display.clone();
             ui.stage_styles=state.dock.stage_styles.clone();
+            ui.window_policies=state.dock.window_policies.clone();
             ui.utility_profiles=state.dock.utility_profiles.clone();
             ui.displays=state.displays.clone();
             let t = if state.hotkey { "Khóa với cảnh động (Ctrl+Alt+L)" } else { "Khóa với cảnh động" };
@@ -566,8 +570,8 @@ pub fn sync(state: &State) {
 /// An in-place Windows menu keeps the essential display controls accessible
 /// with a keyboard even when the WebView cannot start.
 unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
-    let Some((mut target, displays, styles, utility_profiles)) = UI.with(|u| u.borrow().as_ref().map(|ui| {
-        (if stage { ui.stage_target.clone() } else { ui.dock_target.clone() }, ui.displays.clone(), ui.stage_styles.clone(), ui.utility_profiles.clone())
+    let Some((mut target, displays, styles, utility_profiles, window_policies)) = UI.with(|u| u.borrow().as_ref().map(|ui| {
+        (if stage { ui.stage_target.clone() } else { ui.dock_target.clone() }, ui.displays.clone(), ui.stage_styles.clone(), ui.utility_profiles.clone(),ui.window_policies.clone())
     })) else { return };
     let menu = CreatePopupMenu();
     if menu.is_null() { return; }
@@ -594,6 +598,24 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
     // A compact menu gives the fallback access without opening another app.
     let mut edits = Vec::new();
     let mut utility_edits=Vec::new();
+    let mut policy_edits=Vec::new();
+    let policies=CreatePopupMenu();
+    if !policies.is_null(){
+        for d in displays.iter().take(32){
+            let list=CreatePopupMenu();
+            if list.is_null(){continue;}
+            let base=window_policies.get(&d.id).copied().unwrap_or_default();
+            for (mode,title) in [(WindowMode::Default,"Mặc định"),(WindowMode::Reserve,"Giữ chỗ khi phóng to"),
+                (WindowMode::Floating,"Nổi trên cửa sổ"),(WindowMode::AutoHide,"Tự ẩn")]{
+                let (next,current)=if stage{(WindowPolicy{stage:mode,..base},base.stage)}
+                    else{(WindowPolicy{dock:mode,..base},base.dock)};
+                policy_edits.push((d.id.clone(),next));
+                AppendMenuW(list,MF_STRING|if mode==current{MF_CHECKED}else{0},2300+policy_edits.len()-1,wide(title).as_ptr());
+            }
+            if AppendMenuW(policies,MF_POPUP,list as usize,wide(&d.name.replace('&',"&&")).as_ptr())==0{DestroyMenu(list);}
+        }
+        if AppendMenuW(menu,MF_POPUP,policies as usize,wide("Hành vi cửa sổ theo màn hình").as_ptr())==0{DestroyMenu(policies);}
+    }
     if stage && !displays.is_empty() {
         let layouts = CreatePopupMenu();
         if !layouts.is_null() {
@@ -648,11 +670,14 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
                 let base=utility_profiles.get(&d.id).cloned().unwrap_or_default();
                 let mut append=|label:&str,checked:bool,value:UtilityProfile|{
                     utility_edits.push((d.id.clone(),value));
-                    AppendMenuW(list,MF_STRING|if checked{MF_CHECKED}else{0},1100+utility_edits.len()-1,wide(label).as_ptr());
+                    AppendMenuW(list,MF_STRING|if checked{MF_CHECKED}else{0},1200+utility_edits.len()-1,wide(label).as_ptr());
                 };
                 append("Hiện nút tiện ích",base.enabled,UtilityProfile{enabled:!base.enabled,..base.clone()});
                 append("Đặt bên trái",base.leading,UtilityProfile{leading:!base.leading,..base.clone()});
                 append("Hiện thông tin",base.details,UtilityProfile{details:!base.details,..base.clone()});
+                for (cell,label) in [(24,"Nút nhỏ · 24 px"),(28,"Nút chuẩn · 28 px"),(32,"Nút dễ bấm · 32 px")]{
+                    append(label,base.cell==cell,UtilityProfile{cell,..base.clone()});
+                }
                 AppendMenuW(list,MF_SEPARATOR,0,std::ptr::null());
                 for widget in UtilityWidget::ALL{
                     let mut update=base.clone();update.toggle(widget);
@@ -669,7 +694,10 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
     GetWindowRect(button,&mut rect);
     let command = TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,rect.left,rect.bottom,0,owner,std::ptr::null()) as usize;
     DestroyMenu(menu);
-    if let Some((id,p))=command.checked_sub(1100).and_then(|i|utility_edits.get(i)){
+    if let Some((id,p))=command.checked_sub(2300).and_then(|i|policy_edits.get(i)){
+        push(Action::WindowPolicy(id.clone(),*p));return;
+    }
+    if let Some((id,p))=command.checked_sub(1200).and_then(|i|utility_edits.get(i)){
         push(Action::UtilityProfile(id.clone(),p.clone()));
         return;
     }

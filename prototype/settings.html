@@ -157,10 +157,20 @@
         <label class="setting-row"><b data-i18n="utilityEnabled">Hiện nút tiện ích</b><input id="utilityEnabled" type="checkbox"></label>
         <label class="setting-row"><b data-i18n="utilitySide">Vị trí trong Dock</b><select id="utilitySide"><option value="left" data-i18n="dockLeft">Bên trái</option><option value="right" data-i18n="dockRight">Bên phải</option></select></label>
         <label class="setting-row"><b data-i18n="utilityDetails">Hiện thông tin trong bảng tiện ích</b><input id="utilityDetails" type="checkbox"></label>
+        <label class="setting-row"><b>Cỡ nút tiện ích</b><select id="utilityCell"><option value="24">Nhỏ · 24 px</option><option value="28">Chuẩn · 28 px</option><option value="32">Dễ bấm · 32 px</option></select></label>
         <ol id="utilityRows" class="dock-utility-rows"></ol>
         <button id="utilityReset" type="button" data-i18n="utilityReset">Khôi phục tiện ích mặc định</button>
       </div>
     </details>
+  </section>
+  <section class="setting-card dock-placement">
+    <h3>Hành vi cửa sổ</h3>
+    <p>Giữ chỗ dùng vùng làm việc của Windows và giữ thanh tác vụ. Ứng dụng toàn màn hình sẽ ẩn Dock và Stage trên màn hình đó.</p>
+    <label class="setting-row"><b>Màn hình</b><select id="dockPolicyDisplay"></select></label>
+    <div id="dockPolicyControls" hidden>
+      <label class="setting-row"><b>Dock</b><select id="dockPolicy_dock"><option value="default">Dùng cài đặt Dock chung</option><option value="reserve">Giữ chỗ khi phóng to</option><option value="floating">Nổi trên cửa sổ</option><option value="autoHide">Tự ẩn</option></select></label>
+      <label class="setting-row"><b>Stage Manager</b><select id="dockPolicy_stage"><option value="default">Mặc định (nổi)</option><option value="reserve">Giữ chỗ khi có thẻ Stage</option><option value="floating">Nổi trên cửa sổ</option><option value="autoHide">Tự ẩn</option></select></label>
+    </div>
   </section>
   <section class="setting-card dock-placement">
     <h3>Stage Manager</h3>
@@ -814,6 +824,28 @@ function requestedDisplays(target){
 }
 const defaultDisplay=()=>dockDisplays.find(d=>d.primary)||dockDisplays[0];
 const displayLabel=d=>d.name+' · '+d.w+' × '+d.h+' · '+d.dpi+' DPI'+(d.primary?' · '+dockText('primaryMonitor'):'');
+let policyDisplay=null;
+const policyFor=id=>{
+  const policies=dockOptions.windowPolicies||{};
+  return {dock:'default',stage:'default',...(Object.hasOwn(policies,id)?policies[id]:{})};
+};
+function showWindowPolicy(){
+  const picker=$('dockPolicyDisplay');
+  const markup=dockDisplays.map(d=>'<option value="'+esc(d.id)+'">'+esc(displayLabel(d))+'</option>').join('');
+  if(picker.policyMarkup!==markup){picker.innerHTML=markup;picker.policyMarkup=markup;}
+  if(!dockDisplays.some(d=>d.id===policyDisplay))policyDisplay=defaultDisplay()?.id||null;
+  picker.value=policyDisplay||'';picker.disabled=!policyDisplay;
+  $('dockPolicyControls').hidden=!policyDisplay;
+  const policy=policyFor(policyDisplay);
+  for(const key of ['dock','stage'])$('dockPolicy_'+key).value=policy[key];
+}
+$('dockPolicyDisplay').addEventListener('change',e=>{policyDisplay=e.target.value;showWindowPolicy();});
+for(const key of ['dock','stage'])$('dockPolicy_'+key).addEventListener('change',()=>{
+  if(!policyDisplay)return;
+  const policy={...policyFor(policyDisplay),[key]:$('dockPolicy_'+key).value};
+  dockOptions.windowPolicies={...dockOptions.windowPolicies,[policyDisplay]:policy};
+  send({t:'dockWindowPolicy',display:policyDisplay,policy});
+});
 const stageStyleDefaults={side:'default',scale:100,spacing:6,groupLimit:5,opacity:76};
 const stageStyleFor=id=>({...stageStyleDefaults,...(Object.hasOwn(dockOptions.stageStyles||{},id)?dockOptions.stageStyles[id]:{})});
 const stageRight=id=>{const side=stageStyleFor(id).side;return (side==='default'?dockOptions.stageSide:side)==='right';};
@@ -853,7 +885,7 @@ const utilityLabels={
 };
 const utilityKeys=Object.keys(utilityLabels);
 let utilityDisplay=null,utilityDrag=null;
-const utilityDefault=()=>({enabled:true,side:'right',details:true,order:[...utilityKeys],hidden:[],inline:[]});
+const utilityDefault=()=>({enabled:true,side:'right',details:true,cell:28,order:[...utilityKeys],hidden:[],inline:[]});
 function utilityProfile(){
   const map=dockOptions.utilityProfiles||{};
   return {...utilityDefault(),...(Object.hasOwn(map,utilityDisplay)?map[utilityDisplay]:{})};
@@ -869,6 +901,7 @@ function renderUtilityControls(){
   $('utilityEnabled').checked=p.enabled;
   $('utilitySide').value=p.side;
   $('utilityDetails').checked=p.details;
+  $('utilityCell').value=String(p.cell);
   $('utilityRows').innerHTML=p.order.filter(key=>Object.hasOwn(utilityLabels,key)).map((key,i)=>{
     const label=t('utilityItem_'+key);
     const name=label==='utilityItem_'+key?utilityLabels[key]:label;
@@ -892,6 +925,7 @@ function moveUtility(key,to){
   saveUtilityProfile({...p,order});
 }
 $('utilityDisplay').addEventListener('change',e=>{utilityDisplay=e.target.value;renderUtilityControls();});
+$('utilityCell').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),cell:Number($('utilityCell').value)}));
 $('utilityEnabled').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),enabled:$('utilityEnabled').checked}));
 $('utilityDetails').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),details:$('utilityDetails').checked}));
 $('utilitySide').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),side:$('utilitySide').value}));
@@ -980,6 +1014,7 @@ function syncDockSettings(m) {
   renderDockPlacement();
   showDockAppearance();
   showStageStyle();
+  showWindowPolicy();
   renderUtilityControls();
 }
 for(const [id,key,type] of [['dockEnabled','enabled','checked'],['dockStageEnabled','stageEnabled','checked'],

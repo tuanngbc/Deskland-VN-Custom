@@ -221,11 +221,11 @@ impl Widget {
 }
 #[derive(Clone,Debug,PartialEq,Eq)]
 pub struct Profile {
-    pub enabled:bool,pub leading:bool,pub details:bool,
+    pub enabled:bool,pub leading:bool,pub details:bool,pub cell:u32,
     pub order:Vec<Widget>,pub hidden:Vec<Widget>,pub inline:Vec<Widget>,
 }
 impl Default for Profile {
-    fn default()->Self{Self{enabled:true,leading:false,details:true,order:Widget::ALL.to_vec(),hidden:Vec::new(),inline:Vec::new()}}
+    fn default()->Self{Self{enabled:true,leading:false,details:true,cell:28,order:Widget::ALL.to_vec(),hidden:Vec::new(),inline:Vec::new()}}
 }
 impl Profile {
     pub fn from_json(v:&Value)->Self{
@@ -243,10 +243,10 @@ impl Profile {
         let hidden=read("hidden");
         let inline=read("inline").into_iter().take(5).collect();
         Self{enabled:v["enabled"].as_bool().unwrap_or(true),leading:v["side"]=="left",
-            details:v["details"].as_bool().unwrap_or(true),order,hidden,inline}
+            details:v["details"].as_bool().unwrap_or(true),cell:v["cell"].as_u64().map_or(28,|n|n.clamp(24,32) as u32),order,hidden,inline}
     }
     pub fn json(&self)->Value{
-        json!({"enabled":self.enabled,"side":if self.leading{"left"}else{"right"},"details":self.details,
+        json!({"enabled":self.enabled,"side":if self.leading{"left"}else{"right"},"details":self.details,"cell":self.cell,
             "order":self.order.iter().map(|w|w.key()).collect::<Vec<_>>(),
             "hidden":self.hidden.iter().map(|w|w.key()).collect::<Vec<_>>(),
             "inline":self.inline.iter().map(|w|w.key()).collect::<Vec<_>>()})

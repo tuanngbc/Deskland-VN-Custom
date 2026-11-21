@@ -8,6 +8,25 @@ fn display_id(v: &str) -> Option<String> {
         .then(|| v.to_lowercase())
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WindowMode { #[default] Default, Reserve, Floating, AutoHide }
+impl WindowMode {
+    pub fn from_json(v:&Value)->Self {
+        match v.as_str(){Some("reserve")=>Self::Reserve,Some("floating")=>Self::Floating,Some("autoHide")=>Self::AutoHide,_=>Self::Default}
+    }
+    pub fn key(self)->&'static str {
+        match self{Self::Default=>"default",Self::Reserve=>"reserve",Self::Floating=>"floating",Self::AutoHide=>"autoHide"}
+    }
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WindowPolicy {pub dock:WindowMode,pub stage:WindowMode}
+impl WindowPolicy {
+    pub fn from_json(v:&Value)->Self {
+        Self{dock:WindowMode::from_json(&v["dock"]),stage:WindowMode::from_json(&v["stage"])}
+    }
+    fn json(self)->Value {json!({"dock":self.dock.key(),"stage":self.stage.key()})}
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StageStyle {
     pub right: Option<bool>,
@@ -97,6 +116,7 @@ pub struct Options {
     pub stage_display: DisplayTarget,
     pub stage_styles: BTreeMap<String, StageStyle>,
     pub appearance: Appearance,
+    pub window_policies:BTreeMap<String,WindowPolicy>,
     pub utility_profiles:BTreeMap<String,Profile>,
 }
 #[derive(Debug)]
@@ -104,6 +124,7 @@ pub enum Edit {
     Pin(String), Unpin(String), MovePin(String,String), AllWindows(bool), StageSide(String), DockEnabled(bool), StageEnabled(bool),
     StageStyle(String, StageStyle),
     UtilityProfile(String, Profile),
+    WindowPolicy(String, WindowPolicy),
 }
 impl Edit {
     pub fn apply(self, options: &mut Options) {
@@ -134,6 +155,14 @@ impl Edit {
                     }
                 }
             }
+            Self::WindowPolicy(id,policy)=>{
+                if let Some(id)=display_id(&id){
+                    if policy==WindowPolicy::default(){options.window_policies.remove(&id);}
+                    else if options.window_policies.len()<32||options.window_policies.contains_key(&id){
+                        options.window_policies.insert(id,policy);
+                    }
+                }
+            }
             Self::DockEnabled(on)=>options.enabled=on,
             Self::StageEnabled(on)=>options.stage_enabled=on,
         }
@@ -141,7 +170,7 @@ impl Edit {
 }
 impl Default for Options {
     fn default() -> Self {
-        Self { enabled: false, stage_enabled: false, pinned: Vec::new(), all_windows: false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), appearance: Appearance::default(),utility_profiles:BTreeMap::new() }
+        Self { enabled: false, stage_enabled: false, pinned: Vec::new(), all_windows: false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), appearance: Appearance::default(),utility_profiles:BTreeMap::new(),window_policies:BTreeMap::new() }
     }
 }
 impl Options {
@@ -165,6 +194,10 @@ impl Options {
                 let profile=Profile::from_json(value);
                 (profile!=Profile::default()).then(||(display_id(id),profile)).and_then(|(id,p)|Some((id?,p)))
             }).take(32).collect(),
+            window_policies:v["windowPolicies"].as_object().into_iter().flatten().filter_map(|(id,value)|{
+                let mode=WindowPolicy::from_json(value);
+                (mode!=WindowPolicy::default()).then(||(display_id(id),mode)).and_then(|(id,p)|Some((id?,p)))
+            }).take(32).collect(),
             appearance: Appearance::from_json(&v["appearance"]),
             stage_side: if v["stageSide"] == "right" { "right" } else { "left" }.into(),
         }
@@ -180,6 +213,15 @@ impl Options {
         options
     }
     pub fn any_enabled(&self) -> bool { self.enabled || self.stage_enabled }
+    pub fn window_policy(&self,id:&str)->WindowPolicy {self.window_policies.get(id).copied().unwrap_or_default()}
+    pub fn dock_auto_hide(&self,id:&str)->bool{
+        match self.window_policy(id).dock{
+            WindowMode::Default=>self.appearance.auto_hide,
+            WindowMode::AutoHide=>true,
+            _=>false,
+        }
+    }
+    pub fn utility_cell(&self,id:&str)->u32{ self.utility_profiles.get(id).map_or(28,|p|p.cell) }
     pub fn utility_position(&self,id:&str)->Option<bool>{
         match self.utility_profiles.get(id){Some(p) if !p.enabled||p.hidden.len()==super::utilities::Widget::ALL.len()=>None,Some(p)=>Some(p.leading),None=>Some(false)}
     }
@@ -192,6 +234,7 @@ impl Options {
         json!({"version":2,"enabled":self.enabled,"stageEnabled":self.stage_enabled,
             "pinned":self.pinned,"allWindows":self.all_windows,"stageSide":self.stage_side,
             "dockDisplay":self.dock_display.json(),"stageDisplay":self.stage_display.json(),"appearance":self.appearance.json(),
+            "windowPolicies":self.window_policies.iter().map(|(id,p)|(id.clone(),p.json())).collect::<serde_json::Map<_,_>>(),
             "utilityProfiles":self.utility_profiles.iter().map(|(id,p)|(id.clone(),p.json())).collect::<serde_json::Map<_,_>>(),
             "stageStyles":self.stage_styles.iter().map(|(id,style)|(id.clone(),style.json())).collect::<serde_json::Map<_,_>>()})
     }
@@ -260,6 +303,20 @@ mod tests {
         Edit::MovePin("unpinned.exe".into(),"third.exe".into()).apply(&mut options);
         assert_eq!(options.pinned,["second.exe","third.exe","first.exe"]);
         assert_eq!(Options::from_json(&options.json()),options);
+    }
+    #[test]
+    fn window_policy_keeps_legacy_auto_hide_and_per_screen_overrides() {
+        let mut options=Options::from_json(&json!({"appearance":{"autoHide":true},"windowPolicies":{
+            "Portrait":{"dock":"reserve","stage":"autoHide"},
+            "disconnected":{"dock":"floating","stage":"reserve"}
+        }}));
+        assert!(options.dock_auto_hide("main"));
+        assert!(!options.dock_auto_hide("portrait"));
+        assert_eq!(options.window_policy("portrait").stage,WindowMode::AutoHide);
+        Edit::WindowPolicy("portrait".into(),WindowPolicy::default()).apply(&mut options);
+        assert!(options.dock_auto_hide("portrait"));
+        assert_eq!(Options::from_json(&options.json()),options);
+        assert_eq!(options.window_policy("disconnected").dock,WindowMode::Floating);
     }
     #[test]
     fn queued_edits_do_not_overwrite_other_modules_or_newer_preferences() {

@@ -119,7 +119,7 @@ impl Surface {
                 let d=strokes.iter().map(|&(ax,ay,bx,by)| segment_distance(x,y,
                     slot.x+slot.w*ax,slot.y+slot.h*ay,slot.x+slot.w*bx,slot.y+slot.h*by))
                     .fold(f32::INFINITY,f32::min);
-                Some((tint,(0.5+slot.w*0.019-d).clamp(0.0,1.0)*245.0))
+                Some((tint,(0.5+slot.w*0.021-d).clamp(0.0,1.0)*245.0))
             });
         }
         // Two native-looking control switches; vector coverage scales with DPI.
@@ -172,19 +172,37 @@ pub(super) fn fallback_icon(data:&mut[u8],w:i32,h:i32,slot:Rect,tint:[u8;3]){
 pub(super) fn icon_on(data:&mut[u8],w:i32,h:i32,slot:Rect,icon:&crate::launcher::IconPixels){
     let source_w=icon.width as usize;let source_h=icon.height as usize;
     if source_w==0||source_h==0{return;}
-    let inset=slot.w*0.08;
-    let target=Rect{x:slot.x+inset,y:slot.y+inset,w:slot.w-2.0*inset,h:slot.h-2.0*inset};
+    let size=(slot.w.min(slot.h)*0.84).round().max(1.0);
+    let ratio=source_w.max(source_h) as f32;
+    let (tw,th)=((size*source_w as f32/ratio).round().max(1.0),(size*source_h as f32/ratio).round().max(1.0));
+    let target=Rect{x:(slot.x+(slot.w-tw)*0.5).round(),y:(slot.y+(slot.h-th)*0.5).round(),w:tw,h:th};
+    // Integrate source pixels on downscale; use interpolation only for an
+    // undersized shell icon. Premultiplied BGRA avoids dark/colored halos.
+    fn axis(p:f32,start:f32,extent:f32,src:usize)->(usize,usize,f32,f32){
+        let step=src as f32/extent;
+        if step>=1.0 {
+            let lo=((p-start-0.5)*step).max(0.0);
+            let hi=(lo+step).min(src as f32);
+            (lo.floor() as usize,(hi.ceil() as usize).min(src),lo,hi)
+        }else{
+            let at=((p-start)*step-0.5).clamp(0.0,(src-1) as f32);
+            (at.floor() as usize,(at.floor() as usize+2).min(src),at,at+1.0)
+        }
+    }
     draw(data,w,h,target,|x,y|{
-        let a=((x-target.x)/target.w*source_w as f32-0.5).clamp(0.0,(source_w-1) as f32);
-        let b=((y-target.y)/target.h*source_h as f32-0.5).clamp(0.0,(source_h-1) as f32);
-        let (i,j)=(a as usize,b as usize);
-        let (u,v)=(a-a.floor(),b-b.floor());
-        let mut out=[0.0;4];
-        for (xx,yy,weight) in [(i,j,(1.0-u)*(1.0-v)),((i+1).min(source_w-1),j,u*(1.0-v)),
-            (i,(j+1).min(source_h-1),(1.0-u)*v),((i+1).min(source_w-1),(j+1).min(source_h-1),u*v)]{
+        let (l,r,ax,bx)=axis(x,target.x,target.w,source_w);
+        let (t,b,ay,by)=axis(y,target.y,target.h,source_h);
+        let mut out=[0.0;4]; let mut sum=0.0;
+        for yy in t..b {for xx in l..r {
+            let wx=((xx+1) as f32).min(bx)-(xx as f32).max(ax);
+            let wy=((yy+1) as f32).min(by)-(yy as f32).max(ay);
+            let weight=wx.max(0.0)*wy.max(0.0);
             let k=(yy*source_w+xx)*4;
             for c in 0..4{out[c]+=icon.pixels[k+c] as f32*weight;}
-        }
-        Some(([out[0].round() as u8,out[1].round() as u8,out[2].round() as u8],out[3]))
+            sum+=weight;
+        }}
+        if sum<=0.0||out[3]<=0.0{return None;}
+        let channel=|i:usize|(out[i]*255.0/out[3]).round().clamp(0.0,255.0) as u8;
+        Some(([channel(0),channel(1),channel(2)],out[3]/sum))
     });
 }

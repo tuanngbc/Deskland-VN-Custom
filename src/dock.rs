@@ -6,7 +6,7 @@ use std::{cell::{Cell,RefCell},collections::{HashMap,HashSet},mem,ptr,sync::mpsc
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Devices::Display::*;
 use windows_sys::Win32::Graphics::Gdi::*;
-use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute,DWMWA_CLOAKED};
+use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute,DWMWA_CLOAKED,DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::{OpenProcess,QueryFullProcessImageNameW,PROCESS_QUERY_LIMITED_INFORMATION};
 use windows_sys::Win32::UI::Shell::*;
@@ -26,10 +26,11 @@ mod workspaces;
 mod perf;
 mod stage_surface;
 mod utilities;
+mod appbar;
 pub use utilities::{HostAction,Profile as UtilityProfile,Widget as UtilityWidget};
 pub use glass_probe::probe as glass_probe;
 pub use appearance::{Appearance,DockSide};
-pub use options::{Options,Edit,DisplayMode,DisplayTarget,StageStyle};
+pub use options::{Options,Edit,DisplayMode,DisplayTarget,StageStyle,WindowMode,WindowPolicy};
 pub use runtime::{Runtime,Event};
 use runtime::Command;
 type Preferences=Options;
@@ -66,7 +67,8 @@ const MENU_MAXIMIZE:usize=515;
 const MENU_RESTORE:usize=516;
 const MENU_SNAP_LEFT:usize=517;
 const MENU_SNAP_RIGHT:usize=518;
-const MENU_FULLSCREEN:usize=519;
+const MENU_EXPAND:usize=519;
+const STAGE_RAIL_CLASS:&str="TuanpcDeskStageReveal";
 
 #[derive(Clone)]
 pub struct Display {
@@ -81,7 +83,7 @@ struct Item { path:String, title:String, hwnd:HWND, count:usize, pinned:bool }
 #[derive(Clone)]
 struct Bar {
     hwnd:HWND, bounds:RECT, items:Vec<Item>, hovered:i32, hidden:bool,
-    layout:Option<geometry::Layout>, pinned_widgets:Vec<UtilityWidget>, motion:Motion, collapsed:bool,
+    layout:Option<geometry::Layout>, pinned_widgets:Vec<UtilityWidget>, motion:Motion, collapsed:bool, auto_hide:bool,
     pressed:Option<(String,i32,i32)>, keyboard:Option<usize>, previous_focus:isize, pointer:Option<(f32,f32)>,
 }
 #[derive(Clone,Default)]
@@ -136,14 +138,17 @@ impl StageEmphasis {
         keyboard.map(|i|(i,255)).or_else(||self.index.map(|i|(i,self.strength)))
     }
 }
-struct Stage { hwnd:HWND, preview_hwnd:HWND, preview_boxes:Vec<RECT>, preview_visible:bool, layered:bool, opacity:u32, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, emphasis:StageEmphasis, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews }
+struct Stage { hwnd:HWND, rail:HWND, collapsed:bool, auto_hide:bool, preview_hwnd:HWND, preview_boxes:Vec<RECT>, preview_visible:bool, layered:bool, opacity:u32, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, emphasis:StageEmphasis, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews }
 #[derive(Default)]
-struct State { bars:Vec<Bar>, stages:Vec<Stage>, windows:Vec<AppWindow>, prefs:Preferences, screens:Vec<Screen>, suspended:bool, foreground:isize, workspaces:workspaces::Workspaces, material:Option<surface::Material> }
+struct State { bars:Vec<Bar>, stages:Vec<Stage>, windows:Vec<AppWindow>, prefs:Preferences, screens:Vec<Screen>, suspended:bool, foreground:isize, workspaces:workspaces::Workspaces, material:Option<surface::Material>, appbars:appbar::Bars, reservation_failed:bool }
 thread_local! {
     static STATE:RefCell<State>=RefCell::new(State::default());
     static CONTROL:Cell<HWND>=const{Cell::new(ptr::null_mut())};
     static OWNER:Cell<HWND>=const{Cell::new(ptr::null_mut())};
     static DIRTY:Cell<bool>=const{Cell::new(false)};
+    static SHELL_RESTARTED:Cell<bool>=const{Cell::new(false)};
+    static SHELL_MESSAGE:Cell<u32>=const{Cell::new(0)};
+    static APPBAR_DIRTY:Cell<bool>=const{Cell::new(false)};
     static DISPLAY_DIRTY:Cell<bool>=const{Cell::new(false)};
     static WORKSPACE_TIMER_ARMED:Cell<bool>=const{Cell::new(false)};
     static COMMANDS:RefCell<Option<mpsc::Receiver<Command>>>=const{RefCell::new(None)};
@@ -273,18 +278,51 @@ fn basename(path:&str)->String {
     path.rsplit(['\\','/']).next().unwrap_or(path).trim_end_matches(".exe").to_string()
 }
 fn is_shell_class(class:&str)->bool {
-    matches!(class,"Progman"|"WorkerW"|"Shell_TrayWnd"|"Shell_SecondaryTrayWnd"|"NotifyIconOverflowWindow"|"ApplicationFrameInputSinkWindow"|"TuanpcDeskNativeDock"|"TuanpcDeskMsg"|"TuanpcDeskWall")
+    matches!(class,"Progman"|"WorkerW"|"Shell_TrayWnd"|"Shell_SecondaryTrayWnd"|"NotifyIconOverflowWindow"|"ApplicationFrameInputSinkWindow"|"TuanpcDeskNativeDock"|"TuanpcDeskStagePreview"|"TuanpcDeskStageReveal"|"TuanpcDeskMsg"|"TuanpcDeskWall")
 }
 fn covers_display(class:&str,window:RECT,screen:RECT)->bool {
     !is_shell_class(class) && window.left<=screen.left && window.top<=screen.top
         && window.right>=screen.right && window.bottom>=screen.bottom
 }
-unsafe fn foreground_fullscreen(screen:RECT)->bool {
-    let foreground=GetForegroundWindow();
-    if foreground.is_null() || IsIconic(foreground)!=0{return false;}
-    let mut class=[0u16;128];let n=GetClassNameW(foreground,class.as_mut_ptr(),128);
+/// A maximized framed window can have invisible resize borders extending
+/// beyond rcMonitor. Check its visible DWM bounds and its native show state.
+unsafe fn window_fullscreen(hwnd:HWND,screen:RECT)->bool {
+    if hwnd.is_null()||IsIconic(hwnd)!=0||!stage_window_is_local(hwnd,screen){return false;}
+    let style=GetWindowLongW(hwnd,GWL_STYLE) as u32;
+    if style&WS_CAPTION==WS_CAPTION{return false;}
+    if IsZoomed(hwnd)!=0&&style&WS_THICKFRAME!=0{return false;}
+    let mut pid=0;
+    GetWindowThreadProcessId(hwnd,&mut pid);
+    if pid==std::process::id(){return false;}
+    let mut class=[0u16;128];let n=GetClassNameW(hwnd,class.as_mut_ptr(),128);
     let mut bounds:RECT=mem::zeroed();
-    GetWindowRect(foreground,&mut bounds)!=0 && covers_display(&String::from_utf16_lossy(&class[..n.max(0) as usize]),bounds,screen)
+    if DwmGetWindowAttribute(hwnd,DWMWA_EXTENDED_FRAME_BOUNDS as u32,&mut bounds as *mut _ as _,mem::size_of::<RECT>() as u32)<0
+        && GetWindowRect(hwnd,&mut bounds)==0{return false;}
+    covers_display(&String::from_utf16_lossy(&class[..n.max(0) as usize]),bounds,screen)
+}
+unsafe fn display_fullscreen(screen:RECT,windows:&[AppWindow])->bool{
+    window_fullscreen(GetForegroundWindow(),screen)||
+        windows.iter().find(|w|IsIconic(w.hwnd)==0&&stage_window_is_local(w.hwnd,screen))
+            .is_some_and(|w|window_fullscreen(w.hwnd,screen))
+}
+// GetApplicationUserModelId is a local process query, so packaged apps retain
+// distinct identities even when a generic process owns their frame window.
+unsafe fn packaged_identity(process:HANDLE)->Option<String>{
+    use windows_sys::Win32::Storage::Packaging::Appx::GetApplicationUserModelId;
+    let mut id=[0u16;256];
+    let mut size=id.len() as u32;
+    if GetApplicationUserModelId(process,&mut size,id.as_mut_ptr())!=0||size<=1||size as usize>id.len(){return None;}
+    Some(format!("shell:AppsFolder\\{}",utf16(&id[..size as usize])))
+}
+unsafe extern "system" fn frame_app(hwnd:HWND,out:LPARAM)->i32{
+    let mut class=[0u16;48];
+    let n=GetClassNameW(hwnd,class.as_mut_ptr(),class.len() as i32);
+    if String::from_utf16_lossy(&class[..n.max(0) as usize])!="Windows.UI.Core.CoreWindow"{return 1;}
+    let mut pid=0;GetWindowThreadProcessId(hwnd,&mut pid);
+    let process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,0,pid);
+    if process.is_null(){return 1;}
+    let app=packaged_identity(process);CloseHandle(process);
+    if let Some(app)=app{*(out as *mut String)=app;0}else{1}
 }
 unsafe extern "system" fn enumerate(hwnd:HWND,param:LPARAM)->i32 {
     let out=&mut *(param as *mut Vec<AppWindow>);
@@ -304,11 +342,16 @@ unsafe extern "system" fn enumerate(hwnd:HWND,param:LPARAM)->i32 {
     let process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,0,pid);
     let mut path=String::new();
     if !process.is_null() {
-        let mut buf=[0u16;1024];let mut len=buf.len() as u32;
-        if QueryFullProcessImageNameW(process,0,buf.as_mut_ptr(),&mut len)!=0 {
-            path=String::from_utf16_lossy(&buf[..len as usize]);
+        if let Some(id)=packaged_identity(process){path=id;}else{
+            let mut buf=[0u16;1024];let mut len=buf.len() as u32;
+            if QueryFullProcessImageNameW(process,0,buf.as_mut_ptr(),&mut len)!=0 {
+                path=String::from_utf16_lossy(&buf[..len as usize]);
+            }
         }
-        windows_sys::Win32::Foundation::CloseHandle(process);
+        CloseHandle(process);
+    }
+    if path.rsplit('\\').next().is_some_and(|p|p.eq_ignore_ascii_case("ApplicationFrameHost.exe")){
+        EnumChildWindows(hwnd,Some(frame_app),(&mut path as *mut String) as LPARAM);
     }
     if path.is_empty(){return 1;}
     let mut rect:RECT=mem::zeroed();
@@ -350,11 +393,57 @@ fn item_list(all:&[AppWindow],screen:RECT,prefs:&Preferences)->Vec<Item>{
     }
     result.truncate(MAX_ITEMS);result
 }
-fn stage_rect(screen:&Screen,style:StageStyle)->RECT {
+fn dock_depth(screen:&Screen,style:&Appearance)->i32 {
+    let scale=(screen.dpi as f32/96.0).clamp(0.75,3.0);
+    let zoom=if style.reduced_motion{0.0}else{style.magnification as f32/100.0};
+    (8.0*scale+(style.icon_size as f32*scale*(1.0+zoom)+32.0*scale).ceil()).ceil() as i32
+}
+fn stage_width(screen:&Screen,style:StageStyle)->i32{
+    let scale=(screen.dpi as f32/96.0).clamp(0.75,3.0);
+    (160.0*style.scale as f32/100.0*scale).round() as i32
+}
+fn stage_depth(screen:&Screen,style:StageStyle)->i32{
+    let margin=(8.0*(screen.dpi as f32/96.0).clamp(0.75,3.0)).round() as i32;
+    stage_width(screen,style).min(((screen.bounds.right-screen.bounds.left)/5).max(62))+margin
+}
+unsafe fn sync_appbars(state:&mut State,topology:bool){
+    let notify=APPBAR_DIRTY.with(|flag|flag.replace(false));
+    let reset=SHELL_RESTARTED.with(|flag|flag.replace(false));
+    if reset{state.appbars.clear();}
+    let mut requests=Vec::new();
+    for screen in &state.screens {
+        let policy=state.prefs.window_policy(&screen.id);
+        if policy.dock==WindowMode::Reserve&&state.bars.iter().any(|b|same_rect(b.bounds,screen.bounds)){
+            requests.push(appbar::Request{display:screen.id.clone(),stage:false,monitor:screen.bounds,
+                side:state.prefs.appearance.position,depth:dock_depth(screen,&state.prefs.appearance)});
+        }
+        if policy.stage==WindowMode::Reserve&&state.stages.iter().any(|p|p.display==screen.id){
+            let (cards,_)=state.workspaces.cards(&screen.id,screen.bounds,&state.windows,state.prefs.all_windows);
+            if !cards.is_empty() || state.suspended {
+                let style=state.prefs.stage_style(&screen.id);
+                requests.push(appbar::Request{display:screen.id.clone(),stage:true,monitor:screen.bounds,
+                    side:if style.right==Some(true){DockSide::Right}else{DockSide::Left},depth:stage_depth(screen,style)});
+            }
+        }
+    }
+    let ok=state.appbars.sync(requests,notify||reset||topology);
+    if !ok&&!state.reservation_failed{
+        emit(Event::Error("Windows không cấp được vùng dành riêng cho Dock hoặc Stage; tạm dùng chế độ nổi.".into()));
+    }
+    state.reservation_failed=!ok;
+    // rcWork must come from Explorer after registration/removal, not before.
+    for screen in &mut state.screens{
+        let monitor=MonitorFromRect(&screen.bounds,MONITOR_DEFAULTTONULL);
+        let mut info=MONITORINFO{cbSize:mem::size_of::<MONITORINFO>() as u32,..mem::zeroed()};
+        if !monitor.is_null()&&GetMonitorInfoW(monitor,&mut info)!=0&&same_rect(screen.bounds,info.rcMonitor){ screen.work=info.rcWork; }
+    }
+}
+fn stage_rect(screen:&Screen,style:StageStyle)->RECT { stage_rect_with_depth(screen,style,None) }
+fn stage_rect_with_depth(screen:&Screen,style:StageStyle,depth:Option<i32>)->RECT {
     let scale=(screen.dpi as f32/96.0).clamp(0.75,3.0);
     let px=|n:f32|(n*scale).round() as i32;
-    let width=px(160.0*style.scale as f32/100.0).min(((screen.work.right-screen.work.left)/5).max(62));
     let margin=px(8.0);
+    let width=depth.map_or_else(||stage_width(screen,style).min(((screen.work.right-screen.work.left)/5).max(62)),|d|d-margin);
     let edge=if style.right==Some(true){screen.work.right-width-margin}else{screen.work.left+margin};
     let top=screen.work.top+((screen.work.bottom-screen.work.top)/12).min(px(90.0));
     let height=((screen.work.bottom-screen.work.top)-px(150.0)).clamp(px(112.0),px(650.0*style.scale as f32/100.0).max(px(112.0)));
@@ -372,6 +461,7 @@ fn bar_rect(screen:&Screen,items:usize)->RECT {
 }
 unsafe fn destroy_stage(stage:&mut Stage){
     stage.previews.clear();
+    if !stage.rail.is_null(){DestroyWindow(stage.rail);}
     if !stage.preview_hwnd.is_null(){DestroyWindow(stage.preview_hwnd);}
     DestroyWindow(stage.hwnd);
 }
@@ -394,14 +484,14 @@ unsafe fn recreate(state:&mut State) {
         if dock_targets.contains(&i) && !state.bars.iter().any(|b|same_rect(b.bounds,screen.bounds)) {
         let items=item_list(&state.windows,screen.bounds,&state.prefs);
         let pinned_widgets=state.prefs.utility_profiles.get(&screen.id).map_or_else(Vec::new,UtilityProfile::pinned);
-        let layout=geometry::measure_widgets(screen,&state.prefs.appearance,items.len(),None,0.0,state.prefs.utility_position(&screen.id),&pinned_widgets);
+        let layout=geometry::measure_widgets(screen,&state.prefs.appearance,items.len(),None,0.0,state.prefs.utility_position(&screen.id),&pinned_widgets,state.prefs.utility_cell(&screen.id));
         let r=layout.window;
         let hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|WS_EX_LAYERED,
             class.as_ptr(),wide("tuanpc-desk Dock").as_ptr(),WS_POPUP,
             r.left,r.top,r.right-r.left,r.bottom-r.top,
             ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
         if !hwnd.is_null(){
-        state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:true,layout:Some(layout),pinned_widgets,motion:Motion::default(),collapsed:state.prefs.appearance.auto_hide,pressed:None,keyboard:None,previous_focus:0,pointer:None});
+        state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:true,layout:Some(layout),pinned_widgets,motion:Motion::default(),collapsed:state.prefs.dock_auto_hide(&screen.id),auto_hide:state.prefs.dock_auto_hide(&screen.id),pressed:None,keyboard:None,previous_focus:0,pointer:None});
         }else{emit(Event::Error(format!("Create Dock window: {}",GetLastError())));}
         }
         if stage_targets.contains(&i) && !state.stages.iter().any(|s|same_rect(s.bounds,screen.bounds)) {
@@ -421,7 +511,7 @@ unsafe fn recreate(state:&mut State) {
                     SetWindowLongPtrW(stage_hwnd,GWL_EXSTYLE,GetWindowLongPtrW(stage_hwnd,GWL_EXSTYLE)& !(WS_EX_LAYERED as isize));
                     previews::style_destination(stage_hwnd);
                 }
-                state.stages.push(Stage{hwnd:stage_hwnd,preview_hwnd,preview_boxes:Vec::new(),preview_visible:false,layered,opacity:style.opacity,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),selected:None,layout:None,page:0,pages:1,hidden:true,hover:None,emphasis:StageEmphasis::default(),keyboard:None,previous_focus:0,previews:previews::Previews::default()});
+                state.stages.push(Stage{hwnd:stage_hwnd,rail:ptr::null_mut(),collapsed:false,auto_hide:false,preview_hwnd,preview_boxes:Vec::new(),preview_visible:false,layered,opacity:style.opacity,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),selected:None,layout:None,page:0,pages:1,hidden:true,hover:None,emphasis:StageEmphasis::default(),keyboard:None,previous_focus:0,previews:previews::Previews::default()});
             } else { emit(Event::Error(format!("Create Stage window: {}",GetLastError()))); }
         }
     }
@@ -437,6 +527,8 @@ unsafe fn refresh(state:&mut State, topology:bool) {
     }else{false};
     state.windows=if state.suspended||!state.prefs.any_enabled(){Vec::new()}else{windows()};
     recreate(state);
+    sync_appbars(state,topology);
+    let fullscreen_outputs:HashSet<String>=state.screens.iter().filter(|s|!state.suspended&&display_fullscreen(s.bounds,&state.windows)).map(|s|s.id.clone()).collect();
     let foreground=GetForegroundWindow() as isize;let active_changed=foreground!=state.foreground;state.foreground=foreground;
     for b in &mut state.bars {
         let items=item_list(&state.windows,b.bounds,&state.prefs);
@@ -444,20 +536,26 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         b.items=items;
         let screen=state.screens.iter().find(|s|same_rect(s.bounds,b.bounds));
         if let Some(screen)=screen {
+            let (placed,_)=state.appbars.placement(screen,false);
+            let auto=state.prefs.dock_auto_hide(&screen.id);
+            if auto!=b.auto_hide{
+                KillTimer(b.hwnd,HIDE_TIMER);
+                b.auto_hide=auto;b.collapsed=auto&&b.layout.is_some();changed=true;
+            }
             let r=if b.layout.is_some(){
                 b.pinned_widgets=state.prefs.utility_profiles.get(&screen.id).map_or_else(Vec::new,UtilityProfile::pinned);
-                let layout=geometry::measure_widgets(screen,&state.prefs.appearance,b.items.len(),b.motion.focus,b.motion.amount,
-                    state.prefs.utility_position(&screen.id),&b.pinned_widgets);
+                let layout=geometry::measure_widgets(&placed,&state.prefs.appearance,b.items.len(),b.motion.focus,b.motion.amount,
+                    state.prefs.utility_position(&screen.id),&b.pinned_widgets,state.prefs.utility_cell(&screen.id));
                 changed|=b.layout.as_ref().is_some_and(|old|old.glass!=layout.glass||old.slots!=layout.slots||old.utility!=layout.utility||old.inline!=layout.inline);
                 let r=layout.window;b.layout=Some(layout);r
-            }else{bar_rect(screen,b.items.len())};
+            }else{bar_rect(&placed,b.items.len())};
             let mut actual:RECT=mem::zeroed();
             if GetWindowRect(b.hwnd,&mut actual)==0 || !same_rect(r,actual){SetWindowPos(b.hwnd,HWND_TOPMOST,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE);}
         }
-        let fullscreen=state.suspended || foreground_fullscreen(b.bounds);
+        let fullscreen=state.suspended || screen.is_some_and(|s|fullscreen_outputs.contains(&s.id));
         if b.hidden!=fullscreen {
             ShowWindow(b.hwnd,if fullscreen{SW_HIDE}else{SW_SHOWNOACTIVATE});b.hidden=fullscreen;
-            if fullscreen{KillTimer(b.hwnd,MOTION_TIMER);KillTimer(b.hwnd,HIDE_TIMER);b.motion=Motion::default();b.hovered=-1;b.keyboard=None;b.pressed=None;b.pointer=None;b.collapsed=state.prefs.appearance.auto_hide;}
+            if fullscreen{KillTimer(b.hwnd,MOTION_TIMER);KillTimer(b.hwnd,HIDE_TIMER);b.motion=Motion::default();b.hovered=-1;b.keyboard=None;b.pressed=None;b.pointer=None;b.collapsed=b.auto_hide;}
             changed=true;
         }
         if changed{InvalidateRect(b.hwnd,ptr::null(),0);}
@@ -467,7 +565,14 @@ unsafe fn refresh(state:&mut State, topology:bool) {
     for stage in &mut state.stages {
         let Some(screen)=state.screens.iter().find(|s|s.id==stage.display) else{continue;};
         let style=state.prefs.stage_style(&screen.id);
-        let mut bounds=stage_rect(screen,style);
+        let (placed,depth)=state.appbars.placement(screen,true);
+        let mut bounds=stage_rect_with_depth(&placed,style,depth);
+        let auto=state.prefs.window_policy(&screen.id).stage==WindowMode::AutoHide;
+        if auto!=stage.auto_hide{
+            KillTimer(stage.hwnd,HIDE_TIMER);
+            stage.auto_hide=auto;stage.collapsed=auto;
+        }
+        if !auto&&!stage.rail.is_null(){DestroyWindow(stage.rail);stage.rail=ptr::null_mut();}
         let (items,groups)=state.workspaces.cards(&stage.display,stage.bounds,&state.windows,state.prefs.all_windows);
         let mut layout=stage_surface::Layout::new(bounds.right-bounds.left,bounds.bottom-bounds.top,screen.dpi,stage_gap(screen,style),
             style.group_limit as usize,items.len(),style.right==Some(true));
@@ -503,11 +608,31 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             stage.layout=if stage.layered||layout.apply(stage.hwnd){Some(layout)}else{None};
             changed=true;
         }
-        // Handle fullscreen on the local monitor even while the foreground
-        // window is on another screen. The top local app must cover the output.
-        let local_fullscreen=state.windows.iter().find(|w|rect_intersects(w.rect,stage.bounds)&&IsIconic(w.hwnd)==0)
-            .is_some_and(|w|covers_display("",w.rect,stage.bounds));
-        let hide=stage.layout.is_none() || stage.items.is_empty() || state.suspended || foreground_fullscreen(stage.bounds) || local_fullscreen;
+        let unavailable=stage.layout.is_none() || stage.items.is_empty() || state.suspended || fullscreen_outputs.contains(&screen.id);
+        if unavailable&&auto{stage.collapsed=true;KillTimer(stage.hwnd,HIDE_TIMER);}
+        let hide=unavailable||stage.collapsed;
+        if auto&&!unavailable&&stage.rail.is_null(){
+            stage.rail=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,
+                wide(STAGE_RAIL_CLASS).as_ptr(),wide("Hiện Stage Manager").as_ptr(),WS_POPUP,
+                0,0,1,1,ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
+            if stage.rail.is_null(){stage.collapsed=false;}
+        }
+        if !stage.rail.is_null(){
+            if unavailable||!stage.collapsed{
+                if IsWindowVisible(stage.rail)!=0{ShowWindow(stage.rail,SW_HIDE);}
+            }else{
+                let dpi=screen.dpi.clamp(72,288) as i32;
+                let w=(5*dpi+48)/96;
+                let h=(64*dpi+48)/96;
+                let x=if style.right==Some(true){screen.work.right-w}else{screen.work.left};
+                let y=bounds.top;
+                let mut old:RECT=mem::zeroed();GetWindowRect(stage.rail,&mut old);
+                if IsWindowVisible(stage.rail)==0||!same_rect(old,RECT{left:x,top:y,right:x+w,bottom:y+h}){
+                    SetWindowPos(stage.rail,HWND_TOPMOST,x,y,w,h,SWP_NOACTIVATE|SWP_SHOWWINDOW);
+                }
+            }
+        }
+        let hide=hide&&(unavailable||stage.collapsed);
         if hide!=stage.hidden{ShowWindow(stage.hwnd,if hide{SW_HIDE}else{SW_SHOWNOACTIVATE});stage.hidden=hide;changed=true;}
         if hide {
             if stage.emphasis.start.is_some(){KillTimer(stage.hwnd,STAGE_MOTION_TIMER);}
@@ -613,7 +738,7 @@ unsafe fn paint(hwnd:HWND){
         let labels=items.iter().enumerate().map(|(i,item)|{
             let app=basename(&item.path).trim_end_matches(".exe").to_owned();
             let same_app=items.iter().enumerate().any(|(j,other)|j!=i&&other.path==item.path);
-            let name=if app.is_empty()||same_app{&item.title}else{&app};
+            let name=if app.is_empty()||item.path.starts_with("shell:AppsFolder")||same_app{&item.title}else{&app};
             if groups[i].is_some(){format!("{name} · {}",item.count)}else{name.to_owned()}
         }).collect::<Vec<_>>();
         let look=stage_surface::Look{dark,layout,active:active_mask,alpha:layered.then_some((opacity*255/100) as u8)};
@@ -747,11 +872,11 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
         AppendMenuW(menu,MF_STRING,if item.pinned{MENU_UNPIN}else{MENU_PIN},wide(if item.pinned{"Bỏ ghim"}else{"Ghim ứng dụng"}).as_ptr());
         if !item.hwnd.is_null() {
             AppendMenuW(menu,MF_STRING,MENU_MINIMIZE,wide("Thu nhỏ cửa sổ").as_ptr());
-            AppendMenuW(menu,MF_STRING,MENU_MAXIMIZE,wide("Phóng to").as_ptr());
+            AppendMenuW(menu,MF_STRING,MENU_MAXIMIZE,wide("Phóng to theo vùng làm việc").as_ptr());
             AppendMenuW(menu,MF_STRING,MENU_RESTORE,wide("Khôi phục kích thước").as_ptr());
             AppendMenuW(menu,MF_STRING,MENU_SNAP_LEFT,wide("Chia nửa trái").as_ptr());
             AppendMenuW(menu,MF_STRING,MENU_SNAP_RIGHT,wide("Chia nửa phải").as_ptr());
-            AppendMenuW(menu,MF_STRING,MENU_FULLSCREEN,wide("Mở rộng tới màn hình (giữ kiểu cửa sổ)").as_ptr());
+            AppendMenuW(menu,MF_STRING,MENU_EXPAND,wide("Mở rộng tới màn hình (giữ kiểu cửa sổ)").as_ptr());
         }
         AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
     }
@@ -781,20 +906,18 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
         },
         MENU_STAGE_LEFT|MENU_STAGE_RIGHT=>emit(Event::Edit(Edit::StageSide(if cmd==MENU_STAGE_LEFT{"left"}else{"right"}.into()))),
         MENU_STAGE_OFF=>emit(Event::Edit(Edit::StageEnabled(false))),
-        MENU_MINIMIZE|MENU_MAXIMIZE|MENU_RESTORE|MENU_SNAP_LEFT|MENU_SNAP_RIGHT|MENU_FULLSCREEN=>if let Some(item)=selected{
+        MENU_MINIMIZE|MENU_MAXIMIZE|MENU_RESTORE|MENU_SNAP_LEFT|MENU_SNAP_RIGHT|MENU_EXPAND=>if let Some(item)=selected{
             if !item.hwnd.is_null()&&IsWindow(item.hwnd)!=0 {
                 match cmd {
                     MENU_MINIMIZE=>{ShowWindowAsync(item.hwnd,SW_MINIMIZE);}
                     MENU_MAXIMIZE=>{ShowWindowAsync(item.hwnd,SW_MAXIMIZE);}
                     MENU_RESTORE=>{ShowWindowAsync(item.hwnd,SW_RESTORE);}
-                    MENU_SNAP_LEFT|MENU_SNAP_RIGHT|MENU_FULLSCREEN=>{
-                        let screen=displays().into_iter().find(|s|{
-                            let mut r:RECT=mem::zeroed();GetWindowRect(item.hwnd,&mut r)!=0&&rect_intersects(r,s.bounds)
-                        });
+                    MENU_SNAP_LEFT|MENU_SNAP_RIGHT|MENU_EXPAND=>{
+                        let screen=displays().into_iter().find(|s|stage_window_is_local(item.hwnd,s.bounds));
                         if let Some(screen)=screen {
                             ShowWindowAsync(item.hwnd,SW_RESTORE);
-                            let mut r=if cmd==MENU_FULLSCREEN{screen.bounds}else{screen.work};
-                            if cmd!=MENU_FULLSCREEN{
+                            let mut r=if cmd==MENU_EXPAND{screen.bounds}else{screen.work};
+                            if cmd!=MENU_EXPAND{
                                 let middle=r.left+(r.right-r.left)/2;
                                 if cmd==MENU_SNAP_LEFT{r.right=middle;}else{r.left=middle;}
                             }
@@ -899,7 +1022,11 @@ unsafe fn turn_stage_page(hwnd:HWND,forward:bool)->bool{
     changed
 }
 unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
+    if msg!=0&&SHELL_MESSAGE.with(Cell::get)==msg&&CONTROL.with(Cell::get)==hwnd{
+        SHELL_RESTARTED.with(|f|f.set(true));DISPLAY_DIRTY.with(|f|f.set(true));queue_refresh();return 0;
+    }
     match msg {
+        appbar::CALLBACK=>{if w as u32==ABN_POSCHANGED{APPBAR_DIRTY.with(|f|f.set(true));queue_refresh();}0},
         WM_CONFIG=>{drain_commands();0},
         WM_TICK=>{SetTimer(hwnd,2,60,None);0},
         WM_UTILITY_READY=>{show_utilities();0},
@@ -923,10 +1050,11 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let reduced=state.prefs.appearance.reduced_motion;
                 state.stages.iter_mut().find(|p|p.hwnd==hwnd).map(|p|{
                     let changed=p.hover.take().is_some();
-                    (changed,changed&&p.emphasis.change(None,reduced))
+                    (changed,changed&&p.emphasis.change(None,reduced),p.auto_hide&&p.keyboard.is_none())
                 })
             });
-            if let Some((changed,animate))=stage{
+            if let Some((changed,animate,auto))=stage{
+                if auto{SetTimer(hwnd,HIDE_TIMER,650,None);}
                 if animate{SetTimer(hwnd,STAGE_MOTION_TIMER,16,None);}
                 if changed{InvalidateRect(hwnd,ptr::null(),0);}
                 return 0;
@@ -934,13 +1062,12 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             let tracked=STATE.with(|s|{
                 let mut state=s.borrow_mut();
                 let animate=!state.prefs.appearance.reduced_motion;
-                let auto=state.prefs.appearance.auto_hide;
                 if let Some(b)=state.bars.iter_mut().find(|b|b.hwnd==hwnd){
                     b.hovered=-1;b.motion.target=None;b.pressed=None;b.pointer=None;
                     if !animate{b.motion=Motion::default();}
                     let start=animate&&b.layout.is_some()&&!b.motion.scheduled&&b.motion.amount>0.001;
                     b.motion.scheduled|=start;
-                    (true,start,auto&&b.layout.is_some()&&b.keyboard.is_none())
+                    (true,start,b.auto_hide&&b.layout.is_some()&&b.keyboard.is_none())
                 }else{(false,false,false)}
             });
             if tracked.1{SetTimer(hwnd,MOTION_TIMER,16,None);}
@@ -964,10 +1091,17 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         },
         WM_TIMER if w==HIDE_TIMER=>{
             KillTimer(hwnd,HIDE_TIMER);
+            let mut point=POINT{x:0,y:0};GetCursorPos(&mut point);
+            let mut bounds:RECT=mem::zeroed();GetWindowRect(hwnd,&mut bounds);
+            let stage=STATE.with(|state|state.borrow().stages.iter().any(|p|p.hwnd==hwnd&&p.auto_hide&&p.keyboard.is_none()));
+            if stage{
+                if point.x>=bounds.left&&point.x<bounds.right&&point.y>=bounds.top&&point.y<bounds.bottom{return 0;}
+                update_state(|s|{if let Some(p)=s.stages.iter_mut().find(|p|p.hwnd==hwnd){p.collapsed=true;}refresh(s,false);});
+                return 0;
+            }
             STATE.with(|state|{
                 let mut state=state.borrow_mut();
-                if !state.prefs.appearance.auto_hide{return;}
-                if let Some(b)=state.bars.iter_mut().find(|b|b.hwnd==hwnd&&b.layout.is_some()&&b.keyboard.is_none()){b.collapsed=true;}
+                if let Some(b)=state.bars.iter_mut().find(|b|b.hwnd==hwnd&&b.auto_hide&&b.layout.is_some()&&b.keyboard.is_none()){b.collapsed=true;}
             });
             InvalidateRect(hwnd,ptr::null(),0);
             0
@@ -975,12 +1109,13 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER if w==MOTION_TIMER=>{
             let motion=STATE.with(|s|{
                 let mut state=s.borrow_mut();
-                let State{screens,prefs,bars,..}=&mut *state;
+                let State{screens,prefs,bars,appbars,..}=&mut *state;
                 let b=bars.iter_mut().find(|b|b.hwnd==hwnd)?;
                 if b.hidden || b.layout.is_none(){return None;}
                 let display=screens.iter().find(|d|same_rect(d.bounds,b.bounds))?;
                 let again=b.motion.tick(prefs.appearance.animation_speed);
-                let layout=geometry::measure_widgets(display,&prefs.appearance,b.items.len(),b.motion.focus,b.motion.amount,prefs.utility_position(&display.id),&b.pinned_widgets);
+                let (placement,_)=appbars.placement(display,false);
+                let layout=geometry::measure_widgets(&placement,&prefs.appearance,b.items.len(),b.motion.focus,b.motion.amount,prefs.utility_position(&display.id),&b.pinned_widgets,prefs.utility_cell(&display.id));
                 b.hovered=b.pointer.and_then(|(x,y)|layout.hot(x,y)).map_or(-1,|i|i as i32);
                 b.layout=Some(layout);
                 Some(again)
@@ -1013,6 +1148,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 Some((changed,changed&&p.emphasis.change(hit,reduced)))
             });
             if let Some((changed,animate))=stage{
+                KillTimer(hwnd,HIDE_TIMER);
                 if animate{SetTimer(hwnd,STAGE_MOTION_TIMER,16,None);}
                 let mut event=TRACKMOUSEEVENT{cbSize:mem::size_of::<TRACKMOUSEEVENT>() as u32,dwFlags:TME_LEAVE,hwndTrack:hwnd,dwHoverTime:0};
                 TrackMouseEvent(&mut event);
@@ -1061,10 +1197,9 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             STATE.with(|s|{if let Some(p)=s.borrow_mut().stages.iter_mut().find(|p|p.hwnd==hwnd){p.keyboard=None;}});
             let collapse=STATE.with(|s|{
                 let mut state=s.borrow_mut();
-                let auto=state.prefs.appearance.auto_hide;
                 if let Some(bar)=state.bars.iter_mut().find(|b|b.hwnd==hwnd&&b.keyboard.is_some()){
                     bar.keyboard=None;
-                    auto&&bar.layout.is_some()
+                    bar.auto_hide&&bar.layout.is_some()
                 }else{false}
             });
             if collapse{SetTimer(hwnd,HIDE_TIMER,650,None);}
@@ -1186,6 +1321,28 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         _=>DefWindowProcW(hwnd,msg,w,l),
     }
 }
+unsafe extern "system" fn stage_rail_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
+    match msg{
+        WM_MOUSEACTIVATE=>MA_NOACTIVATE as LRESULT,
+        WM_PAINT=>{
+            let mut paint:PAINTSTRUCT=mem::zeroed();
+            let dc=BeginPaint(hwnd,&mut paint);
+            let mut area:RECT=mem::zeroed();GetClientRect(hwnd,&mut area);
+            fill(dc,area,0x00917d68);
+            EndPaint(hwnd,&paint);0
+        }
+        WM_MOUSEMOVE=>{
+            let mut stage=ptr::null_mut();
+            update_state(|s|{
+                if let Some(p)=s.stages.iter_mut().find(|p|p.rail==hwnd){p.collapsed=false;stage=p.hwnd;}
+                if !stage.is_null(){refresh(s,false);}
+            });
+            if !stage.is_null(){SetTimer(stage,HIDE_TIMER,850,None);}
+            0
+        }
+        _=>DefWindowProcW(hwnd,msg,w,l),
+    }
+}
 fn queue_refresh() {
     if !DIRTY.with(|d|d.replace(true)) {
         let control=CONTROL.with(|c|c.get());
@@ -1204,7 +1361,6 @@ unsafe fn drain_commands() {
                 if repaint{state.material=None;}
                 if repaint { for b in &mut state.bars{
                     KillTimer(b.hwnd,MOTION_TIMER);KillTimer(b.hwnd,HIDE_TIMER);b.motion=Motion::default();
-                    if state.prefs.appearance.auto_hide!=options.appearance.auto_hide{b.collapsed=options.appearance.auto_hide;}
                 } }
                 state.prefs=options;refresh(state,false);
                 if repaint{for b in &state.bars{InvalidateRect(b.hwnd,ptr::null(),0);}}
@@ -1263,6 +1419,9 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         wc.lpszClassName=preview_class.as_ptr();wc.lpfnWndProc=Some(previews::destination_proc);
         // Failure here uses the single non-layered Stage path.
         RegisterClassExW(&wc);
+        let rail_class=wide(STAGE_RAIL_CLASS);
+        wc.lpszClassName=rail_class.as_ptr();wc.lpfnWndProc=Some(stage_rail_proc);RegisterClassExW(&wc);
+        SHELL_MESSAGE.with(|id|id.set(RegisterWindowMessageW(wide("TaskbarCreated").as_ptr())));
         let control=CreateWindowExW(WS_EX_TOOLWINDOW,class.as_ptr(),wide("Deskland Dock controller").as_ptr(),WS_POPUP,0,0,0,0,ptr::null_mut(),ptr::null_mut(),wc.hInstance,ptr::null());
         if control.is_null(){let _=ready.send(Err(format!("Create Dock controller: {}",GetLastError())));if com.is_ok(){CoUninitialize();}return;}
         CONTROL.with(|c|c.set(control));DIRTY.with(|c|c.set(false));
@@ -1283,7 +1442,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         let mut msg:MSG=mem::zeroed();
         while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0{TranslateMessage(&msg);DispatchMessageW(&msg);}
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
-        update_state(|s|{s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){destroy_stage(&mut b);}});
+        update_state(|s|{s.appbars.clear();s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){destroy_stage(&mut b);}});
         SURFACES.with(|s|s.borrow_mut().clear());STAGE_SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
         utilities::close_audio();UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));
         CONTROL.with(|c|c.set(ptr::null_mut()));DestroyWindow(control);

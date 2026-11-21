@@ -7,7 +7,7 @@ use std::{
     ptr,
     sync::{Arc,atomic::{AtomicBool,Ordering},mpsc::{self,Receiver,Sender}},
 };
-use crate::launcher::{extract_icon,IconPixels};
+use crate::launcher::{shell_icon,IconPixels};
 use super::{Item,WM_ICON_CHANGED,surface::Atlas};
 use windows_sys::Win32::{
     System::Threading::{TrySubmitThreadpoolCallback,PTP_CALLBACK_INSTANCE},
@@ -39,7 +39,7 @@ unsafe extern "system" fn extract(_:PTP_CALLBACK_INSTANCE,raw:*mut c_void) {
     } else {
         let com=CoInitializeEx(None,COINIT_MULTITHREADED);
         if com.is_ok() {
-            let icon=extract_icon(Path::new(&path),128).map(Arc::new);
+            let icon=shell_icon(Path::new(&path),256).map(Arc::new);
             CoUninitialize();
             icon
         }else{None}
