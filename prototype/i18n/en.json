@@ -35,6 +35,7 @@
     "stageInheritSide": "Use default side",
     "stageScale": "Stage size",
     "stageSpacing": "Stage card spacing",
+    "stageGroupLimit": "Stage cards per page",
     "dockStageSide": "Stage Manager position",
     "dockLeft": "Left",
     "dockRight": "Right",

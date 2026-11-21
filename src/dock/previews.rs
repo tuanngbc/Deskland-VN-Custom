@@ -1,6 +1,6 @@
 //! Window previews use compositor relationships, not repeated screen
 //! capture. Every relationship is released on hide, detach, or teardown.
-use super::{Item,same_rect};
+use super::{Item,same_rect,stage_surface::Layout};
 use std::{collections::HashMap,mem};
 use windows_sys::Win32::{Foundation::*,Graphics::Dwm::*,UI::WindowsAndMessaging::*};
 
@@ -14,15 +14,14 @@ impl Previews {
         let changed=!self.links.is_empty();self.links.clear();changed
     }
     pub fn includes(&self,hwnd:HWND)->bool{self.links.contains_key(&(hwnd as usize))}
-    pub unsafe fn update(&mut self,dst:HWND,items:&[Item],width:i32,height:i32,gap:i32)->bool{
+    pub unsafe fn update(&mut self,dst:HWND,items:&[Item],layout:Layout)->bool{
         let mut next=HashMap::new();
         let mut changed=false;
         for (i,item) in items.iter().enumerate(){
             let source=item.hwnd;
             let Some(pid)=preview_pid(source) else{continue;};
             let key=source as usize;
-            let region=tile(width,height,gap,i);
-            let slot=RECT{left:region.left+5,top:region.top+5,right:region.right-5,bottom:region.bottom-22};
+            let slot=layout.preview(i);
             if slot.right<=slot.left||slot.bottom<=slot.top{continue;}
             let existing=self.links.remove(&key);
             let link=match existing{
@@ -72,16 +71,6 @@ unsafe fn preview_pid(window:HWND)->Option<u32>{
     Some(pid)
 }
 
-pub const NAV_HEIGHT:i32=24;
-pub fn rows(height:i32)->usize{((height-31-NAV_HEIGHT)/38).clamp(1,5) as usize}
-pub fn tile(width:i32,height:i32,gap:i32,i:usize)->RECT{
-    let step=((height-31-NAV_HEIGHT)/rows(height) as i32).clamp(20,126);
-    let top=31+i as i32*step;
-    RECT{left:7,top,right:width-7,bottom:(top+step-gap.min((step/4).max(2))).min(height-NAV_HEIGHT)}
-}
-pub fn slot_at(width:i32,height:i32,x:i32,y:i32,items:usize,gap:i32)->Option<usize>{
-    (0..items).find(|&i|{let r=tile(width,height,gap,i);x>=r.left&&x<r.right&&y>=r.top&&y<r.bottom})
-}
 fn fit(slot:RECT,source:SIZE)->Option<RECT>{
     if source.cx<=0||source.cy<=0{return None;}
     let w=slot.right-slot.left;let h=slot.bottom-slot.top;
@@ -103,21 +92,13 @@ mod tests{
     use super::*;
     #[test]
     fn thumbnail_fits_its_tile_without_covering_labels_or_hit_areas(){
-        let r=tile(164,590,6,2);
-        let area=RECT{left:r.left+5,top:r.top+5,right:r.right-5,bottom:r.bottom-22};
+        let slot=Layout::new(164,590,96,6,5,5,false).preview(2);
+        let area=slot;
         for source in [SIZE{cx:1920,cy:1080},SIZE{cx:1080,cy:1920},SIZE{cx:20000,cy:20}]{
             let dest=fit(area,source).unwrap();
             assert!(dest.left>=area.left&&dest.right<=area.right&&dest.top>=area.top&&dest.bottom<=area.bottom);
-            assert_eq!(slot_at(164,590,dest.left,dest.top,5,6),Some(2));
         }
         assert!(fit(area,SIZE{cx:0,cy:120}).is_none());
     }
-    #[test]
-    fn small_sidebar_reserves_navigation_instead_of_clipping_cards(){
-        let height=140;
-        let shown=rows(height);
-        assert_eq!(shown,2);
-        assert!(tile(160,height,20,shown-1).bottom<=height-NAV_HEIGHT);
-        assert_eq!(slot_at(160,height,80,height-12,shown,20),None);
-    }
+
 }

@@ -123,7 +123,7 @@ fn draw(data:&mut [u8],w:i32,h:i32,r:Rect,f:impl Fn(f32,f32)->Option<([u8;3],f32
 pub(super) fn rounded(data:&mut [u8],w:i32,h:i32,r:Rect,radius:f32,tint:[u8;3],opacity:u8){
     draw(data,w,h,r,|x,y|Some((tint,(0.5-distance(r,radius,x,y)).clamp(0.0,1.0)*opacity as f32)));
 }
-fn fallback_icon(data:&mut[u8],w:i32,h:i32,slot:Rect,tint:[u8;3]){
+pub(super) fn fallback_icon(data:&mut[u8],w:i32,h:i32,slot:Rect,tint:[u8;3]){
     let inner=Rect{x:slot.x+slot.w*0.24,y:slot.y+slot.h*0.24,w:slot.w*0.52,h:slot.h*0.52};
     rounded(data,w,h,inner,slot.w*0.13,tint,84);
     for (u,v) in [(0.39,0.39),(0.61,0.39),(0.39,0.61),(0.61,0.61)]{
@@ -131,7 +131,7 @@ fn fallback_icon(data:&mut[u8],w:i32,h:i32,slot:Rect,tint:[u8;3]){
         rounded(data,w,h,Rect{x:slot.x+u*slot.w-k,y:slot.y+v*slot.h-k,w:k*2.0,h:k*2.0},k,tint,188);
     }
 }
-fn icon_on(data:&mut[u8],w:i32,h:i32,slot:Rect,icon:&crate::launcher::IconPixels){
+pub(super) fn icon_on(data:&mut[u8],w:i32,h:i32,slot:Rect,icon:&crate::launcher::IconPixels){
     let source_w=icon.width as usize;let source_h=icon.height as usize;
     if source_w==0||source_h==0{return;}
     let inset=slot.w*0.08;

@@ -35,6 +35,7 @@
     "stageInheritSide": "Dùng vị trí chung",
     "stageScale": "Kích thước Stage",
     "stageSpacing": "Khoảng cách thẻ Stage",
+    "stageGroupLimit": "Số thẻ Stage mỗi trang",
     "dockStageSide": "Vị trí Stage Manager",
     "dockLeft": "Bên trái",
     "dockRight": "Bên phải",

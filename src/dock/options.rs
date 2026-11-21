@@ -13,9 +13,10 @@ pub struct StageStyle {
     pub right: Option<bool>,
     pub scale: u32,
     pub spacing: u32,
+    pub group_limit: u32,
 }
 impl Default for StageStyle {
-    fn default() -> Self { Self { right: None, scale: 100, spacing: 6 } }
+    fn default() -> Self { Self { right: None, scale: 100, spacing: 6, group_limit: 5 } }
 }
 impl StageStyle {
     pub fn from_json(v: &Value) -> Self {
@@ -24,11 +25,12 @@ impl StageStyle {
             right: match v["side"].as_str() { Some("left") => Some(false), Some("right") => Some(true), _ => None },
             scale: size("scale", 100, 75, 140),
             spacing: size("spacing", 6, 2, 20),
+            group_limit: size("groupLimit", 5, 1, 8),
         }
     }
     fn json(self) -> Value {
         json!({"side":match self.right{Some(false)=>"left",Some(true)=>"right",None=>"default"},
-            "scale":self.scale,"spacing":self.spacing})
+            "scale":self.scale,"spacing":self.spacing,"groupLimit":self.group_limit})
     }
 }
 
@@ -224,7 +226,7 @@ mod tests {
             "missing":{"side":"right","scale":125,"spacing":10}
         }}));
         assert_eq!(options.stage_style("primary"),StageStyle{right:Some(true),..Default::default()});
-        assert_eq!(options.stage_style("portrait"),StageStyle{right:Some(false),scale:140,spacing:2});
+        assert_eq!(options.stage_style("portrait"),StageStyle{right:Some(false),scale:140,spacing:2,..Default::default()});
         Edit::StageStyle("portrait".into(),StageStyle::default()).apply(&mut options);
         let options = Options::from_json(&options.json());
         assert_eq!(options.stage_style("portrait").right,Some(true));

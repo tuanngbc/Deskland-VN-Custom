@@ -99,7 +99,7 @@ impl Motion {
         unsettled
     }
 }
-struct Stage { hwnd:HWND, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, selected:Option<u64>, gap:i32, page:usize, pages:usize, hidden:bool, previews:previews::Previews }
+struct Stage { hwnd:HWND, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews }
 #[derive(Default)]
 struct State { bars:Vec<Bar>, stages:Vec<Stage>, windows:Vec<AppWindow>, prefs:Preferences, screens:Vec<Screen>, suspended:bool, foreground:isize, workspaces:workspaces::Workspaces, material:Option<surface::Material> }
 thread_local! {
@@ -317,7 +317,7 @@ fn stage_rect(screen:&Screen,style:StageStyle)->RECT {
     let width=px(160.0*style.scale as f32/100.0).min(((screen.work.right-screen.work.left)/5).max(62));
     let margin=px(8.0);
     let edge=if style.right==Some(true){screen.work.right-width-margin}else{screen.work.left+margin};
-    let top=screen.work.top+((screen.work.bottom-screen.work.top)/6).min(px(125.0));
+    let top=screen.work.top+((screen.work.bottom-screen.work.top)/12).min(px(90.0));
     let height=((screen.work.bottom-screen.work.top)-px(150.0)).clamp(px(112.0),px(650.0*style.scale as f32/100.0).max(px(112.0)));
     RECT{left:edge,top,right:edge+width,bottom:(top+height).min(screen.work.bottom-margin)}
 }
@@ -368,7 +368,7 @@ unsafe fn recreate(state:&mut State) {
                 ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
             if !stage_hwnd.is_null(){
                 previews::style_destination(stage_hwnd);
-                state.stages.push(Stage{hwnd:stage_hwnd,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),selected:None,gap:stage_gap(screen,style),page:0,pages:1,hidden:true,previews:previews::Previews::default()});
+                state.stages.push(Stage{hwnd:stage_hwnd,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),selected:None,layout:None,page:0,pages:1,hidden:true,hover:None,keyboard:None,previous_focus:0,previews:previews::Previews::default()});
             } else { emit(Event::Error(format!("Create Stage window: {}",GetLastError()))); }
         }
     }
@@ -415,16 +415,19 @@ unsafe fn refresh(state:&mut State, topology:bool) {
     state.workspaces.prune();
     for stage in &mut state.stages {
         let mut placement_changed=false;
-        if let Some(screen)=state.screens.iter().find(|s|s.id==stage.display) {
+        let Some(screen)=state.screens.iter().find(|s|s.id==stage.display) else{continue;};
+        {
             let style=state.prefs.stage_style(&screen.id);
             let r=stage_rect(screen,style);let mut actual:RECT=mem::zeroed();
-            let gap=stage_gap(screen,style);placement_changed=gap!=stage.gap;stage.gap=gap;
-            if GetWindowRect(stage.hwnd,&mut actual)==0 || !same_rect(r,actual){SetWindowPos(stage.hwnd,HWND_TOPMOST,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE);}
+            if GetWindowRect(stage.hwnd,&mut actual)==0 || !same_rect(r,actual){SetWindowPos(stage.hwnd,HWND_TOPMOST,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE);placement_changed=true;}
         }
         let mut area:RECT=mem::zeroed();
         GetClientRect(stage.hwnd,&mut area);
-        let rows=previews::rows(area.bottom);
         let (items,groups)=state.workspaces.cards(&stage.display,stage.bounds,&state.windows,state.prefs.all_windows);
+        let style=state.prefs.stage_style(&screen.id);
+        let mut layout=stage_surface::Layout::new(area.right,area.bottom,screen.dpi,stage_gap(screen,style),
+            style.group_limit as usize,items.len(),style.right==Some(true));
+        let rows=layout.rows;
         let selected=state.workspaces.active(&stage.display);
         let old_pages=stage.pages;
         stage.pages=items.len().div_ceil(rows).max(1);
@@ -433,17 +436,27 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let items:Vec<_>=items.into_iter().skip(start).take(rows).collect();
         let groups:Vec<_>=groups.into_iter().skip(start).take(rows).collect();
         let mut changed=placement_changed||stage.items!=items||stage.groups!=groups||stage.selected!=selected||active_changed||material_changed||old_pages!=stage.pages;
+        layout.count=items.len();
+        layout.stack=(0..items.len()).filter(|&i|items[i].count>1).fold(0u8,|bits,i|bits|(1<<i));
+        if stage.items!=items {
+            stage.hover=None;
+            stage.keyboard=stage.keyboard.filter(|i|*i<items.len());
+        }
         stage.items=items;stage.groups=groups;stage.selected=selected;
+        if stage.layout!=Some(layout){
+            stage.layout=if layout.apply(stage.hwnd){Some(layout)}else{None};
+            changed=true;
+        }
         // Handle fullscreen on the local monitor even while the foreground
         // window is on another screen. The top local app must cover the output.
         let local_fullscreen=state.windows.iter().find(|w|rect_intersects(w.rect,stage.bounds)&&IsIconic(w.hwnd)==0)
             .is_some_and(|w|covers_display("",w.rect,stage.bounds));
-        let hide=state.suspended || foreground_fullscreen(stage.bounds) || local_fullscreen;
+        let hide=stage.layout.is_none() || stage.items.is_empty() || state.suspended || foreground_fullscreen(stage.bounds) || local_fullscreen;
         if hide!=stage.hidden{ShowWindow(stage.hwnd,if hide{SW_HIDE}else{SW_SHOWNOACTIVATE});stage.hidden=hide;changed=true;}
-        if hide{changed|=stage.previews.clear();}
+        if hide{stage.hover=None;stage.keyboard=None;changed|=stage.previews.clear();}
         else {
             if area.right>0&&area.bottom>0{
-                changed|=stage.previews.update(stage.hwnd,&stage.items,area.right,area.bottom,stage.gap);
+                changed|=stage.previews.update(stage.hwnd,&stage.items,layout);
             }
         }
         if changed{InvalidateRect(stage.hwnd,ptr::null(),0);}
@@ -506,43 +519,35 @@ unsafe fn paint(hwnd:HWND){
         let ready=stage.items.iter().map(|item|stage.previews.includes(item.hwnd)).collect::<Vec<_>>();
         let dpi=state.screens.iter().find(|s|s.id==stage.display).map_or(96,|s|s.dpi);
         let dark=state.material.is_none_or(|m|m.dark);
-        Some((stage.items.clone(),ready,stage.groups.clone(),stage.selected,stage.gap,stage.page,stage.pages,state.foreground,dpi,dark))
+        Some((stage.items.clone(),ready,stage.groups.clone(),stage.selected,stage.layout?,stage.page,stage.pages,state.foreground,dpi,dark,stage.keyboard.or(stage.hover)))
     });
-    if let Some((items,ready,groups,active,gap,page,pages,foreground,dpi,dark))=stage {
+    if let Some((items,ready,groups,active,layout,page,pages,foreground,dpi,dark,hover))=stage {
         let key=hwnd as usize;
         let size=(area.right,area.bottom,dpi);
         let panel=STAGE_SURFACES.with(|s|s.borrow_mut().remove(&key));
         let mut panel=match panel{Some(p) if p.geometry()==size=>Some(p),_=>stage_surface::Panel::new(size.0,size.1,size.2)};
         let selected=|i:usize|items[i].hwnd as isize==foreground || (active.is_some()&&active==groups[i]);
         let active_mask=(0..items.len()).filter(|&i|selected(i)).fold(0u8,|bits,i|bits|(1<<i));
-        let stack_mask=(0..items.len()).filter(|&i|items[i].count>1).fold(0u8,|bits,i|bits|(1<<i));
-        let look=stage_surface::Look{dark,gap,count:items.len(),active:active_mask,stacked:stack_mask};
-        let rendered=panel.as_mut().is_some_and(|p|p.paint(dc,look));
+        let atlas=ATLAS.with(|a|a.borrow_mut().as_mut().map(|w|w.request(&items)).unwrap_or_default());
+        let look=stage_surface::Look{dark,layout,active:active_mask,hover};
+        let rendered=panel.as_mut().is_some_and(|p|p.paint(dc,look,&items,&atlas,&ready));
         if !rendered{fill(dc,area,if dark{0x00201b18}else{0x00f4f2ee});}
         let font=panel.as_ref().map_or(ptr::null_mut(),stage_surface::Panel::font);
         let previous=if font.is_null(){ptr::null_mut()}else{SelectObject(dc,font)};
         let ink=if dark{0x00f1ebe7}else{0x00342823};
         let muted=if dark{0x00a09d98}else{0x007e7268};
-        label(dc,6,2,area.right-12,"Stage Manager",ink);
         for (i,item) in items.iter().enumerate(){
-            let tile=previews::tile(area.right,area.bottom,gap,i);
-            if tile.bottom-tile.top<22{continue;}
-            if !rendered {
-                fill(dc,tile,if dark{0x00362923}else{0x00fbfaf8});
-            }
-            if !ready[i] {
-                let image=LoadIconW(ptr::null_mut(),IDI_APPLICATION);
-                DrawIconEx(dc,(area.right-24)/2,tile.top+(tile.bottom-tile.top-40).max(8)/2,
-                    image,24,24,0,ptr::null_mut(),DI_NORMAL);
-            }
-            let title=if groups[i].is_some(){format!("{} · {}",item.title,item.count)}else{item.title.clone()};
-            label(dc,tile.left+6,tile.bottom-25,tile.right-tile.left-12,&title,ink);
+            let app=basename(&item.path).trim_end_matches(".exe").to_owned();
+            let name=if app.is_empty(){&item.title}else{&app};
+            let title=if groups[i].is_some(){format!("{name} · {}",item.count)}else{name.to_owned()};
+            stage_surface::caption(dc,layout,i,&title,ink);
         }
-        if pages>1 {
-            let y=area.bottom-previews::NAV_HEIGHT;
-            label(dc,8,y,25,"‹",if page>0{ink}else{muted});
-            label(dc,33,y,area.right-66,&format!("{} / {pages}",page+1),muted);
-            label(dc,area.right-33,y,25,"›",if page+1<pages{ink}else{muted});
+        if let Some(nav)=layout.nav(){
+            let segment=(nav.w/4).max(1);
+            stage_surface::nav_label(dc,stage_surface::Box2{w:segment,..nav},"‹",if page>0{ink}else{muted});
+            stage_surface::nav_label(dc,stage_surface::Box2{x:nav.x+nav.w-segment,w:segment,..nav},"›",if page+1<pages{ink}else{muted});
+            stage_surface::nav_label(dc,stage_surface::Box2{x:nav.x+segment,w:nav.w-segment*2,..nav},
+                &format!("{} · {pages}",page+1),ink);
         }
         if !previous.is_null(){SelectObject(dc,previous);}
         EndPaint(hwnd,&ps);
@@ -666,11 +671,10 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     }
 }
 unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
-    let mut area:RECT=mem::zeroed();GetClientRect(hwnd,&mut area);
     let card=STATE.with(|s|{
         let state=s.borrow();
         let stage=state.stages.iter().find(|p|p.hwnd==hwnd)?;
-        let i=previews::slot_at(area.right,area.bottom,x,y,stage.items.len(),stage.gap)?;
+        let i=stage.layout?.hit(x,y)?;
         let item=stage.items.get(i)?;
         let local=stage_window_is_local(item.hwnd,stage.bounds);
         Some((item.hwnd,stage.groups.get(i).copied().flatten(),stage.display.clone(),stage.selected,local,state.workspaces.can_create(&stage.display)))
@@ -685,6 +689,8 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
     add(2,"Thêm vào nhóm đang mở",local&&group.is_none()&&current.is_some());
     add(3,"Tách cửa sổ đại diện khỏi nhóm",group.is_some());
     add(4,"Giải tán nhóm và khôi phục cửa sổ",group.is_some());
+    AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
+    add(5,"Điều hướng Stage bằng bàn phím",true);
     let mut point:POINT=mem::zeroed();GetCursorPos(&mut point);
     // A no-activate tool window needs a temporary foreground owner while its
     // native menu is open, so Escape and clicks outside dismiss the menu.
@@ -693,6 +699,16 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
     let result=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,point.x,point.y,0,hwnd,ptr::null()) as usize;
     DestroyMenu(menu);
     if GetForegroundWindow()==hwnd && IsWindow(previous)!=0 {SetForegroundWindow(previous);}
+    if result==5{
+        let selected=STATE.with(|s|{
+            let mut state=s.borrow_mut();
+            let Some(p)=state.stages.iter_mut().find(|p|p.hwnd==hwnd&&!p.hidden)else{return false;};
+            let Some(i)=p.items.iter().position(|e|e.hwnd==item)else{return false;};
+            p.keyboard=Some(i);p.previous_focus=previous as usize;true
+        });
+        if selected{SetForegroundWindow(hwnd);SetFocus(hwnd);InvalidateRect(hwnd,ptr::null(),0);}
+        return;
+    }
     if result==0{return;}
     update_state(|state|{
         // The menu can run a nested loop. Revalidate the original source and
@@ -712,6 +728,20 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
         refresh(state,false);
     });
 }
+unsafe fn activate_stage(hwnd:HWND,i:usize){
+    let selected=STATE.with(|s|{
+        let state=s.borrow();
+        let stage=state.stages.iter().find(|p|p.hwnd==hwnd)?;
+        Some((stage.items.get(i)?.clone(),stage.groups.get(i).copied().flatten(),stage.display.clone()))
+    });
+    if let Some((item,group,display))=selected {
+        if let Some(id)=group{
+            let mut focus=None;
+            update_state(|state|{focus=state.workspaces.switch(&display,id);refresh(state,false);});
+            if let Some(hwnd)=focus{SetForegroundWindow(hwnd);}
+        }else{activate(&item);}
+    }
+}
 unsafe fn turn_stage_page(hwnd:HWND,forward:bool)->bool{
     let changed=STATE.with(|s|{
         let mut state=s.borrow_mut();
@@ -730,7 +760,8 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TICK=>{SetTimer(hwnd,2,60,None);0},
         WM_ICON_CHANGED=>{
             let changed=ATLAS.with(|a|a.borrow_mut().as_mut().is_some_and(|worker|worker.receive()));
-            if changed{for h in STATE.with(|s|s.borrow().bars.iter().filter(|b|!b.hidden).map(|b|b.hwnd).collect::<Vec<_>>()){
+            if changed{for h in STATE.with(|s|{let state=s.borrow();state.bars.iter().filter(|b|!b.hidden).map(|b|b.hwnd)
+                .chain(state.stages.iter().filter(|p|!p.hidden).map(|p|p.hwnd)).collect::<Vec<_>>()}){
                 InvalidateRect(h,ptr::null(),0);
             }}
             0
@@ -742,6 +773,11 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             DefWindowProcW(hwnd,msg,w,l)
         },
         WM_DOCK_MOUSELEAVE=>{
+            let stage=STATE.with(|s|{
+                let mut state=s.borrow_mut();
+                state.stages.iter_mut().find(|p|p.hwnd==hwnd).map(|p|p.hover.take().is_some())
+            });
+            if let Some(changed)=stage{if changed{InvalidateRect(hwnd,ptr::null(),0);}return 0;}
             let tracked=STATE.with(|s|{
                 let mut state=s.borrow_mut();
                 let animate=!state.prefs.appearance.reduced_motion;
@@ -800,6 +836,19 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_MOUSEMOVE=>{
             let x=l as i16 as i32;
             let y=(l>>16) as i16 as i32;
+            let stage=STATE.with(|s|{
+                let mut state=s.borrow_mut();
+                let p=state.stages.iter_mut().find(|p|p.hwnd==hwnd)?;
+                let hit=p.layout.and_then(|layout|layout.hit(x,y));
+                let old=std::mem::replace(&mut p.hover,hit);
+                Some(old!=hit)
+            });
+            if let Some(changed)=stage{
+                let mut event=TRACKMOUSEEVENT{cbSize:mem::size_of::<TRACKMOUSEEVENT>() as u32,dwFlags:TME_LEAVE,hwndTrack:hwnd,dwHoverTime:0};
+                TrackMouseEvent(&mut event);
+                if changed{InvalidateRect(hwnd,ptr::null(),0);}
+                return 0;
+            }
             let (changed,animate,track)=STATE.with(|s|{
                 let mut state=s.borrow_mut();
                 let reduced=state.prefs.appearance.reduced_motion||state.prefs.appearance.magnification==0;
@@ -839,6 +888,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_KILLFOCUS=>{
+            STATE.with(|s|{if let Some(p)=s.borrow_mut().stages.iter_mut().find(|p|p.hwnd==hwnd){p.keyboard=None;}});
             let collapse=STATE.with(|s|{
                 let mut state=s.borrow_mut();
                 let auto=state.prefs.appearance.auto_hide;
@@ -853,6 +903,31 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         },
         WM_KEYDOWN=>{
             let key=w as u16;
+            let stage_action=STATE.with(|s|{
+                let mut state=s.borrow_mut();
+                let p=state.stages.iter_mut().find(|p|p.hwnd==hwnd)?;
+                let i=p.keyboard?;
+                let last=p.items.len().saturating_sub(1);
+                match key{
+                    VK_UP=>p.keyboard=Some(i.saturating_sub(1)),
+                    VK_DOWN=>p.keyboard=Some((i+1).min(last)),
+                    VK_HOME=>p.keyboard=Some(0),VK_END=>p.keyboard=Some(last),
+                    _=>{}
+                }
+                Some((i,p.previous_focus))
+            });
+            if let Some((i,previous))=stage_action{
+                match key{
+                    VK_LEFT|VK_RIGHT=>{if turn_stage_page(hwnd,key==VK_RIGHT){
+                        STATE.with(|s|{if let Some(p)=s.borrow_mut().stages.iter_mut().find(|p|p.hwnd==hwnd){p.keyboard=Some(0);}});
+                    }},
+                    VK_RETURN=>activate_stage(hwnd,i),
+                    VK_ESCAPE if previous!=0&&IsWindow(previous as HWND)!=0=>{SetForegroundWindow(previous as HWND);},
+                    _=>{}
+                }
+                InvalidateRect(hwnd,ptr::null(),0);
+                return 0;
+            }
             let action=STATE.with(|s|{
                 let mut state=s.borrow_mut();
                 let bar=state.bars.iter_mut().find(|b|b.hwnd==hwnd)?;
@@ -879,24 +954,17 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_LBUTTONUP=>{
             let y=(l>>16) as i16 as i32;
             let px=l as i16 as i32;
-            let mut area:RECT=mem::zeroed();GetClientRect(hwnd,&mut area);
-            let stage_item=STATE.with(|s|{
+            let stage_hit=STATE.with(|s|{
                 let a=s.borrow();
                 let stage=a.stages.iter().find(|stage|stage.hwnd==hwnd)?;
-                let i=previews::slot_at(area.right,area.bottom,px,y,stage.items.len(),stage.gap)?;
-                Some((stage.items.get(i)?.clone(),stage.groups.get(i).copied().flatten(),stage.display.clone()))
+                let layout=stage.layout?;
+                let nav=layout.nav().and_then(|r| (px>=r.x&&px<r.x+r.w&&y>=r.y&&y<r.y+r.h)
+                    .then_some(px>=r.x+r.w/2));
+                Some((layout.hit(px,y),nav))
             });
-            if let Some((item,group,display))=stage_item {
-                if let Some(id)=group{
-                    let mut focus=None;
-                    update_state(|state|{focus=state.workspaces.switch(&display,id);refresh(state,false);});
-                    if let Some(hwnd)=focus{SetForegroundWindow(hwnd);}
-                }else{activate(&item);}
-                return 0;
-            }
-            let is_stage=STATE.with(|s|s.borrow().stages.iter().any(|stage|stage.hwnd==hwnd));
-            if is_stage{
-                if y>=area.bottom-previews::NAV_HEIGHT{turn_stage_page(hwnd,px>=area.right/2);}
+            if let Some((item,nav))=stage_hit {
+                if let Some(i)=item{activate_stage(hwnd,i);}
+                else if let Some(forward)=nav{turn_stage_page(hwnd,forward);}
                 return 0;
             }
             let x=(l as u32&0xffff) as i16 as i32;
@@ -1066,7 +1134,7 @@ mod tests{
     #[test] fn stage_geometry_on_negative_monitor(){
         let sc=Screen{bounds:rect([-1920,-120,0,1080]),work:rect([-1920,-120,0,1040]),primary:false,id:"test".into(),name:"Test".into(),dpi:96};
         let left=stage_rect(&sc,StageStyle::default());
-        let right=stage_rect(&sc,StageStyle{right:Some(true),scale:140,spacing:12});
+        let right=stage_rect(&sc,StageStyle{right:Some(true),scale:140,spacing:12,..Default::default()});
         assert!(left.left<right.left && left.left>=sc.work.left && right.right<=sc.work.right);
         assert!(left.top>=sc.work.top && left.bottom<=sc.work.bottom);
         assert!(right.right-right.left>left.right-left.left);

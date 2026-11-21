@@ -613,6 +613,12 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
                     AppendMenuW(submenu, MF_STRING | if base.spacing == spacing {MF_CHECKED} else {0},
                         500+edits.len()-1, wide(&format!("Khoảng cách {spacing} px")).as_ptr());
                 }
+                AppendMenuW(submenu, MF_SEPARATOR, 0, std::ptr::null());
+                for group_limit in [1,3,5,8] {
+                    edits.push((d.id.clone(), StageStyle {group_limit,..base}));
+                    AppendMenuW(submenu, MF_STRING | if base.group_limit == group_limit {MF_CHECKED} else {0},
+                        500+edits.len()-1, wide(&format!("{group_limit} thẻ Stage mỗi trang")).as_ptr());
+                }
                 if AppendMenuW(layouts, MF_POPUP, submenu as usize, wide(&d.name.replace('&',"&&")).as_ptr()) == 0 {
                     DestroyMenu(submenu);
                 }
