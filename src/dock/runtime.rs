@@ -151,6 +151,71 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "isolated Windows Actions desktop only; terminates its own test subprocess"]
+    fn native_appbar_fatal_exit_restores_work_area() {
+        use super::super::{appbar,displays,same_rect,DockSide,CLASS};
+        use std::{process::{Command as ProcessCommand,Stdio}, thread, time::{Duration,Instant}};
+        use windows_sys::Win32::{System::LibraryLoader::GetModuleHandleW,UI::WindowsAndMessaging::*};
+        const CHILD:&str="TUANPC_DESK_APPBAR_CI_CHILD";
+        const TEST:&str="dock::runtime::tests::native_appbar_fatal_exit_restores_work_area";
+        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(),Ok("true"),"only run on the disposable Actions desktop");
+        let shell=unsafe{ FindWindowW(crate::desktop::wide("Shell_TrayWnd").as_ptr(),std::ptr::null()) };
+        if shell.is_null(){
+            eprintln!("SKIP live AppBar crash test: Explorer taskbar missing on runner");
+            return;
+        }
+        let primary=||displays().into_iter().find(|d|d.primary).expect("primary display");
+        if std::env::var_os(CHILD).is_some(){
+            let screen=primary();
+            let request=|stage,side|appbar::Request{
+                display:screen.id.clone(),stage,monitor:screen.bounds,side,depth:70
+            };
+            let class=crate::desktop::wide(CLASS);
+            let mut bars=appbar::Bars::default();
+            unsafe{
+                let mut wc:WNDCLASSW=std::mem::zeroed();
+                wc.lpfnWndProc=Some(DefWindowProcW);
+                wc.hInstance=GetModuleHandleW(std::ptr::null());
+                wc.lpszClassName=class.as_ptr();
+                assert_ne!(RegisterClassW(&wc),0);
+                assert!(bars.sync(vec![request(false,DockSide::Bottom),request(true,DockSide::Left)],false,false).healthy);
+                let until=Instant::now()+Duration::from_secs(25);
+                while Instant::now()<until{
+                    let mut msg:MSG=std::mem::zeroed();
+                    while PeekMessageW(&mut msg,std::ptr::null_mut(),0,0,PM_REMOVE)!=0{DispatchMessageW(&msg);}
+                    thread::sleep(Duration::from_millis(15));
+                }
+            }
+            return; // bounded fallback if the controller process exits unexpectedly
+        }
+        let before=primary();
+        let mut child=ProcessCommand::new(std::env::current_exe().unwrap())
+            .args(["--exact",TEST,"--ignored","--nocapture","--test-threads=1"])
+            .env(CHILD,"1").stdin(Stdio::null()).spawn().unwrap();
+        let deadline=Instant::now()+Duration::from_secs(8);
+        let reserved=loop {
+            let screen=primary();
+            if screen.id==before.id&&screen.work.bottom<before.work.bottom&&screen.work.left>before.work.left{break true;}
+            if Instant::now()>=deadline||child.try_wait().unwrap().is_some(){break false;}
+            thread::sleep(Duration::from_millis(100));
+        };
+        // A direct child handle identifies the test process. Don't touch
+        // Explorer or repair the work area artificially.
+        if child.try_wait().unwrap().is_none(){child.kill().unwrap();}
+        let _=child.wait().unwrap();
+        let deadline=Instant::now()+Duration::from_secs(8);
+        let restored=loop {
+            let screen=primary();
+            if screen.id==before.id&&same_rect(screen.work,before.work){break true;}
+            if Instant::now()>=deadline{break false;}
+            thread::sleep(Duration::from_millis(100));
+        };
+        assert!(reserved,"live Explorer did not reserve both AppBar strips");
+        assert!(restored,"release blocker: Explorer retained a reserved strip after process termination");
+        eprintln!("Live Explorer AppBar reservations and forced-exit cleanup observed on the Actions desktop");
+    }
+
+    #[test]
     #[ignore = "real Windows resources; explicitly run in CI"]
     fn native_100_toggles_release_overlays_and_process_handles() {
         use std::time::{Duration,Instant};
