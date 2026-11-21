@@ -163,3 +163,21 @@ cargo build --release
 
 - Không port các lớp ảnh PNG/Canvas phụ của 2 chủ đề đầu (`beach-palms.js`, `meadow-boy.js`, `meadow-cat.js`) và tính năng xuất GIF/PNG chia sẻ mạng xã hội (`share.js`); giao diện Cài đặt tự động ẩn các tùy chọn này qua cờ `caps` để đồng nhất với cảnh thực tế trên Desktop.
 - Không vẽ đè đồng hồ Glassmorphism giả lập lên màn hình khóa và không chặn `Win+L`, đảm bảo an toàn bảo mật tuyệt đối thông qua màn hình đăng nhập thật của Windows (`Winlogon` / Windows Hello / PIN hệ thống).
+# Dock & Stage Manager development branch
+
+On `codex/rust-dock`, Dock and the initial Stage sidebar are managed by the
+existing `tuanpc-desk.exe`. Open **Settings → Dock & Stage Manager** or use
+Deskland's tray to enable wallpaper, Dock and Stage independently. No separate
+manual `--dock` launch or configuration application is required. Enabled modules
+start through the existing Windows autostart entry and stop with Deskland.
+
+Settings remain in `%USERPROFILE%\.deskland-rs\settings.json`. When its `dock`
+object is absent, legacy `dock.json` pins/scope/side are imported without enabling
+new overlays. The legacy file is retained. Existing theme/widget/shortcut fields
+and unknown settings are preserved by atomic writes. Do not delete the profile
+to roll back; restore the accepted binary/bundle instead.
+
+This branch is not an accepted release. Stage is still a sidebar, not completed
+workspace management. Windows taskbar/tray remain available. Track actual CI and
+native acceptance separately in `docs/DOCK_STATUS.md` and
+`docs/DOCK_ACCEPTANCE_MATRIX.md`; no merge before `OWNER_NATIVE_ACCEPTED`.

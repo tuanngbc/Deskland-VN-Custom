@@ -27,6 +27,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::tests -- --nocapture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Isolated same-process HWND/thread test; never loads the owner's profile.
+          # This is CI integration evidence, not Windows 11 dual-monitor acceptance.
+          cargo test --release dock::runtime::tests::native_integrated_modules_toggle_suspend_and_cleanup -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # Kiểm tra SPI_SET tắt + SPI_GET xác nhận trên Windows thật. Runner
           # không có timer tương tác dùng trạng thái bật giả ở bước quyết định.
           cargo test --release lock::tests::saver_disable_applies_and_verifies_live_windows_state -- --ignored --exact --nocapture
@@ -44,6 +48,8 @@ jobs:
           node tests/renderer-contract.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/shortcuts-contract.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/dock-settings-contract.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package Rust native build
@@ -67,7 +73,9 @@ jobs:
 
           Giải nén toàn bộ thư mục này và chạy tuanpc-desk.exe.
           Giữ thư mục prototype cạnh file exe để mở Cài đặt.
-          Bản này dùng engine Rust + Win32 + OpenGL, một tiến trình native.
+          Bản này dùng engine Rust + Win32 + OpenGL. Dock và Stage Manager
+          được quản lý trong cùng tuanpc-desk.exe, bật riêng trong Cài đặt.
+          Windows taskbar và notification area được giữ nguyên.
           "@ | Set-Content "$dir\DOC-TRUOC.txt" -Encoding utf8
           Compress-Archive -Path $dir -DestinationPath "dist\$name.zip"
           $hash = (Get-FileHash "dist\$name.zip" -Algorithm SHA256).Hash.ToLower()
@@ -82,4 +90,3 @@ jobs:
             dist/*.sha256
             Cargo.lock
           retention-days: 14
-

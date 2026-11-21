@@ -25,6 +25,9 @@ pub enum Action {
     Sync(bool),
     Autostart(bool),
     Interaction(bool),
+    Wallpaper(bool),
+    Dock(bool),
+    Stage(bool),
 }
 
 /// Trạng thái thật mà giao diện hiển thị.
@@ -38,6 +41,9 @@ pub struct State {
     pub autostart: bool,
     pub hotkey: bool,
     pub interaction: bool,
+    pub wallpaper_enabled:bool,
+    pub dock_enabled:bool,
+    pub stage_enabled:bool,
 }
 
 pub struct ParamDef {
@@ -244,6 +250,9 @@ const ID_IDLE: usize = 1304;
 const ID_SYNC: usize = 1305;
 const ID_AUTO: usize = 1306;
 const ID_INTERACTION: usize = 1307;
+const ID_WALLPAPER:usize=1308;
+const ID_DOCK:usize=1309;
+const ID_STAGE:usize=1310;
 const ID_ROW: usize = 1100;
 
 const TBM_GETPOS_: u32 = WM_USER;
@@ -276,6 +285,9 @@ struct Ui {
     sync: HWND,
     auto: HWND,
     interaction: HWND,
+    wallpaper:HWND,
+    dock:HWND,
+    stage:HWND,
     note: HWND,
 }
 
@@ -395,7 +407,7 @@ pub fn open(state: &State) {
         let dpi = GetDpiForSystem().max(96);
         let s = dpi as f32 / 96.0;
         let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-        let mut r = RECT { left: 0, top: 0, right: (540.0 * s) as i32, bottom: (736.0 * s) as i32 };
+        let mut r = RECT { left: 0, top: 0, right: (540.0 * s) as i32, bottom: (790.0 * s) as i32 };
         AdjustWindowRectEx(&mut r, style, 0, 0);
         let (w, h) = (r.right - r.left, r.bottom - r.top);
         let (sw, sh) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
@@ -437,6 +449,9 @@ pub fn open(state: &State) {
             adaptive: std::ptr::null_mut(),
             theme_combo: std::ptr::null_mut(),
             interaction: std::ptr::null_mut(),
+            wallpaper:std::ptr::null_mut(),
+            dock:std::ptr::null_mut(),
+            stage:std::ptr::null_mut(),
             saver_now: std::ptr::null_mut(),
             saver: std::ptr::null_mut(),
             idle: std::ptr::null_mut(),
@@ -481,6 +496,9 @@ pub fn open(state: &State) {
         ui.ctl("STATIC", "Chung", 0, 20, y2, 300, 24, 0, true);
         ui.auto = ui.ctl("BUTTON", "Khởi động cùng Windows", chk, 20, y2 + 30, 400, 26, ID_AUTO, false);
         ui.interaction = ui.ctl("BUTTON", "Tương tác chuột trên màn hình nền", chk, 20, y2 + 60, 400, 26, ID_INTERACTION, false);
+        ui.wallpaper=ui.ctl("BUTTON","Hình nền động",chk,20,y2+94,165,26,ID_WALLPAPER,false);
+        ui.dock=ui.ctl("BUTTON","Dock",chk,190,y2+94,115,26,ID_DOCK,false);
+        ui.stage=ui.ctl("BUTTON","Stage Manager",chk,320,y2+94,190,26,ID_STAGE,false);
         UI.with(|u| *u.borrow_mut() = Some(ui));
         sync(state);
         ShowWindow(hwnd, SW_SHOWNORMAL);
@@ -513,6 +531,9 @@ pub fn sync(state: &State) {
             set_check(ui.sync, state.sync);
             set_check(ui.interaction, state.interaction);
             set_check(ui.auto, state.autostart);
+            set_check(ui.wallpaper,state.wallpaper_enabled);
+            set_check(ui.dock,state.dock_enabled);
+            set_check(ui.stage,state.stage_enabled);
             let t = if state.hotkey { "Khóa với cảnh động (Ctrl+Alt+L)" } else { "Khóa với cảnh động" };
             SetWindowTextW(ui.saver_now, wide(t).as_ptr());
         }
@@ -540,6 +561,9 @@ unsafe extern "system" fn proc_(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESUL
                 (ID_SYNC, BN_CLICKED) => push(Action::Sync(checked(ctl))),
                 (ID_INTERACTION, BN_CLICKED) => push(Action::Interaction(checked(ctl))),
                 (ID_AUTO, BN_CLICKED) => push(Action::Autostart(checked(ctl))),
+                (ID_WALLPAPER,BN_CLICKED)=>push(Action::Wallpaper(checked(ctl))),
+                (ID_DOCK,BN_CLICKED)=>push(Action::Dock(checked(ctl))),
+                (ID_STAGE,BN_CLICKED)=>push(Action::Stage(checked(ctl))),
                 (ID_IDLE, CBN_SELCHANGE) => {
                     let i = SendMessageW(ctl, CB_GETCURSEL, 0, 0);
                     if let Some(&m) = IDLE_CHOICES.get(i as usize) {

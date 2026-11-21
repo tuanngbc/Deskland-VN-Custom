@@ -1,7 +1,7 @@
 (function(){
   'use strict';
   let current='wallpaper';
-  const fallback={wallpaper:['Hình nền','Chọn một khung cảnh cho ngày của bạn.'],monitors:['Màn hình','Bố trí không gian làm việc theo cách của bạn.'],weather:['Thời tiết & ánh sáng','Đưa nhịp điệu ngoài trời vào màn hình.'],clock:['Đồng hồ','Chỉnh từng dòng chữ, theo đúng ý bạn.'],shortcuts:['Phím tắt & tiện ích','Mở nhanh, chụp gọn, làm việc liền mạch.'],system:['Hệ thống','Những thiết lập chung cho không gian của bạn.']};
+  const fallback={dock:['Dock & Stage Manager','Quản lý các thành phần trong cùng không gian làm việc.'],wallpaper:['Hình nền','Chọn một khung cảnh cho ngày của bạn.'],monitors:['Màn hình','Bố trí không gian làm việc theo cách của bạn.'],weather:['Thời tiết & ánh sáng','Đưa nhịp điệu ngoài trời vào màn hình.'],clock:['Đồng hồ','Chỉnh từng dòng chữ, theo đúng ý bạn.'],shortcuts:['Phím tắt & tiện ích','Mở nhanh, chụp gọn, làm việc liền mạch.'],system:['Hệ thống','Những thiết lập chung cho không gian của bạn.']};
   function copy(){const key='nav_'+current,sub='navSub_'+current;$('pageTitle').textContent=t(key)===key?fallback[current][0]:t(key);$('pageSubtitle').textContent=t(sub)===sub?fallback[current][1]:t(sub);}
   for(const button of document.querySelectorAll('.nav-item'))button.addEventListener('click',()=>{
     current=button.dataset.page;

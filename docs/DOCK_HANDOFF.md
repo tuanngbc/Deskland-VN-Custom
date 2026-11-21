@@ -13,6 +13,8 @@ Verified CI: [44839614362](https://github.com/tuanngbc/Deskland-VN-Custom/action
 
 ## Next in order
 
+Foundation code increment after D0: managed same-process runtime and canonical settings/tray/UI; independent wallpaper toggle and legacy migration; coalesced hooks/cache/work-area refresh; local activation/minimized/cloaked fixes. Source is the commit containing this entry (parent docs 45bacf4). Local JS 32+7+4 PASS; Rust and new isolated native lifecycle test require this increment's CI. D0 own CI is now PASS: [44844337708](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44844337708). Do not treat partial D1/D9 as milestone completion.
+
 1. Verify checkpoint CI, then D1 local/global selection, collector/filtering, coalesced lifecycle model.
 2. D9 main-owned configuration/migration, managed runtime, Settings/tray roundtrip, independent module controls and cleanup. Default new modules off.
 3. D2/D3 UI/cache/previews/workspaces; D4/D5 reversible actions and monitor/DPI recovery, each CI tested.

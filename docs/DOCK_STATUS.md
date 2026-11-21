@@ -2,12 +2,12 @@
 
 ## Authoritative checkpoint — 2026-11-21 00:26 UTC (D0 + mandatory D9)
 
-Inspected SHA: `1d5d4c99a868fd4a475b1a1e160976d19ea29d35`. Historical pending CI notes below are superseded by [successful run 44839614362](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44839614362).
+Inspected SHA: `1d5d4c99a868fd4a475b1a1e160976d19ea29d35`. D0 docs `45bacf4` also passed [CI 44844337708](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44844337708). Historical pending CI notes below are superseded by this evidence.
 42 Rust tests passed (including seven Dock tests), five existing native tests separately passed. JS renderer 32, shortcuts seven. Runner is Windows Server 2025; no Dock-specific native GUI evidence.
 
 | Milestone | Implementation | Native acceptance |
 |---|---|---|
-| D0 architecture | IMPLEMENTED_UNVERIFIED; this docs checkpoint needs own CI | NATIVE_PENDING (measurement protocol only) |
+| D0 architecture | CI_PASS at 45bacf4 | NATIVE_PENDING (measurement protocol only) |
 | D1 window engine | IN_PROGRESS; EXE grouping, seven model/geometry tests | NATIVE_PENDING |
 | D2 Dock UI | IN_PROGRESS; opaque GDI scaffold, uncached Shell icons | NATIVE_PENDING |
 | D3 Stage | IN_PROGRESS; app sidebar only | NATIVE_PENDING |
@@ -20,6 +20,15 @@ Inspected SHA: `1d5d4c99a868fd4a475b1a1e160976d19ea29d35`. Historical pending CI
 | D9 product integration | IN_PROGRESS; current unmanaged child/config do not meet gate | NATIVE_PENDING |
 
 Next: D1 local/global app selection/filtering and D9 main-owned configuration, Settings, lifecycle and independent toggles. Build on GitHub only. No installed binary/profile/baseline changes or merge.
+
+### D1/D9 foundation increment (IMPLEMENTED_UNVERIFIED until its own CI)
+
+- Same-process managed Dock/Stage UI thread, explicit readiness, channel commands/partial edits, joined cleanup; standalone spawn removed. New modules default off.
+- Canonical settings.json with one-time legacy pin/scope/side migration; independent Dock/Stage/wallpaper toggles in existing Settings, native fallback and tray. Atomic writes preserve unknown existing settings and refuse to overwrite malformed files.
+- Reuse main monitor detection; work-area changes rebuild overlays. Out-of-context WinEvent notifications coalesce, one 5-second recovery timer replaces per-monitor polling. Unchanged items do not repaint, Shell icons cached/bounded/cleaned up. Suspension hides overlays.
+- D1 fixes unpinned global activation locality, excludes DWM-cloaked windows, uses restored monitor identity for minimized HWNDs; foreign ShowWindow actions become asynchronous.
+- New isolated native CI test covers same PID, independent Dock/Stage toggles, suspend and shutdown HWND cleanup; it is not owner dual-display acceptance. Additional options/migration/atomic-file and actual Settings-handler tests. Rust/Windows results pending this increment's CI; local JS 32+7+4 passed.
+- D9 still incomplete: per-monitor appearance/size/position/auto-hide controls and full Explorer/Windows restart/renderer-toggle native acceptance remain pending. D1 packaged identity, multiple-window picker/reorder and other D2-D8 work remain open. No RC/merge/deployment.
 See [architecture](DOCK_ARCHITECTURE.md), [acceptance](DOCK_ACCEPTANCE_MATRIX.md), [issues](DOCK_KNOWN_ISSUES.md), [handoff](DOCK_HANDOFF.md).
 
 Baseline: accepted Rust `a604519` on `codex/rust-test`; development only on `codex/rust-dock`, PR #1 Draft. No merge and no Explorer replacement enabled.
