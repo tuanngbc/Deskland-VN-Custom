@@ -17,6 +17,14 @@
       autostartWarn：开机自启这次没跑起来（被安全软件拦了）时的提醒文字，空字符串 = 没问题；点"知道了"发 autostartWarnSeen
 -->
 <link rel="stylesheet" href="settings.css">
+<style>
+.dock-utility-settings{margin-top:.8rem;border-top:1px solid var(--line,#80808040);padding-top:.65rem}
+.dock-utility-settings summary{cursor:pointer;font-weight:650;padding:.4rem 0}
+.dock-utility-rows{display:grid;gap:.3rem;max-height:18rem;overflow:auto;margin:.4rem 0 .75rem;padding:0;list-style:none}
+.dock-utility-rows li{display:grid;grid-template-columns:1.1rem 1fr auto auto;align-items:center;gap:.4rem;border:1px solid var(--line,#80808040);border-radius:.55rem;padding:.32rem .45rem}
+.dock-utility-rows li>span{cursor:grab;opacity:.6}
+.dock-utility-rows button{min-width:2rem}
+</style>
 </head>
 <body>
 <div id="bootStatus"><div class="boot-card"><b>tuanpc-desk</b><span>Đang chuẩn bị không gian của bạn…</span><br><button id="bootRetry" type="button" class="ghost-btn" hidden>Thử lại</button></div></div>
@@ -142,6 +150,17 @@
       <option value="custom" data-i18n="dockDisplayCustom">Tự chọn nhiều màn hình</option>
     </select></label>
     <div id="dockDisplayChoices" class="dock-display-choices"></div>
+    <details class="dock-utility-settings">
+      <summary data-i18n="utilityTitle">Tiện ích Dock</summary>
+      <label class="setting-row"><b data-i18n="dockDisplayTarget">Màn hình hiển thị</b><select id="utilityDisplay"></select></label>
+      <div id="utilityControls" hidden>
+        <label class="setting-row"><b data-i18n="utilityEnabled">Hiện nút tiện ích</b><input id="utilityEnabled" type="checkbox"></label>
+        <label class="setting-row"><b data-i18n="utilitySide">Vị trí trong Dock</b><select id="utilitySide"><option value="left" data-i18n="dockLeft">Bên trái</option><option value="right" data-i18n="dockRight">Bên phải</option></select></label>
+        <label class="setting-row"><b data-i18n="utilityDetails">Hiện thông tin trong bảng tiện ích</b><input id="utilityDetails" type="checkbox"></label>
+        <ol id="utilityRows" class="dock-utility-rows"></ol>
+        <button id="utilityReset" type="button" data-i18n="utilityReset">Khôi phục tiện ích mặc định</button>
+      </div>
+    </details>
   </section>
   <section class="setting-card dock-placement">
     <h3>Stage Manager</h3>
@@ -826,6 +845,82 @@ for(const key of ['side','scale','spacing','groupLimit','opacity']){
     send({t:'stageStyle',display,style});
   });
 }
+const utilityLabels={
+  network:'Mạng',audio:'Âm thanh',bluetooth:'Bluetooth',battery:'Pin',calendar:'Ngày giờ và lịch',
+  notifications:'Thông báo',quickSettings:'Cài đặt nhanh',spotlight:'Spotlight',explorer:'File Explorer',
+  desktop:'Hiện desktop',capture:'Chụp màn hình',record:'Quay màn hình',stats:'Chỉ số taskbar',
+  wallpaper:'Hình nền động',stage:'Stage Manager',settings:'Cài đặt',windows:'Chuyển cửa sổ'
+};
+const utilityKeys=Object.keys(utilityLabels);
+let utilityDisplay=null,utilityDrag=null;
+const utilityDefault=()=>({enabled:true,side:'right',details:true,order:[...utilityKeys],hidden:[]});
+function utilityProfile(){
+  const map=dockOptions.utilityProfiles||{};
+  return {...utilityDefault(),...(Object.hasOwn(map,utilityDisplay)?map[utilityDisplay]:{})};
+}
+function renderUtilityControls(){
+  const picker=$('utilityDisplay');
+  const markup=dockDisplays.map(d=>'<option value="'+esc(d.id)+'">'+esc(displayLabel(d))+'</option>').join('');
+  if(picker.utilityMarkup!==markup){picker.innerHTML=markup;picker.utilityMarkup=markup;}
+  if(!dockDisplays.some(d=>d.id===utilityDisplay))utilityDisplay=defaultDisplay()?.id||null;
+  picker.value=utilityDisplay||'';picker.disabled=!utilityDisplay;
+  $('utilityControls').hidden=!utilityDisplay;
+  const p=utilityProfile();
+  $('utilityEnabled').checked=p.enabled;
+  $('utilitySide').value=p.side;
+  $('utilityDetails').checked=p.details;
+  $('utilityRows').innerHTML=p.order.filter(key=>Object.hasOwn(utilityLabels,key)).map((key,i)=>{
+    const label=t('utilityItem_'+key);
+    const name=label==='utilityItem_'+key?utilityLabels[key]:label;
+    return '<li draggable="true" data-widget="'+esc(key)+'"><span aria-hidden="true">⋮⋮</span><label>'+
+      '<input type="checkbox" data-utility-visible="'+esc(key)+'"'+(p.hidden.includes(key)?'':' checked')+'> '+esc(name)+'</label>'+
+      '<button type="button" data-utility-move="-1" aria-label="'+esc(dockText('utilityUp')+': '+name)+'"'+(i===0?' disabled':'')+'>↑</button>'+
+      '<button type="button" data-utility-move="1" aria-label="'+esc(dockText('utilityDown')+': '+name)+'"'+(i===p.order.length-1?' disabled':'')+'>↓</button></li>';
+  }).join('');
+}
+function saveUtilityProfile(p){
+  if(!utilityDisplay)return;
+  dockOptions.utilityProfiles={...dockOptions.utilityProfiles,[utilityDisplay]:p};
+  renderUtilityControls();
+  send({t:'utilityProfile',display:utilityDisplay,profile:p});
+}
+function moveUtility(key,to){
+  const p=utilityProfile();const from=p.order.indexOf(key);
+  if(from<0||to<0||to>=p.order.length||to===from)return;
+  const order=[...p.order];order.splice(from,1);order.splice(to,0,key);
+  saveUtilityProfile({...p,order});
+}
+$('utilityDisplay').addEventListener('change',e=>{utilityDisplay=e.target.value;renderUtilityControls();});
+$('utilityEnabled').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),enabled:$('utilityEnabled').checked}));
+$('utilityDetails').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),details:$('utilityDetails').checked}));
+$('utilitySide').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),side:$('utilitySide').value}));
+$('utilityReset').addEventListener('click',()=>saveUtilityProfile(utilityDefault()));
+const utilityRows=$('utilityRows');
+utilityRows.addEventListener('change',e=>{
+  const key=e.target.dataset.utilityVisible;if(!Object.hasOwn(utilityLabels,key))return;
+  const p=utilityProfile();const next=p.hidden.filter(w=>w!==key);
+  if(!e.target.checked)next.push(key);
+  saveUtilityProfile({...p,hidden:next});
+});
+utilityRows.addEventListener('click',e=>{
+  const button=e.target.closest('[data-utility-move]');
+  if(!button)return;
+  const key=button.closest('[data-widget]')?.dataset.widget;
+  const step=Number(button.dataset.utilityMove);
+  moveUtility(key,utilityProfile().order.indexOf(key)+step);
+  utilityRows.querySelector?.('[data-widget="'+key+'"] [data-utility-move="'+step+'"]:not([disabled])')?.focus();
+});
+utilityRows.addEventListener('dragstart',e=>{
+  utilityDrag=e.target.closest('[data-widget]')?.dataset.widget||null;
+  if(utilityDrag){e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',utilityDrag);}
+});
+utilityRows.addEventListener('dragover',e=>{if(utilityDrag&&e.target.closest('[data-widget]'))e.preventDefault();});
+utilityRows.addEventListener('dragend',()=>{utilityDrag=null;});
+utilityRows.addEventListener('drop',e=>{
+  const target=e.target.closest('[data-widget]')?.dataset.widget;
+  if(!utilityDrag||!target)return;
+  e.preventDefault();moveUtility(utilityDrag,utilityProfile().order.indexOf(target));utilityDrag=null;
+});
 function renderDockPlacement(){
   const layouts={};
   let fallback=false;
@@ -877,6 +972,7 @@ function syncDockSettings(m) {
   renderDockPlacement();
   showDockAppearance();
   showStageStyle();
+  renderUtilityControls();
 }
 for(const [id,key,type] of [['dockEnabled','enabled','checked'],['dockStageEnabled','stageEnabled','checked'],
       ['dockAllWindows','allWindows','checked'],['dockStageSide','stageSide','value']])$(id).addEventListener('change',()=>{

@@ -26,7 +26,7 @@ mod workspaces;
 mod perf;
 mod stage_surface;
 mod utilities;
-pub use utilities::HostAction;
+pub use utilities::{HostAction,Profile as UtilityProfile,Widget as UtilityWidget};
 pub use glass_probe::probe as glass_probe;
 pub use appearance::{Appearance,DockSide};
 pub use options::{Options,Edit,DisplayMode,DisplayTarget,StageStyle};
@@ -393,7 +393,7 @@ unsafe fn recreate(state:&mut State) {
     for (i, screen) in screens.iter().enumerate() {
         if dock_targets.contains(&i) && !state.bars.iter().any(|b|same_rect(b.bounds,screen.bounds)) {
         let items=item_list(&state.windows,screen.bounds,&state.prefs);
-        let layout=geometry::measure(screen,&state.prefs.appearance,items.len(),None,0.0);
+        let layout=geometry::measure_utilities(screen,&state.prefs.appearance,items.len(),None,0.0,state.prefs.utility_position(&screen.id));
         let r=layout.window;
         let hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|WS_EX_LAYERED,
             class.as_ptr(),wide("tuanpc-desk Dock").as_ptr(),WS_POPUP,
@@ -444,8 +444,8 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let screen=state.screens.iter().find(|s|same_rect(s.bounds,b.bounds));
         if let Some(screen)=screen {
             let r=if b.layout.is_some(){
-                let layout=geometry::measure(screen,&state.prefs.appearance,b.items.len(),b.motion.focus,b.motion.amount);
-                changed|=b.layout.as_ref().is_some_and(|old|old.glass!=layout.glass||old.slots!=layout.slots);
+                let layout=geometry::measure_utilities(screen,&state.prefs.appearance,b.items.len(),b.motion.focus,b.motion.amount,state.prefs.utility_position(&screen.id));
+                changed|=b.layout.as_ref().is_some_and(|old|old.glass!=layout.glass||old.slots!=layout.slots||old.utility!=layout.utility);
                 let r=layout.window;b.layout=Some(layout);r
             }else{bar_rect(screen,b.items.len())};
             let mut actual:RECT=mem::zeroed();
@@ -666,11 +666,12 @@ unsafe fn paint(hwnd:HWND){
                 fill(dc,RECT{left:left+24,top:56,right:left+28,bottom:60},0x00888888);
             }
         }
-        label(dc,area.right-52,20,42,"⋯",0x00ffffff);
+        if utility_profile(hwnd).is_some_and(|p|p.enabled){label(dc,area.right-52,20,42,"⋯",0x00ffffff);}
     }
     EndPaint(hwnd,&ps);
 }
 unsafe fn request_utilities(hwnd:HWND){
+    if utility_profile(hwnd).is_none_or(|p|!p.enabled){return;}
     let mut point=POINT{x:0,y:0};
     let location=STATE.with(|s|{
         let state=s.borrow();
@@ -685,13 +686,21 @@ unsafe fn request_utilities(hwnd:HWND){
     let submitted=UTILITIES.with(|u|u.borrow_mut().get_or_insert_with(utilities::Provider::new).read(control));
     if submitted{UTILITY_ANCHOR.with(|a|a.set(Some((hwnd as usize,point))));}
 }
+fn utility_profile(hwnd:HWND)->Option<UtilityProfile>{
+    STATE.with(|s|{
+        let state=s.borrow();
+        let bar=state.bars.iter().find(|b|b.hwnd==hwnd&&!b.hidden)?;
+        let output=state.screens.iter().find(|d|same_rect(d.bounds,bar.bounds))?;
+        Some(state.prefs.utility_profiles.get(&output.id).cloned().unwrap_or_default())
+    })
+}
 unsafe fn show_utilities(){
     let snapshot=UTILITIES.with(|u|u.borrow().as_ref().and_then(utilities::Provider::take));
     let target=UTILITY_ANCHOR.with(|a|a.take());
     let (Some(snapshot),Some((bar,point)))=(snapshot,target) else{return;};
     let hwnd=bar as HWND;
-    if !STATE.with(|s|s.borrow().bars.iter().any(|b|b.hwnd==hwnd&&!b.hidden)){return;}
-    if let Some(action)=utilities::menu(hwnd,point,&snapshot){
+    let Some(profile)=utility_profile(hwnd).filter(|p|p.enabled) else{return;};
+    if let Some(action)=utilities::menu(hwnd,point,&snapshot,&profile){
         match action{
             utilities::Action::Host(action)=>emit(Event::Utility(action)),
             utilities::Action::SetVolume(_)|utilities::Action::Mute=>{
@@ -957,7 +966,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 if b.hidden || b.layout.is_none(){return None;}
                 let display=screens.iter().find(|d|same_rect(d.bounds,b.bounds))?;
                 let again=b.motion.tick(prefs.appearance.animation_speed);
-                let layout=geometry::measure(display,&prefs.appearance,b.items.len(),b.motion.focus,b.motion.amount);
+                let layout=geometry::measure_utilities(display,&prefs.appearance,b.items.len(),b.motion.focus,b.motion.amount,prefs.utility_position(&display.id));
                 b.hovered=b.pointer.and_then(|(x,y)|layout.hot(x,y)).map_or(-1,|i|i as i32);
                 b.layout=Some(layout);
                 Some(again)
@@ -1079,11 +1088,12 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let mut state=s.borrow_mut();
                 let bar=state.bars.iter_mut().find(|b|b.hwnd==hwnd)?;
                 let current=bar.keyboard?;
-                let max=bar.items.len()+1;
+                let has_utilities=bar.layout.as_ref().is_none_or(|l|l.utility.w>0.0);
+                let max=bar.items.len()+usize::from(has_utilities);
                 let next=match key{
                     VK_LEFT|VK_UP=>current.saturating_sub(1),VK_RIGHT|VK_DOWN=>(current+1).min(max),
                     VK_HOME=>0,VK_END=>max,
-                    VK_RETURN=>return Some((bar.items.get(current).cloned(),current+1==max,current==max,0)),
+                    VK_RETURN=>return Some((bar.items.get(current).cloned(),current==bar.items.len(),has_utilities&&current==max,0)),
                     VK_ESCAPE=>return Some((None,false,false,bar.previous_focus)),
                     _=>return None,
                 };

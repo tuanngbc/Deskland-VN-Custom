@@ -84,4 +84,21 @@ test('stage layout changes one display and leaves saved disconnected layouts unt
   $('stageStyle_opacity').value='55';$('stageStyle_opacity').listeners.change();
   assert.deepEqual(JSON.parse(JSON.stringify(messages.pop().style)),{side:'right',scale:115,spacing:16,groupLimit:8,opacity:55});
 });
+test('utility order, visibility and reset are isolated to the selected monitor',()=>{
+  const d={id:'main',name:'Main',w:2560,h:1080,dpi:96,primary:true};
+  context.syncDockSettings({dockDisplays:[d,{...d,id:'portrait',primary:false}],dock:{utilityProfiles:{main:{enabled:false}}}});
+  $('utilityDisplay').listeners.change({target:{value:'portrait'}});
+  assert.equal($('utilityEnabled').checked,true);
+  context.moveUtility('calendar',0);
+  const first=messages.pop();
+  assert.equal(first.t,'utilityProfile');
+  assert.equal(first.display,'portrait');
+  assert.equal(first.profile.order[0],'calendar');
+  $('utilityRows').listeners.change({target:{checked:false,dataset:{utilityVisible:'audio'}}});
+  assert.equal(messages.pop().profile.hidden[0],'audio');
+  $('utilityReset').listeners.click();
+  assert.equal(messages.pop().profile.hidden.length,0);
+  $('utilityDisplay').listeners.change({target:{value:'main'}});
+  assert.equal($('utilityEnabled').checked,false);
+});
 console.log('TOTAL: '+count+' PASS / 0 FAIL');

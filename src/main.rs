@@ -2619,6 +2619,9 @@ fn main() {
                     if stage {app.cfg.dock.stage_display=target;} else {app.cfg.dock.dock_display=target;}
                     app.configure_dock();
                 }
+                Action::UtilityProfile(id,profile)=>{
+                    dock::Edit::UtilityProfile(id,profile).apply(&mut app.cfg.dock);app.configure_dock();
+                }
                 Action::StageStyle(id,style)=>{
                     dock::Edit::StageStyle(id,style).apply(&mut app.cfg.dock);app.configure_dock();
                 }
@@ -2926,6 +2929,13 @@ fn main() {
                         if let Some(v)=m.get(key){value[key]=v.clone();}
                     }
                     app.cfg.dock=dock::Options::from_json(&value);app.configure_dock();web_changed=true;
+                }
+                "utilityProfile" => {
+                    let id=s_("display");
+                    if dock::displays().iter().any(|display|display.id==id){
+                        dock::Edit::UtilityProfile(id,dock::UtilityProfile::from_json(&m["profile"])).apply(&mut app.cfg.dock);
+                        app.configure_dock();web_changed=true;
+                    }
                 }
                 "stageStyle" => {
                     let id = s_("display");

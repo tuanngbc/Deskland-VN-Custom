@@ -19,6 +19,7 @@ pub struct Layout {
     pub slots: Vec<Rect>,
     pub scan: Rect,
     pub utility: Rect,
+    pub utility_leading:bool,
     pub indicators: Vec<(f32,f32)>,
     pub scale:f32,
     pub side:DockSide,
@@ -39,7 +40,11 @@ impl Layout {
     pub fn axis(&self,x:f32,y:f32)->f32 {if self.side==DockSide::Bottom{x}else{y}}
 }
 
-pub fn measure(display:&Display, style:&Appearance, count:usize, focus:Option<f32>, amount:f32)->Layout {
+#[cfg(test)]
+pub fn measure(display:&Display,style:&Appearance,count:usize,focus:Option<f32>,amount:f32)->Layout{
+    measure_utilities(display,style,count,focus,amount,Some(false))
+}
+pub fn measure_utilities(display:&Display, style:&Appearance, count:usize, focus:Option<f32>, amount:f32, utility_position:Option<bool>)->Layout {
     let oriented=style.position!=DockSide::Bottom;
     let scale=(display.dpi as f32/96.0).clamp(0.75,3.0);
     let spacing=style.spacing as f32*scale;
@@ -49,7 +54,8 @@ pub fn measure(display:&Display, style:&Appearance, count:usize, focus:Option<f3
     let margins=2.0*(edge+shadow);
     let max_span=if oriented {display.work.bottom-display.work.top} else {display.work.right-display.work.left};
     // A permanent search affordance opens the existing Deskland launcher.
-    let cells=count+2;
+    let cells=count+1+usize::from(utility_position.is_some());
+    let utility_leading=utility_position==Some(true);
     let max_span=max_span as f32-margins;
     let available=(max_span-2.0*pad-(cells-1) as f32*spacing).max(cells as f32*8.0);
     // Reserve enough room for the largest neighborhood before drawing the
@@ -90,7 +96,8 @@ pub fn measure(display:&Display, style:&Appearance, count:usize, focus:Option<f3
             DockSide::Left=>shadow+13.0*scale,
         };
         let r=if oriented{Rect{x:cross_axis,y:cursor,w:size,h:size}}else{Rect{x:cursor,y:cross_axis,w:size,h:size}};
-        if i<count{
+        let item_index=i.checked_sub(usize::from(utility_leading));
+        if item_index.is_some_and(|index|index<count){
             let center=cursor+size*0.5;
             indicators.push(match style.position{
                 DockSide::Bottom=>(center,total_cross-shadow-6.0*scale),
@@ -101,7 +108,7 @@ pub fn measure(display:&Display, style:&Appearance, count:usize, focus:Option<f3
         all.push(r);
         cursor+=size+spacing;
     }
-    let utility=all.pop().unwrap_or_default();
+    let utility=match utility_position{Some(true)=>all.remove(0),Some(false)=>all.pop().unwrap_or_default(),None=>Rect::default()};
     let scan=all.pop().unwrap_or_default();
     // The background follows the app row; empty hover slack remains alpha 0.
     let height=icon+20.0*scale;
@@ -110,7 +117,7 @@ pub fn measure(display:&Display, style:&Appearance, count:usize, focus:Option<f3
         DockSide::Right=>Rect{x:total_cross-shadow-height,y:start,w:height,h:span},
         DockSide::Left=>Rect{x:shadow,y:start,w:height,h:span},
     };
-    Layout{window:RECT{left:x,top:y,right:x+w as i32,bottom:y+h as i32},glass,slots:all,scan,utility,indicators,scale,side:style.position}
+    Layout{window:RECT{left:x,top:y,right:x+w as i32,bottom:y+h as i32},glass,slots:all,scan,utility,utility_leading,indicators,scale,side:style.position}
 }
 
 #[cfg(test)]
@@ -150,5 +157,23 @@ mod tests{
         assert_eq!(grown.hit(focus,grown.slots[3].y+10.0),Some(3));
         let relaxed=measure(&display,&Appearance{reduced_motion:true,..style},7,Some(focus),1.0);
         assert!(relaxed.slots.iter().all(|s|(s.w-relaxed.slots[0].w).abs()<0.001));
+    }
+    #[test]
+    fn utility_button_moves_or_disappears_without_changing_app_indices(){
+        let work=RECT{left:-1080,top:-731,right:0,bottom:1189};
+        let d=Display{id:"portrait".into(),name:"Portrait".into(),bounds:work,work,primary:false,dpi:192};
+        let style=Appearance::default();
+        for side in [Some(true),Some(false),None]{
+            let l=measure_utilities(&d,&style,10,None,0.0,side);
+            assert!(l.window.left>=work.left&&l.window.right<=work.right);
+            assert_eq!(l.hot(l.slots[0].x+1.0,l.slots[0].y+1.0),Some(0));
+            assert_eq!(l.hot(l.scan.x+1.0,l.scan.y+1.0),Some(10));
+            match side {
+                Some(true)=>assert!(l.utility.x+l.utility.w<=l.slots[0].x),
+                Some(false)=>assert!(l.utility.x>=l.scan.x+l.scan.w),
+                None=>assert_eq!(l.utility.w,0.0),
+            }
+            if side.is_some(){assert_eq!(l.hot(l.utility.x+1.0,l.utility.y+1.0),Some(11));}
+        }
     }
 }

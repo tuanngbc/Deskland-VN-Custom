@@ -2,11 +2,12 @@
 //! idle, no WLAN or Bluetooth scans, and no Shell/COM calls on the UI thread.
 use super::{WM_UTILITY_READY,open};
 use crate::desktop::wide;
+use serde_json::{json,Value};
 use std::{mem,ptr,sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}}};
 use windows::Win32::Media::Audio::{*,Endpoints::IAudioEndpointVolume};
 use windows::Win32::System::Com::*;
 use windows_sys::Win32::{
-    Devices::Bluetooth::*,
+    Devices::BluetoothState::*,
     Foundation::*,
     NetworkManagement::{IpHelper::*,Ndis::IfOperStatusUp,WiFi::*},
     System::{Power::*,SystemInformation::GetLocalTime,Threading::{TrySubmitThreadpoolCallback,PTP_CALLBACK_INSTANCE}},
@@ -15,11 +16,11 @@ use windows_sys::Win32::{
 
 #[derive(Clone, Copy, Debug)]
 enum Link { None, Wired, WiFi(Option<u8>), Both(Option<u8>) }
-enum Bluetooth { Unknown, Adapter, Connected }
+enum BluetoothState { Unknown, Adapter, Connected }
 #[derive(Clone,Copy)]
-enum Battery { Unknown, Absent, Present{level:Option<u8>,ac:Option<bool>,charging:bool} }
+enum BatteryState { Unknown, Absent, Present{level:Option<u8>,ac:Option<bool>,charging:bool} }
 struct Audio { level:u32, muted:bool }
-pub(super) struct Snapshot { network:Option<Link>, bluetooth:Bluetooth, battery:Battery, audio:Option<Audio>, local:SYSTEMTIME }
+pub(super) struct Snapshot { network:Option<Link>, bluetooth:BluetoothState, battery:BatteryState, audio:Option<Audio>, local:SYSTEMTIME }
 
 #[derive(Clone,Copy)]
 enum JobKind { Read, Volume(u32), Mute }
@@ -128,12 +129,12 @@ unsafe fn wifi_signal()->Option<u8>{
     WlanCloseHandle(h,ptr::null());
     signal
 }
-unsafe fn bluetooth()->Bluetooth{
+unsafe fn bluetooth()->BluetoothState{
     let mut radio=ptr::null_mut();
     let params=BLUETOOTH_FIND_RADIO_PARAMS{dwSize:mem::size_of::<BLUETOOTH_FIND_RADIO_PARAMS>() as u32};
     let find=BluetoothFindFirstRadio(&params,&mut radio);
-    if find.is_null(){return Bluetooth::Unknown;}
-    let mut state=Bluetooth::Adapter;
+    if find.is_null(){return BluetoothState::Unknown;}
+    let mut state=BluetoothState::Adapter;
     for index in 0..16 {
         if radio.is_null(){break;}
         let mut params:BLUETOOTH_DEVICE_SEARCH_PARAMS=mem::zeroed();
@@ -143,21 +144,80 @@ unsafe fn bluetooth()->Bluetooth{
         info.dwSize=mem::size_of::<BLUETOOTH_DEVICE_INFO>() as u32;
         let device=BluetoothFindFirstDevice(&params,&mut info);
         if !device.is_null(){
-            if info.fConnected!=0{state=Bluetooth::Connected;}
+            if info.fConnected!=0{state=BluetoothState::Connected;}
             BluetoothFindDeviceClose(device);
         }
         CloseHandle(radio);
-        if matches!(state,Bluetooth::Connected)||index==15||BluetoothFindNextRadio(find,&mut radio)==0{break;}
+        if matches!(state,BluetoothState::Connected)||index==15||BluetoothFindNextRadio(find,&mut radio)==0{break;}
     }
     BluetoothFindRadioClose(find);
     state
 }
-unsafe fn battery()->Battery{
+unsafe fn battery()->BatteryState{
     let mut s:SYSTEM_POWER_STATUS=mem::zeroed();
-    if GetSystemPowerStatus(&mut s)==0||s.BatteryFlag==255{return Battery::Unknown;}
-    if s.BatteryFlag&128!=0{return Battery::Absent;}
-    Battery::Present {level:(s.BatteryLifePercent<=100).then_some(s.BatteryLifePercent),
+    if GetSystemPowerStatus(&mut s)==0||s.BatteryFlag==255{return BatteryState::Unknown;}
+    if s.BatteryFlag&128!=0{return BatteryState::Absent;}
+    BatteryState::Present {level:(s.BatteryLifePercent<=100).then_some(s.BatteryLifePercent),
         ac:match s.ACLineStatus{0=>Some(false),1=>Some(true),_=>None},charging:s.BatteryFlag&8!=0}
+}
+
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum Widget {
+    Network, Sound, Bluetooth, Battery, Calendar, Notifications, QuickSettings,
+    Spotlight, Explorer, Desktop, Capture, Record, Stats, Wallpaper, Stage, Settings, Windows,
+}
+impl Widget {
+    pub const ALL:[Self;17]=[Self::Network,Self::Sound,Self::BluetoothState,Self::BatteryState,Self::Calendar,
+        Self::Notifications,Self::QuickSettings,Self::Spotlight,Self::Explorer,Self::Desktop,
+        Self::Capture,Self::Record,Self::Stats,Self::Wallpaper,Self::Stage,Self::Settings,Self::Windows];
+    pub fn key(self)->&'static str{
+        use Widget::*;
+        match self {Network=>"network",Sound=>"audio",Bluetooth=>"bluetooth",Battery=>"battery",Calendar=>"calendar",
+            Notifications=>"notifications",QuickSettings=>"quickSettings",Spotlight=>"spotlight",Explorer=>"explorer",
+            Desktop=>"desktop",Capture=>"capture",Record=>"record",Stats=>"stats",Wallpaper=>"wallpaper",Stage=>"stage",
+            Settings=>"settings",Windows=>"windows"}
+    }
+    pub fn title(self)->&'static str{
+        use Widget::*;
+        match self{Network=>"Mạng",Sound=>"Âm thanh",Bluetooth=>"Bluetooth",Battery=>"Pin",Calendar=>"Ngày giờ và lịch",
+            Notifications=>"Trung tâm thông báo Windows",QuickSettings=>"Cài đặt nhanh Windows",Spotlight=>"Spotlight",
+            Explorer=>"File Explorer",Desktop=>"Hiện/ẩn desktop",Capture=>"Chụp màn hình",Record=>"Quay màn hình",
+            Stats=>"Bật/tắt chỉ số taskbar",Wallpaper=>"Bật/tắt hình nền động",Stage=>"Bật/tắt Stage Manager",
+            Settings=>"Cài đặt tuanpc-desk",Windows=>"Chuyển cửa sổ Windows"}
+    }
+    fn command(self)->usize{301+Self::ALL.iter().position(|v|*v==self).unwrap_or(0)}
+}
+#[derive(Clone,Debug,PartialEq,Eq)]
+pub struct Profile {
+    pub enabled:bool,pub leading:bool,pub details:bool,
+    pub order:Vec<Widget>,pub hidden:Vec<Widget>,
+}
+impl Default for Profile {
+    fn default()->Self{Self{enabled:true,leading:false,details:true,order:Widget::ALL.to_vec(),hidden:Vec::new()}}
+}
+impl Profile {
+    pub fn from_json(v:&Value)->Self{
+        let read=|key:&str|{
+            let mut out=Vec::new();
+            for item in v[key].as_array().into_iter().flatten().take(64){
+                if let Some(w)=Widget::ALL.iter().copied().find(|w|item.as_str()==Some(w.key())){
+                    if !out.contains(&w){out.push(w);}
+                }
+            }
+            out
+        };
+        let mut order=read("order");
+        for w in Widget::ALL {if !order.contains(&w){order.push(w);}}
+        let hidden=read("hidden");
+        Self{enabled:v["enabled"].as_bool().unwrap_or(true),leading:v["side"]=="left",
+            details:v["details"].as_bool().unwrap_or(true),order,hidden}
+    }
+    pub fn json(&self)->Value{
+        json!({"enabled":self.enabled,"side":if self.leading{"left"}else{"right"},"details":self.details,
+            "order":self.order.iter().map(|w|w.key()).collect::<Vec<_>>(),
+            "hidden":self.hidden.iter().map(|w|w.key()).collect::<Vec<_>>()})
+    }
+    pub fn toggle(&mut self,widget:Widget){if self.hidden.contains(&widget){self.hidden.retain(|&w|w!=widget);}else{self.hidden.push(widget);}}
 }
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
@@ -179,57 +239,69 @@ fn network_label(state:Option<Link>)->String{
         }
     }
 }
-pub(super) unsafe fn menu(owner:HWND,point:POINT,snapshot:&Snapshot)->Option<Action>{
+pub(super) unsafe fn menu(owner:HWND,point:POINT,snapshot:&Snapshot,profile:&Profile)->Option<Action>{
     let menu=CreatePopupMenu();
     if menu.is_null(){return None;}
     let row=|id,text:&str|{AppendMenuW(menu,MF_STRING,id,wide(text).as_ptr());};
-    row(1,&network_label(snapshot.network));
-    let sound=CreatePopupMenu();
-    if !sound.is_null(){
-        if let Some(a)=snapshot.audio.as_ref() {
-            AppendMenuW(sound,MF_STRING,10,wide(if a.muted{"Bật tiếng"}else{"Tắt tiếng"}).as_ptr());
-            for p in [0u32,10,20,30,40,50,60,70,80,90,100]{
-                AppendMenuW(sound,MF_STRING|if a.level==p{MF_CHECKED}else{0},SET_LEVEL+p as usize,wide(&format!("{p}%")).as_ptr());
+    for &widget in &profile.order {
+        if profile.hidden.contains(&widget){continue;}
+        let id=widget.command();
+        match widget {
+            Widget::Network=>if profile.details{row(id,&network_label(snapshot.network));}else{row(id,widget.title());},
+            Widget::Sound=>{
+                let sound=CreatePopupMenu();
+                if sound.is_null(){continue;}
+                if let Some(a)=snapshot.audio.as_ref() {
+                    AppendMenuW(sound,MF_STRING,10,wide(if a.muted{"Bật tiếng"}else{"Tắt tiếng"}).as_ptr());
+                    for p in [0u32,10,20,30,40,50,60,70,80,90,100]{
+                        AppendMenuW(sound,MF_STRING|if a.level==p{MF_CHECKED}else{0},SET_LEVEL+p as usize,wide(&format!("{p}%")).as_ptr());
+                    }
+                    AppendMenuW(sound,MF_SEPARATOR,0,ptr::null());
+                }
+                AppendMenuW(sound,MF_STRING,id,wide("Chọn thiết bị âm thanh trong Windows…").as_ptr());
+                let title=if profile.details{
+                    snapshot.audio.as_ref().map_or_else(||"Âm thanh · Không đọc được thiết bị".into(),|a|{
+                        if a.muted{format!("Âm thanh · Đang tắt ({0}%)",a.level)}else{format!("Âm thanh · {}%",a.level)}
+                    })
+                }else{widget.title().into()};
+                if AppendMenuW(menu,MF_POPUP,sound as usize,wide(&title).as_ptr())==0{DestroyMenu(sound);}
             }
-            AppendMenuW(sound,MF_SEPARATOR,0,ptr::null());
+            Widget::Bluetooth if profile.details=>row(id,match snapshot.bluetooth{
+                BluetoothState::Unknown=>"Bluetooth · Mở cài đặt Windows…",
+                BluetoothState::Adapter=>"Bluetooth · Có bộ điều hợp",
+                BluetoothState::Connected=>"Bluetooth · Có thiết bị Classic đang kết nối",
+            }),
+            Widget::Battery=>if let BatteryState::Present{level,ac,charging}=snapshot.battery {
+                let label=if profile.details{
+                    let value=level.map_or("—".into(),|p|format!("{p}%"));
+                    let mode=if charging{"Đang sạc"}else{match ac{Some(true)=>"Nguồn AC",Some(false)=>"Dùng pin",None=>"Không rõ nguồn"}};
+                    format!("Pin · {value} · {mode}")
+                }else{widget.title().into()};
+                row(id,&label);
+            },
+            Widget::Calendar if profile.details=>{
+                let d=&snapshot.local;
+                row(id,&format!("{:02}:{:02} · {:02}/{:02}/{} · Lịch",d.wHour,d.wMinute,d.wDay,d.wMonth,d.wYear));
+            }
+            _=>row(id,widget.title()),
         }
-        AppendMenuW(sound,MF_STRING,2,wide("Chọn thiết bị âm thanh trong Windows…").as_ptr());
-        let title=snapshot.audio.as_ref().map_or_else(||"Âm thanh · Không đọc được thiết bị".into(),|a|{
-            if a.muted{format!("Âm thanh · Đang tắt ({0}%)",a.level)}else{format!("Âm thanh · {}%",a.level)}
-        });
-        if AppendMenuW(menu,MF_POPUP,sound as usize,wide(&title).as_ptr())==0{DestroyMenu(sound);}
     }
-    row(3,match snapshot.bluetooth{
-        Bluetooth::Unknown=>"Bluetooth · Mở cài đặt Windows…",
-        Bluetooth::Adapter=>"Bluetooth · Có bộ điều hợp",
-        Bluetooth::Connected=>"Bluetooth · Có thiết bị Classic đang kết nối",
-    });
-    if let Battery::Present{level,ac,charging}=snapshot.battery {
-        let value=level.map_or("—".into(),|p|format!("{p}%"));
-        let mode=if charging{"Đang sạc"}else{match ac{Some(true)=>"Nguồn AC",Some(false)=>"Dùng pin",None=>"Không rõ nguồn"}};
-        row(4,&format!("Pin · {value} · {mode}"));
-    }
-    let d=&snapshot.local;
-    row(5,&format!("{:02}:{:02} · {:02}/{:02}/{} · Lịch",d.wHour,d.wMinute,d.wDay,d.wMonth,d.wYear));
-    row(6,"Trung tâm thông báo Windows");
-    row(7,"Cài đặt nhanh Windows");
-    AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
-    for (id,label) in [(11,"Spotlight"),(12,"File Explorer"),(13,"Hiện/ẩn desktop"),(14,"Chụp màn hình"),
-        (15,"Quay màn hình"),(16,"Bật/tắt chỉ số taskbar"),(17,"Bật/tắt hình nền động"),
-        (18,"Bật/tắt Stage Manager"),(19,"Cài đặt tuanpc-desk"),(20,"Chuyển cửa sổ Windows")] {row(id,label);}
+    if GetMenuItemCount(menu)==0{DestroyMenu(menu);return None;}
     let previous=GetForegroundWindow();
     SetForegroundWindow(owner);
     let cmd=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY|TPM_BOTTOMALIGN,point.x,point.y,0,owner,ptr::null()) as usize;
     DestroyMenu(menu);
     if GetForegroundWindow()==owner&&!previous.is_null()&&IsWindow(previous)!=0{SetForegroundWindow(previous);}
     use Action::*;
-    Some(match cmd {
-        1=>Network,2=>Sound,3=>Bluetooth,4=>Battery,5=>Calendar,6=>Notifications,7=>QuickSettings,10=>Mute,
-        11=>Host(HostAction::Launcher),12=>Explorer,13=>Desktop,14=>Host(HostAction::Capture),
-        15=>Host(HostAction::Record),16=>Host(HostAction::SystemMonitor),17=>Host(HostAction::Wallpaper),
-        18=>Host(HostAction::Stage),19=>Host(HostAction::Settings),20=>Windows,
-        SET_LEVEL..=200=>SetVolume((cmd-SET_LEVEL) as u32),
-        _=>return None,
+    if cmd==10{return Some(Mute);}
+    if (SET_LEVEL..=200).contains(&cmd){return Some(SetVolume((cmd-SET_LEVEL) as u32));}
+    Some(match *Widget::ALL.get(cmd.checked_sub(301)?)? {
+        Widget::Network=>Network,Widget::Sound=>Sound,Widget::Bluetooth=>Bluetooth,Widget::Battery=>Battery,
+        Widget::Calendar=>Calendar,Widget::Notifications=>Notifications,Widget::QuickSettings=>QuickSettings,
+        Widget::Spotlight=>Host(HostAction::Launcher),Widget::Explorer=>Explorer,Widget::Desktop=>Desktop,
+        Widget::Capture=>Host(HostAction::Capture),Widget::Record=>Host(HostAction::Record),
+        Widget::Stats=>Host(HostAction::SystemMonitor),Widget::Wallpaper=>Host(HostAction::Wallpaper),
+        Widget::Stage=>Host(HostAction::Stage),Widget::Settings=>Host(HostAction::Settings),Widget::Windows=>Windows,
     })
 }
 pub(super) unsafe fn delegated(action:Action){
@@ -285,7 +357,7 @@ mod tests {
             let report=snapshot.expect("read-only probe must complete in a bounded time");
             assert!((1..=12).contains(&report.local.wMonth));
             if let Some(audio)=report.audio{assert!(audio.level<=100);}
-            if let Battery::Present{level:Some(level),..}=report.battery{assert!(level<=100);}
+            if let BatteryState::Present{level:Some(level),..}=report.battery{assert!(level<=100);}
         }
     }
 }

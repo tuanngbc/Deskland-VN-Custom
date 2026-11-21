@@ -1,6 +1,6 @@
 //! Canonical Dock/Stage settings. Only Deskland main persists these values.
 use serde_json::{json, Value};
-use super::Appearance;
+use super::{Appearance,utilities::Profile};
 use std::collections::{BTreeMap, HashSet};
 
 fn display_id(v: &str) -> Option<String> {
@@ -97,11 +97,13 @@ pub struct Options {
     pub stage_display: DisplayTarget,
     pub stage_styles: BTreeMap<String, StageStyle>,
     pub appearance: Appearance,
+    pub utility_profiles:BTreeMap<String,Profile>,
 }
 #[derive(Debug)]
 pub enum Edit {
     Pin(String), Unpin(String), MovePin(String,String), AllWindows(bool), StageSide(String), DockEnabled(bool), StageEnabled(bool),
     StageStyle(String, StageStyle),
+    UtilityProfile(String, Profile),
 }
 impl Edit {
     pub fn apply(self, options: &mut Options) {
@@ -124,6 +126,14 @@ impl Edit {
                     }
                 }
             }
+            Self::UtilityProfile(id, profile)=>{
+                if let Some(id)=display_id(&id){
+                    if profile==Profile::default(){options.utility_profiles.remove(&id);}
+                    else if options.utility_profiles.len()<32||options.utility_profiles.contains_key(&id){
+                        options.utility_profiles.insert(id,profile);
+                    }
+                }
+            }
             Self::DockEnabled(on)=>options.enabled=on,
             Self::StageEnabled(on)=>options.stage_enabled=on,
         }
@@ -131,7 +141,7 @@ impl Edit {
 }
 impl Default for Options {
     fn default() -> Self {
-        Self { enabled: false, stage_enabled: false, pinned: Vec::new(), all_windows: false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), appearance: Appearance::default() }
+        Self { enabled: false, stage_enabled: false, pinned: Vec::new(), all_windows: false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), appearance: Appearance::default(),utility_profiles:BTreeMap::new() }
     }
 }
 impl Options {
@@ -151,6 +161,10 @@ impl Options {
                 (style!=StageStyle::default()).then(|| (display_id(id),style))
                     .and_then(|(id,style)| Some((id?,style)))
             }).take(32).collect(),
+            utility_profiles:v["utilityProfiles"].as_object().into_iter().flatten().filter_map(|(id,value)|{
+                let profile=Profile::from_json(value);
+                (profile!=Profile::default()).then(||(display_id(id),profile)).and_then(|(id,p)|Some((id?,p)))
+            }).take(32).collect(),
             appearance: Appearance::from_json(&v["appearance"]),
             stage_side: if v["stageSide"] == "right" { "right" } else { "left" }.into(),
         }
@@ -166,6 +180,9 @@ impl Options {
         options
     }
     pub fn any_enabled(&self) -> bool { self.enabled || self.stage_enabled }
+    pub fn utility_position(&self,id:&str)->Option<bool>{
+        match self.utility_profiles.get(id){Some(p) if !p.enabled=>None,Some(p)=>Some(p.leading),None=>Some(false)}
+    }
     pub fn stage_style(&self, id: &str) -> StageStyle {
         let mut settings = self.stage_styles.get(id).copied().unwrap_or_default();
         settings.right = Some(settings.right.unwrap_or(self.stage_side == "right"));
@@ -175,6 +192,7 @@ impl Options {
         json!({"version":2,"enabled":self.enabled,"stageEnabled":self.stage_enabled,
             "pinned":self.pinned,"allWindows":self.all_windows,"stageSide":self.stage_side,
             "dockDisplay":self.dock_display.json(),"stageDisplay":self.stage_display.json(),"appearance":self.appearance.json(),
+            "utilityProfiles":self.utility_profiles.iter().map(|(id,p)|(id.clone(),p.json())).collect::<serde_json::Map<_,_>>(),
             "stageStyles":self.stage_styles.iter().map(|(id,style)|(id.clone(),style.json())).collect::<serde_json::Map<_,_>>()})
     }
 }

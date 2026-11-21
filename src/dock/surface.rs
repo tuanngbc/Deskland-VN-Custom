@@ -103,8 +103,11 @@ impl Surface {
                 Rect{x:layout.glass.x+layout.glass.w*0.22,y:(a.y+a.h+b.y)*0.5-0.5*scale,w:layout.glass.w*0.56,h:scale}
             }
         };
-        let group=divider(scan,utility);
-        rounded(data,w,h,group,scale*0.5,tint,82);
+        if utility.w>0.0 {
+            let group=if layout.utility_leading{divider(utility,layout.slots.first().copied().unwrap_or(scan))}
+                else{divider(scan,utility)};
+            rounded(data,w,h,group,scale*0.5,tint,82);
+        }
         if let Some(split)=items.windows(2).position(|pair|pair[0].pinned&&!pair[1].pinned){
             let group=divider(layout.slots[split],layout.slots[split+1]);
             rounded(data,w,h,group,scale*0.5,tint,58);
