@@ -13,6 +13,8 @@ Verified CI: [44839614362](https://github.com/tuanngbc/Deskland-VN-Custom/action
 
 ## Next in order
 
+CI correction: source 16b73d0 failed [44845761358](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44845761358) on `DWMWA_CLOAKED` i32 vs API u32. Explicit cast fixed in following commit. Also preserve Stage HWNDs when only Dock toggles (and vice versa), update Stage side by repositioning rather than rebuilding both modules. Native lifecycle assertion strengthened; workflow bounded at 20 minutes. Await replacement CI before PASS.
+
 Foundation code increment after D0: managed same-process runtime and canonical settings/tray/UI; independent wallpaper toggle and legacy migration; coalesced hooks/cache/work-area refresh; local activation/minimized/cloaked fixes. Source is the commit containing this entry (parent docs 45bacf4). Local JS 32+7+4 PASS; Rust and new isolated native lifecycle test require this increment's CI. D0 own CI is now PASS: [44844337708](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44844337708). Do not treat partial D1/D9 as milestone completion.
 
 1. Verify checkpoint CI, then D1 local/global selection, collector/filtering, coalesced lifecycle model.

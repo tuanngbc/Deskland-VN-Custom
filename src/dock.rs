@@ -100,7 +100,7 @@ unsafe extern "system" fn enumerate(hwnd:HWND,param:LPARAM)->i32 {
     if IsWindowVisible(hwnd)==0 || GetWindow(hwnd,GW_OWNER)!=ptr::null_mut() {return 1;}
     if GetWindowLongW(hwnd,GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW!=0 {return 1;}
     let mut cloaked=0u32;
-    if DwmGetWindowAttribute(hwnd,DWMWA_CLOAKED,&mut cloaked as *mut _ as *mut _,mem::size_of::<u32>() as u32)>=0 && cloaked!=0{return 1;}
+    if DwmGetWindowAttribute(hwnd,DWMWA_CLOAKED as u32,&mut cloaked as *mut _ as *mut _,mem::size_of::<u32>() as u32)>=0 && cloaked!=0{return 1;}
     let mut class=[0u16;128];let c=GetClassNameW(hwnd,class.as_mut_ptr(),128);
     if is_shell_class(&String::from_utf16_lossy(&class[..c.max(0) as usize])) {return 1;}
     let mut title=[0u16;260];let n=GetWindowTextW(hwnd,title.as_mut_ptr(),260);
@@ -192,13 +192,13 @@ fn bar_rect(screen:&Screen,items:usize)->RECT {
 }
 unsafe fn recreate(state:&mut State) {
     let screens=monitors();
-    if screens.len()==state.screens.len() && screens.iter().zip(&state.screens).all(|(s,b)|same_rect(s.bounds,b.bounds)&&same_rect(s.work,b.work)&&s.primary==b.primary){return;}
-    for b in state.bars.drain(..){DestroyWindow(b.hwnd);}
-    for s in state.stages.drain(..){DestroyWindow(s.hwnd);}
+    let changed=screens.len()!=state.screens.len() || !screens.iter().zip(&state.screens).all(|(s,b)|same_rect(s.bounds,b.bounds)&&same_rect(s.work,b.work)&&s.primary==b.primary);
+    if changed || !state.prefs.enabled{for b in state.bars.drain(..){DestroyWindow(b.hwnd);}}
+    if changed || !state.prefs.stage_enabled{for s in state.stages.drain(..){DestroyWindow(s.hwnd);}}
     let class=wide(CLASS);
     state.screens=screens.clone();
     for screen in screens {
-        if state.prefs.enabled {
+        if state.prefs.enabled && !state.bars.iter().any(|b|same_rect(b.bounds,screen.bounds)) {
         let items=item_list(&state.windows,screen.bounds,&state.prefs);
         let r=bar_rect(&screen,items.len());
         let hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,
@@ -210,7 +210,7 @@ unsafe fn recreate(state:&mut State) {
         state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:false});
         }else{emit(Event::Error(format!("Create Dock window: {}",GetLastError())));}
         }
-        if state.prefs.stage_enabled {
+        if state.prefs.stage_enabled && !state.stages.iter().any(|s|same_rect(s.bounds,screen.bounds)) {
             let r=stage_rect(&screen,&state.prefs.stage_side);
             let stage_hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,
                 class.as_ptr(),wide("tuanpc-desk Stage Manager").as_ptr(),WS_POPUP,
@@ -251,6 +251,10 @@ unsafe fn refresh(state:&mut State) {
     }
     let own:Vec<HWND>=state.bars.iter().map(|b|b.hwnd).chain(state.stages.iter().map(|s|s.hwnd)).collect();
     for stage in &mut state.stages {
+        if let Some(screen)=state.screens.iter().find(|s|same_rect(s.bounds,stage.bounds)) {
+            let r=stage_rect(screen,&state.prefs.stage_side);let mut actual:RECT=mem::zeroed();
+            if GetWindowRect(stage.hwnd,&mut actual)==0 || !same_rect(r,actual){SetWindowPos(stage.hwnd,HWND_TOPMOST,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE);}
+        }
         let items=stage_item_list(&state.windows,stage.bounds,state.prefs.all_windows);
         let changed=stage.items!=items || active_changed;stage.items=items;
         let fg=GetForegroundWindow();let mut rect:RECT=mem::zeroed();
@@ -490,7 +494,6 @@ unsafe fn drain_commands() {
     for command in commands {
         match command {
             Command::Configure(options)=>update_state(|state|{
-                if state.prefs.enabled!=options.enabled || state.prefs.stage_enabled!=options.stage_enabled || state.prefs.stage_side!=options.stage_side {state.screens.clear();}
                 state.prefs=options;refresh(state);
             }),
             Command::Suspend(on)=>update_state(|state|{if state.suspended!=on{state.suspended=on;refresh(state);}}),

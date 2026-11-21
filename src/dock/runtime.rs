@@ -70,6 +70,7 @@ mod tests {
             runtime.suspend(false);runtime.inspect();
             options.enabled=false;runtime.configure(options.clone());
             let stages=runtime.inspect();assert_eq!(stages.len(),screens);
+            assert!(stages.iter().all(|handle|handles.contains(handle)),"disabling Dock must retain the existing Stage HWNDs");
             options.stage_enabled=false;runtime.configure(options.clone());assert!(runtime.inspect().is_empty());
             options.enabled=true;runtime.configure(options.clone());assert_eq!(runtime.inspect().len(),screens);
             drop(runtime);
