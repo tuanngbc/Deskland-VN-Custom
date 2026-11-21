@@ -1,6 +1,6 @@
 # Known issues and safety limits
 
-Audit source `1d5d4c99`; foundation evidence `3526fcc`, CI 44846159435, 2026-11-21. CI fixes do not close the Windows 11 owner gate.
+Updated after owner smoke at `fa93c16`, CI 44852504957, 2026-11-21. See [native report](DOCK_NATIVE_SMOKE_REPORT.md). CI fixes and partial native PASS do not close the full owner gate.
 
 | ID | Issue | Disposition |
 |---|---|---|
@@ -16,7 +16,11 @@ Audit source `1d5d4c99`; foundation evidence `3526fcc`, CI 44846159435, 2026-11-
 | K10 | Settings links are not status widgets/native flyouts | D6, WINDOWS_DELEGATED |
 | K11 | No safe third-party tray host/AppBar/recovery evidence | D7 Replacement BLOCKED; retain hybrid |
 | K12 | No Dock native integration/dual-display/performance evidence | D8/D9 NATIVE_PENDING |
+| K13 | Unisolated candidate Startup/profile mutations | P0 trial risk; cdc9dcf trial mode/release guard CI PASS. Never run trial without --trial-dir on owner's account |
+| K14 | Visible own Settings deadlocks Dock startup/title enumeration | P1 fixed fa93c16, dedicated native CI and Win32/WebView owner retry PASS |
+| K15 | First clock-on/WebView attempt hung during helper surface errors | P1 investigation; exact call site unproven. Clock-on + Settings stress needed |
+| K16 | Initial Dock status can show raw dockStopped | P2 initial localization refresh investigation |
 
-K12 clarification: isolated Windows CI lifecycle evidence exists at 3526fcc; owner dual-display/renderer-toggle/performance evidence is still absent. Same-process integration avoids orphans but provides no process crash isolation. A Shell icon handler could block the UI worker and delay a joined shutdown: resolve/test before RC, do not claim a bounded fault-isolation guarantee.
+K12 clarification: fa93c16 owner smoke verifies basic same-PID/two-monitor geometry, eight toggle combinations, configuration preservation, saved startup and normal Exit. Overlay actions, mixed DPI/hotplug, real shell/login recovery, matched performance and long-run evidence remain pending. Short samples are not budget acceptance. Same-process integration provides no process crash isolation. A Shell icon handler could block the UI worker and delay joined shutdown: resolve/test before RC; no bounded fault-isolation guarantee.
 
-No baseline, installed binary or owner-profile changes. No taskbar hiding/Explorer termination. No merge without OWNER_NATIVE_ACCEPTED.
+No baseline/installed binary replacement. Owner state restored and verified, including reviewed runtime cache/image changes during production restarts. No taskbar hiding/Explorer termination. No merge without OWNER_NATIVE_ACCEPTED.

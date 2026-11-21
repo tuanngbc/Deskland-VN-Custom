@@ -1,7 +1,7 @@
 # Deskland Rust Dock + Stage Manager — execution status
 
-Checkpoint: 2026-11-21 01:00 UTC. Development only on `codex/rust-dock`, [Draft PR #1](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1).
-Accepted baseline remains `a604519acaf4d5881b9e13e5476d52f97ac29c0f` on `codex/rust-test`. No owner profile/installed EXE change, candidate download/run or merge.
+Checkpoint: 2026-11-21 02:10 UTC. Development only on `codex/rust-dock`, [Draft PR #1](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1).
+Accepted source baseline remains `a604519acaf4d5881b9e13e5476d52f97ac29c0f` on `codex/rust-test`, clean. Owner subsequently authorized isolated native smoke, fixes and CI, without production replacement or merge. See [native report](DOCK_NATIVE_SMOKE_REPORT.md). Installed EXE bytes were preserved; their source lineage lacks a BUILD-COMMIT marker and is not independently confirmed.
 
 ## Verified source and CI
 
@@ -11,7 +11,9 @@ Accepted baseline remains `a604519acaf4d5881b9e13e5476d52f97ac29c0f` on `codex/r
 - At 3526fcc: 47 Rust passed, six ignored tests each explicitly run and passed (five prior native cases plus new integrated Dock/Stage lifecycle). Eight Dock model/geometry tests are included in the 47 and rerun separately. JS renderer 32, shortcuts seven, Dock Settings handlers four: all passed.
 - Runner is Windows Server 2025, not owner Windows 11 dual-monitor acceptance. No numerical CPU/GPU/FPS improvement is claimed.
 - Shell recovery increment `390bacb2d2be77fb81c544528a7fb8d20730293b`: [44846968455](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44846968455), CI_PASS. 47 Rust plus seven separately invoked native tests passed, JS 32+7+4. Includes documented shell-message routing, hidden-controller cleanup and prompt owner-loop wakeup; actual Explorer restart remains NATIVE_PENDING.
-- This following increment shares fullscreen detection between Dock and independent Stage, excludes desktop/Shell windows, and adds a regression so clicking desktop cannot hide Stage. It requires its own CI; consult actual HEAD/run before selecting artifacts.
+- Fullscreen/desktop regression `4b7500c`: [44847644244](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44847644244), CI_PASS. Exact package/checksums verified; original EXE not executed because Startup migration makes an unisolated trial unsafe.
+- Trial isolation `cdc9dcf`: [44850847554](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44850847554), CI_PASS (49 ordinary Rust, seven separately invoked native tests, JS 32+7+4, release persistence guard check). Native smoke caught a Settings/Dock startup deadlock.
+- Own-process title exclusion `fa93c16cec223bb54bc2d75906341a3ae5a39a59`: [44852504957](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44852504957), CI_PASS (49 ordinary Rust, eight explicitly invoked native tests including visible owner-window regression, JS 32+7+4, release isolation check). Artifact 14686511095 was the repaired binary actually tested on owner Windows 11.
 
 ## Actual implementation
 
@@ -23,6 +25,7 @@ Accepted baseline remains `a604519acaf4d5881b9e13e5476d52f97ac29c0f` on `codex/r
 - Running-app grouping remains EXE-based. D1 locality regression fixed for both pinned/unpinned global apps; DWM-cloaked windows excluded, iconic windows use their restored monitor. Foreign show-state requests asynchronous.
 - Stage remains an initial app sidebar. No DWM thumbnails, actual workspace switching/restoration or macOS visual acceptance.
 - Windows taskbar/tray preserved. Wi-Fi, Bluetooth, sound, notifications and taskbar entries are WINDOWS_DELEGATED Settings links, not native system-status flyouts or third-party tray hosting.
+- Explicit --trial-dir protects real Startup/saver/lock/wallpaper changes and uses a separate marked profile. Windows 11 smoke verified eight module combinations in native Settings, selected WebView controls, negative-coordinate two-monitor HWND geometry, preserved module HWNDs, saved startup and normal cleanup. This is partial acceptance, not D1–D9 completion. No performance improvement is established.
 
 ## Milestone gates
 
@@ -40,7 +43,7 @@ Accepted baseline remains `a604519acaf4d5881b9e13e5476d52f97ac29c0f` on `codex/r
 | D8 hardening/RC | NOT_STARTED; development packages only, no RC | NATIVE_PENDING |
 | D9 integrated product | IN_PROGRESS; common executable/config/Settings/lifecycle foundation CI_PASS; appearance/size/position/auto-hide/per-display controls still pending | NATIVE_PENDING |
 
-Native lifecycle CI verifies same PID, independent Dock/Stage toggles without replacing the other module HWND, suspension and destroyed overlays. It does not prove Windows autostart, actual Explorer restart, wallpaper GPU cleanup, mixed-DPI hardware or long-run performance. No OWNER_NATIVE_ACCEPTED and no merge.
+Native lifecycle CI verifies same PID, independent Dock/Stage toggles without replacing the other module HWND, suspension and destroyed overlays. Owner smoke at fa93c16 additionally observed basic integration, persistence and normal cleanup. Windows autostart, actual Explorer restart, GPU budget, mixed-DPI hardware, overlay app actions and long-run performance remain pending. First clock-on/WebView hang remains an investigation item. No OWNER_NATIVE_ACCEPTED and no merge.
 
-Next: finish D1 identity/multi-window model, continue D9 per-display/appearance/behavior in D2/D5, then D3/D4/D6 and D7 safety review, D8 regression/performance/RC. No owner test requested before suitable RC.
+Next: auditor review of [native smoke evidence and remaining checklist](DOCK_NATIVE_SMOKE_REPORT.md); reproduce clock-on/WebView case, then remaining overlay actions/performance/recovery. Finish D1 identity/multi-window model, D9 per-display/appearance/behavior in D2/D5, D3/D4/D6 and D7 safety review, then D8/RC. The milestone table's NATIVE_PENDING refers to each full gate; the report records narrower PASS cases.
 See [architecture](DOCK_ARCHITECTURE.md), [acceptance matrix](DOCK_ACCEPTANCE_MATRIX.md), [known issues](DOCK_KNOWN_ISSUES.md), [handoff](DOCK_HANDOFF.md).
