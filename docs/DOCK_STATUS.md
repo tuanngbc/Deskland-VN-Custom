@@ -7,6 +7,8 @@ Accepted source baseline remains `a604519acaf4d5881b9e13e5476d52f97ac29c0f` on `
 
 ## Verified source and CI
 
+- P0 final hardening: [5565667 / CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44886447900) validates live DWM relationship cleanup and source resize with foreign fixture windows. [4fecfd8 / CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44886781438) adds opt-in wallpaper coverage diagnostics and matched-window sampling. [dcd607e / CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44900000775) also verifies live AppBar edge changes, replay and cleanup. The first controlled run rejected a background coverage mismatch; no matched performance baseline yet. See [performance evidence](DOCK_PERFORMANCE_REPORT.md).
+
 - P0 follow-up: AppBar [5f8d2e8 / CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44884226117), icon/utility [4b37064 / CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44884664434), and actual forced-exit AppBar cleanup on the [dddd812 CI desktop](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44885050608). Owner Windows 11 smoke: both 96-DPI outputs, negative-coordinate portrait, separate toggles, normal restore and rollback. Actual Explorer restart, high/mixed-DPI visuals, fullscreen games and performance acceptance remain pending.
 
 - D0 docs `45bacf4`: [44844337708](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44844337708), CI_PASS.

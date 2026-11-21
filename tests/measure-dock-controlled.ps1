@@ -69,6 +69,13 @@ $log = Join-Path $build 'tuanpc-desk.log'
 $settings = Join-Path $trial 'settings.json'
 $settingsHash = (Get-FileHash -LiteralPath $settings -Algorithm SHA256).Hash
 $cfg = Get-Content -LiteralPath $settings -Raw | ConvertFrom-Json
+$controlCfg = Get-Content -LiteralPath $settings -Raw | ConvertFrom-Json
+$controlCfg.PSObject.Properties.Remove('dock')
+$controlJson = $controlCfg | ConvertTo-Json -Depth 100 -Compress -WarningAction Stop
+$sha256 = [Security.Cryptography.SHA256]::Create()
+try {
+    $controlHash = [BitConverter]::ToString($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($controlJson))).Replace('-','')
+} finally { $sha256.Dispose() }
 $app = Get-Process -Id $CandidateId
 $session = $app.SessionId
 $dwm = @(Get-Process -Name dwm | Where-Object SessionId -eq $session)
@@ -125,7 +132,7 @@ try {
             if (![DeskPerfCounters]::GetWindowRect($fixtureHwnd,[ref]$now) -or $now.ToString() -cne $anchor.ToString()) { $reasons.Add("fixture-geometry-changed:$i") }
             if ([DeskPerfCounters]::DisplaySnapshot() -cne $display) { $reasons.Add("display-geometry-or-dpi-changed:$i") }
             if (((SessionWebView) -join ',') -cne $web) { $reasons.Add("session-webview-set-changed:$i") }
-            if ($i -and ($epoch - $samples[$i-1].Epoch -gt 2.5 -or $epoch -le $samples[$i-1].Epoch)) { $reasons.Add("missing-or-nonmonotonic-sample:$i") }
+            if ($i -and ($epoch - $samples[$i-1].Epoch -gt 1.75 -or $epoch -le $samples[$i-1].Epoch)) { $reasons.Add("missing-or-nonmonotonic-sample:$i") }
             $pd = $pdh | Where-Object {$_.Status -eq 0 -and $_.Path -match '\\id process$' -and [int]$_.CookedValue -eq $dwmId} | Select-Object -First 1
             $dwmCPU = if ($pd) { ($pdh | Where-Object {$_.Status -eq 0 -and $_.InstanceName -eq $pd.InstanceName -and $_.Path -match '\\% processor time$'} | Select-Object -First 1).CookedValue }
             if ($null -eq $dwmCPU) { $reasons.Add("missing-dwm-cpu:$i") }
@@ -167,10 +174,11 @@ try {
     $samples | Export-Csv -LiteralPath (Join-Path $Evidence 'controlled-process.csv') -NoTypeInformation
     $engines | Export-Csv -LiteralPath (Join-Path $Evidence 'controlled-engines.csv') -NoTypeInformation
     [ordered]@{
-        State=if($reasons.Count){'INVALID'}else{'VALID_INTERVAL'};Reasons=@($reasons.ToArray());Build=$BuildSha;
+        Schema=2;State=if($reasons.Count){'INVALID'}else{'VALID_INTERVAL'};Reasons=@($reasons.ToArray());Build=$BuildSha;
         WarmupSeconds=$Warmup;Requested=$RequestedSamples;Actual=$samples.Count;LogicalCpus=$logical;Adapters=$adapters;
-        Display=$display;Coverage=$expected;Theme=$cfg.theme;Mode=$cfg.mode;PreviewFixtureCards=$fixture.Cards;
+        Display=$display;Coverage=$expected;Theme=$cfg.theme;Mode=$cfg.mode;ControlSettingsSha256=$controlHash;
+        FixtureRect=if($started){$anchor.ToString()};FixtureFullscreen=$fixture.Fullscreen;PreviewFixtureCards=$fixture.Cards;
         DockEnabled=[bool]$cfg.dock.enabled;StageEnabled=[bool]$cfg.dock.stageEnabled;SessionWebViewCount=if($web){($web -split ',').Count}else{0};
-        CounterWarnings=@($counterErrors).Count
+        CounterWarnings=$counterErrors.Count
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $Evidence 'verdict.json')
 }

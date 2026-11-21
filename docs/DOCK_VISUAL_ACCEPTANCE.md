@@ -2,6 +2,8 @@
 
 Current P0 build and scoped native evidence: [Dock P0 verification](DOCK_P0_VERIFICATION.md). The full owner acceptance gates remain pending.
 
+The DWM relationship regression at 5565667 does not add screenshot or motion evidence. In the isolated 4fecfd8 Windows 11 trial, clicking the landscape Dock's overflow glyph at 96 DPI opened the native menu with Wi-Fi, sound, Bluetooth, Calendar and Spotlight. The observed crop showed the compact row at rest; it did not verify menu command execution, keyboard use, tooltip, maximum magnification, portrait density or higher physical DPI. Preserve existing native crops under their actual build hashes.
+
 The [4b37064 Windows artifact](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44884664434/artifacts/14699144284) produced a native landscape crop showing Explorer, a custom shortcut, packaged Notepad and the compact status row at 96 DPI. It is evidence of normal size and real icon sources only. The open Windows on the user's desktop differ from the previous capture; do not use the new width as a matched before/after comparison. No video, higher physical DPI, authentication-free screen-reader review or complete portrait input matrix has been collected for this SHA.
 
 Status: **VISUAL_PENDING**. The owner rejected the previous GDI appearance. M1 Settings preview is a placement diagram and does not certify the Dock or Stage appearance.

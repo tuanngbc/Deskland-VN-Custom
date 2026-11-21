@@ -11,8 +11,19 @@ function Percentile($values,[double]$p) {
 function ReadInterval($path) {
     $m = Get-Content -LiteralPath (Join-Path $path 'verdict.json') -Raw | ConvertFrom-Json
     if ($m.State -cne 'VALID_INTERVAL') { throw "INVALID interval: $($m.Reasons -join ', ')" }
+    if ($m.Schema -ne 2 -or $m.ControlSettingsSha256 -cnotmatch '^[A-F0-9]{64}$' -or
+        $m.FixtureRect -notmatch '^-?\d+,-?\d+,-?\d+,-?\d+$' -or $m.FixtureFullscreen -notin 'none','primary','secondary') {
+        throw 'INVALID interval: missing control settings or fixture metadata'
+    }
     $rows = @(Import-Csv -LiteralPath (Join-Path $path 'controlled-process.csv'))
-    if ($rows.Count -ne $m.Actual -or $rows.Count -lt 125) { throw 'Incomplete process data' }
+    if ($rows.Count -ne $m.Actual -or $rows.Count -ne $m.Requested -or $rows.Count -lt 125) { throw 'Incomplete process data' }
+    for ($i=0; $i -lt $rows.Count; $i++) {
+        if ($rows[$i].Sequence -cne [string]$i) { throw 'INVALID interval: missing or duplicate process sample' }
+        if ($i) {
+            $gap = [double]$rows[$i].Epoch - [double]$rows[$i-1].Epoch
+            if ($gap -le 0 -or $gap -gt 1.75) { throw 'INVALID interval: noncontinuous sample timestamps' }
+        }
+    }
     $time = [double]$rows[-1].Epoch - [double]$rows[0].Epoch
     if ($time -lt 120) { throw 'Interval shorter than 120 seconds' }
     $start = $rows[0]
@@ -48,7 +59,7 @@ function ReadInterval($path) {
 }
 $a = ReadInterval $Baseline
 $b = ReadInterval $Candidate
-foreach ($field in 'Display','Coverage','Theme','Mode','PreviewFixtureCards','SessionWebViewCount','LogicalCpus') {
+foreach ($field in 'Display','Coverage','Theme','Mode','ControlSettingsSha256','FixtureRect','FixtureFullscreen','PreviewFixtureCards','SessionWebViewCount','LogicalCpus','WarmupSeconds','Requested') {
     if ($a.Metadata.$field -cne $b.Metadata.$field) { throw "INVALID pair: $field differs" }
 }
 if (($a.Metadata.Adapters | ConvertTo-Json -Compress) -cne ($b.Metadata.Adapters | ConvertTo-Json -Compress)) {
@@ -71,5 +82,6 @@ foreach ($role in 'Deskland','DWM') {
 [ordered]@{
     State='VALID_PAIR';BaselineBuild=$a.Metadata.Build;CandidateBuild=$b.Metadata.Build;
     BaselineSeconds=$a.Duration;CandidateSeconds=$b.Duration;Process=$metrics;PerEngineGPU=$engines;
-    CandidateAnimationClientTrace=$b.Frame
+    BaselineCounterWarnings=$a.Metadata.CounterWarnings;CandidateCounterWarnings=$b.Metadata.CounterWarnings;
+    CandidateAnimationTrialLifetimeTrace=$b.Frame
 } | ConvertTo-Json -Depth 10
