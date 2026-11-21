@@ -7,3 +7,7 @@ Capture 125 one-second readings after 15 seconds of warm-up, and use at least 12
 An initial baseline recording (Dock on both, Stage off) obtained 125 process samples on the owner Windows 11 test machine. A wallpaper changed from revealed to covered during the recording and the wildcard GPU query logged invalid instances. This recording is diagnostic only, not a comparison suitable for the performance gate. Raw data and evidence are kept privately; no personal settings or device identifiers are published.
 
 Pending matched matrix: wallpaper only, one/all Dock, one Stage, all modules, idle versus continuous magnification, 5–10 live previews, fullscreen on primary, covered wallpaper, Settings open/closed, both modules OFF. Some scenarios require M3/M4 features and cannot be benchmarked as if implemented. Record animation p50/p95/p99, 100 toggles and a four-hour stability run before an RC. Do not equate CI or a visual screenshot with performance acceptance.
+
+## Current measurement status
+
+Six pre-refactor recordings (three wallpaper-only and three with Dock on both displays) were collected at 125 samples each. Foreground/coverage changed in parts of the fixture, some GPU engine instances were missing or invalid, and the process sampler did not expose readable DWM CPU. These recordings are diagnostic, not matched results. No percentage improvement, idle budget or animation pacing PASS is established for the current capsule, DWM previews or workspaces. The 12-scenario matrix, coverage checks, DWM overhead, 100 toggles and four-hour run remain open.

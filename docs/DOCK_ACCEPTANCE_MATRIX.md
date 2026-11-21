@@ -47,3 +47,11 @@ Stage moving previews must be real; independent groups restore minimized/maximiz
 | M4 | Existing app sidebar only | Live DWM previews, privacy, groups/restoration, per-screen behavior |
 | M5 | Raw pre-refactor samples started | Matched 12-scenario results, animation times, 100 toggles and leak checks |
 | M6 | No RC or owner visual/native acceptance | Native mixed-DPI/recovery/rollback and four-hour run |
+
+## Updated evidence for M2–M4
+
+| Milestone | Narrow verification | Not accepted yet |
+|---|---|---|
+| M2 | Owner-host alpha composite and real capsule still; Spotlight click | True blur, light/dark wallpaper matrix, DPI, animation pacing |
+| M3 | Windows CI for rail, keyboard plumbing and reorder model | Native reveal/focus/drag, accessibility, transition quality |
+| M4 | Windows CI for preview geometry, development code for explicit session-local group switching | Actual preview pixels/privacy matrix, owner desktop groups, mixed DPI, Z-order and display loss |

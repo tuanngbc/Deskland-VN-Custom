@@ -125,3 +125,10 @@ Source [c2a589b](https://github.com/tuanngbc/Deskland-VN-Custom/commit/c2a589b3b
 All overlays had the same Deskland owner PID and 96 DPI. Only the internal controller was hidden. WebView Settings screenshot showed both physical resolutions, primary status and the predicted overlay layout; the screenshot does not certify appearance of the overlay renderer. A drop-down opened, but the target change was not observed. Stage Secondary-only, Custom, editing in Win32, persistence on relaunch, physical hotplug and mixed-DPI interaction stay pending.
 
 Normal exit and production restart succeeded. Bytes of the production EXE, every file in the fresh backed-up profile and the scoped Registry snapshot matched before restoration; no Registry writes or production replacement were needed. Private raw readings and screenshot remain outside the repository. No user action required for this checkpoint.
+
+## Display targeting and actual Dock appearance
+
+- 6ca3997: on the owner host, Dock was on the primary 2560×1080 LG and Stage was on the secondary 1080×1920 portrait output at (-1080,-731). Real Deskland HWNDs matched the saved targets before and after a normal relaunch. Both were 96 DPI; this does not certify mixed DPI.
+- f63d7f7: the controlled stripe probe rendered a true alpha composite. Both DWM backdrop calls returned success, yet the live background was opaque with Windows transparency disabled. No Windows theme/Registry setting was changed.
+- 9512260: an owner-host screenshot showed the actual native capsule and mouse magnification; clicking the Dock search icon opened Deskland Spotlight. A still cannot verify pacing or transitions. These trials ran serially with production; normal exit and rollback checks verified installed EXE, production profile and scoped Registry.
+- No Stage DWM preview pixels, manual group actions, auto-hide, reorder, hotplug, fullscreen recovery or mixed-DPI interaction are certified by these observations. Raw screenshots, device identifiers and trial data remain private.

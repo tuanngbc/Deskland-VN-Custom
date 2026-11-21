@@ -68,4 +68,16 @@ test('appearance edits do not overwrite placement, scope, or pins',()=>{
   assert.equal(m.appearance.transparency,64);
   assert.equal(m.appearance.position,'left');
 });
+test('stage layout changes one display and leaves saved disconnected layouts untouched',()=>{
+  const main={id:'landscape',name:'Main',w:2560,h:1080,dpi:96,primary:true};
+  const vertical={...main,id:'portrait',name:'Vertical',primary:false};
+  context.syncDockSettings({dockDisplays:[main,vertical],dock:{stageEnabled:true,stageSide:'left',
+    stageDisplay:{mode:'all'},stageStyles:{portrait:{side:'right',scale:115,spacing:10},offline:{spacing:13}}}});
+  assert.match($('dockDisplayPreview').innerHTML,/dock-display-stage right/);
+  $('stageStyleDisplay').listeners.change({target:{value:'portrait'}});
+  assert.equal($('stageStyle_side').value,'right');
+  assert.equal($('stageStyle_scale').value,'115');
+  $('stageStyle_spacing').value='16';$('stageStyle_spacing').listeners.change();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'stageStyle',display:'portrait',style:{side:'right',scale:115,spacing:16}});
+});
 console.log('TOTAL: '+count+' PASS / 0 FAIL');

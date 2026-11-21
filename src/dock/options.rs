@@ -1,7 +1,36 @@
 //! Canonical Dock/Stage settings. Only Deskland main persists these values.
 use serde_json::{json, Value};
 use super::Appearance;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+
+fn display_id(v: &str) -> Option<String> {
+    (!v.is_empty() && v.len() <= 1024 && !v.chars().any(char::is_control))
+        .then(|| v.to_lowercase())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StageStyle {
+    pub right: Option<bool>,
+    pub scale: u32,
+    pub spacing: u32,
+}
+impl Default for StageStyle {
+    fn default() -> Self { Self { right: None, scale: 100, spacing: 6 } }
+}
+impl StageStyle {
+    pub fn from_json(v: &Value) -> Self {
+        let size = |key: &str, base, min, max| v[key].as_u64().map_or(base, |x| x.clamp(min, max) as u32);
+        Self {
+            right: match v["side"].as_str() { Some("left") => Some(false), Some("right") => Some(true), _ => None },
+            scale: size("scale", 100, 75, 140),
+            spacing: size("spacing", 6, 2, 20),
+        }
+    }
+    fn json(self) -> Value {
+        json!({"side":match self.right{Some(false)=>"left",Some(true)=>"right",None=>"default"},
+            "scale":self.scale,"spacing":self.spacing})
+    }
+}
 
 /// Output placement is independent of the application model's window scope.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -23,7 +52,7 @@ pub struct DisplayTarget {
 impl DisplayTarget {
     fn from_json(v: &Value) -> Self {
         fn id(v: &Value) -> Option<String> {
-            v.as_str().filter(|s| !s.is_empty() && s.len() <= 1024 && !s.chars().any(char::is_control)).map(str::to_lowercase)
+            v.as_str().and_then(display_id)
         }
         let mut seen = HashSet::new();
         Self {
@@ -62,11 +91,13 @@ pub struct Options {
     pub stage_side: String,
     pub dock_display: DisplayTarget,
     pub stage_display: DisplayTarget,
+    pub stage_styles: BTreeMap<String, StageStyle>,
     pub appearance: Appearance,
 }
 #[derive(Debug)]
 pub enum Edit {
     Pin(String), Unpin(String), MovePin(String,String), AllWindows(bool), StageSide(String), DockEnabled(bool), StageEnabled(bool),
+    StageStyle(String, StageStyle),
 }
 impl Edit {
     pub fn apply(self, options: &mut Options) {
@@ -81,6 +112,14 @@ impl Edit {
             }
             Self::AllWindows(on)=>options.all_windows=on,
             Self::StageSide(side)=>{if side=="left"||side=="right" {options.stage_side=side;options.stage_enabled=true;}}
+            Self::StageStyle(id, style)=> {
+                if let Some(id) = display_id(&id) {
+                    if style == StageStyle::default() { options.stage_styles.remove(&id); }
+                    else if options.stage_styles.len() < 32 || options.stage_styles.contains_key(&id) {
+                        options.stage_styles.insert(id, style);
+                    }
+                }
+            }
             Self::DockEnabled(on)=>options.enabled=on,
             Self::StageEnabled(on)=>options.stage_enabled=on,
         }
@@ -88,7 +127,7 @@ impl Edit {
 }
 impl Default for Options {
     fn default() -> Self {
-        Self { enabled: false, stage_enabled: false, pinned: Vec::new(), all_windows: false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), appearance: Appearance::default() }
+        Self { enabled: false, stage_enabled: false, pinned: Vec::new(), all_windows: false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), appearance: Appearance::default() }
     }
 }
 impl Options {
@@ -103,6 +142,11 @@ impl Options {
             all_windows: v["allWindows"].as_bool().unwrap_or(false),
             dock_display: DisplayTarget::from_json(&v["dockDisplay"]),
             stage_display: DisplayTarget::from_json(&v["stageDisplay"]),
+            stage_styles: v["stageStyles"].as_object().into_iter().flatten().filter_map(|(id,value)|{
+                let style=StageStyle::from_json(value);
+                (style!=StageStyle::default()).then(|| (display_id(id),style))
+                    .and_then(|(id,style)| Some((id?,style)))
+            }).take(32).collect(),
             appearance: Appearance::from_json(&v["appearance"]),
             stage_side: if v["stageSide"] == "right" { "right" } else { "left" }.into(),
         }
@@ -118,10 +162,16 @@ impl Options {
         options
     }
     pub fn any_enabled(&self) -> bool { self.enabled || self.stage_enabled }
+    pub fn stage_style(&self, id: &str) -> StageStyle {
+        let mut settings = self.stage_styles.get(id).copied().unwrap_or_default();
+        settings.right = Some(settings.right.unwrap_or(self.stage_side == "right"));
+        settings
+    }
     pub fn json(&self) -> Value {
         json!({"version":2,"enabled":self.enabled,"stageEnabled":self.stage_enabled,
             "pinned":self.pinned,"allWindows":self.all_windows,"stageSide":self.stage_side,
-            "dockDisplay":self.dock_display.json(),"stageDisplay":self.stage_display.json(),"appearance":self.appearance.json()})
+            "dockDisplay":self.dock_display.json(),"stageDisplay":self.stage_display.json(),"appearance":self.appearance.json(),
+            "stageStyles":self.stage_styles.iter().map(|(id,style)|(id.clone(),style.json())).collect::<serde_json::Map<_,_>>()})
     }
 }
 
@@ -166,6 +216,20 @@ mod tests {
         assert_eq!(custom.outputs(normal),vec![1]);
         assert_eq!(custom.outputs([]),Vec::<usize>::new());
         assert_eq!(Options::migrate(&json!({"dock":{"allWindows":false}}),None).dock_display.outputs(normal),vec![0,1]);
+    }
+    #[test]
+    fn stage_styles_keep_global_defaults_and_disconnected_display_overrides() {
+        let mut options = Options::from_json(&json!({"stageSide":"right","stageStyles":{
+            "Portrait":{"side":"left","scale":200,"spacing":0},
+            "missing":{"side":"right","scale":125,"spacing":10}
+        }}));
+        assert_eq!(options.stage_style("primary"),StageStyle{right:Some(true),..Default::default()});
+        assert_eq!(options.stage_style("portrait"),StageStyle{right:Some(false),scale:140,spacing:2});
+        Edit::StageStyle("portrait".into(),StageStyle::default()).apply(&mut options);
+        let options = Options::from_json(&options.json());
+        assert_eq!(options.stage_style("portrait").right,Some(true));
+        assert_eq!(options.stage_style("missing").scale,125);
+        assert!(!options.stage_enabled);
     }
     #[test]
     fn drag_reorders_only_existing_pins_and_roundtrips() {

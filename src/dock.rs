@@ -25,7 +25,7 @@ mod previews;
 mod workspaces;
 pub use glass_probe::probe as glass_probe;
 pub use appearance::{Appearance,DockSide};
-pub use options::{Options,Edit,DisplayMode,DisplayTarget};
+pub use options::{Options,Edit,DisplayMode,DisplayTarget,StageStyle};
 pub use runtime::{Runtime,Event};
 use runtime::Command;
 type Preferences=Options;
@@ -96,7 +96,7 @@ impl Motion {
         unsettled
     }
 }
-struct Stage { hwnd:HWND, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, selected:Option<u64>, hidden:bool, previews:previews::Previews }
+struct Stage { hwnd:HWND, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, selected:Option<u64>, gap:i32, hidden:bool, previews:previews::Previews }
 #[derive(Default)]
 struct State { bars:Vec<Bar>, stages:Vec<Stage>, windows:Vec<AppWindow>, prefs:Preferences, screens:Vec<Screen>, suspended:bool, foreground:isize, workspaces:workspaces::Workspaces }
 thread_local! {
@@ -290,15 +290,18 @@ fn item_list(all:&[AppWindow],screen:RECT,prefs:&Preferences)->Vec<Item>{
     }
     result.truncate(MAX_ITEMS);result
 }
-fn stage_rect(screen:&Screen,side:&str)->RECT {
+fn stage_rect(screen:&Screen,style:StageStyle)->RECT {
     let scale=(screen.dpi as f32/96.0).clamp(0.75,3.0);
     let px=|n:f32|(n*scale).round() as i32;
-    let width=px(160.0).min(((screen.work.right-screen.work.left)/5).max(62));
+    let width=px(160.0*style.scale as f32/100.0).min(((screen.work.right-screen.work.left)/5).max(62));
     let margin=px(8.0);
-    let edge=if side=="right"{screen.work.right-width-margin}else{screen.work.left+margin};
+    let edge=if style.right==Some(true){screen.work.right-width-margin}else{screen.work.left+margin};
     let top=screen.work.top+((screen.work.bottom-screen.work.top)/6).min(px(125.0));
-    let height=((screen.work.bottom-screen.work.top)-px(150.0)).clamp(px(112.0),px(650.0));
+    let height=((screen.work.bottom-screen.work.top)-px(150.0)).clamp(px(112.0),px(650.0*style.scale as f32/100.0).max(px(112.0)));
     RECT{left:edge,top,right:edge+width,bottom:(top+height).min(screen.work.bottom-margin)}
+}
+fn stage_gap(screen:&Screen,style:StageStyle)->i32 {
+    (style.spacing as f32 * (screen.dpi as f32/96.0).clamp(0.75,3.0)).round() as i32
 }
 fn bar_rect(screen:&Screen,items:usize)->RECT {
     let width=(items.min(MAX_ITEMS) as i32*ITEM_WIDTH+220).clamp(296,(screen.bounds.right-screen.bounds.left-24).max(296));
@@ -338,14 +341,15 @@ unsafe fn recreate(state:&mut State) {
         }else{emit(Event::Error(format!("Create Dock window: {}",GetLastError())));}
         }
         if stage_targets.contains(&i) && !state.stages.iter().any(|s|same_rect(s.bounds,screen.bounds)) {
-            let r=stage_rect(&screen,&state.prefs.stage_side);
+            let style=state.prefs.stage_style(&screen.id);
+            let r=stage_rect(screen,style);
             let stage_hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,
                 class.as_ptr(),wide("tuanpc-desk Stage Manager").as_ptr(),WS_POPUP,
                 r.left,r.top,r.right-r.left,r.bottom-r.top,
                 ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
             if !stage_hwnd.is_null(){
                 previews::style_destination(stage_hwnd);
-                state.stages.push(Stage{hwnd:stage_hwnd,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),selected:None,hidden:true,previews:previews::Previews::default()});
+                state.stages.push(Stage{hwnd:stage_hwnd,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),selected:None,gap:stage_gap(screen,style),hidden:true,previews:previews::Previews::default()});
             } else { emit(Event::Error(format!("Create Stage window: {}",GetLastError()))); }
         }
     }
@@ -384,13 +388,16 @@ unsafe fn refresh(state:&mut State, topology:bool) {
     }
     state.workspaces.prune();
     for stage in &mut state.stages {
-        if let Some(screen)=state.screens.iter().find(|s|same_rect(s.bounds,stage.bounds)) {
-            let r=stage_rect(screen,&state.prefs.stage_side);let mut actual:RECT=mem::zeroed();
+        let mut placement_changed=false;
+        if let Some(screen)=state.screens.iter().find(|s|s.id==stage.display) {
+            let style=state.prefs.stage_style(&screen.id);
+            let r=stage_rect(screen,style);let mut actual:RECT=mem::zeroed();
+            let gap=stage_gap(screen,style);placement_changed=gap!=stage.gap;stage.gap=gap;
             if GetWindowRect(stage.hwnd,&mut actual)==0 || !same_rect(r,actual){SetWindowPos(stage.hwnd,HWND_TOPMOST,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE);}
         }
         let (items,groups)=state.workspaces.cards(&stage.display,stage.bounds,&state.windows,state.prefs.all_windows);
         let selected=state.workspaces.active(&stage.display);
-        let mut changed=stage.items!=items||stage.groups!=groups||stage.selected!=selected||active_changed;
+        let mut changed=placement_changed||stage.items!=items||stage.groups!=groups||stage.selected!=selected||active_changed;
         stage.items=items;stage.groups=groups;stage.selected=selected;
         // Handle fullscreen on the local monitor even while the foreground
         // window is on another screen. The top local app must cover the output.
@@ -402,7 +409,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         else {
             let mut area:RECT=mem::zeroed();
             if GetClientRect(stage.hwnd,&mut area)!=0{
-                changed|=stage.previews.update(stage.hwnd,&stage.items,area.right,area.bottom);
+                changed|=stage.previews.update(stage.hwnd,&stage.items,area.right,area.bottom,stage.gap);
             }
         }
         if changed{InvalidateRect(stage.hwnd,ptr::null(),0);}
@@ -475,12 +482,12 @@ unsafe fn paint(hwnd:HWND){
         let state=cell.borrow();
         let stage=state.stages.iter().find(|stage|stage.hwnd==hwnd)?;
         let ready=stage.items.iter().map(|item|stage.previews.includes(item.hwnd)).collect::<Vec<_>>();
-        Some((stage.items.clone(),ready,stage.groups.clone(),stage.selected,state.foreground))
+        Some((stage.items.clone(),ready,stage.groups.clone(),stage.selected,stage.gap,state.foreground))
     });
-    if let Some((items,ready,groups,active,foreground))=stage {
+    if let Some((items,ready,groups,active,gap,foreground))=stage {
         label(dc,6,4,area.right-12,"Stage Manager",0x00eae9e7);
         for (i,item) in items.iter().enumerate(){
-            let tile=previews::tile(area.right,area.bottom,i);
+            let tile=previews::tile(area.right,area.bottom,gap,i);
             if tile.bottom-tile.top<22{continue;}
             let selected=item.hwnd as isize==foreground||(active.is_some()&&active==groups[i]);
             let brush=CreateSolidBrush(if selected{0x00614936}else{0x00362923});
@@ -493,7 +500,7 @@ unsafe fn paint(hwnd:HWND){
                 DrawIconEx(dc,(area.right-24)/2,tile.top+(tile.bottom-tile.top-40).max(8)/2,
                     image,24,24,0,ptr::null_mut(),DI_NORMAL);
             }
-            let title=if groups[i].is_some(){format!("{} · {}",item.title,item.count)}else{basename(&item.path)};
+            let title=if groups[i].is_some(){format!("{} · {}",item.title,item.count)}else{item.title.clone()};
             label(dc,tile.left+6,tile.bottom-25,tile.right-tile.left-12,&title,0x00eeeeee);
         }
         EndPaint(hwnd,&ps);return;
@@ -621,7 +628,7 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
     let card=STATE.with(|s|{
         let state=s.borrow();
         let stage=state.stages.iter().find(|p|p.hwnd==hwnd)?;
-        let i=previews::slot_at(area.right,area.bottom,x,y,stage.items.len())?;
+        let i=previews::slot_at(area.right,area.bottom,x,y,stage.items.len(),stage.gap)?;
         let item=stage.items.get(i)?;
         let local=state.windows.iter().any(|w|w.hwnd==item.hwnd&&rect_intersects(w.rect,stage.bounds));
         Some((item.hwnd,stage.groups.get(i).copied().flatten(),stage.display.clone(),stage.selected,local,state.workspaces.can_create(&stage.display)))
@@ -809,7 +816,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             let stage_item=STATE.with(|s|{
                 let a=s.borrow();
                 let stage=a.stages.iter().find(|stage|stage.hwnd==hwnd)?;
-                let i=previews::slot_at(area.right,area.bottom,px,y,stage.items.len())?;
+                let i=previews::slot_at(area.right,area.bottom,px,y,stage.items.len(),stage.gap)?;
                 Some((stage.items.get(i)?.clone(),stage.groups.get(i).copied().flatten(),stage.display.clone()))
             });
             if let Some((item,group,display))=stage_item {
@@ -973,9 +980,11 @@ mod tests{
     #[test] fn distinct_monitor_geometry(){let s=Screen{bounds:rect([-1920,0,0,1080]),work:rect([-1920,0,0,1040]),primary:false,id:"test".into(),name:"Test".into(),dpi:96};let r=bar_rect(&s,5);assert!(r.left<0 && r.right<=0 && r.bottom<=1040);}
     #[test] fn stage_geometry_on_negative_monitor(){
         let sc=Screen{bounds:rect([-1920,-120,0,1080]),work:rect([-1920,-120,0,1040]),primary:false,id:"test".into(),name:"Test".into(),dpi:96};
-        let left=stage_rect(&sc,"left");let right=stage_rect(&sc,"right");
+        let left=stage_rect(&sc,StageStyle::default());
+        let right=stage_rect(&sc,StageStyle{right:Some(true),scale:140,spacing:12});
         assert!(left.left<right.left && left.left>=sc.work.left && right.right<=sc.work.right);
         assert!(left.top>=sc.work.top && left.bottom<=sc.work.bottom);
+        assert!(right.right-right.left>left.right-left.left);
     }
     #[test] fn stage_keeps_distinct_windows_even_with_the_same_executable(){
         let make=|hwnd:usize,r:[i32;4]|AppWindow{

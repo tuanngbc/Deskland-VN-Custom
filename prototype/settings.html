@@ -152,6 +152,12 @@
       <option value="custom" data-i18n="dockDisplayCustom">Tự chọn nhiều màn hình</option>
     </select></label>
     <div id="stageDisplayChoices" class="dock-display-choices"></div>
+    <label class="setting-row"><b data-i18n="stageStyleDisplay">Bố cục Stage theo màn hình</b><select id="stageStyleDisplay"></select></label>
+    <div id="stageStyleControls" hidden>
+      <label class="setting-row"><b data-i18n="dockStageSide">Vị trí Stage Manager</b><select id="stageStyle_side"><option value="default" data-i18n="stageInheritSide">Dùng vị trí chung</option><option value="left" data-i18n="dockLeft">Bên trái</option><option value="right" data-i18n="dockRight">Bên phải</option></select></label>
+      <label class="setting-row"><b data-i18n="stageScale">Kích thước Stage</b><span><input type="range" id="stageStyle_scale" min="75" max="140" step="1"><output id="stageValue_scale"></output></span></label>
+      <label class="setting-row"><b data-i18n="stageSpacing">Khoảng cách thẻ Stage</b><span><input type="range" id="stageStyle_spacing" min="2" max="20" step="1"><output id="stageValue_spacing"></output></span></label>
+    </div>
   </section>
   <section class="setting-card"><h3 data-i18n="dockAppearanceTitle">Kiểu hiển thị Dock</h3>
     <label class="setting-row"><b data-i18n="dockIconSize">Cỡ biểu tượng</b><span><input id="dockLook_iconSize" type="range" min="28" max="60" value="44"> <output id="dockValue_iconSize">44</output></span></label>
@@ -747,7 +753,7 @@ function syncSystemMonitor(m) {
   $('systemMonitorInterval').value=String(options.interval);
 }
 let dockOptions={enabled:false,stageEnabled:false,allWindows:false,stageSide:'left'};
-let dockDisplays=[],dockError=null,dockRunning=false;
+let dockDisplays=[],dockError=null,dockRunning=false,stageStyleDisplay=null;
 const dockFallbackText={
   dockStopped:'Dock và Stage đang tắt',dockStarting:'Đang bật Dock hoặc Stage…',dockRunning:'Dock và Stage đang chạy',
   primaryMonitor:'Màn hình chính',dockDisplayDisconnected:'Màn hình đã ngắt kết nối',
@@ -787,6 +793,37 @@ function requestedDisplays(target){
 }
 const defaultDisplay=()=>dockDisplays.find(d=>d.primary)||dockDisplays[0];
 const displayLabel=d=>d.name+' · '+d.w+' × '+d.h+' · '+d.dpi+' DPI'+(d.primary?' · '+dockText('primaryMonitor'):'');
+const stageStyleDefaults={side:'default',scale:100,spacing:6};
+const stageStyleFor=id=>({...stageStyleDefaults,...(Object.hasOwn(dockOptions.stageStyles||{},id)?dockOptions.stageStyles[id]:{})});
+const stageRight=id=>{const side=stageStyleFor(id).side;return (side==='default'?dockOptions.stageSide:side)==='right';};
+const stageUnits={scale:'%',spacing:' px'};
+function showStageStyle(){
+  const control=$('stageStyleDisplay');
+  const markup=dockDisplays.map(d=>'<option value="'+esc(d.id)+'">'+esc(displayLabel(d))+'</option>').join('');
+  if(control.dockMarkup!==markup){control.innerHTML=markup;control.dockMarkup=markup;}
+  if(!dockDisplays.some(d=>d.id===stageStyleDisplay))stageStyleDisplay=defaultDisplay()?.id||null;
+  control.value=stageStyleDisplay||'';
+  control.disabled=!stageStyleDisplay;
+  $('stageStyleControls').hidden=!stageStyleDisplay;
+  const style=stageStyleFor(stageStyleDisplay);
+  for(const key of ['side','scale','spacing']){
+    $('stageStyle_'+key).value=String(style[key]);
+    if(stageUnits[key])$('stageValue_'+key).textContent=style[key]+stageUnits[key];
+  }
+}
+$('stageStyleDisplay').addEventListener('change',e=>{stageStyleDisplay=e.target.value;showStageStyle();});
+for(const key of ['side','scale','spacing']){
+  const control=$('stageStyle_'+key),unit=stageUnits[key];
+  if(unit)control.addEventListener('input',()=>$('stageValue_'+key).textContent=control.value+unit);
+  control.addEventListener('change',()=>{
+    const display=stageStyleDisplay;
+    if(!display)return;
+    const style={...stageStyleFor(display),[key]:unit?Number(control.value):control.value};
+    dockOptions.stageStyles={...dockOptions.stageStyles,[display]:style};
+    renderDockPlacement();
+    send({t:'stageStyle',display,style});
+  });
+}
 function renderDockPlacement(){
   const layouts={};
   let fallback=false;
@@ -819,7 +856,7 @@ function renderDockPlacement(){
   $('dockDisplayPreview').innerHTML=dockDisplays.length?dockDisplays.map(d=>{
     const app=layouts.dockDisplay.has(d.id),stage=layouts.stageDisplay.has(d.id);
     return '<div class="dock-display-card"><div class="dock-display-diagram" aria-hidden="true" style="aspect-ratio:'+Math.max(.5,Math.min(2.5,d.w/d.h))+'">'+
-      (app?'<i class="dock-display-bar '+(["left","right"].includes(dockOptions.appearance?.position)?dockOptions.appearance.position:"")+'"></i>':'')+(stage?'<i class="dock-display-stage '+(dockOptions.stageSide==='right'?'right':'')+'"></i>':'')+
+      (app?'<i class="dock-display-bar '+(["left","right"].includes(dockOptions.appearance?.position)?dockOptions.appearance.position:"")+'"></i>':'')+(stage?'<i class="dock-display-stage '+(stageRight(d.id)?'right':'')+'"></i>':'')+
       '</div><b>'+esc(displayLabel(d))+'</b><small>'+esc([app?'Dock':'',stage?'Stage Manager':''].filter(Boolean).join(' · ')||dockText('dockDisplayOff'))+'</small></div>';
   }).join(''):'<p>'+esc(dockText('dockDisplayNone'))+'</p>';
 }
@@ -837,6 +874,7 @@ function syncDockSettings(m) {
   $('dockRuntimeStatus').classList.toggle('error-text',!!dockError);
   renderDockPlacement();
   showDockAppearance();
+  showStageStyle();
 }
 for(const [id,key,type] of [['dockEnabled','enabled','checked'],['dockStageEnabled','stageEnabled','checked'],
       ['dockAllWindows','allWindows','checked'],['dockStageSide','stageSide','value']])$(id).addEventListener('change',()=>{

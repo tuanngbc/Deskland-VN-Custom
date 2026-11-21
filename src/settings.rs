@@ -3,8 +3,8 @@
 //! cập nhật lại giao diện theo trạng thái thật.
 
 use crate::desktop::wide;
-use crate::dock::{Display, DisplayMode, DisplayTarget};
-use std::cell::RefCell;
+use crate::dock::{Display, DisplayMode, DisplayTarget, StageStyle};
+use std::{cell::RefCell, collections::BTreeMap};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -30,6 +30,7 @@ pub enum Action {
     Dock(bool),
     Stage(bool),
     DockDisplay(bool, DisplayTarget),
+    StageStyle(String, StageStyle),
 }
 
 /// Trạng thái thật mà giao diện hiển thị.
@@ -294,6 +295,7 @@ struct Ui {
     stage:HWND,
     dock_target:DisplayTarget,
     stage_target:DisplayTarget,
+    stage_styles:BTreeMap<String,StageStyle>,
     displays:Vec<Display>,
     note: HWND,
 }
@@ -461,6 +463,7 @@ pub fn open(state: &State) {
             stage:std::ptr::null_mut(),
             dock_target:DisplayTarget::default(),
             stage_target:DisplayTarget::default(),
+            stage_styles:BTreeMap::new(),
             displays:Vec::new(),
             saver_now: std::ptr::null_mut(),
             saver: std::ptr::null_mut(),
@@ -548,6 +551,7 @@ pub fn sync(state: &State) {
             set_check(ui.stage,state.dock.stage_enabled);
             ui.dock_target=state.dock.dock_display.clone();
             ui.stage_target=state.dock.stage_display.clone();
+            ui.stage_styles=state.dock.stage_styles.clone();
             ui.displays=state.displays.clone();
             let t = if state.hotkey { "Khóa với cảnh động (Ctrl+Alt+L)" } else { "Khóa với cảnh động" };
             SetWindowTextW(ui.saver_now, wide(t).as_ptr());
@@ -558,8 +562,8 @@ pub fn sync(state: &State) {
 /// An in-place Windows menu keeps the essential display controls accessible
 /// with a keyboard even when the WebView cannot start.
 unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
-    let Some((mut target, displays)) = UI.with(|u| u.borrow().as_ref().map(|ui| {
-        (if stage { ui.stage_target.clone() } else { ui.dock_target.clone() }, ui.displays.clone())
+    let Some((mut target, displays, styles)) = UI.with(|u| u.borrow().as_ref().map(|ui| {
+        (if stage { ui.stage_target.clone() } else { ui.dock_target.clone() }, ui.displays.clone(), ui.stage_styles.clone())
     })) else { return };
     let menu = CreatePopupMenu();
     if menu.is_null() { return; }
@@ -583,10 +587,49 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
         };
         add(100+i,&label,checked);
     }
+    // A compact menu gives the fallback access without opening another app.
+    let mut edits = Vec::new();
+    if stage && !displays.is_empty() {
+        let layouts = CreatePopupMenu();
+        if !layouts.is_null() {
+            for d in displays.iter().take(32) {
+                let submenu = CreatePopupMenu();
+                if submenu.is_null() { continue; }
+                let base = styles.get(&d.id).copied().unwrap_or_default();
+                for (title, right) in [("Vị trí chung",None),("Bên trái",Some(false)),("Bên phải",Some(true))] {
+                    edits.push((d.id.clone(), StageStyle {right,..base}));
+                    AppendMenuW(submenu, MF_STRING | if base.right == right {MF_CHECKED} else {0},
+                        500+edits.len()-1, wide(title).as_ptr());
+                }
+                AppendMenuW(submenu, MF_SEPARATOR, 0, std::ptr::null());
+                for scale in [75,100,125,140] {
+                    edits.push((d.id.clone(), StageStyle {scale,..base}));
+                    AppendMenuW(submenu, MF_STRING | if base.scale == scale {MF_CHECKED} else {0},
+                        500+edits.len()-1, wide(&format!("Kích thước {scale}%")).as_ptr());
+                }
+                AppendMenuW(submenu, MF_SEPARATOR, 0, std::ptr::null());
+                for spacing in [2,6,12,20] {
+                    edits.push((d.id.clone(), StageStyle {spacing,..base}));
+                    AppendMenuW(submenu, MF_STRING | if base.spacing == spacing {MF_CHECKED} else {0},
+                        500+edits.len()-1, wide(&format!("Khoảng cách {spacing} px")).as_ptr());
+                }
+                if AppendMenuW(layouts, MF_POPUP, submenu as usize, wide(&d.name.replace('&',"&&")).as_ptr()) == 0 {
+                    DestroyMenu(submenu);
+                }
+            }
+            if AppendMenuW(menu, MF_POPUP, layouts as usize, wide("Bố cục từng màn hình").as_ptr()) == 0 {
+                DestroyMenu(layouts);
+            }
+        }
+    }
     let mut rect: RECT = std::mem::zeroed();
     GetWindowRect(button,&mut rect);
     let command = TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,rect.left,rect.bottom,0,owner,std::ptr::null()) as usize;
     DestroyMenu(menu);
+    if let Some((id,style)) = command.checked_sub(500).and_then(|i| edits.get(i)) {
+        push(Action::StageStyle(id.clone(),*style));
+        return;
+    }
     match command {
         1 => target.mode=DisplayMode::All,
         2 => target.mode=DisplayMode::Primary,

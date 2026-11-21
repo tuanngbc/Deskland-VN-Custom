@@ -2611,6 +2611,9 @@ fn main() {
                     if stage {app.cfg.dock.stage_display=target;} else {app.cfg.dock.dock_display=target;}
                     app.configure_dock();
                 }
+                Action::StageStyle(id,style)=>{
+                    dock::Edit::StageStyle(id,style).apply(&mut app.cfg.dock);app.configure_dock();
+                }
                 Action::Interaction(on) => {
                     INTERACTIONS_ENABLED.with(|c| c.set(on));
                     app.interactions_enabled = on;
@@ -2915,6 +2918,13 @@ fn main() {
                         if let Some(v)=m.get(key){value[key]=v.clone();}
                     }
                     app.cfg.dock=dock::Options::from_json(&value);app.configure_dock();web_changed=true;
+                }
+                "stageStyle" => {
+                    let id = s_("display");
+                    if dock::displays().iter().any(|display| display.id == id) {
+                        dock::Edit::StageStyle(id, dock::StageStyle::from_json(&m["style"])).apply(&mut app.cfg.dock);
+                        app.configure_dock();web_changed=true;
+                    }
                 }
                 "wallpaperEnabled" => {
                     if let Some(on)=m["enabled"].as_bool(){

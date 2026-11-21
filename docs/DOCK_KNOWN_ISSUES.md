@@ -32,3 +32,10 @@ No baseline/installed binary replacement. Owner state restored and verified, inc
 - Output identity is per-monitor device path where available. Remote/virtual outputs may fall back to their GDI source name, whose identity is not guaranteed across reconnect. Mirroring is one drawable desktop source and must not spawn duplicate overlays.
 - First owner trial observed settings and real geometry, but coordinate injection into the WebView2 drop-down hit its separate Chrome window. Do not count that attempt as a successfully applied target. Recheck via native fixture or keyboard and record the saved mode and actual HWNDs.
 - The old GDI Dock and Stage sidebar continue to run during M1. Native glass probe success cannot certify the Dock, and successful DWM API calls alone do not certify blur.
+
+## Composition and Stage limitations
+
+- Owner-host Windows transparency is off. DWM backdrop calls can succeed while rendering opaque. The current Dock alpha fallback genuinely blends with the desktop but does not blur it.
+- Stage uses documented DWM thumbnails only when visibility, uncloaked status, and display affinity are verified. Windows may reject affinity queries for ordinary non-layered sources; those cases intentionally show a fallback rather than attempting another capture path.
+- Workspace management is session-local. A hung/elevated window may reject or delay placement; normal Deskland exit submits restoration, but forced process termination and exactly preserving Windows focus/Z-order are not established. Multi-monitor moves and richer editing need separate verification.
+- Initial status has a Vietnamese fallback before localization loads. Clock-on/WebView hang and Shell provider shutdown bounds still need owner-host evidence.

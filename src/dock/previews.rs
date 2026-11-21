@@ -14,14 +14,14 @@ impl Previews {
         let changed=!self.links.is_empty();self.links.clear();changed
     }
     pub fn includes(&self,hwnd:HWND)->bool{self.links.contains_key(&(hwnd as usize))}
-    pub unsafe fn update(&mut self,dst:HWND,items:&[Item],width:i32,height:i32)->bool{
+    pub unsafe fn update(&mut self,dst:HWND,items:&[Item],width:i32,height:i32,gap:i32)->bool{
         let mut next=HashMap::new();
         let mut changed=false;
         for (i,item) in items.iter().enumerate(){
             let source=item.hwnd;
             let Some(pid)=preview_pid(source) else{continue;};
             let key=source as usize;
-            let region=tile(width,height,i);
+            let region=tile(width,height,gap,i);
             let slot=RECT{left:region.left+5,top:region.top+5,right:region.right-5,bottom:region.bottom-22};
             if slot.right<=slot.left||slot.bottom<=slot.top{continue;}
             let existing=self.links.remove(&key);
@@ -72,13 +72,13 @@ unsafe fn preview_pid(window:HWND)->Option<u32>{
     Some(pid)
 }
 
-pub fn tile(width:i32,height:i32,i:usize)->RECT{
+pub fn tile(width:i32,height:i32,gap:i32,i:usize)->RECT{
     let step=((height-28)/5).clamp(28,126);
     let top=31+i as i32*step;
-    RECT{left:7,top,right:width-7,bottom:(top+step-5).min(height-4)}
+    RECT{left:7,top,right:width-7,bottom:(top+step-gap.min((step/4).max(2))).min(height-4)}
 }
-pub fn slot_at(width:i32,height:i32,x:i32,y:i32,items:usize)->Option<usize>{
-    (0..items).find(|&i|{let r=tile(width,height,i);x>=r.left&&x<r.right&&y>=r.top&&y<r.bottom})
+pub fn slot_at(width:i32,height:i32,x:i32,y:i32,items:usize,gap:i32)->Option<usize>{
+    (0..items).find(|&i|{let r=tile(width,height,gap,i);x>=r.left&&x<r.right&&y>=r.top&&y<r.bottom})
 }
 fn fit(slot:RECT,source:SIZE)->Option<RECT>{
     if source.cx<=0||source.cy<=0{return None;}
@@ -101,12 +101,12 @@ mod tests{
     use super::*;
     #[test]
     fn thumbnail_fits_its_tile_without_covering_labels_or_hit_areas(){
-        let r=tile(164,590,2);
+        let r=tile(164,590,6,2);
         let area=RECT{left:r.left+5,top:r.top+5,right:r.right-5,bottom:r.bottom-22};
         for source in [SIZE{cx:1920,cy:1080},SIZE{cx:1080,cy:1920},SIZE{cx:20000,cy:20}]{
             let dest=fit(area,source).unwrap();
             assert!(dest.left>=area.left&&dest.right<=area.right&&dest.top>=area.top&&dest.bottom<=area.bottom);
-            assert_eq!(slot_at(164,590,dest.left,dest.top,5),Some(2));
+            assert_eq!(slot_at(164,590,dest.left,dest.top,5,6),Some(2));
         }
         assert!(fit(area,SIZE{cx:0,cy:120}).is_none());
     }
