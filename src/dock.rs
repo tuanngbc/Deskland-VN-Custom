@@ -24,6 +24,7 @@ mod icon_atlas;
 mod previews;
 mod workspaces;
 mod perf;
+mod stage_surface;
 pub use glass_probe::probe as glass_probe;
 pub use appearance::{Appearance,DockSide};
 pub use options::{Options,Edit,DisplayMode,DisplayTarget,StageStyle};
@@ -111,6 +112,7 @@ thread_local! {
     static COMMANDS:RefCell<Option<mpsc::Receiver<Command>>>=const{RefCell::new(None)};
     static EVENTS:RefCell<Option<mpsc::Sender<Event>>>=const{RefCell::new(None)};
     static SURFACES:RefCell<HashMap<usize,surface::Surface>>=RefCell::new(HashMap::new());
+    static STAGE_SURFACES:RefCell<HashMap<usize,stage_surface::Panel>>=RefCell::new(HashMap::new());
     static ATLAS:RefCell<Option<icon_atlas::Worker>>=const{RefCell::new(None)};
 }
 
@@ -430,7 +432,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let start=stage.page*rows;
         let items:Vec<_>=items.into_iter().skip(start).take(rows).collect();
         let groups:Vec<_>=groups.into_iter().skip(start).take(rows).collect();
-        let mut changed=placement_changed||stage.items!=items||stage.groups!=groups||stage.selected!=selected||active_changed||old_pages!=stage.pages;
+        let mut changed=placement_changed||stage.items!=items||stage.groups!=groups||stage.selected!=selected||active_changed||material_changed||old_pages!=stage.pages;
         stage.items=items;stage.groups=groups;stage.selected=selected;
         // Handle fullscreen on the local monitor even while the foreground
         // window is on another screen. The top local app must cover the output.
@@ -453,7 +455,7 @@ unsafe fn fill(hdc:HDC,r:RECT,color:u32) {
 unsafe fn label(hdc:HDC,x:i32,y:i32,width:i32,text:&str,color:u32) {
     SetTextColor(hdc,color);SetBkMode(hdc,TRANSPARENT as i32);
     let mut r=RECT{left:x,top:y,right:x+width,bottom:y+26};
-    DrawTextW(hdc,wide(text).as_ptr(),-1,&mut r,DT_CENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_VCENTER);
+    DrawTextW(hdc,wide(text).as_ptr(),-1,&mut r,DT_CENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_VCENTER|DT_NOPREFIX);
 }
 fn color(seed:&str)->u32 {
     let n=seed.bytes().fold(0x811c9dc5u32,|x,b|(x^b as u32).wrapping_mul(0x01000193));
@@ -498,40 +500,56 @@ unsafe fn paint(hwnd:HWND){
         return;
     }
     let mut area:RECT=mem::zeroed();GetClientRect(hwnd,&mut area);
-    fill(dc,area,0x00201b18);
     let stage=STATE.with(|cell|{
         let state=cell.borrow();
         let stage=state.stages.iter().find(|stage|stage.hwnd==hwnd)?;
         let ready=stage.items.iter().map(|item|stage.previews.includes(item.hwnd)).collect::<Vec<_>>();
-        Some((stage.items.clone(),ready,stage.groups.clone(),stage.selected,stage.gap,stage.page,stage.pages,state.foreground))
+        let dpi=state.screens.iter().find(|s|s.id==stage.display).map_or(96,|s|s.dpi);
+        let dark=state.material.is_none_or(|m|m.dark);
+        Some((stage.items.clone(),ready,stage.groups.clone(),stage.selected,stage.gap,stage.page,stage.pages,state.foreground,dpi,dark))
     });
-    if let Some((items,ready,groups,active,gap,page,pages,foreground))=stage {
-        label(dc,6,4,area.right-12,"Stage Manager",0x00eae9e7);
+    if let Some((items,ready,groups,active,gap,page,pages,foreground,dpi,dark))=stage {
+        let key=hwnd as usize;
+        let size=(area.right,area.bottom,dpi);
+        let panel=STAGE_SURFACES.with(|s|s.borrow_mut().remove(&key));
+        let mut panel=match panel{Some(p) if p.geometry()==size=>Some(p),_=>stage_surface::Panel::new(size.0,size.1,size.2)};
+        let selected=|i:usize|items[i].hwnd as isize==foreground || (active.is_some()&&active==groups[i]);
+        let active_mask=(0..items.len()).filter(|&i|selected(i)).fold(0u8,|bits,i|bits|(1<<i));
+        let stack_mask=(0..items.len()).filter(|&i|items[i].count>1).fold(0u8,|bits,i|bits|(1<<i));
+        let look=stage_surface::Look{dark,gap,count:items.len(),active:active_mask,stacked:stack_mask};
+        let rendered=panel.as_mut().is_some_and(|p|p.paint(dc,look));
+        if !rendered{fill(dc,area,if dark{0x00201b18}else{0x00f4f2ee});}
+        let font=panel.as_ref().map_or(ptr::null_mut(),stage_surface::Panel::font);
+        let previous=if font.is_null(){ptr::null_mut()}else{SelectObject(dc,font)};
+        let ink=if dark{0x00f1ebe7}else{0x00342823};
+        let muted=if dark{0x00a09d98}else{0x007e7268};
+        label(dc,6,2,area.right-12,"Stage Manager",ink);
         for (i,item) in items.iter().enumerate(){
             let tile=previews::tile(area.right,area.bottom,gap,i);
             if tile.bottom-tile.top<22{continue;}
-            let selected=item.hwnd as isize==foreground||(active.is_some()&&active==groups[i]);
-            let brush=CreateSolidBrush(if selected{0x00614936}else{0x00362923});
-            let pen=CreatePen(PS_SOLID as i32,1,if selected{0x00c29a63}else{0x0053493f});
-            let pb=SelectObject(dc,brush);let pp=SelectObject(dc,pen);
-            RoundRect(dc,tile.left,tile.top,tile.right,tile.bottom,14,14);
-            SelectObject(dc,pb);SelectObject(dc,pp);DeleteObject(brush);DeleteObject(pen);
+            if !rendered {
+                fill(dc,tile,if dark{0x00362923}else{0x00fbfaf8});
+            }
             if !ready[i] {
                 let image=LoadIconW(ptr::null_mut(),IDI_APPLICATION);
                 DrawIconEx(dc,(area.right-24)/2,tile.top+(tile.bottom-tile.top-40).max(8)/2,
                     image,24,24,0,ptr::null_mut(),DI_NORMAL);
             }
             let title=if groups[i].is_some(){format!("{} · {}",item.title,item.count)}else{item.title.clone()};
-            label(dc,tile.left+6,tile.bottom-25,tile.right-tile.left-12,&title,0x00eeeeee);
+            label(dc,tile.left+6,tile.bottom-25,tile.right-tile.left-12,&title,ink);
         }
         if pages>1 {
             let y=area.bottom-previews::NAV_HEIGHT;
-            label(dc,8,y,25,"‹",if page>0{0x00eeeeee}else{0x00606060});
-            label(dc,33,y,area.right-66,&format!("{} / {pages}",page+1),0x00cccccc);
-            label(dc,area.right-33,y,25,"›",if page+1<pages{0x00eeeeee}else{0x00606060});
+            label(dc,8,y,25,"‹",if page>0{ink}else{muted});
+            label(dc,33,y,area.right-66,&format!("{} / {pages}",page+1),muted);
+            label(dc,area.right-33,y,25,"›",if page+1<pages{ink}else{muted});
         }
-        EndPaint(hwnd,&ps);return;
+        if !previous.is_null(){SelectObject(dc,previous);}
+        EndPaint(hwnd,&ps);
+        if let Some(panel)=panel{STAGE_SURFACES.with(|s|s.borrow_mut().insert(key,panel));}
+        return;
     }
+    fill(dc,area,0x00201b18);
     let bar=STATE.with(|cell|cell.borrow().bars.iter().find(|b|b.hwnd==hwnd).cloned());
     if let Some(bar)=bar{
         for (i,item) in bar.items.iter().enumerate() {
@@ -719,6 +737,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         },
         WM_NCDESTROY=>{
             perf::forget(hwnd as usize);
+            STAGE_SURFACES.with(|s|s.borrow_mut().remove(&(hwnd as usize)));
             SURFACES.with(|s|s.borrow_mut().remove(&(hwnd as usize)));
             DefWindowProcW(hwnd,msg,w,l)
         },
@@ -956,7 +975,20 @@ unsafe fn drain_commands() {
             Command::Suspend(on)=>update_state(|state|{if state.suspended!=on{state.suspended=on;refresh(state,!on);}}),
             Command::Stop=>{EndMenu();PostQuitMessage(0);},
             Command::Focus=>focus_dock(),
-            #[cfg(test)] Command::Inspect(tx)=>{let handles=STATE.with(|s|{let s=s.borrow();s.bars.iter().map(|b|b.hwnd as usize).chain(s.stages.iter().map(|s|s.hwnd as usize)).collect()});let _=tx.send(handles);},
+            #[cfg(test)] Command::Inspect{reply,paint}=>{
+                let handles:Vec<usize>=STATE.with(|s|{let s=s.borrow();s.bars.iter().map(|b|b.hwnd as usize)
+                    .chain(s.stages.iter().map(|s|s.hwnd as usize)).collect()});
+                if paint {
+                    for &handle in &handles {
+                        let hwnd=handle as HWND;
+                        if IsWindowVisible(hwnd)!=0 {
+                            InvalidateRect(hwnd,ptr::null(),0);
+                            UpdateWindow(hwnd);
+                        }
+                    }
+                }
+                let _=reply.send(handles);
+            },
         }
     }
 }
@@ -1011,7 +1043,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0{TranslateMessage(&msg);DispatchMessageW(&msg);}
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
         update_state(|s|{s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){b.previews.clear();DestroyWindow(b.hwnd);}});
-        SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
+        SURFACES.with(|s|s.borrow_mut().clear());STAGE_SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
         CONTROL.with(|c|c.set(ptr::null_mut()));DestroyWindow(control);
         OWNER.with(|o|o.set(ptr::null_mut()));
         COMMANDS.with(|c|{c.take();});EVENTS.with(|e|{e.take();});STATE.with(|s|{s.take();});

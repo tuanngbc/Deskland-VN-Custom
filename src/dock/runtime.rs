@@ -7,7 +7,7 @@ pub(super) enum Command {
     Suspend(bool),
     Stop,
     Focus,
-    #[cfg(test)] Inspect(Sender<Vec<usize>>),
+    #[cfg(test)] Inspect { reply:Sender<Vec<usize>>, paint:bool },
 }
 #[derive(Debug)]
 pub enum Event { Edit(super::Edit), Error(String) }
@@ -42,7 +42,11 @@ impl Runtime {
     pub fn finished(&self)->bool {self.thread.as_ref().is_none_or(JoinHandle::is_finished)}
     #[cfg(test)]
     fn inspect(&self)->Vec<usize> {
-        let (tx,rx)=mpsc::channel();self.send(Command::Inspect(tx));
+        self.inspect_with_paint(false)
+    }
+    #[cfg(test)]
+    fn inspect_with_paint(&self,paint:bool)->Vec<usize> {
+        let (tx,rx)=mpsc::channel();self.send(Command::Inspect{reply:tx,paint});
         rx.recv_timeout(std::time::Duration::from_secs(5)).expect("Dock UI must answer")
     }
 }
@@ -189,7 +193,7 @@ mod tests {
             let t=Instant::now();
             for _ in 0..100 {
                 runtime.configure(on.clone());
-                let active=runtime.inspect();
+                let active=runtime.inspect_with_paint(dock||stage);
                 assert_eq!(active.is_empty(),!(dock||stage));
                 runtime.configure(off.clone());
                 assert!(runtime.inspect().is_empty());
@@ -212,7 +216,7 @@ mod tests {
         for _ in 0..100 {
             let runtime=Runtime::new(on.clone(),0).unwrap();
             let controller=runtime.control;
-            let active=runtime.inspect();
+            let active=runtime.inspect_with_paint(true);
             assert!(!active.is_empty());
             drop(runtime);
             assert_eq!(unsafe{IsWindow(controller as _)},0);

@@ -120,7 +120,7 @@ fn draw(data:&mut [u8],w:i32,h:i32,r:Rect,f:impl Fn(f32,f32)->Option<([u8;3],f32
         }
     }
 }
-fn rounded(data:&mut [u8],w:i32,h:i32,r:Rect,radius:f32,tint:[u8;3],opacity:u8){
+pub(super) fn rounded(data:&mut [u8],w:i32,h:i32,r:Rect,radius:f32,tint:[u8;3],opacity:u8){
     draw(data,w,h,r,|x,y|Some((tint,(0.5-distance(r,radius,x,y)).clamp(0.0,1.0)*opacity as f32)));
 }
 fn fallback_icon(data:&mut[u8],w:i32,h:i32,slot:Rect,tint:[u8;3]){

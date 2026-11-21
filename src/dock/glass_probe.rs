@@ -80,6 +80,9 @@ impl Layer {
         let blend=BLENDFUNCTION{BlendOp:AC_SRC_OVER as u8,BlendFlags:0,SourceConstantAlpha:255,AlphaFormat:AC_SRC_ALPHA as u8};
         UpdateLayeredWindow(hwnd,ptr::null_mut(),ptr::null(),&size,self.dc,&origin,0,&blend,ULW_ALPHA)!=0
     }
+    pub(super) unsafe fn blit(&self, target:HDC)->bool {
+        BitBlt(target,0,0,self.size.0,self.size.1,self.dc,0,0,SRCCOPY)!=0
+    }
 }
 impl Drop for Layer {
     fn drop(&mut self) {unsafe {SelectObject(self.dc,self.previous);DeleteObject(self.bitmap);DeleteDC(self.dc);}}
