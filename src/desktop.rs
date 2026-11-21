@@ -286,6 +286,21 @@ struct FgScan<'a> {
     screens: &'a [RECT],
     own: &'a [HWND],
     paused: Vec<bool>,
+    probe: Option<CoverageProbe>,
+}
+
+struct CoverageProbe {
+    wallpaper_pid: Option<u32>,
+    reasons: Vec<Option<&'static str>>,
+}
+
+fn coverage_reason(screen: &RECT, window: &RECT, zoomed: bool, ex: u32) -> Option<&'static str> {
+    let (cx, cy) = ((window.left + window.right) / 2, (window.top + window.bottom) / 2);
+    if !(cx >= screen.left && cx < screen.right && cy >= screen.top && cy < screen.bottom) { return None; }
+    if zoomed { return Some("maximized"); }
+    (ex & WS_EX_TOOLWINDOW == 0
+        && window.left <= screen.left + 2 && window.top <= screen.top + 2
+        && window.right >= screen.right - 2 && window.bottom >= screen.bottom - 56).then_some("bounds")
 }
 
 unsafe extern "system" fn enum_fg(w: HWND, l: LPARAM) -> BOOL {
@@ -305,6 +320,13 @@ unsafe extern "system" fn enum_fg(w: HWND, l: LPARAM) -> BOOL {
     if matches!(c.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "DummyDWMListenerWindow") {
         return 1;
     }
+    if c == crate::WALL_CLASS {
+        if let Some(pid) = s.probe.as_ref().and_then(|probe| probe.wallpaper_pid) {
+            let mut owner = 0;
+            GetWindowThreadProcessId(w, &mut owner);
+            if owner == pid { return 1; }
+        }
+    }
     let mut wr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
     if GetWindowRect(w, &mut wr) == 0 {
         return 1;
@@ -312,20 +334,52 @@ unsafe extern "system" fn enum_fg(w: HWND, l: LPARAM) -> BOOL {
     if wr.right - wr.left <= 0 || wr.bottom - wr.top <= 0 {
         return 1;
     }
-    let (cx, cy) = ((wr.left + wr.right) / 2, (wr.top + wr.bottom) / 2);
     let zoomed = IsZoomed(w) != 0;
     for (index,sc) in s.screens.iter().enumerate() {
-        if s.paused[index] || !(cx >= sc.left && cx < sc.right && cy >= sc.top && cy < sc.bottom) {continue;}
-        let covers = ex & WS_EX_TOOLWINDOW == 0
-            && wr.left <= sc.left + 2 && wr.top <= sc.top + 2
-            && wr.right >= sc.right - 2 && wr.bottom >= sc.bottom - 56;
-        if zoomed || covers {s.paused[index]=true;}
+        if s.paused[index] { continue; }
+        if let Some(reason) = coverage_reason(sc, &wr, zoomed, ex) {
+            s.paused[index]=true;
+            if let Some(probe) = s.probe.as_mut() {
+                probe.reasons[index] = Some(reason);
+            }
+        }
     }
     if s.paused.iter().all(|paused|*paused) {0}else{1}
 }
 
 pub fn covered_monitors(screens: &[RECT], own: &[HWND]) -> Vec<bool> {
-    let mut s = FgScan { screens, own, paused: vec![false;screens.len()] };
+    let mut s = FgScan { screens, own, paused: vec![false;screens.len()], probe: None };
     unsafe { EnumWindows(Some(enum_fg), &mut s as *mut FgScan as LPARAM) };
     s.paused
+}
+
+/// Read the same policy before pausing the installed app for a benchmark. The
+/// optional PID excludes only its wallpaper HWNDs; its Settings still count.
+/// The probe never returns titles, paths, HWNDs or PIDs.
+pub(crate) fn probe_coverage(screens: &[RECT], wallpaper_pid: Option<u32>) -> Vec<Option<&'static str>> {
+    let mut s = FgScan {
+        screens, own: &[], paused: vec![false;screens.len()],
+        probe: Some(CoverageProbe { wallpaper_pid, reasons: vec![None;screens.len()] }),
+    };
+    unsafe { EnumWindows(Some(enum_fg), &mut s as *mut FgScan as LPARAM) };
+    s.probe.unwrap().reasons
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+
+    #[test]
+    fn small_foreground_fixture_does_not_hide_even_one_output() {
+        let landscape = RECT { left: 0, top: 0, right: 2560, bottom: 1080 };
+        let portrait = RECT { left: -1080, top: -731, right: 0, bottom: 1189 };
+        let fixture = RECT { left: 475, top: 100, right: 875, bottom: 330 };
+        let maximized = RECT { left: -8, top: -8, right: 2568, bottom: 1040 };
+        assert_eq!(coverage_reason(&landscape, &fixture, false, 0), None);
+        assert_eq!(coverage_reason(&portrait, &fixture, false, 0), None);
+        assert_eq!(coverage_reason(&landscape, &maximized, true, 0), Some("maximized"));
+        assert_eq!(coverage_reason(&portrait, &maximized, true, 0), None);
+        assert_eq!(coverage_reason(&portrait, &portrait, false, 0), Some("bounds"));
+        assert_eq!(coverage_reason(&portrait, &portrait, false, WS_EX_TOOLWINDOW), None);
+    }
 }

@@ -3,7 +3,8 @@
 //! cập nhật lại giao diện theo trạng thái thật.
 
 use crate::desktop::wide;
-use std::cell::RefCell;
+use crate::dock::{Appearance, Display, DisplayMode, DisplayTarget, DockSide, StageStyle, Theme as DockTheme, UtilityProfile, UtilityWidget, WindowMode, WindowPolicy};
+use std::{cell::RefCell, collections::BTreeMap};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -25,6 +26,14 @@ pub enum Action {
     Sync(bool),
     Autostart(bool),
     Interaction(bool),
+    Wallpaper(bool),
+    Dock(bool),
+    Stage(bool),
+    DockDisplay(bool, DisplayTarget),
+    StageStyle(String, StageStyle),
+    DockAppearance(Appearance),
+    UtilityProfile(String, UtilityProfile),
+    WindowPolicy(String,WindowPolicy),
 }
 
 /// Trạng thái thật mà giao diện hiển thị.
@@ -38,6 +47,9 @@ pub struct State {
     pub autostart: bool,
     pub hotkey: bool,
     pub interaction: bool,
+    pub wallpaper_enabled:bool,
+    pub dock:crate::dock::Options,
+    pub displays:Vec<Display>,
 }
 
 pub struct ParamDef {
@@ -244,6 +256,11 @@ const ID_IDLE: usize = 1304;
 const ID_SYNC: usize = 1305;
 const ID_AUTO: usize = 1306;
 const ID_INTERACTION: usize = 1307;
+const ID_WALLPAPER:usize=1308;
+const ID_DOCK:usize=1309;
+const ID_STAGE:usize=1310;
+const ID_DOCK_DISPLAY:usize=1311;
+const ID_STAGE_DISPLAY:usize=1312;
 const ID_ROW: usize = 1100;
 
 const TBM_GETPOS_: u32 = WM_USER;
@@ -276,6 +293,16 @@ struct Ui {
     sync: HWND,
     auto: HWND,
     interaction: HWND,
+    wallpaper:HWND,
+    dock:HWND,
+    stage:HWND,
+    dock_target:DisplayTarget,
+    stage_target:DisplayTarget,
+    stage_styles:BTreeMap<String,StageStyle>,
+    dock_appearance:Appearance,
+    window_policies:BTreeMap<String,WindowPolicy>,
+    utility_profiles:BTreeMap<String,UtilityProfile>,
+    displays:Vec<Display>,
     note: HWND,
 }
 
@@ -395,7 +422,7 @@ pub fn open(state: &State) {
         let dpi = GetDpiForSystem().max(96);
         let s = dpi as f32 / 96.0;
         let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-        let mut r = RECT { left: 0, top: 0, right: (540.0 * s) as i32, bottom: (736.0 * s) as i32 };
+        let mut r = RECT { left: 0, top: 0, right: (540.0 * s) as i32, bottom: (790.0 * s) as i32 };
         AdjustWindowRectEx(&mut r, style, 0, 0);
         let (w, h) = (r.right - r.left, r.bottom - r.top);
         let (sw, sh) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
@@ -437,6 +464,16 @@ pub fn open(state: &State) {
             adaptive: std::ptr::null_mut(),
             theme_combo: std::ptr::null_mut(),
             interaction: std::ptr::null_mut(),
+            wallpaper:std::ptr::null_mut(),
+            dock:std::ptr::null_mut(),
+            stage:std::ptr::null_mut(),
+            dock_target:DisplayTarget::default(),
+            stage_target:DisplayTarget::default(),
+            stage_styles:BTreeMap::new(),
+            dock_appearance:Appearance::default(),
+            window_policies:BTreeMap::new(),
+            utility_profiles:BTreeMap::new(),
+            displays:Vec::new(),
             saver_now: std::ptr::null_mut(),
             saver: std::ptr::null_mut(),
             idle: std::ptr::null_mut(),
@@ -446,7 +483,9 @@ pub fn open(state: &State) {
         };
         let btn = BS_PUSHBUTTON as u32 | WS_TABSTOP;
         let chk = BS_AUTOCHECKBOX as u32 | WS_TABSTOP;
-        ui.ctl("STATIC", "Chủ đề", 0, 20, 16, 300, 24, 0, true);
+        ui.ctl("STATIC", "Chủ đề", 0, 20, 16, 220, 24, 0, true);
+        ui.ctl("BUTTON","Màn hình Dock…",btn,249,9,118,28,ID_DOCK_DISPLAY,false);
+        ui.ctl("BUTTON","Màn hình Stage…",btn,376,9,144,28,ID_STAGE_DISPLAY,false);
         ui.theme_combo = ui.ctl("COMBOBOX", "", CBS_DROPDOWNLIST as u32 | WS_VSCROLL | WS_TABSTOP, 20, 44, 240, 320, ID_THEME, false);
         for &(_, label, _) in crate::THEMES {
             SendMessageW(ui.theme_combo, CB_ADDSTRING, 0, wide(label).as_ptr() as LPARAM);
@@ -481,6 +520,9 @@ pub fn open(state: &State) {
         ui.ctl("STATIC", "Chung", 0, 20, y2, 300, 24, 0, true);
         ui.auto = ui.ctl("BUTTON", "Khởi động cùng Windows", chk, 20, y2 + 30, 400, 26, ID_AUTO, false);
         ui.interaction = ui.ctl("BUTTON", "Tương tác chuột trên màn hình nền", chk, 20, y2 + 60, 400, 26, ID_INTERACTION, false);
+        ui.wallpaper=ui.ctl("BUTTON","Hình nền động",chk,20,y2+94,165,26,ID_WALLPAPER,false);
+        ui.dock=ui.ctl("BUTTON","Dock",chk,190,y2+94,115,26,ID_DOCK,false);
+        ui.stage=ui.ctl("BUTTON","Stage Manager",chk,320,y2+94,190,26,ID_STAGE,false);
         UI.with(|u| *u.borrow_mut() = Some(ui));
         sync(state);
         ShowWindow(hwnd, SW_SHOWNORMAL);
@@ -513,10 +555,218 @@ pub fn sync(state: &State) {
             set_check(ui.sync, state.sync);
             set_check(ui.interaction, state.interaction);
             set_check(ui.auto, state.autostart);
+            set_check(ui.wallpaper,state.wallpaper_enabled);
+            set_check(ui.dock,state.dock.enabled);
+            set_check(ui.stage,state.dock.stage_enabled);
+            ui.dock_target=state.dock.dock_display.clone();
+            ui.stage_target=state.dock.stage_display.clone();
+            ui.stage_styles=state.dock.stage_styles.clone();
+            ui.dock_appearance=state.dock.appearance.clone();
+            ui.window_policies=state.dock.window_policies.clone();
+            ui.utility_profiles=state.dock.utility_profiles.clone();
+            ui.displays=state.displays.clone();
             let t = if state.hotkey { "Khóa với cảnh động (Ctrl+Alt+L)" } else { "Khóa với cảnh động" };
             SetWindowTextW(ui.saver_now, wide(t).as_ptr());
         }
     });
+}
+
+/// An in-place Windows menu keeps the essential display controls accessible
+/// with a keyboard even when the WebView cannot start.
+unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
+    let Some((mut target, displays, styles, utility_profiles, window_policies,appearance)) = UI.with(|u| u.borrow().as_ref().map(|ui| {
+        (if stage { ui.stage_target.clone() } else { ui.dock_target.clone() }, ui.displays.clone(), ui.stage_styles.clone(), ui.utility_profiles.clone(),ui.window_policies.clone(),ui.dock_appearance.clone())
+    })) else { return };
+    let menu = CreatePopupMenu();
+    if menu.is_null() { return; }
+    let effective = target.outputs(displays.iter().map(|d| (d.id.as_str(), d.primary)));
+    let add = |id, title: &str, checked| {
+        AppendMenuW(menu, MF_STRING | if checked { MF_CHECKED } else { 0 }, id, wide(title).as_ptr());
+    };
+    add(1, "Tất cả màn hình", target.mode == DisplayMode::All);
+    add(2, "Chỉ màn hình chính", target.mode == DisplayMode::Primary);
+    add(3, "Chọn một màn hình", target.mode == DisplayMode::Selected);
+    add(4, "Tự chọn nhiều màn hình", target.mode == DisplayMode::Custom);
+    AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+    for (i,d) in displays.iter().take(32).enumerate() {
+        let label = format!("{} · {} × {} · {} DPI{}{}", d.name.replace('&',"&&"),
+            d.bounds.right-d.bounds.left, d.bounds.bottom-d.bounds.top, d.dpi,
+            if d.primary {" · Chính"} else {""}, if effective.contains(&i) {" · Đang chọn"} else {""});
+        let checked = match target.mode {
+            DisplayMode::Selected => target.selected.as_deref() == Some(d.id.as_str()),
+            DisplayMode::Custom => target.custom.contains(&d.id),
+            _ => effective.contains(&i),
+        };
+        add(100+i,&label,checked);
+    }
+    // A compact menu gives the fallback access without opening another app.
+    let mut edits = Vec::new();
+    let mut utility_edits=Vec::new();
+    let mut policy_edits=Vec::new();
+    let mut appearance_edits=Vec::new();
+    if !stage {
+        let look=CreatePopupMenu();
+        if !look.is_null(){
+            let mut item=|label:&str,checked:bool,next:Appearance|{
+                appearance_edits.push(next);
+                AppendMenuW(look,MF_STRING|if checked{MF_CHECKED}else{0},3000+appearance_edits.len()-1,wide(label).as_ptr());
+            };
+            for (position,title) in [(DockSide::Bottom,"Cạnh dưới"),(DockSide::Left,"Cạnh trái"),(DockSide::Right,"Cạnh phải")]{
+                item(title,appearance.position==position,Appearance{position,..appearance.clone()});
+            }
+            AppendMenuW(look,MF_SEPARATOR,0,std::ptr::null());
+            for (theme,title) in [(DockTheme::Auto,"Theo màu hệ thống"),(DockTheme::Light,"Giao diện sáng"),(DockTheme::Dark,"Giao diện tối")]{
+                item(title,appearance.theme==theme,Appearance{theme,..appearance.clone()});
+            }
+            AppendMenuW(look,MF_SEPARATOR,0,std::ptr::null());
+            for (icon_size,title) in [(34,"Biểu tượng nhỏ"),(44,"Biểu tượng chuẩn"),(56,"Biểu tượng lớn")]{
+                item(title,appearance.icon_size==icon_size,Appearance{icon_size,..appearance.clone()});
+            }
+            item("Giảm chuyển động",appearance.reduced_motion,Appearance{reduced_motion:!appearance.reduced_motion,..appearance.clone()});
+            item("Tự ẩn mặc định",appearance.auto_hide,Appearance{auto_hide:!appearance.auto_hide,..appearance.clone()});
+            AppendMenuW(look,MF_SEPARATOR,0,std::ptr::null());
+            item("Khôi phục kiểu hiển thị Dock",false,Appearance::default());
+            if AppendMenuW(menu,MF_POPUP,look as usize,wide("Kiểu hiển thị Dock").as_ptr())==0{DestroyMenu(look);}
+        }
+    }
+    let policies=CreatePopupMenu();
+    if !policies.is_null(){
+        for d in displays.iter().take(32){
+            let list=CreatePopupMenu();
+            if list.is_null(){continue;}
+            let base=window_policies.get(&d.id).copied().unwrap_or_default();
+            for (mode,title) in [(WindowMode::Default,"Mặc định"),(WindowMode::Reserve,"Giữ chỗ khi phóng to"),
+                (WindowMode::Floating,"Nổi trên cửa sổ"),(WindowMode::AutoHide,"Tự ẩn")]{
+                let (next,current)=if stage{(WindowPolicy{stage:mode,..base},base.stage)}
+                    else{(WindowPolicy{dock:mode,..base},base.dock)};
+                policy_edits.push((d.id.clone(),next));
+                AppendMenuW(list,MF_STRING|if mode==current{MF_CHECKED}else{0},2300+policy_edits.len()-1,wide(title).as_ptr());
+            }
+            if AppendMenuW(policies,MF_POPUP,list as usize,wide(&d.name.replace('&',"&&")).as_ptr())==0{DestroyMenu(list);}
+        }
+        if AppendMenuW(menu,MF_POPUP,policies as usize,wide("Hành vi cửa sổ theo màn hình").as_ptr())==0{DestroyMenu(policies);}
+    }
+    if stage && !displays.is_empty() {
+        let layouts = CreatePopupMenu();
+        if !layouts.is_null() {
+            for d in displays.iter().take(32) {
+                let submenu = CreatePopupMenu();
+                if submenu.is_null() { continue; }
+                let base = styles.get(&d.id).copied().unwrap_or_default();
+                for (title, right) in [("Vị trí chung",None),("Bên trái",Some(false)),("Bên phải",Some(true))] {
+                    edits.push((d.id.clone(), StageStyle {right,..base}));
+                    AppendMenuW(submenu, MF_STRING | if base.right == right {MF_CHECKED} else {0},
+                        500+edits.len()-1, wide(title).as_ptr());
+                }
+                AppendMenuW(submenu, MF_SEPARATOR, 0, std::ptr::null());
+                for scale in [75,100,125,140] {
+                    edits.push((d.id.clone(), StageStyle {scale,..base}));
+                    AppendMenuW(submenu, MF_STRING | if base.scale == scale {MF_CHECKED} else {0},
+                        500+edits.len()-1, wide(&format!("Kích thước {scale}%")).as_ptr());
+                }
+                AppendMenuW(submenu, MF_SEPARATOR, 0, std::ptr::null());
+                for spacing in [2,6,12,20] {
+                    edits.push((d.id.clone(), StageStyle {spacing,..base}));
+                    AppendMenuW(submenu, MF_STRING | if base.spacing == spacing {MF_CHECKED} else {0},
+                        500+edits.len()-1, wide(&format!("Khoảng cách {spacing} px")).as_ptr());
+                }
+                AppendMenuW(submenu, MF_SEPARATOR, 0, std::ptr::null());
+                for group_limit in [1,3,5,8] {
+                    edits.push((d.id.clone(), StageStyle {group_limit,..base}));
+                    AppendMenuW(submenu, MF_STRING | if base.group_limit == group_limit {MF_CHECKED} else {0},
+                        500+edits.len()-1, wide(&format!("{group_limit} thẻ Stage mỗi trang")).as_ptr());
+                }
+                AppendMenuW(submenu, MF_SEPARATOR, 0, std::ptr::null());
+                for opacity in [45,60,76,100] {
+                    edits.push((d.id.clone(), StageStyle {opacity,..base}));
+                    AppendMenuW(submenu, MF_STRING | if base.opacity == opacity {MF_CHECKED} else {0},
+                        500+edits.len()-1, wide(&format!("Độ đậm của thẻ {opacity}%")).as_ptr());
+                }
+                edits.push((d.id.clone(),StageStyle{stack_groups:!base.stack_groups,..base}));
+                AppendMenuW(submenu,MF_STRING|if base.stack_groups{MF_CHECKED}else{0},500+edits.len()-1,wide("Xếp lớp nhóm cửa sổ").as_ptr());
+                AppendMenuW(submenu,MF_SEPARATOR,0,std::ptr::null());
+                edits.push((d.id.clone(),StageStyle::default()));
+                AppendMenuW(submenu,MF_STRING,500+edits.len()-1,wide("Khôi phục bố cục màn hình này").as_ptr());
+                if AppendMenuW(layouts, MF_POPUP, submenu as usize, wide(&d.name.replace('&',"&&")).as_ptr()) == 0 {
+                    DestroyMenu(submenu);
+                }
+            }
+            if AppendMenuW(menu, MF_POPUP, layouts as usize, wide("Bố cục từng màn hình").as_ptr()) == 0 {
+                DestroyMenu(layouts);
+            }
+        }
+    }
+    if !stage&&!displays.is_empty(){
+        let options=CreatePopupMenu();
+        if !options.is_null(){
+            for d in displays.iter().take(32){
+                let list=CreatePopupMenu();
+                if list.is_null(){continue;}
+                let base=utility_profiles.get(&d.id).cloned().unwrap_or_default();
+                let mut append=|label:&str,checked:bool,value:UtilityProfile|{
+                    utility_edits.push((d.id.clone(),value));
+                    AppendMenuW(list,MF_STRING|if checked{MF_CHECKED}else{0},1200+utility_edits.len()-1,wide(label).as_ptr());
+                };
+                append("Hiện nút tiện ích",base.enabled,UtilityProfile{enabled:!base.enabled,..base.clone()});
+                append("Đặt bên trái",base.leading,UtilityProfile{leading:!base.leading,..base.clone()});
+                append("Hiện thông tin",base.details,UtilityProfile{details:!base.details,..base.clone()});
+                for (cell,label) in [(24,"Nút nhỏ · 24 px"),(28,"Nút chuẩn · 28 px"),(32,"Nút dễ bấm · 32 px")]{
+                    append(label,base.cell==cell,UtilityProfile{cell,..base.clone()});
+                }
+                AppendMenuW(list,MF_SEPARATOR,0,std::ptr::null());
+                for widget in UtilityWidget::ALL{
+                    let mut update=base.clone();update.toggle(widget);
+                    append(widget.title(),!base.hidden.contains(&widget),update);
+                }
+                AppendMenuW(list,MF_SEPARATOR,0,std::ptr::null());
+                append("Khôi phục mặc định",false,UtilityProfile::default());
+                if AppendMenuW(options,MF_POPUP,list as usize,wide(&d.name.replace('&',"&&")).as_ptr())==0{DestroyMenu(list);}
+            }
+            if AppendMenuW(menu,MF_POPUP,options as usize,wide("Tiện ích theo màn hình").as_ptr())==0{DestroyMenu(options);}
+        }
+    }
+    let mut rect: RECT = std::mem::zeroed();
+    GetWindowRect(button,&mut rect);
+    let command = TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,rect.left,rect.bottom,0,owner,std::ptr::null()) as usize;
+    DestroyMenu(menu);
+    if let Some(appearance)=command.checked_sub(3000).and_then(|i|appearance_edits.get(i)){
+        push(Action::DockAppearance(appearance.clone()));return;
+    }
+    if let Some((id,p))=command.checked_sub(2300).and_then(|i|policy_edits.get(i)){
+        push(Action::WindowPolicy(id.clone(),*p));return;
+    }
+    if let Some((id,p))=command.checked_sub(1200).and_then(|i|utility_edits.get(i)){
+        push(Action::UtilityProfile(id.clone(),p.clone()));
+        return;
+    }
+    if let Some((id,style)) = command.checked_sub(500).and_then(|i| edits.get(i)) {
+        push(Action::StageStyle(id.clone(),*style));
+        return;
+    }
+    match command {
+        1 => target.mode=DisplayMode::All,
+        2 => target.mode=DisplayMode::Primary,
+        3 => {
+            target.mode=DisplayMode::Selected;
+            if target.selected.is_none() { target.selected=displays.first().map(|d| d.id.clone()); }
+        }
+        4 => {
+            target.mode=DisplayMode::Custom;
+            if target.custom.is_empty() { target.custom=displays.first().map(|d|d.id.clone()).into_iter().collect(); }
+        }
+        100..=131 => {
+            let Some(d)=displays.get(command-100) else {return};
+            if target.mode==DisplayMode::Custom {
+                if target.custom.contains(&d.id) { target.custom.retain(|id|id!=&d.id); }
+                else if target.custom.len()<32 { target.custom.push(d.id.clone()); }
+            } else {
+                target.mode=DisplayMode::Selected;
+                target.selected=Some(d.id.clone());
+            }
+        }
+        _ => return,
+    }
+    push(Action::DockDisplay(stage,target));
 }
 
 unsafe extern "system" fn proc_(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -540,6 +790,10 @@ unsafe extern "system" fn proc_(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESUL
                 (ID_SYNC, BN_CLICKED) => push(Action::Sync(checked(ctl))),
                 (ID_INTERACTION, BN_CLICKED) => push(Action::Interaction(checked(ctl))),
                 (ID_AUTO, BN_CLICKED) => push(Action::Autostart(checked(ctl))),
+                (ID_WALLPAPER,BN_CLICKED)=>push(Action::Wallpaper(checked(ctl))),
+                (ID_DOCK,BN_CLICKED)=>push(Action::Dock(checked(ctl))),
+                (ID_STAGE,BN_CLICKED)=>push(Action::Stage(checked(ctl))),
+                (ID_DOCK_DISPLAY|ID_STAGE_DISPLAY,BN_CLICKED)=>display_menu(h,ctl,id==ID_STAGE_DISPLAY),
                 (ID_IDLE, CBN_SELCHANGE) => {
                     let i = SendMessageW(ctl, CB_GETCURSEL, 0, 0);
                     if let Some(&m) = IDLE_CHOICES.get(i as usize) {
@@ -604,6 +858,7 @@ pub fn autostart_enabled() -> bool {
 }
 
 pub fn set_autostart(on: bool) {
+    if let Err(error) = crate::trial::protect_windows() { crate::log!("{error}"); return; }
     use windows_sys::Win32::System::Registry::HKEY_CURRENT_USER;
     if on {
         let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();

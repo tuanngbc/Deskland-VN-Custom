@@ -1,0 +1,59 @@
+//! Persistent Dock appearance. Display targeting and app scope stay separate.
+use serde_json::{json,Value};
+
+#[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
+pub enum DockSide { #[default] Bottom, Left, Right }
+impl DockSide {
+    fn parse(value:&Value)->Self {match value.as_str(){Some("left")=>Self::Left,Some("right")=>Self::Right,_=>Self::Bottom}}
+    fn key(self)->&'static str {match self{Self::Bottom=>"bottom",Self::Left=>"left",Self::Right=>"right"}}
+}
+#[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
+pub enum Theme { #[default] Auto, Light, Dark }
+impl Theme {
+    fn parse(value:&Value)->Self {match value.as_str(){Some("light")=>Self::Light,Some("dark")=>Self::Dark,_=>Self::Auto}}
+    fn key(self)->&'static str {match self{Self::Auto=>"auto",Self::Light=>"light",Self::Dark=>"dark"}}
+}
+
+/// Percentage controls are stored as integers so settings acknowledgement and
+/// persistence can compare them exactly. On unsupported backdrops the same
+/// opacity/contrast controls still affect a true composited alpha surface.
+#[derive(Clone,Debug,PartialEq,Eq)]
+pub struct Appearance {
+    pub icon_size:u32,
+    pub spacing:u32,
+    pub transparency:u32,
+    pub position:DockSide,
+    pub theme:Theme,
+    pub magnification:u32,
+    pub animation_speed:u32,
+    pub reduced_motion:bool,
+    pub auto_hide:bool,
+}
+impl Default for Appearance {
+    fn default()->Self{Self{icon_size:44,spacing:10,transparency:36,position:DockSide::Bottom,theme:Theme::Auto,
+        magnification:38,animation_speed:100,reduced_motion:false,auto_hide:false}}
+}
+impl Appearance {
+    pub fn from_json(v:&Value)->Self {
+        fn bounded(v:&Value,default:u32,min:u32,max:u32)->u32{
+            v.as_u64().map(|x|x.clamp(min as u64,max as u64) as u32).unwrap_or(default)
+        }
+        let old=Self::default();
+        Self {
+            icon_size:bounded(&v["iconSize"],old.icon_size,28,60),
+            spacing:bounded(&v["spacing"],old.spacing,4,22),
+            transparency:bounded(&v["transparency"],old.transparency,4,74),
+            position:DockSide::parse(&v["position"]),
+            theme:Theme::parse(&v["theme"]),
+            magnification:bounded(&v["magnification"],old.magnification,0,55),
+            animation_speed:bounded(&v["animationSpeed"],old.animation_speed,50,170),
+            reduced_motion:v["reducedMotion"].as_bool().unwrap_or(false),
+            auto_hide:v["autoHide"].as_bool().unwrap_or(false),
+        }
+    }
+    pub fn json(&self)->Value {
+        json!({"iconSize":self.icon_size,"spacing":self.spacing,"transparency":self.transparency,
+            "position":self.position.key(),"theme":self.theme.key(),"magnification":self.magnification,
+            "animationSpeed":self.animation_speed,"reducedMotion":self.reduced_motion,"autoHide":self.auto_hide})
+    }
+}

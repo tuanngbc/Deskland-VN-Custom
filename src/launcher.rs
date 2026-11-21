@@ -103,7 +103,7 @@ struct State {
     history: History, launching: bool,
 }
 #[derive(Clone)]
-struct IconPixels { width: i32, height: i32, pixels: Vec<u8> }
+pub(crate) struct IconPixels { pub(crate) width: i32, pub(crate) height: i32, pub(crate) pixels: Vec<u8> }
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
     static PREFS: RefCell<Appearance> = RefCell::new(Appearance::default());
@@ -254,10 +254,28 @@ fn icon_worker() -> (std::sync::mpsc::Sender<(PathBuf, i32)>, std::sync::mpsc::R
 }
 
 unsafe fn extract_icon(path: &Path, size: i32) -> Option<IconPixels> {
+    let icon = shell_icon(path, (size * 2).clamp(64, 256))?;
+    let scale = size as f32 / icon.width.max(icon.height) as f32;
+    let width = (icon.width as f32 * scale).round().max(1.0) as i32;
+    let height = (icon.height as f32 * scale).round().max(1.0) as i32;
+    let image = image::RgbaImage::from_raw(icon.width as u32, icon.height as u32, icon.pixels)?;
+    let mut pixels = image::imageops::resize(&image, width as u32, height as u32, image::imageops::FilterType::Lanczos3).into_raw();
+    for p in pixels.chunks_exact_mut(4) { for c in 0..3 {p[c] = p[c].min(p[3]);} }
+    Some(IconPixels { width, height, pixels })
+}
+
+/// Preserve the shell bitmap dimensions. IconPixels are premultiplied BGRA
+/// (the order used by both Win32 renderers); resize only at the destination.
+pub(crate) unsafe fn shell_icon(path: &Path, source_size: i32) -> Option<IconPixels> {
     use windows::Win32::UI::Shell::{SHCreateItemFromParsingName, IShellItemImageFactory, SIIGBF_ICONONLY, SIIGBF_BIGGERSIZEOK};
-    let path = wide(&path.to_string_lossy());
-    let factory: IShellItemImageFactory = SHCreateItemFromParsingName(windows::core::PCWSTR(path.as_ptr()), None).ok()?;
-    let source_size = (size * 2).clamp(64, 256);
+    let name = path.to_string_lossy();
+    let factory_for = |name: &str| {
+        let path = wide(name);
+        { let item: windows::core::Result<IShellItemImageFactory> = SHCreateItemFromParsingName(windows::core::PCWSTR(path.as_ptr()), None); item }
+    };
+    let factory = factory_for(&name).or_else(|error| {
+        if let Some(alternate)=apps_folder_parsing_name(&name){factory_for(&alternate)}else{Err(error)}
+    }).ok()?;
     let bitmap = factory.GetImage(windows::Win32::Foundation::SIZE { cx: source_size, cy: source_size }, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK).ok()?;
     let bitmap = bitmap.0;
     let mut object: BITMAP = std::mem::zeroed();
@@ -265,18 +283,58 @@ unsafe fn extract_icon(path: &Path, size: i32) -> Option<IconPixels> {
     let (w, h) = (object.bmWidth, object.bmHeight.abs());
     if w <= 0 || h <= 0 || w > 512 || h > 512 { DeleteObject(bitmap); return None; }
     let dc = CreateCompatibleDC(std::ptr::null_mut());
+    if dc.is_null(){DeleteObject(bitmap);return None;}
     let mut info: BITMAPINFO = std::mem::zeroed(); info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
     info.bmiHeader.biWidth = w; info.bmiHeader.biHeight = -h; info.bmiHeader.biPlanes = 1; info.bmiHeader.biBitCount = 32;
     let mut pixels = vec![0u8; (w * h * 4) as usize];
     let ok = GetDIBits(dc, bitmap, 0, h as u32, pixels.as_mut_ptr() as *mut _, &mut info, DIB_RGB_COLORS);
     DeleteDC(dc); DeleteObject(bitmap);
-    if ok == 0 { return None; }
-    if pixels.chunks_exact(4).all(|p| p[3]==0) { for p in pixels.chunks_exact_mut(4) {p[3]=255;} }
-    let image = image::RgbaImage::from_raw(w as u32, h as u32, pixels)?;
-    let pixels = image::imageops::resize(&image, size as u32, size as u32, image::imageops::FilterType::Lanczos3).into_raw();
-    Some(IconPixels { width: size, height: size, pixels })
+    if ok != h || !pixels.iter().any(|&v|v!=0) { return None; }
+    normalize_shell_alpha(&mut pixels);
+    Some(IconPixels { width: w, height: h, pixels })
 }
 
+fn apps_folder_parsing_name(path:&str)->Option<String>{
+    const PREFIX:&str="shell:AppsFolder\\";
+    if !path.get(..PREFIX.len())?.eq_ignore_ascii_case(PREFIX){return None;}
+    let id=path.get(PREFIX.len()..)?;
+    if id.is_empty()||id.contains(['\\','/']){return None;}
+    Some(format!(r"::{{4234d49b-0245-4df3-b780-3893943456e1}}\{id}"))
+}
+
+#[cfg(test)]
+#[test]
+fn apps_folder_icon_fallback_uses_one_separator_and_preserves_aumid(){
+    let id="Microsoft.WindowsNotepad_8wekyb3d8bbwe!App";
+    let path=format!(r"Shell:AppsFolder\{id}");
+    assert_eq!(apps_folder_parsing_name(&path).unwrap(),format!(r"::{{4234d49b-0245-4df3-b780-3893943456e1}}\{id}"));
+    assert!(apps_folder_parsing_name(r"shell:AppsFolder\\Invalid").is_none());
+    assert!(apps_folder_parsing_name(r"C:\Windows\explorer.exe").is_none());
+}
+
+fn normalize_shell_alpha(pixels: &mut [u8]) {
+    let alpha_missing = pixels.chunks_exact(4).all(|p| p[3] == 0);
+    let straight = !alpha_missing && pixels.chunks_exact(4).any(|p| p[3] > 0 && p[..3].iter().any(|&c| c > p[3]));
+    for p in pixels.chunks_exact_mut(4) {
+        if alpha_missing { p[3] = 255; }
+        else if p[3] == 0 { p[..3].fill(0); }
+        else if straight {
+            let a = p[3] as u32;
+            for c in &mut p[..3] { *c = ((*c as u32 * a + 127) / 255) as u8; }
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn shell_pixels_keep_premultiplied_bgra_without_colored_transparent_edges() {
+    let mut straight=[30,60,240,128,200,200,200,0,3,220,120,255];
+    normalize_shell_alpha(&mut straight);
+    assert_eq!(straight,[15,30,120,128,0,0,0,0,3,220,120,255]);
+    let mut premultiplied=[15,30,120,128,0,0,0,0,3,220,120,255];
+    normalize_shell_alpha(&mut premultiplied);
+    assert_eq!(premultiplied,straight);
+}
 fn icon_for(hwnd: HWND, path: &Path, size: i32) -> Option<IconPixels> {
     let (icon, pending) = STATE.with(|c| {
         let mut g = c.borrow_mut(); let s = g.as_mut()?;

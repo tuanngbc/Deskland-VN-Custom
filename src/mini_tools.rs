@@ -74,6 +74,8 @@ pub fn spawn_capture_staged(o:&Options) {
     spawn_inner("capture", o, screen::take_hotkey_capture());
 }
 fn spawn_inner(mode:&str, o:&Options, staged:Option<PathBuf>) {
+    // Trial smoke covers desktop modules, not unsupervised helper processes.
+    if crate::trial::active() { crate::log!("Trial mode: mini-tool subprocess disabled"); return; }
     if mode=="record"{unsafe{let existing=FindWindowW(wide("tuanpc-deskRecordingPanel").as_ptr(),std::ptr::null());if !existing.is_null(){PostMessageW(existing,WM_CLOSE,0,0);return;}}}
     let result=std::env::current_exe().and_then(|exe| {
         let mut command=std::process::Command::new(exe);
@@ -88,6 +90,7 @@ fn spawn_inner(mode:&str, o:&Options, staged:Option<PathBuf>) {
 /// Must run before wallpaper singleton, logging, WebView, timers or OpenGL.
 pub fn dispatch(args:&[String])->bool {
     let Some(i)=args.iter().position(|a|a=="--mini-tool") else {return false;};
+    if crate::trial::active() { return true; }
     let mode=args.get(i+1).map(String::as_str).unwrap_or("");
     unsafe {
         windows_sys::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(windows_sys::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);

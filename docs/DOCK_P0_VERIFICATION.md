@@ -1,0 +1,51 @@
+# Dock P0: window policies, icons, and status controls
+
+The PR remains [Draft](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1), targeting the accepted Rust baseline. The installed baseline was restored after isolated testing.
+
+| Commit | Build evidence | Observed scope |
+| --- | --- | --- |
+| [5f8d2e8](https://github.com/tuanngbc/Deskland-VN-Custom/commit/5f8d2e802e28f9161d03af5b2ad052d4db8774cd) | [Windows CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44884226117) / [artifact](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44884226117/artifacts/14699203118) | Owner Windows 11 AppBar and borderless fixture smoke |
+| [4b37064](https://github.com/tuanngbc/Deskland-VN-Custom/commit/4b37064df6c39e3e17de926ff4bc20ed1e5072ef) | [Windows CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44884664434) / [artifact](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44884664434/artifacts/14699144284) | Owner Windows 11 AppBar toggles, maximized fixtures, static 96-DPI Dock |
+| [dddd812](https://github.com/tuanngbc/Deskland-VN-Custom/commit/dddd812d667de9c3e4fed533f84091d8ef8e74fe) | [Windows CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44885050608) / [artifact](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44885050608/artifacts/14699752463) | Real Explorer AppBar reservations and forced child process exit on Actions; 67 standard Rust tests passed |
+| [78bc892](https://github.com/tuanngbc/Deskland-VN-Custom/commit/78bc892538c6b4b66e9f81824f6b190e2d596bf4) | [Windows CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44885714124) | Stage preview allocation change; not part of the owner smoke or measurements |
+| [5565667](https://github.com/tuanngbc/Deskland-VN-Custom/commit/5565667232750ba5f2dd9b12176852d5969c6d8d) | [Windows CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44886447900) / [artifact](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44886447900/artifacts/14699159999) | Real DWM links: source resize, protection/minimize, destination replacement, 240 card switches per mode, clear/drop cleanup |
+| [4fecfd8](https://github.com/tuanngbc/Deskland-VN-Custom/commit/4fecfd8774cea889f5917ed054b9b23e91611deb) | [Windows CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44886781438) / [artifact](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44886781438/artifacts/14699913357) | Isolated coverage diagnostics, benchmark scripts and native landscape overflow opening at 96 DPI |
+| [dcd607e](https://github.com/tuanngbc/Deskland-VN-Custom/commit/dcd607ef15f9bce74d9bc46da59ec35db5623bf9) | [Windows CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44900000775) / [artifact](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44900000775/artifacts/14705049627) | Live AppBar Stage left-to-right move while Dock stays registered; explicit shell recovery message, independent removal and final work-area restoration |
+
+On both owner displays at 96 DPI, ordinary WinForms maximize matched the reserved work area; restore returned the original frame. On 5f8d2e8, the portrait borderless fixture hid only portrait Dock/Stage, with no foreground change, and both returned after exit. On 4b37064, the native Settings switches gave an additional independent toggle check:
+
+| State | Landscape work area (L,T,R,B) | Portrait work area (L,T,R,B) |
+| --- | --- | --- |
+| Baseline / both Off | 0,0,2560,1032 | -1080,-731,0,1141 |
+| Dock and Stage Reserve | 168,0,2560,931 | -1080,-731,-216,1040 |
+| Stage Reserve only | 168,0,2560,1032 | -1080,-731,-216,1141 |
+
+The 4b37064 Dock image shows Explorer, a custom-icon shortcut, packaged Notepad and the compact status glyphs. It is a real capture on the primary monitor. App count differed from the earlier comparison; it is not a matched density comparison, and no motion or higher-DPI evidence was collected. The app uses Shell icon size tiers and a bounded cache of physical raster sizes; it also navigates cells in their visual order. Neither proves final visual or screen-reader acceptance.
+
+The CI crash check waited for both live reservations and terminated only the child started by the test; Explorer returned the original work area. It did not restart Explorer or test the user's dual-display crash recovery. The owner smoke used normal exit.
+
+Final hardening: **APPBAR_CI_PASS, APPBAR_NATIVE_PARTIAL**. No change to the reservation policy in this increment. **Stage preview regression CI passed**: both fixture card sets retained five real DWM links, stale identifiers stopped resolving, and minimized/protected windows continued to fall back. Changing the destination HWND now invalidates the old relationships before registration. The test covers the native preview component, not an interactive Stage workspace session or a visual verdict.
+
+Final 4b37064 rollback: no overlay windows remained, both work areas matched their pre-test rectangles, and the production EXE, saved profile and scoped registry values all matched before restarting production. The tested package's EXE SHA-256 was `61d4684fd318c1427624a778ddd970626f22d12dd54b1ec15f321b5c8d3a0a27`. The same-session performance attempt captured valid counters but failed workload matching; see [performance evidence](DOCK_PERFORMANCE_REPORT.md).
+
+## Prior build evidence
+
+The earlier [ae2106b](https://github.com/tuanngbc/Deskland-VN-Custom/commit/ae2106bd567236add5d84ec584a6c05fb8610668) ran from the [exact Windows artifact](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44881880241/artifacts/14698059438). Visual comparison: [099a4eb](https://github.com/tuanngbc/Deskland-VN-Custom/commit/099a4eb04415d6d4de0534b81c755135dea5a398). The observations below refer to that earlier build.
+
+- Reserve space is opt-in and independent for Dock and Stage on each display. The Rust UI submits and removes documented Windows AppBars. Floating and auto-hide do not reserve space. The Explorer taskbar and its area are retained. Normal maximize belongs to Windows; the explicit expand action preserves window style and is not fullscreen.
+- At 96 DPI, a Windows 11 landscape monitor and a portrait monitor with origin (-1080, -731) both negotiated the expected AppBar strips. With both modules set to reserve, the visible DWM bounds of framed WinForms fixtures matched the work area after native maximize; restoring preserved their original visible bounds. Turning off Dock restored 101 px of work height on both monitors while Stage remained visible and reserved. Normal exit restored the original work areas and left no Dock or Stage overlays. The production executable, saved profile and scoped registry values were verified unchanged before restarting the production process.
+- An owned, topmost borderless fixture covered the portrait monitor without becoming foreground. Only the portrait Dock and Stage hid, and they returned when the test window restored. Chrome F11 from an isolated browser profile also hid only the portrait overlays and restored both when F11 exited. Chrome’s own maximize and restore buttons were exercised with both reservations enabled: the visible maximized DWM bounds matched the portrait work area, and the taskbar remained visible. This does not certify exclusive fullscreen games.
+- At 96 DPI, actual primary Dock captures with five app icons, a launcher control and five pinned utility glyphs plus overflow measured 718 px on the old build and 578 px on the new build. Explorer, a custom-icon shell shortcut and packaged Notepad were visible. The atlas retains shell icon source pixels and composites them with premultiplied alpha at the physical destination. Utility glyphs use compact cells independent of app size; density is configurable on each display.
+
+| Gate | State |
+| --- | --- |
+| `MAXIMIZE_SAFE_AREA_NATIVE_PASS` | Pending: fixture maximize and restore, per-monitor borderless detection, toggles and normal cleanup observed. Actual Explorer restart, Win+Up, Dock menu, more apps, DPI/primary changes and game/fullscreen coverage remain. |
+| `ICON_VISUAL_PASS` | Pending: 96-DPI EXE, .lnk and packaged icon samples visible; magnification, higher physical DPI and owner visual review remain. |
+| `DOCK_DENSITY_PASS` | Pending: five pins and overflow visible. Portrait density, overflow selection, tooltip, keyboard and accessibility coverage remain. |
+| `PERFORMANCE_PASS` | Pending overall. [Three valid native Dock idle pairs](DOCK_PERFORMANCE_REPORT.md#native-windows-11-three-valid-dock-idle-pairs) earned `DOCK_IDLE_PERFORMANCE_SCOPED_PASS`. [Three matched Stage idle pairs](DOCK_PERFORMANCE_REPORT.md#native-windows-11-three-valid-stage-idle-pairs) with six live links earned `STAGE_IDLE_PERFORMANCE_SCOPED_PASS`. Dock handle attribution, Utilities, motion, fullscreen and four-hour stability remain. |
+
+An exploratory 122-sample run per build used the same floating modes, landscape/portrait fixture, wallpaper theme, and Settings path. Total-machine normalized Deskland CPU averaged 3.28% → 0.61%; median private memory was 258.0 → 268.9 MiB and working set 130.7 → 131.0 MiB. Median busiest GPU engine for Deskland was 1.45% → 1.44% and for DWM 7.25% → 8.08%. These are per-process engine readings, not the system-wide GPU value. The desktop remained in use and PDH reported 69 counter warnings on the old run (122 valid timestamps for each reported GPU series in both runs). This is not a controlled no-regression claim. Repeat with matched foreground/window coverage, including hover and a settled fullscreen game/video, before accepting performance.
+
+The dcd607e AppBar test used the live CI shell and actual reservations. Recovery was triggered by a test message; an actual Explorer restart on Windows 11 remains pending. The isolated 4fecfd8 visual session exited normally: both work areas matched the pre-test snapshot, no overlays remained, taskbar stayed visible, and the production EXE, profile and scoped registry matched before the installed executable restarted. Its EXE SHA-256 is `864972657981C211CC3B2664C0D8184550A494E5DAC74B546179B32087A20647`.
+
+Do not treat CI, the scoped smoke tests or a renderer sample as owner acceptance.

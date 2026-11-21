@@ -2,7 +2,7 @@ name: Build tuanpc-desk Rust
 
 on:
   push:
-    branches: [main, codex/rust-test]
+    branches: [main, codex/rust-test, codex/rust-dock]
   workflow_dispatch:
 
 permissions:
@@ -11,6 +11,7 @@ permissions:
 jobs:
   build-rust:
     runs-on: windows-latest
+    timeout-minutes: 20
     defaults:
       run:
         shell: pwsh
@@ -24,6 +25,40 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
           cargo test --release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::tests -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Isolated same-process HWND/thread test; never loads the owner's profile.
+          # This is CI integration evidence, not Windows 11 dual-monitor acceptance.
+          cargo test --release dock::runtime::tests::native_integrated_modules_toggle_suspend_and_cleanup -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::runtime::tests::native_100_toggles_release_overlays_and_process_handles -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::runtime::tests::native_appbar_fatal_exit_restores_work_area -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::appbar::tests::native_keeps_dock_when_stage_changes_edges_and_rebinds -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::runtime::tests::native_display_targets_filter_hwnds_and_keep_other_module -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::runtime::tests::native_startup_never_synchronously_reads_own_settings_title -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::stage_surface::tests::native_region_clips_desktop_gaps_and_preserves_thumbnail_slots -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::stage_surface::tests::native_stage_surface_submits_premultiplied_cards_with_desktop_gaps -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::stage_surface::tests::native_slide_keeps_live_preview_host_aligned_without_activating_either_window -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::previews::native_tests::native_preview_relationships_survive_switches_and_release -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::utilities::tests::native_on_demand_provider_completes_without_an_assumed_device -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::utilities::tests::native_calendar_uses_a_real_control_and_closes_with_utilities -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($attempt in 1..3) {
+            cargo test --release dock::workspaces::tests::native_stage_switch_restores_placement_and_ignores_unmanaged_windows -- --ignored --exact --nocapture --test-threads=1
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          cargo test --release integration_tests::native_explorer_restart_queues_recovery_without_settings_writes -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # Kiểm tra SPI_SET tắt + SPI_GET xác nhận trên Windows thật. Runner
           # không có timer tương tác dùng trạng thái bật giả ở bước quyết định.
@@ -39,10 +74,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./tests/trial-isolation.ps1 -Exe (Resolve-Path target/release/tuanpc-desk.exe).Path
           node tests/renderer-contract.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/shortcuts-contract.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/dock-settings-contract.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./tests/dock-benchmark-contract.ps1
+          ./tests/dock-fixture-native.ps1
 
       - name: Package Rust native build
         run: |
@@ -65,7 +105,9 @@ jobs:
 
           Giải nén toàn bộ thư mục này và chạy tuanpc-desk.exe.
           Giữ thư mục prototype cạnh file exe để mở Cài đặt.
-          Bản này dùng engine Rust + Win32 + OpenGL, một tiến trình native.
+          Bản này dùng engine Rust + Win32 + OpenGL. Dock và Stage Manager
+          được quản lý trong cùng tuanpc-desk.exe, bật riêng trong Cài đặt.
+          Windows taskbar và notification area được giữ nguyên.
           "@ | Set-Content "$dir\DOC-TRUOC.txt" -Encoding utf8
           Compress-Archive -Path $dir -DestinationPath "dist\$name.zip"
           $hash = (Get-FileHash "dist\$name.zip" -Algorithm SHA256).Hash.ToLower()
@@ -80,4 +122,3 @@ jobs:
             dist/*.sha256
             Cargo.lock
           retention-days: 14
-

@@ -11,6 +11,7 @@ mod solar;
 mod lock;
 mod settings;
 mod launcher;
+mod dock;
 mod mini_tools;
 mod web;
 mod shortcuts;
@@ -37,6 +38,8 @@ mod widget;
 mod system_monitor;
 mod presentation;
 mod gpu_present;
+mod config_store;
+mod trial;
 
 use desktop::wide;
 use engine::{IconBox, Prog, Shared, Theme};
@@ -97,6 +100,10 @@ const CMD_LAUNCHER: usize = 130;
 const CMD_CAPTURE: usize = 131;
 const CMD_RECORD: usize = 132;
 const CMD_SYSTEM_MONITOR: usize = 133;
+const CMD_DOCK: usize = 134;
+const CMD_STAGE: usize = 135;
+const CMD_DOCK_FOCUS:usize = 139;
+const CMD_WALLPAPER: usize = 136;
 const WM_OPEN_SETTINGS: u32 = WM_APP + 2;
 const WM_OPEN_LAUNCHER: u32 = WM_APP + 3;
 const CMD_EXIT: usize = 199;
@@ -175,6 +182,8 @@ thread_local! {
     static MOUSE_DOWN: Cell<Option<(i32, i32, Instant)>> = const { Cell::new(None) };
     static ZORDER_DIRTY: Cell<bool> = const { Cell::new(false) };
     static DISPLAY_CHANGED: Cell<bool> = const { Cell::new(false) };
+    static TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
+    static TRAY_RESTORE_PENDING: Cell<bool> = const { Cell::new(false) };
     static REPAINT: Cell<bool> = const { Cell::new(false) };
     static LOCK_SYNC: Cell<bool> = const { Cell::new(true) };
     static INTERACTIONS_ENABLED: Cell<bool> = const { Cell::new(true) };
@@ -210,7 +219,14 @@ unsafe fn register_hotkey_logged(hwnd: HWND, id: i32, mods: u32, vk: u32, name: 
 }
 
 unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if m!=0 && TASKBAR_CREATED.with(|id|id.get())==m {
+        TRAY_RESTORE_PENDING.with(|p|p.set(true));
+        DISPLAY_CHANGED.with(|p|p.set(true));
+        return 0;
+    }
     match m {
+        WM_QUERYENDSESSION=>1,
+        WM_ENDSESSION if w!=0=>{PostQuitMessage(0);0},
         WM_HOTKEY if SHORTCUT_RECORDING.with(|c| c.get()) => 0,
         WM_INPUT => {
             let mut raw: RAWINPUT = std::mem::zeroed();
@@ -299,6 +315,10 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
                 let menu_cfg = load_config(None);
                 let launcher_label = format!("Mở Launcher\t{}", launcher::hotkey_text(menu_cfg.launcher_mods, menu_cfg.launcher_vk));
                 AppendMenuW(menu, MF_STRING, CMD_LAUNCHER, wide(&launcher_label).as_ptr());
+                AppendMenuW(menu, MF_STRING | if menu_cfg.wallpaper_enabled { MF_CHECKED } else { 0 }, CMD_WALLPAPER, wide("Hình nền động").as_ptr());
+                AppendMenuW(menu, MF_STRING | if menu_cfg.dock.enabled { MF_CHECKED } else { 0 }, CMD_DOCK, wide("Dock").as_ptr());
+                if menu_cfg.dock.enabled { AppendMenuW(menu, MF_STRING, CMD_DOCK_FOCUS, wide("Điều khiển Dock bằng bàn phím").as_ptr()); }
+                AppendMenuW(menu, MF_STRING | if menu_cfg.dock.stage_enabled { MF_CHECKED } else { 0 }, CMD_STAGE, wide("Stage Manager").as_ptr());
                 AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
                 let capture_label = format!("Chụp vùng và chỉnh sửa…\t{}", mini_tools::hotkey_text(menu_cfg.tools.capture_mods, menu_cfg.tools.capture_key));
                 let record_label = format!("Quay vùng / dừng và lưu…\t{}", mini_tools::hotkey_text(menu_cfg.tools.record_mods, menu_cfg.tools.record_key));
@@ -424,18 +444,20 @@ fn register_class(name: &str, proc_: WNDPROC, own_dc: bool) {
 // ---------------------------------------------------------------- Màn hình
 struct Monitor {
     rect: RECT,
+    work: RECT,
+    device: [u16; 32],
     dpr: f32,
     primary: bool,
 }
 
 unsafe extern "system" fn enum_monitor(hm: HMONITOR, _: HDC, _: *mut RECT, l: LPARAM) -> BOOL {
     let out = &mut *(l as *mut Vec<Monitor>);
-    let mut mi: MONITORINFO = std::mem::zeroed();
-    mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-    if GetMonitorInfoW(hm, &mut mi) != 0 {
+    let mut mi: MONITORINFOEXW = std::mem::zeroed();
+    mi.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    if GetMonitorInfoW(hm, &mut mi.monitorInfo) != 0 {
         let (mut dx, mut dy) = (96u32, 96u32);
         GetDpiForMonitor(hm, MDT_EFFECTIVE_DPI, &mut dx, &mut dy);
-        out.push(Monitor { rect: mi.rcMonitor, dpr: dx as f32 / 96.0, primary: mi.dwFlags & MONITORINFOF_PRIMARY != 0 });
+        out.push(Monitor { rect: mi.monitorInfo.rcMonitor, work: mi.monitorInfo.rcWork, device: mi.szDevice, dpr: dx as f32 / 96.0, primary: mi.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0 });
     }
     1
 }
@@ -549,6 +571,8 @@ impl Environment {
 
 #[derive(Clone)]
 struct Config {
+    wallpaper_enabled: bool,
+    dock: dock::Options,
     theme: String,
     params: serde_json::Value,
     mode: String,
@@ -586,7 +610,7 @@ fn rust_settings_path() -> std::path::PathBuf {
 fn load_config(cli_theme: Option<String>) -> Config {
     let read = |p: &std::path::Path| std::fs::read_to_string(p).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(s.trim_start_matches('\u{feff}')).ok());
     let cs = std::env::var("LOCALAPPDATA").map(|d| std::path::PathBuf::from(d).join("DesklandPreview").join("settings.json")).unwrap_or_default();
-    let csv = read(&cs);
+    let csv = if trial::active() { None } else { read(&cs) };
     let root = read(&rust_settings_path()).or_else(|| csv.clone()).unwrap_or(serde_json::Value::Null);
     // Ngôn ngữ: bản Rust chưa lưu thì theo lựa chọn ở bản C#
     let lang = root.get("lang").or_else(|| csv.as_ref().and_then(|c| c.get("lang"))).and_then(|v| v.as_str()).unwrap_or("auto").to_string();
@@ -609,6 +633,7 @@ fn load_config(cli_theme: Option<String>) -> Config {
         location: env_location.or(legacy_location),
     };
     let raw_theme = cli_theme.unwrap_or(saved);
+    let legacy_dock=if root.get("dock").is_none(){read(&lock::data_dir().join("dock.json"))}else{None};
     let theme = match canonical_theme(&raw_theme) {
         Some(t) => t.to_string(),
         None => {
@@ -617,6 +642,8 @@ fn load_config(cli_theme: Option<String>) -> Config {
         }
     };
     Config {
+        wallpaper_enabled: root["wallpaperEnabled"].as_bool().unwrap_or(true),
+        dock: dock::Options::migrate(&root, legacy_dock.as_ref()),
         theme,
         params: root.get("params").cloned().unwrap_or(serde_json::Value::Null),
         mode: root.get("mode").and_then(|v| v.as_str()).map(|v| v.to_ascii_lowercase()).filter(|v| matches!(v.as_str(), "mirror" | "independent" | "panorama")).unwrap_or_else(|| "mirror".to_string()),
@@ -676,6 +703,8 @@ fn register_configured_shortcuts(hwnd: HWND,cfg: &Config) {
 fn save_config(cfg: &Config) {
     let v = serde_json::json!({
         "version": 1,
+        "wallpaperEnabled": cfg.wallpaper_enabled,
+        "dock": cfg.dock.json(),
         "theme": cfg.theme,
         "mode": cfg.mode,
         "environment": {
@@ -708,8 +737,9 @@ fn save_config(cfg: &Config) {
         "systemMonitor": cfg.system_monitor.json(),
     });
     let p = rust_settings_path();
-    if let Err(e) = std::fs::write(&p, serde_json::to_string_pretty(&v).unwrap_or_default()) {
+    if let Err(e) = config_store::save(&p, v) {
         log!("Lưu cài đặt {} lỗi: {e}", p.display());
+        web::post(&serde_json::json!({"t":"settingsSaveError","message":format!("Không lưu được cài đặt: {e}")}).to_string());
     }
 }
 
@@ -728,23 +758,24 @@ fn primary_wall(app: &App) -> Option<&Wallpaper> {
 
 /// Thông điệp `init` cho trang cài đặt (cùng định dạng bản C#), kèm `caps` nói rõ bản Rust làm được gì.
 fn web_init(app: &App) -> serde_json::Value {
-    let (w, h) = primary_wall(app).map(|p| (p.screen.right - p.screen.left, p.screen.bottom - p.screen.top)).unwrap_or((1920, 1080));
+    let detected=monitors();
+    let (w,h)=detected.first().map(|m|(m.rect.right-m.rect.left,m.rect.bottom-m.rect.top)).unwrap_or((1920,1080));
     let (eff, sys) = lang_eff(&app.cfg.lang);
     let mut monitors = Vec::new();
     let mut world = serde_json::json!({ "x": 0, "y": 0, "w": w, "h": h });
-    if let (Some(first), Some(last)) = (app.walls.iter().map(|p| p.screen.left).min(), app.walls.iter().map(|p| p.screen.top).min()) {
-        let right = app.walls.iter().map(|p| p.screen.right).max().unwrap_or(w);
-        let bottom = app.walls.iter().map(|p| p.screen.bottom).max().unwrap_or(h);
+    if let (Some(first), Some(last)) = (detected.iter().map(|p| p.rect.left).min(), detected.iter().map(|p| p.rect.top).min()) {
+        let right = detected.iter().map(|p| p.rect.right).max().unwrap_or(w);
+        let bottom = detected.iter().map(|p| p.rect.bottom).max().unwrap_or(h);
         world = serde_json::json!({ "x": first, "y": last, "w": right - first, "h": bottom - last });
     }
-    for (i, p) in app.walls.iter().enumerate() {
+    for (i, p) in detected.iter().enumerate() {
         monitors.push(serde_json::json!({
             "id": format!("screen-{i}"), "name": format!("Màn hình {}", i + 1),
-            "x": p.screen.left, "y": p.screen.top,
-            "w": p.screen.right - p.screen.left, "h": p.screen.bottom - p.screen.top,
+            "x": p.rect.left, "y": p.rect.top,
+            "w": p.rect.right - p.rect.left, "h": p.rect.bottom - p.rect.top,
             "dpi": (p.dpr * 96.0).round(), "scale": p.dpr,
-            "primary": p.screen.left == 0 && p.screen.top == 0,
-            "theme": app.cfg.theme, "status": if p.paused { "paused" } else { "running" },
+            "primary": p.primary,
+            "theme": app.cfg.theme, "status": if !app.cfg.wallpaper_enabled {"disabled"}else if app.walls.is_empty(){"error"}else if app.walls.get(i).is_some_and(|w|w.paused) { "paused" } else { "running" },
         }));
     }
     let registry = web::find_prototype()
@@ -773,6 +804,11 @@ fn web_init(app: &App) -> serde_json::Value {
         "launcherAppearance": app.cfg.launcher_appearance.json(),
         "miniTools": app.cfg.tools.json(),
         "systemMonitor": app.cfg.system_monitor.json(),
+        "wallpaperEnabled": app.cfg.wallpaper_enabled,
+        "dock": app.cfg.dock.json(),
+        "dockDisplays": dock::display_json(),
+        "dockRunning": app.dock_runtime.as_ref().is_some_and(|r|!r.finished()),
+        "dockError": app.dock_error,
         "miniToolsHotkeys": TOOL_HOTKEYS.with(|c|c.get()),
         "autostartWarn": false,
         "interactions": app.interactions_enabled,
@@ -918,6 +954,7 @@ fn output_surface(gl:&glow::Context,width:i32,height:i32)->Result<(glow::Framebu
 }}
 
 struct App {
+    owner:HWND,
     ctx: Option<wgl::GlContext>,
     shared: Option<Shared>,
     vao: Option<glow::VertexArray>,
@@ -944,6 +981,8 @@ struct App {
     environment_update_at: f64,
     widget: Option<widget::Widget>,
     system_monitor: Option<system_monitor::Monitor>,
+    dock_runtime: Option<dock::Runtime>,
+    dock_error: Option<String>,
     // One cached CPU buffer shared by all outputs, never scaled while GPU-mapped.
     staging: RefCell<Vec<u8>>,
     benchmark_gdi: bool,
@@ -955,6 +994,40 @@ struct App {
 }
 
 impl App {
+    fn configure_dock(&mut self) {
+        self.dock_error=None;
+        if self.saver || self.headless || !self.cfg.dock.any_enabled() {self.dock_runtime=None;}
+        else if let Some(runtime)=self.dock_runtime.as_ref() {runtime.configure(self.cfg.dock.clone());}
+        else {match dock::Runtime::new(self.cfg.dock.clone(),self.owner as usize) {
+            Ok(runtime)=>self.dock_runtime=Some(runtime),
+            Err(error)=>{log!("Dock & Stage: {error}");self.dock_error=Some(error);}
+        }}
+        self.post_dock_state();
+    }
+    fn post_dock_state(&self) {
+        if !web::is_open() { return; }
+        web::post(&serde_json::json!({"t":"dockState","dock":self.cfg.dock.json(),"dockDisplays":dock::display_json(),"wallpaperEnabled":self.cfg.wallpaper_enabled,
+            "dockRunning":self.dock_runtime.as_ref().is_some_and(|r|!r.finished()),"dockError":self.dock_error}).to_string());
+    }
+    fn set_wallpaper_enabled(&mut self,on:bool)->Result<(),String> {
+        if self.cfg.wallpaper_enabled==on{return Ok(());}
+        self.cfg.wallpaper_enabled=on;
+        if on {
+            if let Err(error)=self.create_walls(){self.stop_wallpaper();self.cfg.wallpaper_enabled=false;return Err(error);}
+            self.poll_icons();self.render();
+        }else{self.stop_wallpaper();}
+        Ok(())
+    }
+    fn stop_wallpaper(&mut self) {
+        if let Some(ctx)=self.ctx.as_ref() {
+            if let Some(dc)=self.walls.first().map(|w|w.gl_dc).or_else(||self.dummy.map(|(_,dc)|dc)) {
+                ctx.make_current(dc);if let Some(vao)=self.vao.take(){unsafe{ctx.gl.delete_vertex_array(vao);}}
+            }
+        }
+        self.drop_shared();self.destroy_walls();self.gpu_device=None;self.ctx=None;self.gpu_attempted=false;
+        self.staging.replace(Vec::new());
+        if let Some((hwnd,dc))=self.dummy.take(){unsafe{ReleaseDC(hwnd,dc);DestroyWindow(hwnd);}}
+    }
     fn configure_system_monitor(&mut self, owner: HWND) {
         if self.saver || self.headless || !self.cfg.system_monitor.enabled {
             self.system_monitor = None;
@@ -969,8 +1042,8 @@ impl App {
     }
 
     fn init_widget(&mut self) {
-        if self.saver || self.headless || !self.cfg.widget_enabled || self.walls.is_empty() { return; }
-        let Some(screen) = primary_wall(self).map(|w| w.screen) else { return };
+        if self.saver || self.headless || !self.cfg.widget_enabled { return; }
+        let Some(screen) = primary_wall(self).map(|w| w.screen).or_else(||monitors().first().map(|m|m.rect)) else { return };
         let lang_vi = self.cfg.lang == "vi" || (self.cfg.lang == "auto" && lang_eff("auto").0 == "vi");
         match widget::Widget::new(screen, self.cfg.widget_x, self.cfg.widget_y, self.cfg.widget_locked, self.cfg.widget_scale, self.cfg.widget_lines, self.cfg.widget_opacity) {
             Ok(w) => { self.widget = Some(w); }
@@ -1106,7 +1179,14 @@ impl App {
         let seed = self.seed();
         let p = self.cfg.params.get(&self.cfg.theme);
         let now = self.now();
-        let rs = 0x5EED_0000 + idx as u64 * 7919 + self.start.elapsed().as_nanos() as u64;
+        // In a marked benchmark replay the same actor RNG as well as the same
+        // terrain seed. Leave the normal desktop's varying actor paths alone.
+        let actor_salt = if trial::benchmark_active() {
+            u64::from(seed as u32)
+        } else {
+            self.start.elapsed().as_nanos() as u64
+        };
+        let rs = (0x5EED_0000 + idx as u64 * 7919).wrapping_add(actor_salt);
         match self.cfg.theme.as_str() {
             "meadow" => Box::new(themes::meadow::Meadow::new(gl, w, h, buf_w, buf_h, scale, seed, themes::meadow::Params::from_json(p), rs, now)),
             "beach-turquoise" => Box::new(themes::maldives::Maldives::new(gl, w, h, buf_w, buf_h, scale, seed, themes::maldives::Params::from_json(p), rs, now)),
@@ -1176,6 +1256,7 @@ impl App {
     }
 
     fn create_walls(&mut self) -> Result<(), String> {
+        if !self.cfg.wallpaper_enabled && !self.saver && !self.headless{return Ok(());}
         self.ensure_seed();
         let mons = monitors();
         log!("Phát hiện {} màn hình", mons.len());
@@ -1466,11 +1547,15 @@ impl App {
             autostart: settings::autostart_enabled(),
             hotkey: HOTKEY_OK.with(|c| c.get()),
             interaction: self.interactions_enabled,
+            wallpaper_enabled:self.cfg.wallpaper_enabled,
+            dock:self.cfg.dock.clone(),
+            displays:dock::displays(),
         }
     }
 
     /// Dựng lại cảnh của chủ đề hiện tại (đổi chủ đề / thông số / seed).
     fn rebuild_theme(&mut self) {
+        if self.walls.is_empty() || self.ctx.is_none(){return;}
         let now = self.now();
         self.drop_shared();
         if let Err(e) = self.build_shared() {
@@ -1506,6 +1591,7 @@ impl App {
     }
 
     fn poll_icons(&mut self) {
+        if self.walls.is_empty() || self.ctx.is_none(){return;}
         let Some((rects, visible)) = self.reader.read() else { return };
         let now = self.now();
         let ctx = self.ctx.as_ref().unwrap();
@@ -1572,6 +1658,7 @@ impl App {
         let own: Vec<HWND> = self.walls.iter().map(|w| w.hwnd).collect();
         let screens:Vec<RECT>=self.walls.iter().map(|w|w.screen).collect();
         let covered=desktop::covered_monitors(&screens,&own);
+        trial::benchmark_coverage(&screens, &covered);
         for (wp,p) in self.walls.iter_mut().zip(covered) {
             if p != wp.paused {
                 wp.paused = p;
@@ -1869,6 +1956,7 @@ impl App {
 
     /// Chụp cảnh màn hình chính rồi đặt làm ảnh màn khóa Windows (chạy nền).
     fn sync_lock_image(&self) {
+        if trial::active() { return; }
         if self.walls.is_empty() {
             return;
         }
@@ -1882,6 +1970,7 @@ impl App {
     /// Chụp cảnh màn hình chính làm hình nền tĩnh của Windows, để lúc mở máy (trước khi app chạy)
     /// desktop hiện đúng cảnh này thay vì màn đen.
     fn sync_static_wallpaper(&self) {
+        if trial::active() { return; }
         if self.walls.is_empty() {
             return;
         }
@@ -2006,6 +2095,67 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if let Err(error) = trial::initialize(&args) {
+        eprintln!("Trial initialization refused: {error}");
+        std::process::exit(2);
+    }
+    if args.iter().any(|a| a == "--trial-isolation-check") {
+        if let Err(error) = trial::verify_guards() {
+            eprintln!("Trial isolation check failed: {error}");
+            std::process::exit(3);
+        }
+        return;
+    }
+    if args.iter().any(|a| a == "--trial-dock-glass-probe") {
+        let Some(dir) = trial::data_dir() else { std::process::exit(2); };
+        // Share the production singleton even though this read-only renderer
+        // proof does not start the normal tray/launcher/wallpaper lifecycle.
+        let singleton = unsafe {
+            let name = wide("TuanpcDesk_Singleton");
+            let mutex = CreateMutexW(std::ptr::null(), 1, name.as_ptr());
+            if mutex.is_null() || GetLastError() == ERROR_ALREADY_EXISTS { std::process::exit(2); }
+            SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            mutex
+        };
+        let duration = arg_value(&args, "--trial-dock-glass-probe").and_then(|s| s.parse().ok()).unwrap_or(30);
+        let result = dock::glass_probe(dir,duration);
+        unsafe { CloseHandle(singleton); }
+        if result.is_err() { std::process::exit(3); }
+        return;
+    }
+    if args.iter().any(|a| a == "--trial-dock-displays") {
+        let Some(dir) = trial::data_dir() else { std::process::exit(2); };
+        // Report only to an explicit, marked trial profile selected by the caller.
+        unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2); }
+        if std::fs::write(dir.join("dock-displays.json"), dock::display_json().to_string()).is_err() {
+            std::process::exit(3);
+        }
+        return;
+    }
+    if args.iter().any(|a| a == "--trial-benchmark-coverage-probe") {
+        let Some(dir) = trial::data_dir() else { std::process::exit(2); };
+        if !trial::benchmark_active() { std::process::exit(2); }
+        // This path only inspects HWND geometry. It does not acquire or signal
+        // the application's singleton, change focus or start a module.
+        unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2); }
+        let screens = monitors();
+        if screens.is_empty() { std::process::exit(3); }
+        let own = arg_value(&args, "--benchmark-wallpaper-pid").and_then(|v| v.parse::<u32>().ok()).filter(|&id| id != 0);
+        let bounds: Vec<_> = screens.iter().map(|m| m.rect).collect();
+        let reasons = desktop::probe_coverage(&bounds, own);
+        let outputs: Vec<_> = screens.iter().zip(reasons).map(|(m, reason)| serde_json::json!({
+            "rect": [m.rect.left, m.rect.top, m.rect.right, m.rect.bottom],
+            "primary": m.primary, "covered": reason.is_some(), "reason": reason
+        })).collect();
+        if std::fs::write(dir.join("wallpaper-coverage.json"), serde_json::json!({"outputs":outputs}).to_string()).is_err() {
+            std::process::exit(3);
+        }
+        return;
+    }
+    if trial::active() && args.iter().any(|a| {
+        let a = a.to_ascii_lowercase();
+        a == "--saver" || a.starts_with("/s") || a.starts_with("-s")
+    }) { std::process::exit(2); }
     if let Some(path) = arg_value(&args, "--system-monitor-diagnostics") {
         let _ = system_monitor::diagnostics(std::path::Path::new(&path));
         return;
@@ -2027,6 +2177,8 @@ fn main() {
             if !h.is_null() {
                 let mut pid = 0;
                 GetWindowThreadProcessId(h, &mut pid);
+                // Trial CLI must never forward to an installed production owner.
+                if trial::active() { std::process::exit(2); }
                 AllowSetForegroundWindow(pid);
                 PostMessageW(h, if open_launcher { WM_OPEN_LAUNCHER } else { WM_OPEN_SETTINGS }, 0, 0);
                 return;
@@ -2034,6 +2186,7 @@ fn main() {
         }
     }
     if args.iter().any(|a| a == "--quit") {
+        if trial::active() { std::process::exit(2); }
         let cls = wide(MSG_CLASS);
         unsafe {
             let h = FindWindowW(cls.as_ptr(), std::ptr::null());
@@ -2104,6 +2257,7 @@ fn main() {
     WIDGET_LOCKED.with(|c| c.set(cfg.widget_locked));
 
     register_class(MSG_CLASS, Some(msg_proc), false);
+    TASKBAR_CREATED.with(|id|id.set(unsafe{RegisterWindowMessageW(wide("TaskbarCreated").as_ptr())}));
     register_class(WALL_CLASS, Some(wall_proc), true);
     register_class(SAVER_CLASS, Some(saver_proc), true);
     let msg_hwnd = unsafe {
@@ -2167,6 +2321,7 @@ fn main() {
     let interactions_enabled = cfg.interactions_enabled;
     let environment = cfg.environment.clone();
     let mut app = App {
+        owner:msg_hwnd,
         ctx: None,
         shared: None,
         vao: None,
@@ -2191,6 +2346,8 @@ fn main() {
         environment_update_at: 0.0,
         widget: None,
         system_monitor: None,
+        dock_runtime:None,
+        dock_error:None,
         staging:RefCell::new(Vec::new()),
         benchmark_gdi:headless && args.iter().any(|a|a=="--benchmark-gdi"),
         benchmark_direct_readback:headless && args.iter().any(|a|a=="--benchmark-direct-readback"),
@@ -2212,11 +2369,7 @@ fn main() {
             }
             Err(e) => {
                 log!("Khởi động/gắn hình nền lần {} thất bại: {e}", attempt + 1);
-                app.destroy_walls();
-                app.drop_shared();
-                app.gpu_device=None;app.gpu_attempted=false;
-                app.ctx = None;
-                app.vao = None;
+                app.stop_wallpaper();
                 if attempt < 11 {
                     std::thread::sleep(Duration::from_millis(500));
                 }
@@ -2224,12 +2377,13 @@ fn main() {
         }
     }
     if !walls_ready {
-        log!("Không thể gắn hình nền sau nhiều lần thử");
-        unsafe { Shell_NotifyIconW(NIM_DELETE, &nid) };
-        return;
+        log!("Không thể gắn hình nền sau nhiều lần thử; các tiện ích desktop vẫn độc lập");
+        if saver || headless {return;}
     }
     app.init_widget();
     app.configure_system_monitor(msg_hwnd);
+    app.configure_dock();
+    if !saver && !headless {save_config(&app.cfg);}
     if headless && !args.iter().any(|a| a == "--real-icons") {
         let now = app.now();
         if let Some(ctx) = app.ctx.as_ref() {
@@ -2394,6 +2548,25 @@ fn main() {
             }
         }
         let cmd = PENDING_CMD.with(|c| c.replace(0));
+        if TRAY_RESTORE_PENDING.with(|p|p.replace(false)) && !saver && !headless {
+            unsafe{Shell_NotifyIconW(NIM_ADD,&nid);}
+            log!("Explorer khởi động lại: khôi phục menu tray, giữ cấu hình module");
+        }
+        let dock_events=app.dock_runtime.as_ref().map(|r|r.take_events()).unwrap_or_default();
+        let mut dock_edited=false;
+        for event in dock_events {match event {
+            dock::Event::Edit(edit)=>{edit.apply(&mut app.cfg.dock);dock_edited=true;}
+            dock::Event::Utility(action)=>{
+                use dock::HostAction::*;
+                let command=match action {
+                    Settings=>CMD_SETTINGS,Capture=>CMD_CAPTURE,Record=>CMD_RECORD,
+                    SystemMonitor=>CMD_SYSTEM_MONITOR,Wallpaper=>CMD_WALLPAPER,Stage=>CMD_STAGE,Launcher=>CMD_LAUNCHER,
+                };
+                PENDING_CMD.with(|c|c.set(command));
+            }
+            dock::Event::Error(error)=>{log!("Dock & Stage: {error}");app.dock_error=Some(error);app.post_dock_state();}
+        }}
+        if dock_edited {app.configure_dock();save_config(&app.cfg);settings::sync(&app.settings_state());}
         if benchmark_until.is_some_and(|t|app.now()>=t) {break 'outer;}
         let click = PENDING_CLICK.with(|c| c.take());
         if let Some((x, y)) = click {
@@ -2467,6 +2640,23 @@ fn main() {
                     }
                 }
                 Action::Autostart(on) => settings::set_autostart(on),
+                Action::Wallpaper(on)=>{if let Err(error)=app.set_wallpaper_enabled(on){log!("Hình nền: {error}");}app.post_dock_state();}
+                Action::Dock(on)=>{app.cfg.dock.enabled=on;app.configure_dock();}
+                Action::Stage(on)=>{app.cfg.dock.stage_enabled=on;app.configure_dock();}
+                Action::DockDisplay(stage,target)=>{
+                    if stage {app.cfg.dock.stage_display=target;} else {app.cfg.dock.dock_display=target;}
+                    app.configure_dock();
+                }
+                Action::UtilityProfile(id,profile)=>{
+                    dock::Edit::UtilityProfile(id,profile).apply(&mut app.cfg.dock);app.configure_dock();
+                }
+                Action::WindowPolicy(id,policy)=>{
+                    dock::Edit::WindowPolicy(id,policy).apply(&mut app.cfg.dock);app.configure_dock();
+                }
+                Action::StageStyle(id,style)=>{
+                    dock::Edit::StageStyle(id,style).apply(&mut app.cfg.dock);app.configure_dock();
+                }
+                Action::DockAppearance(appearance)=>{app.cfg.dock.appearance=appearance;app.configure_dock();}
                 Action::Interaction(on) => {
                     INTERACTIONS_ENABLED.with(|c| c.set(on));
                     app.interactions_enabled = on;
@@ -2764,6 +2954,41 @@ fn main() {
                     web::post(&serde_json::json!({"t":"systemMonitorState","systemMonitor":app.cfg.system_monitor.json()}).to_string());
                     web_changed = true;
                 }
+                "dock" => {
+                    // Partial UI patch must preserve pins/unknown monitor settings.
+                    let mut value=app.cfg.dock.json();
+                    for key in ["enabled","stageEnabled","allWindows","stageSide","dockDisplay","stageDisplay","appearance"] {
+                        if let Some(v)=m.get(key){value[key]=v.clone();}
+                    }
+                    app.cfg.dock=dock::Options::from_json(&value);app.configure_dock();web_changed=true;
+                }
+                "dockWindowPolicy" => {
+                    let id=s_("display");
+                    if dock::displays().iter().any(|display|display.id==id){
+                        dock::Edit::WindowPolicy(id,dock::WindowPolicy::from_json(&m["policy"])).apply(&mut app.cfg.dock);
+                        app.configure_dock();web_changed=true;
+                    }
+                }
+                "utilityProfile" => {
+                    let id=s_("display");
+                    if dock::displays().iter().any(|display|display.id==id){
+                        dock::Edit::UtilityProfile(id,dock::UtilityProfile::from_json(&m["profile"])).apply(&mut app.cfg.dock);
+                        app.configure_dock();web_changed=true;
+                    }
+                }
+                "stageStyle" => {
+                    let id = s_("display");
+                    if dock::displays().iter().any(|display| display.id == id) {
+                        dock::Edit::StageStyle(id, dock::StageStyle::from_json(&m["style"])).apply(&mut app.cfg.dock);
+                        app.configure_dock();web_changed=true;
+                    }
+                }
+                "wallpaperEnabled" => {
+                    if let Some(on)=m["enabled"].as_bool(){
+                        if let Err(error)=app.set_wallpaper_enabled(on){app.dock_error=Some(error);}
+                        app.post_dock_state();web_changed=true;
+                    }
+                }
                 "miniTools" => {
                     let old_tools = app.cfg.tools.clone();
                     let requested_tools = mini_tools::Options::from_json(&m);
@@ -2858,6 +3083,13 @@ fn main() {
         } else {
             match cmd {
                 CMD_EXIT => break,
+                CMD_DOCK => {app.cfg.dock.enabled=!app.cfg.dock.enabled;app.configure_dock();}
+                CMD_DOCK_FOCUS => {if let Some(runtime)=app.dock_runtime.as_ref(){runtime.focus();}}
+                CMD_STAGE => {app.cfg.dock.stage_enabled=!app.cfg.dock.stage_enabled;app.configure_dock();}
+                CMD_WALLPAPER => {
+                    if let Err(error)=app.set_wallpaper_enabled(!app.cfg.wallpaper_enabled){app.dock_error=Some(error);}
+                    app.post_dock_state();
+                }
                 CMD_LAUNCHER => {
                     launcher::configure(app.cfg.launcher_appearance.clone());
                     launcher::toggle(msg_hwnd);
@@ -2980,6 +3212,8 @@ fn main() {
                 break;
             }
             app.init_widget();
+            if web::is_open() { app.post_dock_state(); }
+            if settings::hwnd().is_some() { settings::sync(&app.settings_state()); }
         }
         if REPAINT.with(|c| c.replace(false)) {
             app.repaint_all();
@@ -3016,6 +3250,7 @@ fn main() {
                 let h = locked || saver_running || !default_desktop;
                 if h != hidden {
                     hidden = h;
+                    if let Some(runtime)=app.dock_runtime.as_ref(){runtime.suspend(h);}
                     log!("Desktop {}: sessionLocked={locked}, saverRunning={saver_running}, inputDefault={default_desktop}", if h { "ẩn -> ngừng vẽ" } else { "hiển thị -> vẽ tiếp" });
                     lock::log_saver_state("desktop đổi trạng thái");
                     if !h {
@@ -3098,7 +3333,9 @@ fn main() {
 
     if precise_timer {unsafe {timeEndPeriod(1);}}
     log!("Đang thoát");
-    if !headless {save_config(&app.cfg);}
+    if !headless && !saver {save_config(&app.cfg);}
+    // Join managed desktop UI before removing the Deskland tray/config owner.
+    app.dock_runtime=None;
     if !hook.is_null() {
         unsafe { UnhookWinEvent(hook) };
     }
@@ -3114,9 +3351,32 @@ fn main() {
             DestroyWindow(h);
         }
         if !saver && !headless {
+            unregister_shortcuts(msg_hwnd);
+            windows_sys::Win32::System::RemoteDesktop::WTSUnRegisterSessionNotification(msg_hwnd);
             Shell_NotifyIconW(NIM_DELETE, &nid);
         }
         DestroyWindow(msg_hwnd);
+    }
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    #[test]
+    #[ignore = "real hidden HWND and Explorer broadcast routing; explicitly run in CI"]
+    fn native_explorer_restart_queues_recovery_without_settings_writes() {
+        // Route the documented shell message without restarting Explorer or
+        // reading/writing a profile. Actual desktop restart remains native pending.
+        register_class(MSG_CLASS,Some(msg_proc),false);
+        let message=unsafe{RegisterWindowMessageW(wide("TaskbarCreated").as_ptr())};assert_ne!(message,0);
+        TASKBAR_CREATED.with(|id|id.set(message));
+        let class=wide(MSG_CLASS);
+        let hwnd=unsafe{CreateWindowExW(WS_EX_TOOLWINDOW,class.as_ptr(),class.as_ptr(),WS_POPUP,0,0,0,0,std::ptr::null_mut(),std::ptr::null_mut(),GetModuleHandleW(std::ptr::null()),std::ptr::null())};
+        assert!(!hwnd.is_null());
+        unsafe{SendMessageW(hwnd,message,0,0);}
+        assert!(TRAY_RESTORE_PENDING.with(|p|p.replace(false)));
+        assert!(DISPLAY_CHANGED.with(|p|p.replace(false)));
+        unsafe{DestroyWindow(hwnd);}
     }
 }
 
