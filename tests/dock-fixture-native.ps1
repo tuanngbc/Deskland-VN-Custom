@@ -20,5 +20,8 @@ try {
 } finally {
     $check = Join-Path $evidence 'fixture-card-check.json'
     [IO.File]::Delete($check)
+    foreach ($name in 'fixture-deactivated.log','source-0-deactivated.log','source-1-deactivated.log','source-2-deactivated.log') {
+        [IO.File]::Delete((Join-Path $evidence $name))
+    }
     [IO.Directory]::Delete($evidence, $false)
 }

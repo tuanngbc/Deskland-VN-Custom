@@ -80,6 +80,7 @@ try {
     $manifest.PreviewFixtureCards = 3
     $manifest.DockEnabled = $true
     $manifest.NonStageSettingsSha256 = 'D'*64
+    $manifest.FixtureFocusRole = 'fixture-deactivated.log'
     $manifest.StageSourceGeometry = 'primary:10,10,80,80;secondary:-300,10,-100,80;primary:10,100,80,170'
     Write-Manifest $cases[0]
     $manifest.StageEnabled = $true
@@ -100,6 +101,10 @@ try {
     Write-Manifest $cases[1]
     Expect-Invalid 'Stage control settings, source geometry or build differ'
     $manifest.NonStageSettingsSha256 = 'D'*64
+    $manifest.FixtureFocusRole = 'source-0-deactivated.log'
+    Write-Manifest $cases[1]
+    Expect-Invalid 'FixtureFocusRole differs'
+    $manifest.FixtureFocusRole = 'fixture-deactivated.log'
     $manifest.State = 'INVALID'
     Write-Manifest $cases[1]
     Expect-Invalid 'INVALID interval:'

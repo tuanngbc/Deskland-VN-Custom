@@ -71,10 +71,14 @@ try {
         $control.FormBorderStyle = 'FixedToolWindow'
         $control.ShowInTaskbar = $false
     }
-    $deactivated = Join-Path $Evidence 'fixture-deactivated.log'
-    $control.Add_Deactivate({
-        [IO.File]::AppendAllText($deactivated, [string][DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()+[Environment]::NewLine)
-    }.GetNewClosure())
+    foreach ($owned in $forms) {
+        $focusLog = if ($owned -eq $control) { 'fixture-deactivated.log' }
+            else { "source-$($forms.IndexOf($owned))-deactivated.log" }
+        $deactivated = Join-Path $Evidence $focusLog
+        $owned.Add_Deactivate({
+            [IO.File]::AppendAllText($deactivated, [string][DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()+[Environment]::NewLine)
+        }.GetNewClosure())
+    }
     $screen = if ($Fullscreen -eq 'secondary') { $screens[1] } else { $screens[0] }
     if ($Fullscreen -eq 'none') {
         $offset = if ($Cards -gt 0) { [Math]::Min(605, $screen.Bounds.Width-400) } else { 475 }
@@ -144,8 +148,12 @@ try {
         $covered = ($side -eq $Fullscreen) -or ($side -in $BackgroundCovered)
         '{0},{1},{2},{3}:{4}' -f $b.Left,$b.Top,$b.Right,$b.Bottom,[int]$covered
     }) -join ';'
-    [ordered]@{PID=$PID;Hwnd=$control.Handle.ToInt64();Rect=$controlRect;Cards=$Cards;Coverage=$expected;Fullscreen=$Fullscreen;BackgroundCovered=$BackgroundCovered} |
-        ConvertTo-Json | Set-Content -LiteralPath $next
+    $foregroundWindows = @(for ($i=0; $i -lt $Cards; $i++) {
+        [ordered]@{Hwnd=$forms[$i].Handle.ToInt64();Rect=$sources[$i].Rect;DeactivationLog="source-$i-deactivated.log"}
+    })
+    $foregroundWindows += [ordered]@{Hwnd=$control.Handle.ToInt64();Rect=$controlRect;DeactivationLog='fixture-deactivated.log'}
+    [ordered]@{PID=$PID;Hwnd=$control.Handle.ToInt64();Rect=$controlRect;Cards=$Cards;Coverage=$expected;Fullscreen=$Fullscreen;BackgroundCovered=$BackgroundCovered;ForegroundWindows=$foregroundWindows} |
+        ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $next
     Move-Item -LiteralPath $next -Destination $ready
     while ($clock.Elapsed.TotalSeconds -lt $TimeoutSeconds -and !(Test-Path -LiteralPath $stop) -and !$control.IsDisposed) {
         [Windows.Forms.Application]::DoEvents()

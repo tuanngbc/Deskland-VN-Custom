@@ -8,6 +8,7 @@ param(
     [ValidateRange(0,16)][int]$ExpectedStagePreviews,
     [string]$AbortMarker,
     [string]$FixtureEvidence = $Evidence,
+    [long]$SharedForegroundHwnd,
     [ValidateRange(15,600)][int]$Warmup = 15,
     [Alias('Samples')][ValidateRange(125,600)][int]$RequestedSamples = 125
 )
@@ -92,7 +93,17 @@ public static class DeskPerfCounters {
 }
 '@
 }
-$fixtureHwnd = [IntPtr][int64]$fixture.Hwnd
+$focusRecord = $fixture
+$focusDeactivationLog = 'fixture-deactivated.log'
+if ($PSBoundParameters.ContainsKey('SharedForegroundHwnd')) {
+    $focus = @($fixture.ForegroundWindows | Where-Object Hwnd -eq $SharedForegroundHwnd)
+    if ($focus.Count -ne 1 -or $focus[0].DeactivationLog -cnotmatch '^(fixture|source-[0-7])-deactivated\.log$') {
+        throw 'Shared foreground must be one known fixture window'
+    }
+    $focusRecord = $focus[0]
+    $focusDeactivationLog = $focusRecord.DeactivationLog
+}
+$fixtureHwnd = [IntPtr][int64]$focusRecord.Hwnd
 [uint32]$owner = 0
 [void][DeskPerfCounters]::GetWindowThreadProcessId($fixtureHwnd,[ref]$owner)
 if ($owner -ne $fixtureProcess.Id) { throw 'Fixture HWND ownership mismatch' }
@@ -186,7 +197,7 @@ try {
     $web = (SessionWebView) -join ','
     if ([DeskPerfCounters]::GetForegroundWindow() -ne $fixtureHwnd) { $reasons.Add('fixture-not-foreground') }
     if (![DeskPerfCounters]::PhysicalWindowRect($fixtureHwnd,[ref]$anchor)) { $reasons.Add('fixture-window-gone') }
-    if ($anchor.ToString() -cne $fixture.Rect) { $reasons.Add('fixture-not-in-declared-geometry') }
+    if ($anchor.ToString() -cne $focusRecord.Rect) { $reasons.Add('fixture-not-in-declared-geometry') }
     if ([DeskPerfCounters]::SettingsVisible($CandidateId)) { $reasons.Add('candidate-settings-visible') }
     if (!$display) { $reasons.Add('two-display-geometry-or-dpi-unavailable') }
     $preflightTime = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0
@@ -254,7 +265,7 @@ try {
                 $reasons.Add('stage-live-preview-workload-changed')
             }
         }
-        $deactivated = Join-Path $FixtureEvidence 'fixture-deactivated.log'
+        $deactivated = Join-Path $FixtureEvidence $focusDeactivationLog
         if (Test-Path -LiteralPath $deactivated) {
             $lost = @(Get-Content -LiteralPath $deactivated | Where-Object {
                 $_ -match '^\d+$' -and [long]$_ -ge $started*1000 -and [long]$_ -le $samples[-1].Epoch*1000
@@ -277,7 +288,7 @@ try {
         Schema=2;State=if($reasons.Count){'INVALID'}else{'VALID_INTERVAL'};Reasons=@($reasons.ToArray());Build=$BuildSha;
         WarmupSeconds=$Warmup;Requested=$RequestedSamples;Actual=$samples.Count;LogicalCpus=$logical;Adapters=$adapters;
         Display=$display;Coverage=$expected;ObservedCoverage=$observedCoverage;Theme=$cfg.theme;Mode=$cfg.mode;ControlSettingsSha256=$controlHash;SceneSeed=$observedSeed;
-        FixtureRect=$anchor.ToString();FixtureFullscreen=$fixture.Fullscreen;PreviewFixtureCards=$fixture.Cards;
+        FixtureRect=$anchor.ToString();FixtureFocusRole=if($SharedForegroundHwnd){$focusDeactivationLog};FixtureFullscreen=$fixture.Fullscreen;PreviewFixtureCards=$fixture.Cards;
         StageFixturePreviews=$observedStagePreviews;StageSourceGeometry=$stageSourceGeometry;NonStageSettingsSha256=$nonStageHash;
         DockEnabled=[bool]$cfg.dock.enabled;StageEnabled=[bool]$cfg.dock.stageEnabled;SessionWebViewCount=if($web){($web -split ',').Count}else{0};
         CounterWarnings=$counterErrors.Count

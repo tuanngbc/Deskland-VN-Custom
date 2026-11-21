@@ -102,7 +102,7 @@ if ($a.Metadata.StageEnabled -or $b.Metadata.StageEnabled) {
         throw 'INVALID pair: Stage control settings, source geometry or build differ'
     }
 }
-foreach ($field in 'Display','Coverage','Theme','Mode','SceneSeed','ControlSettingsSha256','FixtureRect','FixtureFullscreen','PreviewFixtureCards','SessionWebViewCount','LogicalCpus','WarmupSeconds','Requested') {
+foreach ($field in 'Display','Coverage','Theme','Mode','SceneSeed','ControlSettingsSha256','FixtureRect','FixtureFocusRole','FixtureFullscreen','PreviewFixtureCards','SessionWebViewCount','LogicalCpus','WarmupSeconds','Requested') {
     if ($a.Metadata.$field -cne $b.Metadata.$field) { throw "INVALID pair: $field differs" }
 }
 if (($a.Metadata.Adapters | ConvertTo-Json -Compress) -cne ($b.Metadata.Adapters | ConvertTo-Json -Compress)) {
