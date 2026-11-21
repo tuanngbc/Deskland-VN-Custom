@@ -2096,6 +2096,15 @@ fn main() {
         }
         return;
     }
+    if args.iter().any(|a| a == "--trial-dock-displays") {
+        let Some(dir) = trial::data_dir() else { std::process::exit(2); };
+        // Report only to an explicit, marked trial profile selected by the caller.
+        unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2); }
+        if std::fs::write(dir.join("dock-displays.json"), dock::display_json().to_string()).is_err() {
+            std::process::exit(3);
+        }
+        return;
+    }
     if trial::active() && args.iter().any(|a| {
         let a = a.to_ascii_lowercase();
         a == "--saver" || a.starts_with("/s") || a.starts_with("-s")

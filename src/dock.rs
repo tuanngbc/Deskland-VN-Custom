@@ -4,6 +4,7 @@
 use crate::desktop::wide;
 use std::{cell::{Cell,RefCell},collections::{HashMap,HashSet},mem,ptr,sync::mpsc};
 use windows_sys::Win32::Foundation::*;
+use windows_sys::Win32::Devices::Display::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute,DWMWA_CLOAKED};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -85,28 +86,74 @@ fn emit(event:Event) {
     if !owner.is_null(){unsafe{PostMessageW(owner,WM_NULL,0,0);}}
 }
 
-pub fn displays() -> Vec<Display> {
-    fn utf16(z: &[u16]) -> String {
-        String::from_utf16_lossy(&z[..z.iter().position(|&c| c == 0).unwrap_or(z.len())])
+fn utf16(z: &[u16]) -> String {
+    String::from_utf16_lossy(&z[..z.iter().position(|&c| c == 0).unwrap_or(z.len())])
+}
+
+fn active_targets() -> HashMap<String, (String, String)> {
+    let mut results = HashMap::new();
+    const FLAGS: u32 = QDC_ONLY_ACTIVE_PATHS;
+    unsafe {
+        // A hotplug between the size probe and query can change array lengths.
+        for _ in 0..3 {
+            let (mut count, mut modes) = (0, 0);
+            if GetDisplayConfigBufferSizes(FLAGS, &mut count, &mut modes) != ERROR_SUCCESS
+                || !(1..=128).contains(&count) || !(1..=512).contains(&modes) { break; }
+            let mut paths = vec![mem::zeroed::<DISPLAYCONFIG_PATH_INFO>(); count as usize];
+            let mut info = vec![mem::zeroed::<DISPLAYCONFIG_MODE_INFO>(); modes as usize];
+            match QueryDisplayConfig(FLAGS, &mut count, paths.as_mut_ptr(), &mut modes, info.as_mut_ptr(), ptr::null_mut()) {
+                ERROR_SUCCESS => {}
+                ERROR_INSUFFICIENT_BUFFER => continue,
+                _ => break,
+            }
+            for link in paths.into_iter().take(count as usize) {
+                let mut source: DISPLAYCONFIG_SOURCE_DEVICE_NAME = mem::zeroed();
+                source.header = DISPLAYCONFIG_DEVICE_INFO_HEADER {
+                    r#type: DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
+                    size: mem::size_of_val(&source) as u32,
+                    adapterId: link.sourceInfo.adapterId, id: link.sourceInfo.id,
+                };
+                if DisplayConfigGetDeviceInfo(&mut source.header) != 0 { continue; }
+                let mut target: DISPLAYCONFIG_TARGET_DEVICE_NAME = mem::zeroed();
+                target.header = DISPLAYCONFIG_DEVICE_INFO_HEADER {
+                    r#type: DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+                    size: mem::size_of_val(&target) as u32,
+                    adapterId: link.targetInfo.adapterId, id: link.targetInfo.id,
+                };
+                if DisplayConfigGetDeviceInfo(&mut target.header) != 0 { continue; }
+                let path = utf16(&target.monitorDevicePath);
+                let name = utf16(&target.monitorFriendlyDeviceName);
+                if path.is_empty() && name.is_empty() { continue; }
+                // Cloned displays share one drawable source, therefore one overlay.
+                // Use the first active target in Windows' documented priority order.
+                results.entry(utf16(&source.viewGdiDeviceName).to_lowercase()).or_insert((path, name));
+            }
+            break;
+        }
     }
-    // A monitor interface path is independent of desktop coordinates and
-    // primary status. Remote/virtual outputs can lack a physical interface.
+    results
+}
+
+pub fn displays() -> Vec<Display> {
+    let targets = active_targets();
     crate::monitors().into_iter().enumerate().map(|(index, monitor)| {
-        let mut path = String::new();
-        let mut name = String::new();
-        unsafe {
-            for i in 0..32 {
-                let mut device: DISPLAY_DEVICEW = mem::zeroed();
-                device.cb = mem::size_of::<DISPLAY_DEVICEW>() as u32;
-                // EDD_GET_DEVICE_INTERFACE_NAME returns GUID_DEVINTERFACE_MONITOR.
-                if EnumDisplayDevicesW(monitor.device.as_ptr(), i, &mut device, 1) == 0 { break; }
-                if device.StateFlags & 1 == 0 { continue; } // DISPLAY_DEVICE_ACTIVE
-                path = utf16(&device.DeviceID);
-                name = utf16(&device.DeviceString);
-                if !path.is_empty() { break; }
+        let source = utf16(&monitor.device);
+        let (mut path, mut name) = targets.get(&source.to_lowercase()).cloned().unwrap_or_default();
+        // Preserve the same per-monitor interface ID across the fallback so a
+        // temporary failure to query DisplayConfig does not change a saved target.
+        if path.is_empty() || name.is_empty() {
+            unsafe {
+                for i in 0..32 {
+                    let mut device: DISPLAY_DEVICEW = mem::zeroed();
+                    device.cb = mem::size_of::<DISPLAY_DEVICEW>() as u32;
+                    if EnumDisplayDevicesW(monitor.device.as_ptr(), i, &mut device, 1) == 0 { break; }
+                    if device.StateFlags & 1 == 0 { continue; }
+                    if path.is_empty() { path = utf16(&device.DeviceID); }
+                    if name.is_empty() { name = utf16(&device.DeviceString); }
+                    if !path.is_empty() { break; }
+                }
             }
         }
-        let source = utf16(&monitor.device);
         let id = if path.is_empty() { format!("source:{source}") } else { format!("monitor:{path}") }.to_lowercase();
         if name.is_empty() { name = if source.is_empty() { format!("Display {}", index+1) } else { source }; }
         Display { id, name, bounds: monitor.rect, work: monitor.work, primary: monitor.primary,
