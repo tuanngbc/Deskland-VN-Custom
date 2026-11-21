@@ -274,9 +274,7 @@ pub(crate) unsafe fn shell_icon(path: &Path, source_size: i32) -> Option<IconPix
         { let item: windows::core::Result<IShellItemImageFactory> = SHCreateItemFromParsingName(windows::core::PCWSTR(path.as_ptr()), None); item }
     };
     let factory = factory_for(&name).or_else(|error| {
-        if let Some(id)=name.strip_prefix(r"shell:AppsFolder"){
-            factory_for(&format!(r"::{{4234d49b-0245-4df3-b780-3893943456e1}}\{id}"))
-        }else{Err(error)}
+        if let Some(alternate)=apps_folder_parsing_name(&name){factory_for(&alternate)}else{Err(error)}
     }).ok()?;
     let bitmap = factory.GetImage(windows::Win32::Foundation::SIZE { cx: source_size, cy: source_size }, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK).ok()?;
     let bitmap = bitmap.0;
@@ -285,14 +283,33 @@ pub(crate) unsafe fn shell_icon(path: &Path, source_size: i32) -> Option<IconPix
     let (w, h) = (object.bmWidth, object.bmHeight.abs());
     if w <= 0 || h <= 0 || w > 512 || h > 512 { DeleteObject(bitmap); return None; }
     let dc = CreateCompatibleDC(std::ptr::null_mut());
+    if dc.is_null(){DeleteObject(bitmap);return None;}
     let mut info: BITMAPINFO = std::mem::zeroed(); info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
     info.bmiHeader.biWidth = w; info.bmiHeader.biHeight = -h; info.bmiHeader.biPlanes = 1; info.bmiHeader.biBitCount = 32;
     let mut pixels = vec![0u8; (w * h * 4) as usize];
     let ok = GetDIBits(dc, bitmap, 0, h as u32, pixels.as_mut_ptr() as *mut _, &mut info, DIB_RGB_COLORS);
     DeleteDC(dc); DeleteObject(bitmap);
-    if ok == 0 { return None; }
+    if ok != h || !pixels.iter().any(|&v|v!=0) { return None; }
     normalize_shell_alpha(&mut pixels);
     Some(IconPixels { width: w, height: h, pixels })
+}
+
+fn apps_folder_parsing_name(path:&str)->Option<String>{
+    const PREFIX:&str="shell:AppsFolder\\";
+    if !path.get(..PREFIX.len())?.eq_ignore_ascii_case(PREFIX){return None;}
+    let id=path.get(PREFIX.len()..)?;
+    if id.is_empty()||id.contains(['\\','/']){return None;}
+    Some(format!(r"::{{4234d49b-0245-4df3-b780-3893943456e1}}\{id}"))
+}
+
+#[cfg(test)]
+#[test]
+fn apps_folder_icon_fallback_uses_one_separator_and_preserves_aumid(){
+    let id="Microsoft.WindowsNotepad_8wekyb3d8bbwe!App";
+    let path=format!(r"Shell:AppsFolder\{id}");
+    assert_eq!(apps_folder_parsing_name(&path).unwrap(),format!(r"::{{4234d49b-0245-4df3-b780-3893943456e1}}\{id}"));
+    assert!(apps_folder_parsing_name(r"shell:AppsFolder\\Invalid").is_none());
+    assert!(apps_folder_parsing_name(r"C:\Windows\explorer.exe").is_none());
 }
 
 fn normalize_shell_alpha(pixels: &mut [u8]) {

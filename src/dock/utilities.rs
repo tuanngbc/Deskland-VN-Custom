@@ -17,7 +17,7 @@ use windows_sys::Win32::{
 
 #[derive(Clone, Copy, Debug)]
 enum Link { None, Wired, WiFi(Option<u8>), Both(Option<u8>) }
-enum BluetoothState { Unknown, Adapter, Connected }
+enum BluetoothState { Unknown, Adapter, Connected(Vec<String>) }
 #[derive(Clone,Copy)]
 enum BatteryState { Unknown, Absent, Present{level:Option<u8>,ac:Option<bool>,charging:bool} }
 pub(super) struct Audio { level:u32, muted:bool }
@@ -141,7 +141,7 @@ unsafe fn bluetooth()->BluetoothState{
     let params=BLUETOOTH_FIND_RADIO_PARAMS{dwSize:mem::size_of::<BLUETOOTH_FIND_RADIO_PARAMS>() as u32};
     let find=BluetoothFindFirstRadio(&params,&mut radio);
     if find.is_null(){return BluetoothState::Unknown;}
-    let mut state=BluetoothState::Adapter;
+    let mut names=Vec::new();
     for index in 0..16 {
         if radio.is_null(){break;}
         let mut params:BLUETOOTH_DEVICE_SEARCH_PARAMS=mem::zeroed();
@@ -151,14 +151,22 @@ unsafe fn bluetooth()->BluetoothState{
         info.dwSize=mem::size_of::<BLUETOOTH_DEVICE_INFO>() as u32;
         let device=BluetoothFindFirstDevice(&params,&mut info);
         if !device.is_null(){
-            if info.fConnected!=0{state=BluetoothState::Connected;}
+            for _ in 0..48{
+                if info.fConnected!=0{
+                    let length=info.szName.iter().position(|&c|c==0).unwrap_or(info.szName.len());
+                    let name=String::from_utf16_lossy(&info.szName[..length]).trim().to_owned();
+                    if name.is_empty(){names.push("Thiết bị chưa có tên".into());}
+                    else if !names.contains(&name){names.push(name);}
+                }
+                if names.len()>=8||BluetoothFindNextDevice(device,&mut info)==0{break;}
+            }
             BluetoothFindDeviceClose(device);
         }
         CloseHandle(radio);
-        if matches!(state,BluetoothState::Connected)||index==15||BluetoothFindNextRadio(find,&mut radio)==0{break;}
+        if names.len()>=8||index==15||BluetoothFindNextRadio(find,&mut radio)==0{break;}
     }
     BluetoothFindRadioClose(find);
-    state
+    if names.is_empty(){BluetoothState::Adapter}else{BluetoothState::Connected(names)}
 }
 unsafe fn battery()->BatteryState{
     let mut s:SYSTEM_POWER_STATUS=mem::zeroed();
@@ -312,11 +320,23 @@ pub(super) unsafe fn menu(owner:HWND,point:POINT,snapshot:&Snapshot,profile:&Pro
                 }else{widget.title().into()};
                 if AppendMenuW(menu,MF_POPUP,sound as usize,wide(&title).as_ptr())==0{DestroyMenu(sound);}
             }
-            Widget::Bluetooth if profile.details=>row(id,match snapshot.bluetooth{
-                BluetoothState::Unknown=>"Bluetooth · Mở cài đặt Windows…",
-                BluetoothState::Adapter=>"Bluetooth · Có bộ điều hợp",
-                BluetoothState::Connected=>"Bluetooth · Có thiết bị Classic đang kết nối",
-            }),
+            Widget::Bluetooth if profile.details=>match &snapshot.bluetooth{
+                BluetoothState::Unknown=>row(id,"Bluetooth · Mở cài đặt Windows…"),
+                BluetoothState::Adapter=>row(id,"Bluetooth · Có bộ điều hợp"),
+                BluetoothState::Connected(names)=>{
+                    let sub=CreatePopupMenu();
+                    if sub.is_null(){row(id,"Bluetooth · Thiết bị Classic đang kết nối");continue;}
+                    for name in names{
+                        let label=name.chars().filter(|c|!c.is_control()).take(64).collect::<String>().replace('&',"&&");
+                        AppendMenuW(sub,MF_STRING|MF_DISABLED,0,wide(&label).as_ptr());
+                    }
+                    AppendMenuW(sub,MF_SEPARATOR,0,ptr::null());
+                    AppendMenuW(sub,MF_STRING,id,wide("Quản lý Bluetooth trong Windows…").as_ptr());
+                    if AppendMenuW(menu,MF_POPUP,sub as usize,wide("Bluetooth · Thiết bị Classic đang kết nối").as_ptr())==0{
+                        DestroyMenu(sub);row(id,"Bluetooth · Mở cài đặt Windows…");
+                    }
+                }
+            },
             Widget::Battery=>if let BatteryState::Present{level,ac,charging}=snapshot.battery {
                 let label=if profile.details{
                     let value=level.map_or("—".into(),|p|format!("{p}%"));
