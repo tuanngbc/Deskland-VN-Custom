@@ -1,5 +1,7 @@
 # Visual acceptance evidence
 
+See the [visual redesign and utility metrics checkpoint](DOCK_VISUAL_REDESIGN.md) for the current candidate, exact Windows CI, and the scope of the native evidence.
+
 Current P0 build and scoped native evidence: [Dock P0 verification](DOCK_P0_VERIFICATION.md). The full owner acceptance gates remain pending.
 
 ## Daily-use functional closure — 4d64a26

@@ -1,5 +1,7 @@
 # Acceptance matrix D0-D9
 
+See the [visual redesign and utility metrics checkpoint](DOCK_VISUAL_REDESIGN.md) for the current candidate, exact Windows CI, and the scope of the native evidence.
+
 Current P0 build and scoped native evidence: [Dock P0 verification](DOCK_P0_VERIFICATION.md). The full owner acceptance gates remain pending.
 
 See the [current product gates and exact native evidence](DOCK_VISUAL_ACCEPTANCE.md#owner-host-windows-11-results). Older D0–D9 rows below describe broader milestone gates; scoped interaction and Settings PASS results do not close them.
