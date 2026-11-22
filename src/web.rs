@@ -169,13 +169,11 @@ unsafe extern "system" fn proc_(h: F::HWND, m: u32, wp: F::WPARAM, lp: F::LPARAM
 pub fn open(proto: &Path) -> Result<(), String> {
     if OPENING.with(|p| p.borrow().is_some()) {return Ok(());}
     if let Some(h) = WEB.with(|w| w.borrow().as_ref().map(|w| w.hwnd)) {
-        unsafe {
-            if IsIconic(h) != 0 || IsWindowVisible(h) == 0 {
-                ShowWindow(h, SW_RESTORE);
-            }
-            SetForegroundWindow(h);
+        if unsafe{crate::desktop::show_settings_window(h)}{
+            return Ok(());
         }
-        return Ok(());
+        close();
+        return Err("Không hiện được cửa sổ WebView2".into());
     }
     unsafe {
         if !COM_READY.with(|c| c.get()) {
@@ -244,11 +242,15 @@ pub fn take_open_error() -> Option<String> {
     if error.is_some(){close();}
     error
 }
-pub fn ready() {
+pub fn ready() -> Result<(),String> {
     if let Some(p)=OPENING.with(|p|p.borrow_mut().take()){
-        unsafe{ShowWindow(p.hwnd,SW_SHOWNORMAL);SetForegroundWindow(p.hwnd);}
+        if !unsafe{crate::desktop::show_settings_window(p.hwnd)}{
+            close();
+            return Err("WebView2 đã sẵn sàng nhưng không hiện được cửa sổ".into());
+        }
         crate::log!("Mở cửa sổ cài đặt WebView2 sau {:.0} ms",p.started.elapsed().as_secs_f64()*1000.0);
     }
+    Ok(())
 }
 pub fn close() {
     let pending=OPENING.with(|p|p.borrow_mut().take()).map(|p|p.hwnd);

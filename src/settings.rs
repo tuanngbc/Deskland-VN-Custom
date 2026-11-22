@@ -398,10 +398,7 @@ fn row_value(d: &ParamDef, pos: isize) -> f64 {
 /// Mở (hoặc đưa lên trước) cửa sổ cài đặt.
 pub fn open(state: &State) {
     if let Some(h) = hwnd() {
-        unsafe {
-            ShowWindow(h, SW_SHOWNORMAL);
-            SetForegroundWindow(h);
-        }
+        unsafe {crate::desktop::show_settings_window(h);}
         return;
     }
     unsafe {
@@ -525,8 +522,7 @@ pub fn open(state: &State) {
         ui.stage=ui.ctl("BUTTON","Stage Manager",chk,320,y2+94,190,26,ID_STAGE,false);
         UI.with(|u| *u.borrow_mut() = Some(ui));
         sync(state);
-        ShowWindow(hwnd, SW_SHOWNORMAL);
-        SetForegroundWindow(hwnd);
+        crate::desktop::show_settings_window(hwnd);
         crate::log!("Mở cửa sổ cài đặt");
     }
 }

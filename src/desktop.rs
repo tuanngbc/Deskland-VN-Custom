@@ -15,6 +15,17 @@ pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// An explicit Settings request must work even for a process whose launch
+/// STARTUPINFO specified SW_HIDE. The first ShowWindow can honor that flag
+/// instead of the requested show state.
+pub(crate) unsafe fn show_settings_window(hwnd: HWND) -> bool {
+    if IsIconic(hwnd)!=0 { ShowWindow(hwnd,SW_RESTORE); }
+    let shown=SetWindowPos(hwnd,std::ptr::null_mut(),0,0,0,0,
+        SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_SHOWWINDOW)!=0 && IsWindowVisible(hwnd)!=0;
+    if shown {SetForegroundWindow(hwnd);}
+    shown
+}
+
 fn find_window(class: &str) -> HWND {
     let c = wide(class);
     unsafe { FindWindowW(c.as_ptr(), std::ptr::null()) }

@@ -2687,7 +2687,10 @@ fn main() {
                 "hello" => {
                     web::post(&web_init(&app).to_string());
                     web::post(&away_state(&app, "").to_string());
-                    web::ready();
+                    if let Err(error)=web::ready() {
+                        log!("{error} -> dùng cửa sổ Win32");
+                        settings::open(&app.settings_state());
+                    }
                     last_icons_json.clear();
                 }
                 "set" => {
