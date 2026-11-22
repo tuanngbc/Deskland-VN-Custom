@@ -2,6 +2,23 @@
 
 Current P0 build and scoped native evidence: [Dock P0 verification](DOCK_P0_VERIFICATION.md). The full owner acceptance gates remain pending.
 
+## Daily-use functional closure — 4d64a26
+
+The exact [code commit](https://github.com/tuanngbc/Deskland-VN-Custom/commit/4d64a2643387745f931ec8e21037ef6d68038ae4) passed [Windows CI 44996312266](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44996312266). The [Windows x64 artifact 14743354272](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44996312266/artifacts/14743354272) passed outer digest, inner ZIP SHA-256, full BUILD-COMMIT and package inventory checks. Inner ZIP SHA-256: a808f943ed72928a5bab61118daecb11a30591a777aac539c61bcd14f1486664. EXE SHA-256: 3871e837805f20d7214897ceccc504fa16a0d61f40903ea8d8a3d176e1af61ad.
+
+| Surface | Exact 4d64a26 evidence | Still open |
+|---|---|---|
+| Dock pointer | Scoped native PASS: landscape drags onto overflow, away and back to the original slot, and off the Dock left the pin list and foreground fixture unchanged. Dragging packaged Notepad to first position saved Notepad → Explorer → shortcut. A CI regression checks matching logical targets and that returning to the original point does not revive a click. | Full A-down/B-up activation trace, same target after moving layout, middle/last reorder, both-display auto-hide/reveal, Reduced Motion, picker and keyboard. |
+| Stage groups | Scoped native PASS on landscape with the Stage context menu and pointer: create, add two members, create a second group, five quick switches and dissolve the active group. Win32 snapshots verified iconic state, HWND owner and normal placement; the pre-minimized fixture stayed minimized. CI uses foreign HWNDs to exercise detach, closed active window, synthetic display loss and Exit recovery. | Native UI detach, close while active, Stage OFF and Exit during a pending transition, unmanaged app on owner host and thumbnail relationships throughout the transition. |
+| Native stills | Bounded composited crops on light and dark opaque fixture backdrops: both Docks at rest and during hover, real Stage previews and an owned full-title tooltip on both outputs. Similar captions can still truncate to the same text at rest. | Measured maximum magnification, mixed DPI and owner visual approval. VIDEO_PENDING and VISUAL_PENDING. |
+| Reserve Space | Scoped native PASS: at 96 DPI, DWM extended frame matched the reserved work area exactly on landscape [168,0,2560,923] and portrait [-1080,-731,-216,1032]. Fixtures returned to exact normal bounds. Borderless fixture hid only local Dock/Stage; original overlays returned on restore. | Controlled WinForms maximize, not title button, Win+Up or Dock menu. Real Explorer/Notepad/game/video, mixed DPI, active hotplug and Explorer restart remain open. |
+| Utilities | Scoped native PASS for the marked in-memory endpoint: pointer drag 46% → 74%, confirmed label 74%, and both mute changes reflected in the panel. | Delegated network/Bluetooth actions, Calendar, Spotlight and capture action runs. |
+| Settings | Scoped native PASS: simulated controller failure with Clock and both modules enabled. One visible Win32 host, then native close and one visible WebView2 host on retry in 2469 ms. Clock and all four overlay HWNDs were visible after retry. | Repeated faults in one process, late ready in full app, close/Exit while starting, WebView subprocess inventory and exact-SHA cross-host configuration checks. |
+
+Both marked trials exited; production process returned, and production executable bytes, profile hashes, scoped Registry and taskbar identity/visibility matched. Native snapshots and reviewed crops are private under the marked owner trial evidence directories ending in 4d64a26-demo and 4d64a26-controller. No owner acceptance; DAILY_USE_READY remains pending.
+
+
+
 ## Daily-use verification — Settings recovery and fixture recording
 
 The [Settings lifecycle revision `1930cd4`](https://github.com/tuanngbc/Deskland-VN-Custom/commit/1930cd43d15e7e5708eebef4a9b8989716ae1712) passed [Windows CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44993592974). The [exact x64 package](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44993592974/artifacts/14742089367) was verified against both archive hashes and BUILD-COMMIT before using the isolated owner profile. Its EXE SHA-256 was `b4a47188ca28f3e86e9db4a4f6064a9c8c0901bfa4b5b7abd43a0d152bcdafaf`.

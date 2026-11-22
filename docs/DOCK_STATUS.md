@@ -5,7 +5,7 @@ Current P0 build and scoped native evidence: [Dock P0 verification](DOCK_P0_VERI
 Checkpoint: 2026-11-22 01:15 UTC. Development only on `codex/rust-dock`, [Draft PR #1](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1).
 Accepted source baseline remains `a604519acaf4d5881b9e13e5476d52f97ac29c0f` on `codex/rust-test`, clean. Owner subsequently authorized isolated native smoke, fixes and CI, without production replacement or merge. See [native report](DOCK_NATIVE_SMOKE_REPORT.md). Installed EXE bytes were preserved; their source lineage lacks a BUILD-COMMIT marker and is not independently confirmed.
 
-Latest daily-use code checkpoint: [09f89a5 / Windows CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44994262488). [Current exact artifact evidence](DOCK_VISUAL_ACCEPTANCE.md#daily-use-native-fixture--09f89a5) and [Settings fault recovery](DOCK_VISUAL_ACCEPTANCE.md#daily-use-verification--settings-recovery-and-fixture-recording) distinguish the native scopes from broader acceptance. No production group, Registry, EXE or baseline change.
+Latest native-tested code: [4d64a26 / Windows CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44996312266). The [exact artifact and case table](DOCK_VISUAL_ACCEPTANCE.md#daily-use-functional-closure--4d64a26) covers pin gestures, Stage group recovery, DWM work areas, demo audio and Settings retry. Full owner gates remain pending.
 
 ## Verified source and CI
 

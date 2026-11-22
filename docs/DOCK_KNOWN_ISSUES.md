@@ -2,6 +2,8 @@
 
 Updated after owner smoke at `fa93c16`, CI 44852504957, 2026-11-21. See [native report](DOCK_NATIVE_SMOKE_REPORT.md). CI fixes and partial native PASS do not close the full owner gate.
 
+The [4d64a26 case table](DOCK_VISUAL_ACCEPTANCE.md#daily-use-functional-closure--4d64a26) adds scoped fixture PASS for pin gestures, Stage active group dissolution, Reserve Space on both displays, demo audio and Settings retry. Same-prefix Stage captions may still need the hover tooltip. Mixed DPI and motion evidence remain pending.
+
 | ID | Issue | Disposition |
 |---|---|---|
 | K01 | Old unmanaged child/config | Replaced by managed thread/canonical settings; isolated same-PID/toggle/cleanup CI_PASS. Autostart/Windows restart NATIVE_PENDING |
