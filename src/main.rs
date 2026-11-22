@@ -2667,7 +2667,7 @@ fn main() {
         }
         if cmd == CMD_SETTINGS {
             // Giống bản gốc: trang settings.html trong WebView2. Không được thì dùng cửa sổ Win32 dự phòng.
-            let r = if force_win32 { Err("--settings-win32".to_string()) } else { web::find_prototype().ok_or_else(|| "không thấy thư mục prototype (settings.html)".to_string()).and_then(|p| web::open(&p)) };
+            let r = if force_win32 || settings::hwnd().is_some() { Err("dùng cài đặt Win32".to_string()) } else { web::find_prototype().ok_or_else(|| "không thấy thư mục prototype (settings.html)".to_string()).and_then(|p| web::open(&p)) };
             if let Err(e) = r {
                 log!("Không mở được cài đặt WebView2 ({e}) -> dùng cửa sổ Win32");
                 settings::open(&app.settings_state());
@@ -2687,6 +2687,7 @@ fn main() {
                 "hello" => {
                     web::post(&web_init(&app).to_string());
                     web::post(&away_state(&app, "").to_string());
+                    web::ready();
                     last_icons_json.clear();
                 }
                 "set" => {
@@ -3174,6 +3175,10 @@ fn main() {
                 _ => {}
             }
         }
+        if let Some(error)=web::take_open_error() {
+            log!("Không mở được cài đặt WebView2 ({error}) -> dùng cửa sổ Win32");
+            settings::open(&app.settings_state());
+        }
         if changed && cmd != CMD_EXIT {
             save_config(&app.cfg);
             settings::sync(&app.settings_state());
@@ -3333,6 +3338,7 @@ fn main() {
 
     if precise_timer {unsafe {timeEndPeriod(1);}}
     log!("Đang thoát");
+    web::close();
     if !headless && !saver {save_config(&app.cfg);}
     // Join managed desktop UI before removing the Deskland tray/config owner.
     app.dock_runtime=None;

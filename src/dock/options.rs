@@ -124,7 +124,7 @@ pub struct Options {
 }
 #[derive(Debug)]
 pub enum Edit {
-    Pin(String), Unpin(String), MovePin(String,String), AllWindows(bool), StageSide(String), DockEnabled(bool), StageEnabled(bool),
+    Pin(String), Unpin(String), MovePin { path:String, anchor:String, after:bool }, AllWindows(bool), StageSide(String), DockEnabled(bool), StageEnabled(bool),
     StageStyle(String, StageStyle),
     UtilityProfile(String, Profile),
     WindowPolicy(String, WindowPolicy),
@@ -134,10 +134,14 @@ impl Edit {
         match self {
             Self::Pin(path)=>{if options.pinned.len()<32 && !path.is_empty() && path.len()<=32760 && !path.contains('\0') && !options.pinned.iter().any(|p|p.eq_ignore_ascii_case(&path)){options.pinned.push(path);}}
             Self::Unpin(path)=>options.pinned.retain(|p|!p.eq_ignore_ascii_case(&path)),
-            Self::MovePin(path,target)=>{
+            Self::MovePin{path,anchor,after}=>{
                 if let (Some(from),Some(to))=(options.pinned.iter().position(|p|p.eq_ignore_ascii_case(&path)),
-                    options.pinned.iter().position(|p|p.eq_ignore_ascii_case(&target))){
-                    if from!=to{let pin=options.pinned.remove(from);options.pinned.insert(to,pin);}
+                    options.pinned.iter().position(|p|p.eq_ignore_ascii_case(&anchor))){
+                    if from!=to{
+                        let boundary=to+usize::from(after);
+                        let pin=options.pinned.remove(from);
+                        options.pinned.insert(boundary-usize::from(from<boundary),pin);
+                    }
                 }
             }
             Self::AllWindows(on)=>options.all_windows=on,
@@ -302,9 +306,15 @@ mod tests {
     #[test]
     fn drag_reorders_only_existing_pins_and_roundtrips() {
         let mut options=Options{pinned:vec!["first.exe".into(),"second.exe".into(),"third.exe".into()],..Default::default()};
-        Edit::MovePin("first.exe".into(),"third.exe".into()).apply(&mut options);
-        Edit::MovePin("unpinned.exe".into(),"third.exe".into()).apply(&mut options);
+        let move_pin=|path:&str,anchor:&str,after|Edit::MovePin{path:path.into(),anchor:anchor.into(),after};
+        move_pin("first.exe","third.exe",true).apply(&mut options);
+        move_pin("unpinned.exe","third.exe",false).apply(&mut options);
         assert_eq!(options.pinned,["second.exe","third.exe","first.exe"]);
+        move_pin("first.exe","third.exe",false).apply(&mut options);
+        assert_eq!(options.pinned,["second.exe","first.exe","third.exe"]);
+        move_pin("third.exe","closed.exe",false).apply(&mut options);
+        move_pin("second.exe","first.exe",false).apply(&mut options);
+        assert_eq!(options.pinned,["second.exe","first.exe","third.exe"]);
         assert_eq!(Options::from_json(&options.json()),options);
     }
     #[test]

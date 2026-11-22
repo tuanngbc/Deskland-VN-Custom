@@ -60,6 +60,37 @@ impl Layout {
     pub fn is_utility_button(&self,x:f32,y:f32)->bool{self.utility.contains(x,y)}
     pub fn is_launch_button(&self,x:f32,y:f32)->bool { self.scan.contains(x,y) }
     pub fn axis(&self,x:f32,y:f32)->f32 {if self.side==DockSide::Bottom{x}else{y}}
+    /// Insertion boundaries follow the drawn slots, including gaps and ends.
+    pub fn pin_boundary(&self,x:f32,y:f32,pins:usize)->Option<usize>{
+        let pins=self.slots.get(..pins)?;
+        let (first,last)=(pins.first()?,pins.last()?);
+        let horizontal=self.side==DockSide::Bottom;
+        let start=|r:&Rect| if horizontal {r.x}else{r.y};
+        let span=|r:&Rect| if horizontal {r.w}else{r.h};
+        let p=self.axis(x,y);
+        let cross=if horizontal{y}else{x};
+        let margin=10.0*self.scale;
+        let low=pins.iter().map(|r|if horizontal{r.y}else{r.x}).fold(f32::INFINITY,f32::min);
+        let high=pins.iter().map(|r|if horizontal{r.y+r.h}else{r.x+r.w}).fold(0.0,f32::max);
+        if cross<low-margin||cross>high+margin||p<start(first)-margin||p>start(last)+span(last)+margin{return None;}
+        Some(pins.iter().position(|r|p<start(r)+span(r)*0.5).unwrap_or(pins.len()))
+    }
+    pub fn pin_marker(&self,boundary:usize,pins:usize)->Option<Rect>{
+        let slots=self.slots.get(..pins)?;
+        let horizontal=self.side==DockSide::Bottom;
+        let start=|r:&Rect|if horizontal{r.x}else{r.y};
+        let end=|r:&Rect|if horizontal{r.x+r.w}else{r.y+r.h};
+        let gap=2.0*self.scale;
+        let axis=match (boundary.checked_sub(1).and_then(|i|slots.get(i)),slots.get(boundary)){
+            (Some(left),Some(right))=>(end(left)+start(right))*0.5,
+            (None,Some(right))=>start(right)-gap,
+            (Some(left),None) if boundary==pins=>end(left)+gap,
+            _=>return None,
+        };
+        let b=self.glass;
+        Some(if horizontal { Rect{x:axis-self.scale,y:b.y+b.h*0.27,w:2.0*self.scale,h:b.h*0.46} }
+            else { Rect{x:b.x+b.w*0.27,y:axis-self.scale,w:b.w*0.46,h:2.0*self.scale} })
+    }
     /// Use visual order without changing the click/paint indices.
     pub fn key_order(&self)->Vec<usize>{
         let n=self.slots.len();
@@ -192,6 +223,22 @@ pub fn measure_widgets(display:&Display, style:&Appearance, count:usize, focus:O
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn insertion_targets_gaps_and_row_ends_at_rest_and_during_zoom(){
+        for side in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
+            for amount in [0.0,0.4,1.0]{
+                let screen=Display{id:"test".into(),name:String::new(),bounds:RECT{left:-900,top:0,right:0,bottom:1200},
+                    work:RECT{left:-900,top:0,right:0,bottom:1160},primary:false,dpi:144};
+                let style=Appearance{position:side,..Default::default()};
+                let layout=measure_widgets(&screen,&style,5,Some(160.0),amount,Some(false),&[],28);
+                for edge in 0..=3{
+                    let marker=layout.pin_marker(edge,3).unwrap();
+                    assert_eq!(layout.pin_boundary(marker.x+marker.w/2.0,marker.y+marker.h/2.0,3),Some(edge));
+                }
+                assert_eq!(layout.pin_boundary(-100.0,-100.0,3),None);
+            }
+        }
+    }
     fn overlaps(a:Rect,b:Rect)->bool{a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y}
     #[test]
     fn window_transfer_respects_mixed_dpi_and_negative_work_area(){

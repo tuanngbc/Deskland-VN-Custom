@@ -117,13 +117,17 @@ impl Motion {
     }
 }
 impl Bar {
-    fn drop_target(&self)->Option<usize>{
+    fn drop_at(&self,x:f32,y:f32)->Option<usize>{
         let (path,sx,sy)=self.pressed.as_ref()?;
+        let layout=self.layout.as_ref()?;
+        let pins=self.items.iter().take_while(|item|item.pinned).count();
+        let from=self.items[..pins].iter().position(|item|item.path==*path)?;
+        if (x-*sx as f32).abs()+(y-*sy as f32).abs()<=9.0*layout.scale{return None;}
+        layout.pin_boundary(x,y,pins).filter(|&i|i!=from&&i!=from+1)
+    }
+    fn drop_target(&self)->Option<usize>{
         let (x,y)=self.pointer?;
-        if (x-*sx as f32).abs()+(y-*sy as f32).abs()<=9.0
-            || !self.items.iter().any(|item|item.pinned&&item.path==*path){return None;}
-        self.layout.as_ref()?.hit(x,y)
-            .filter(|&i|self.items.get(i).is_some_and(|item|item.pinned&&item.path!=*path))
+        self.drop_at(x,y)
     }
     fn schedule(&mut self)->bool{
         let start=!self.motion.scheduled;
@@ -170,8 +174,21 @@ impl StageEmphasis {
     }
 }
 struct Stage { hwnd:HWND, rail:HWND, collapsed:bool, auto_hide:bool, preview_hwnd:HWND, preview_boxes:Vec<RECT>, preview_visible:bool, layered:bool, opacity:u32, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, emphasis:StageEmphasis, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews,
-    resting:RECT, slide:Option<(std::time::Instant,i32)>, offset:i32 }
+    resting:RECT, slide:Option<(std::time::Instant,i32)>, offset:i32, pressed:Option<StageTarget> }
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+enum StageTarget { Group(u64), Window(usize,u32,u32), Page(usize) }
 impl Stage {
+    unsafe fn target(&self,x:i32,y:i32)->Option<StageTarget>{
+        if self.hidden{return None;}
+        let layout=self.layout?;
+        if let Some(i)=layout.hit(x,y) {
+            if let Some(id)=self.groups.get(i).copied().flatten(){return Some(StageTarget::Group(id));}
+            let hwnd=self.items.get(i)?.hwnd;
+            let (pid,tid)=window_owner(hwnd)?;
+            return Some(StageTarget::Window(hwnd as usize,pid,tid));
+        }
+        layout.pages(self.pages)?.target(x,y,self.page).map(StageTarget::Page)
+    }
     unsafe fn begin_slide(&mut self,reduced:bool){
         let Some(layout)=self.layout else{return;};
         if reduced{return;}
@@ -576,7 +593,7 @@ unsafe fn recreate(state:&mut State) {
                     previews::style_destination(stage_hwnd);
                 }
                 state.stages.push(Stage{hwnd:stage_hwnd,rail:ptr::null_mut(),collapsed:false,auto_hide:false,preview_hwnd,preview_boxes:Vec::new(),preview_visible:false,layered,opacity:style.opacity,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),selected:None,layout:None,page:0,pages:1,hidden:true,hover:None,emphasis:StageEmphasis::default(),keyboard:None,previous_focus:0,previews:previews::Previews::default(),
-                    resting:r,slide:None,offset:0});
+                    resting:r,slide:None,offset:0,pressed:None});
             } else { emit(Event::Error(format!("Create Stage window: {}",GetLastError()))); }
         }
     }
@@ -663,7 +680,10 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let selected=state.workspaces.active(&stage.display);
         let old_pages=stage.pages;
         stage.pages=items.len().div_ceil(rows).max(1);
-        stage.page=if selected!=stage.selected{0}else{stage.page.min(stage.pages-1)};
+        stage.page=if selected!=stage.selected {
+            selected.and_then(|id|groups.iter().position(|group|*group==Some(id)))
+                .map_or(stage.page.min(stage.pages-1),|row|row/rows)
+        }else{stage.page.min(stage.pages-1)};
         let start=stage.page*rows;
         let model_count=items.len();
         let fixture_positions=benchmark_sources.map(|sources| sources.iter().map(|&handle|
@@ -732,7 +752,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         if hide {
             if stage.emphasis.start.is_some()||stage.slide.is_some(){KillTimer(stage.hwnd,STAGE_MOTION_TIMER);}
             stage.slide=None;stage.offset=0;
-            stage.hover=None;stage.emphasis=StageEmphasis::default();stage.keyboard=None;changed|=stage.previews.clear();
+            stage.hover=None;stage.emphasis=StageEmphasis::default();stage.keyboard=None;stage.pressed=None;changed|=stage.previews.clear();
         }
         else if layout.width>0&&layout.height>0{
             let host=if stage.preview_hwnd.is_null(){stage.hwnd}else{stage.preview_hwnd};
@@ -1362,6 +1382,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let reduced=state.prefs.appearance.reduced_motion;
                 state.stages.iter_mut().find(|p|p.hwnd==hwnd).map(|p|{
                     let changed=p.hover.take().is_some();
+                    p.pressed=None;
                     (changed,changed&&p.emphasis.change(None,reduced),p.auto_hide&&p.keyboard.is_none())
                 })
             });
@@ -1548,6 +1569,10 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             let (x,y)=(l as i16 as i32,(l>>16) as i16 as i32);
             let capture=STATE.with(|s|{
                 let mut state=s.borrow_mut();
+                if let Some(stage)=state.stages.iter_mut().find(|p|p.hwnd==hwnd){
+                    stage.pressed=stage.target(x,y);
+                    return false;
+                }
                 let Some(bar)=state.bars.iter_mut().find(|b|b.hwnd==hwnd&&!b.collapsed)else{return false;};
                 let item=bar.layout.as_ref().and_then(|layout|layout.hit(x as f32,y as f32)).and_then(|i|bar.items.get(i));
                 let capture=item.is_some_and(|it|it.pinned);
@@ -1558,7 +1583,11 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_CAPTURECHANGED|WM_CANCELMODE=>{
-            let redraw=STATE.with(|s|s.borrow_mut().bars.iter_mut().find(|b|b.hwnd==hwnd).is_some_and(|b|b.pressed.take().is_some()));
+            let redraw=STATE.with(|s|{
+                let mut state=s.borrow_mut();
+                if let Some(stage)=state.stages.iter_mut().find(|p|p.hwnd==hwnd){stage.pressed=None;}
+                state.bars.iter_mut().find(|b|b.hwnd==hwnd).is_some_and(|b|b.pressed.take().is_some())
+            });
             if msg==WM_CANCELMODE&&GetCapture()==hwnd{ReleaseCapture();}
             if redraw{InvalidateRect(hwnd,ptr::null(),0);}
             if msg==WM_CANCELMODE{DefWindowProcW(hwnd,msg,w,l)}else{0}
@@ -1650,15 +1679,18 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             let y=(l>>16) as i16 as i32;
             let px=l as i16 as i32;
             let stage_hit=STATE.with(|s|{
-                let a=s.borrow();
-                let stage=a.stages.iter().find(|stage|stage.hwnd==hwnd)?;
-                let layout=stage.layout?;
-                let nav=layout.pages(stage.pages).and_then(|strip|strip.target(px,y,stage.page));
-                Some((layout.hit(px,y),nav))
+                let mut a=s.borrow_mut();
+                let stage=a.stages.iter_mut().find(|stage|stage.hwnd==hwnd)?;
+                let pressed=stage.pressed.take();
+                let target=stage.target(px,y).filter(|target|Some(*target)==pressed);
+                Some((target,stage.layout.and_then(|l|l.hit(px,y))))
             });
-            if let Some((item,nav))=stage_hit {
-                if let Some(i)=item{activate_stage(hwnd,i);}
-                else if let Some(page)=nav{go_to_stage_page(hwnd,page);}
+            if let Some((target,item))=stage_hit {
+                match target{
+                    Some(StageTarget::Page(page))=>{go_to_stage_page(hwnd,page);}
+                    Some(_)=>{if let Some(i)=item{activate_stage(hwnd,i);}}
+                    None=>{}
+                }
                 return 0;
             }
             let x=(l as u32&0xffff) as i16 as i32;
@@ -1666,16 +1698,22 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let mut state=s.borrow_mut();let bar=state.bars.iter_mut().find(|b|b.hwnd==hwnd)?;
                 let layout=bar.layout.as_ref()?;
                 let item=layout.hit(x as f32,y as f32).and_then(|i|bar.items.get(i)).cloned();
-                Some((item,layout.is_launch_button(x as f32,y as f32),layout.is_utility_button(x as f32,y as f32),layout.inline_at(x as f32,y as f32),bar.pressed.take(),bar.collapsed))
+                let drop=bar.drop_at(x as f32,y as f32).and_then(|index|{
+                    let pinned=bar.items.iter().take_while(|item|item.pinned).count();
+                    let after=index==pinned;
+                    Some((bar.items.get(index-usize::from(after))?.path.clone(),after))
+                });
+                Some((item,layout.is_launch_button(x as f32,y as f32),layout.is_utility_button(x as f32,y as f32),layout.inline_at(x as f32,y as f32),bar.pressed.take(),bar.collapsed,drop,layout.scale))
             });
-            if let Some((item,search,utilities,widget,pressed,collapsed))=rendered{
+            if let Some((item,search,utilities,widget,pressed,collapsed,drop,scale))=rendered{
                 if GetCapture()==hwnd{ReleaseCapture();}
                 if pressed.is_some(){InvalidateRect(hwnd,ptr::null(),0);}
                 if collapsed{return 0;}
                 if let Some((start,sx,sy))=pressed {
-                    if (x-sx).abs()+(y-sy).abs()>9 {
-                        if let Some(item)=item{if item.pinned&&item.path!=start {emit(Event::Edit(Edit::MovePin(start,item.path)));}}
-                        let hide=STATE.with(|s|s.borrow().bars.iter().any(|b|b.hwnd==hwnd&&b.pointer.is_none()&&b.auto_hide&&b.keyboard.is_none()));
+                    if ((x-sx).abs()+(y-sy).abs()) as f32>9.0*scale {
+                        if let Some((anchor,after))=drop{emit(Event::Edit(Edit::MovePin{path:start,anchor,after}));}
+                        let hide=STATE.with(|s|s.borrow().bars.iter().any(|b|b.hwnd==hwnd&&b.auto_hide&&b.keyboard.is_none()&&
+                            b.layout.as_ref().is_some_and(|l|x<0||y<0||x>=l.window.right-l.window.left||y>=l.window.bottom-l.window.top)));
                         if hide{SetTimer(hwnd,HIDE_TIMER,650,None);}
                     }else if let Some(item)=item{if item.path==start{activate(hwnd,&item);}}
                 }else if search{open_launcher();}else if utilities||widget.is_some(){request_utilities(hwnd,widget);}

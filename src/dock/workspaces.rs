@@ -262,10 +262,9 @@ impl Workspaces{
         let mut items=Vec::new();
         let mut ids=Vec::new();
         let known:HashSet<_>=self.groups.iter().flat_map(|g|g.members.iter().map(|m|m.key.hwnd)).collect();
-        let active=self.active(screen);
-        let mut groups:Vec<_>=self.groups.iter().filter(|g|g.screen==screen).collect();
-        groups.sort_by_key(|g|(Some(g.id)!=active,g.id));
-        for g in groups{
+        // Group cards keep creation order across switches. Foreground
+        // changes must not move the remaining targets under the pointer.
+        for g in self.groups.iter().filter(|g|g.screen==screen){
             // Use the first available window in current native Z-order.
             if let Some(window)=windows.iter().find(|w|g.members.iter().any(|m|m.key.hwnd==w.hwnd as usize)){
                 items.push(Item{path:window.path.clone(),title:Self::title(g.id),hwnd:window.hwnd,count:g.members.len(),pinned:false});
@@ -400,6 +399,19 @@ mod tests {
             assert!(super::super::same_rect(placement(normal).unwrap().rcNormalPosition, original));
             assert!(super::super::same_rect(placement(maximized).unwrap().rcNormalPosition, max_original));
             assert_eq!(super::super::MonitorFromWindow(normal, super::super::MONITOR_DEFAULTTONEAREST), monitor);
+
+            // Interleave incoming switch requests before checking native
+            // acknowledgements. Only the last selected group's placement wins.
+            for id in [b,a,b,a,b] { model.switch("primary",id); }
+            until(|| {
+                !model.advance() && IsIconic(normal)!=0 && IsIconic(maximized)!=0 && IsIconic(second_group)==0
+            });
+            model.restore_offscreen(&HashSet::from(["portrait".to_owned()]));
+            until(|| !model.advance() && IsIconic(normal)==0 && IsZoomed(maximized)!=0);
+            assert_eq!(IsIconic(other_display),0);
+            assert_ne!(IsIconic(already_minimized),0);
+            model.switch("primary",a);
+            until(|| {model.advance(); IsIconic(second_group)!=0});
 
             // Never re-hide a member that the user has reopened on their own.
             model.prune();

@@ -76,13 +76,6 @@ impl Surface {
                 rounded(data,w,h,r,r.w*0.26,control_tint,control_alpha);
             }
             if front||hover==Some(i){rounded(data,w,h,*slot,slot.w*0.25,tint,if front{38}else{29});}
-            if drop_target==Some(i){
-                let ink=if self.material.dark{[244,219,180]}else{[171,106,44]};
-                draw(data,w,h,*slot,|x,y|{
-                    let d=distance(*slot,slot.w*0.25,x,y);
-                    Some((ink,(0.5-d).clamp(0.0,1.0)*(d+2.0*scale).clamp(0.0,1.0)*240.0))
-                });
-            }
             if let Some(Some(icon))=atlas.get(&item.path){
                 self.icons.paint(data,w,h,*slot,icon);
             }else{
@@ -149,6 +142,10 @@ impl Surface {
             status_on(data,w,h,slot,scale,tint,Some(widget));
         }
         status_on(data,w,h,utility,scale,tint,None);
+        if let Some(marker)=drop_target.and_then(|i|layout.pin_marker(i,items.iter().take_while(|item|item.pinned).count())){
+            let ink=if self.material.dark{[244,219,180]}else{[171,106,44]};
+            rounded(data,w,h,marker,scale,ink,242);
+        }
         if openness<1.0 {
             let alpha=(openness.clamp(0.0,1.0)*255.0).round() as u16;
             for value in data.iter_mut(){*value=((*value as u16*alpha+127)/255) as u8;}
