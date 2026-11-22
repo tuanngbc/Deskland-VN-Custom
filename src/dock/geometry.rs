@@ -171,7 +171,7 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     let min_icon=(style.icon_size.min(29) as f32)*scale;
     let app_gap=if host&&apps>0{group_gap}else{0.0};
     let minimum=if apps>0{gaps+app_gap+min_icon*(apps as f32+spill)}else{0.0};
-    let metric_span=(if vertical{96.0}else{144.0})*scale;
+    let metric_span=(if vertical{91.0}else{128.0})*scale;
     let inline_metrics=host&&cluster.inline_metrics&&widgets.contains(&UtilityWidget::Metrics)
         && minimum+span(0)+metric_span+gap<=room;
     let extras=if inline_metrics{metric_span+gap}else{0.0};
@@ -199,7 +199,13 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     // Keep the resting capsule centered on the monitor. Reserve motion
     // clearance on the app side; utility anchors never slide during zoom.
     let rest_start=shadow+if host && !leading{slack}else if !host{slack*0.5}else{0.0};
-    let center=(axis-rest_span)*0.5-rest_start;
+    let (monitor_low,monitor_high,work_low)=if vertical{
+        (display.bounds.top,display.bounds.bottom,display.work.top)
+    }else{
+        (display.bounds.left,display.bounds.right,display.work.left)
+    };
+    let monitor_center=(monitor_low as f32+monitor_high as f32)*0.5-work_low as f32;
+    let center=monitor_center-rest_span*0.5-rest_start;
     let offset=center.clamp(edge,(axis-edge-extent).max(edge)).round();
     let (x,y,w,h)=match style.position{
         DockSide::Bottom=>(display.work.left+offset as i32,display.work.bottom-(edge+total_cross).ceil() as i32,extent,total_cross),
@@ -225,9 +231,14 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     let range_end=if host&&!leading{status_start-app_gap}else{extent-shadow-pad};
     let app_start=if apps==0{app_rest}else{
         let ideal=focus.filter(|_|icon>0.0).map_or(app_rest-expanded*0.5,|pos|{
-            let idx=((pos-app_rest)/(icon+spacing).max(1.0)).floor().clamp(0.0,(apps-1) as f32) as usize;
-            let before=widths[..idx].iter().sum::<f32>()-icon*idx as f32;
-            app_rest-before-(widths[idx]-icon)*0.5
+            // Anchor continuously between icon centers so crossing a slot boundary
+            // cannot snap the whole app row to a different position.
+            let relative=((pos-app_rest-icon*0.5)/(icon+spacing).max(1.0)).clamp(0.0,(apps-1) as f32);
+            let first=relative.floor() as usize;
+            let before=widths[..first].iter().sum::<f32>()-icon*first as f32;
+            let grow=widths[first]-icon;
+            let between=widths.get(first+1).map_or(0.0,|next|(grow+next-icon)*0.5);
+            app_rest-before-grow*0.5-(relative-first as f32)*between
         });
         ideal.clamp(range_start,(range_end-app_len).max(range_start))
     };
@@ -353,6 +364,26 @@ mod tests{
         let result=measure_cluster(&screen,&Appearance::default(),10,None,0.0,&pins,cfg);
         assert!(result.metrics.is_none()&&result.utility.w>0.0);
     }
+    #[test]
+    fn resting_glass_is_centered_on_display_with_one_sided_work_area_inset() {
+        let bounds=RECT{left:-1600,top:-900,right:0,bottom:600};
+        let work=RECT{left:-1490,top:-820,right:0,bottom:552};
+        let display=Display{id:"display".into(),name:String::new(),bounds,work,primary:false,dpi:144};
+        let cfg=Cluster{side:Some(false),two_rows:true,cell:28,gap:4,inline_metrics:true};
+        let pins=[UtilityWidget::Network,UtilityWidget::Sound,UtilityWidget::Metrics];
+        for position in [DockSide::Bottom,DockSide::Left,DockSide::Right] {
+            for leading in [true,false] {
+                let style=Appearance{position,..Default::default()};
+                let layout=measure_cluster(&display,&style,6,None,0.0,&pins,Cluster{side:Some(leading),..cfg});
+                let (actual,expected)=if position==DockSide::Bottom{
+                    (layout.window.left as f32+layout.glass.x+layout.glass.w/2.0,-800.0)
+                }else{
+                    (layout.window.top as f32+layout.glass.y+layout.glass.h/2.0,-150.0)
+                };
+                assert!((actual-expected).abs()<=0.51,"{actual} vs {expected}");
+            }
+        }
+    }
     fn overlaps(a:Rect,b:Rect)->bool{a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y}
     #[test]
     fn window_transfer_respects_mixed_dpi_and_negative_work_area(){
@@ -398,6 +429,19 @@ mod tests{
         assert_eq!(grown.hit(focus,grown.slots[3].y+10.0),Some(3));
         let relaxed=measure(&display,&Appearance{reduced_motion:true,..style},7,Some(focus),1.0);
         assert!(relaxed.slots.iter().all(|s|(s.w-relaxed.slots[0].w).abs()<0.001));
+    }
+    #[test]
+    fn crossing_an_icon_boundary_does_not_snap_the_app_row(){
+        let work=RECT{left:0,top:0,right:1920,bottom:1032};
+        let display=Display{id:"display".into(),name:String::new(),bounds:work,work,primary:true,dpi:96};
+        let style=Appearance{magnification:55,..Default::default()};
+        let rest=measure(&display,&style,7,None,0.0);
+        let boundary=rest.slots[3].x;
+        let left=measure(&display,&style,7,Some(boundary-0.01),1.0);
+        let right=measure(&display,&style,7,Some(boundary+0.01),1.0);
+        for (a,b) in left.slots.iter().zip(right.slots){
+            assert!((a.x-b.x).abs()<0.1);
+        }
     }
     #[test]
     fn utility_button_moves_or_disappears_without_changing_app_indices(){

@@ -45,34 +45,59 @@ pub type Atlas = HashMap<String, Option<Arc<crate::launcher::IconPixels>>>;
 pub struct Surface {
     layer:Layer,glass:Rect,material:Material,static_pixels:Vec<u8>,icons:IconRasters,metric:Option<MetricInk>,
 }
-struct MetricInk{size:(i32,i32),font:HFONT,mask:Layer,pixels:Vec<u8>,key:Option<(usize,MetricOptions,[u8;3],bool)>,painted_at:Option<Instant>}
-impl Drop for MetricInk{fn drop(&mut self){unsafe{if !self.font.is_null(){DeleteObject(self.font);}}}}
+struct MetricInk{size:(i32,i32),fonts:[HFONT;2],mask:Layer,pixels:Vec<u8>,key:Option<(usize,MetricOptions,bool,bool)>,painted_at:Option<Instant>}
+impl Drop for MetricInk{fn drop(&mut self){unsafe{for &font in &self.fonts{if !font.is_null(){DeleteObject(font);}}}}}
 impl MetricInk{
     unsafe fn new(w:i32,h:i32,scale:f32)->Option<Self>{
         let mask=Layer::new(w,h)?;
-        let font=CreateFontW(-(11.0*scale).round().max(8.0) as i32,0,0,0,500,0,0,0,
+        let font=|size:f32,weight|CreateFontW(-(size*scale).round().max(7.0) as i32,0,0,0,weight,0,0,0,
             DEFAULT_CHARSET as u32,0,0,ANTIALIASED_QUALITY as u32,DEFAULT_PITCH as u32,
             crate::desktop::wide("Segoe UI").as_ptr());
-        Some(Self{size:(w,h),font,mask,pixels:vec![0;w as usize*h as usize*4],key:None,painted_at:None})
+        Some(Self{size:(w,h),fonts:[font(9.0,500),font(11.0,600)],mask,pixels:vec![0;w as usize*h as usize*4],key:None,painted_at:None})
     }
-    unsafe fn paint(&mut self,data:&mut[u8],w:i32,h:i32,x:i32,y:i32,scale:f32,cfg:MetricOptions,ink:[u8;3],vertical:bool)->bool{
+    unsafe fn paint(&mut self,data:&mut[u8],w:i32,h:i32,x:i32,y:i32,scale:f32,cfg:MetricOptions,palette:Palette,dark:bool,vertical:bool)->bool{
         let (mw,mh)=self.size;
         if x<0||y<0||x+mw>w||y+mh>h{return false;}
-        let key=(control_center::inline_revision(),cfg,ink,vertical);
-        let restyled=self.key.is_none_or(|(_,old,color,edge)|old!=cfg||color!=ink||edge!=vertical);
+        let key=(control_center::inline_revision(),cfg,dark,vertical);
+        let restyled=self.key.is_none_or(|(_,old,theme,edge)|old!=cfg||theme!=dark||edge!=vertical);
         let due=self.painted_at.is_none_or(|at|at.elapsed()>=Duration::from_millis(cfg.interval*1000-100));
         if self.key!=Some(key)&&(restyled||due){
-            let lines=control_center::inline_lines(cfg,vertical);
+            let readings=control_center::inline_readings(cfg);
             self.pixels.fill(0);
-            let inset=(4.0*scale).round() as i32;
-            let line_h=(15.0*scale).round() as i32;
-            let top=(mh-line_h*lines.len() as i32)/2;
-            for (i,line) in lines.iter().enumerate(){
-                let box_=Box2{x:inset,y:top+i as i32*line_h,w:mw-2*inset,h:line_h};
-                draw_mask(&mut self.pixels,mw,mh,&mut self.mask,self.font,box_,line,false,ink);
+            let px=|n:f32|(n*scale).round() as i32;
+            let mut write=|index:usize,rect:Box2,text:&str,center:bool,ink:[u8;3]|{
+                if rect.w>0&&rect.h>0{
+                    draw_mask(&mut self.pixels,mw,mh,&mut self.mask,self.fonts[index],rect,text,center,ink);
+                }
+            };
+            if vertical{
+                let row=px(16.0);
+                let top=(mh-row*readings.len() as i32)/2;
+                for (i,r) in readings.iter().enumerate(){
+                    let y=top+i as i32*row;
+                    write(0,Box2{x:px(3.0),y,w:px(22.0),h:row},r.label,false,palette.muted);
+                    write(1,Box2{x:px(26.0),y,w:mw-px(28.0),h:row},&r.value,false,palette.ink);
+                }
+            }else{
+                let split=readings.iter().position(|r|r.network).unwrap_or(readings.len());
+                let (system,network)=readings.split_at(split);
+                let top=(mh-if system.is_empty(){px(18.0)}else if network.is_empty(){px(28.0)}else{px(44.0)})/2;
+                for (i,r) in system.iter().enumerate(){
+                    let x=i as i32*mw/system.len() as i32;
+                    let width=(i as i32+1)*mw/system.len() as i32-x;
+                    write(0,Box2{x,y:top,w:width,h:px(12.0)},r.label,true,palette.muted);
+                    write(1,Box2{x,y:top+px(12.0),w:width,h:px(15.0)},&r.value,true,palette.ink);
+                }
+                for (i,r) in network.iter().enumerate(){
+                    let x=i as i32*mw/network.len() as i32;
+                    let width=(i as i32+1)*mw/network.len() as i32-x;
+                    let y=top+if system.is_empty(){0}else{px(28.0)};
+                    write(0,Box2{x:x+px(3.0),y,w:px(9.0),h:px(16.0)},r.label,true,palette.muted);
+                    write(1,Box2{x:x+px(14.0),y,w:width-px(15.0),h:px(16.0)},&r.value,false,palette.ink);
+                }
             }
             self.key=Some(key);
-            self.painted_at=(!lines.is_empty()).then(Instant::now);
+            self.painted_at=(!readings.is_empty()).then(Instant::now);
         }
         let mut drawn=false;
         for row in 0..mh as usize{
@@ -112,7 +137,7 @@ impl Surface {
             self.static_pixels.resize(w as usize*h as usize*4,0);
             let rect=self.glass;
             let tint=self.material;
-            let radius=rect.w.min(rect.h)*0.5;
+            let radius=rect.w.min(rect.h)*0.37;
             for (i,p) in self.static_pixels.chunks_exact_mut(4).enumerate() {
                 let x=(i%w as usize) as f32+0.5;
                 let y=(i/w as usize) as f32+0.5;
@@ -134,7 +159,7 @@ impl Surface {
                 rounded(data,w,h,r,r.w*0.26,control_tint,control_alpha);
             }
             if front||hover==Some(i){
-                rounded(data,w,h,*slot,slot.w*0.25,if front{palette.accent}else{palette.ink},if front{53}else{34});
+                rounded(data,w,h,*slot,slot.w*0.25,if front{palette.accent}else{palette.ink},if front{38}else{31});
             }
             if let Some(Some(icon))=atlas.get(&item.path){
                 self.icons.paint(data,w,h,*slot,icon);
@@ -143,7 +168,7 @@ impl Surface {
             }
             let (x,y)=layout.indicators[i];
             if item.count>0 {
-                let (a,b)=if front {(4.0,1.65)}else{(1.65,1.65)};
+                let (a,b)=if front {(5.0,1.9)}else{(1.9,1.9)};
                 let (kx,ky)=if layout.side==super::DockSide::Bottom{(a*scale,b*scale)}else{(b*scale,a*scale)};
                 let r=Rect{x:x-kx,y:y-ky,w:kx*2.0,h:ky*2.0};
                 if asleep {
@@ -169,11 +194,9 @@ impl Surface {
         let scan=layout.scan;
         let tint=palette.ink;
         if let Some(cluster)=layout.cluster {
-            let radius=cluster.w.min(cluster.h).min(28.0*scale)*0.45;
-            rounded(data,w,h,cluster,radius,palette.edge,if self.material.dark{145}else{126});
-            let inset=scale;
-            let body=Rect{x:cluster.x+inset,y:cluster.y+inset,w:cluster.w-2.0*inset,h:cluster.h-2.0*inset};
-            rounded(data,w,h,body,(radius-inset).max(0.0),control_tint,if self.material.dark{235}else{228});
+            let radius=cluster.w.min(cluster.h).min(34.0*scale)*0.44;
+            let backing=control_backing((100-self.material.transparency) as f32*2.55);
+            rounded(data,w,h,cluster,radius,control_tint,backing.ceil() as u8);
         }else if control_alpha!=0{rounded(data,w,h,scan,scan.w*0.32,control_tint,control_alpha);}
         if hover==Some(items.len()){rounded(data,w,h,scan,scan.w*0.22,tint,50);}
         let center=(scan.x+0.45*scan.w,scan.y+0.44*scan.h);
@@ -184,7 +207,7 @@ impl Surface {
             Some((tint,(0.5-ring.min(tail)).clamp(0.0,1.0)*238.0))
         });
         let utility=layout.utility;
-        if utility.w>0.0{rounded(data,w,h,utility,utility.w*0.31,palette.accent,if self.material.dark{28}else{22});}
+        if utility.w>0.0{rounded(data,w,h,utility,utility.w*0.31,palette.ink,if self.material.dark{24}else{15});}
         if hover==Some(items.len()+1){rounded(data,w,h,utility,utility.w*0.22,tint,50);}
         let divider=|a:Rect,b:Rect|{
             if layout.side==super::DockSide::Bottom{
@@ -202,13 +225,20 @@ impl Surface {
         for (i,(widget,slot)) in layout.inline.iter().copied().enumerate(){
             if hover==Some(items.len()+2+i){rounded(data,w,h,slot,7.0*scale,tint,50);}
             if let Some(cfg)=metrics.filter(|_|layout.metrics==Some(slot)&&widget==UtilityWidget::Metrics){
+                let vertical=layout.side!=super::DockSide::Bottom;
+                let line=if vertical{
+                    Rect{x:slot.x+slot.w*0.12,y:slot.y-3.0*scale,w:slot.w*0.76,h:scale}
+                }else{
+                    Rect{x:slot.x-3.0*scale,y:slot.y+slot.h*0.15,w:scale,h:slot.h*0.70}
+                };
+                rounded(data,w,h,line,scale*0.5,palette.muted,82);
                 let x=slot.x.ceil() as i32;let y=slot.y.ceil() as i32;
                 let mw=(slot.x+slot.w).floor() as i32-x;
                 let mh=(slot.y+slot.h).floor() as i32-y;
                 if self.metric.as_ref().is_none_or(|s|s.size!=(mw,mh)){
                     self.metric=MetricInk::new(mw,mh,scale);
                 }
-                if self.metric.as_mut().is_some_and(|r|r.paint(data,w,h,x,y,scale,cfg,tint,layout.side!=super::DockSide::Bottom)){continue;}
+                if self.metric.as_mut().is_some_and(|r|r.paint(data,w,h,x,y,scale,cfg,palette,self.material.dark,vertical)){continue;}
                 let edge=21.0*scale;
                 let badge=Rect{x:slot.x+(slot.w-edge)/2.0,y:slot.y+(slot.h-edge)/2.0,w:edge,h:edge};
                 status_on(data,w,h,badge,scale,palette.muted,Some(widget));
@@ -253,7 +283,7 @@ fn glass_pixel(tint:Material,rect:Rect,radius:f32,x:f32,y:f32,scale:f32,d:f32)->
     let shine=(1.0-v).powi(5);
     let opacity=((100-tint.transparency) as f32*0.01 + 0.10*lip+0.09*shine).clamp(0.0,0.99);
     let alpha=coverage*opacity;
-    let (base,reflection)=if tint.dark{([34.0,27.0,23.0],63.0)}else{([242.0,236.0,231.0],24.0)};
+    let (base,reflection)=if tint.dark{([38.0,33.0,30.0],54.0)}else{([247.0,242.0,237.0],20.0)};
     let mut pixel=[0;4];
     for c in 0..3{
         let rim=if tint.dark{(1.0-0.5*v)*lip*48.0}else{(0.8-v)*lip*26.0};

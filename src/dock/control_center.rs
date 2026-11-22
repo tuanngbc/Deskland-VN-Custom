@@ -93,7 +93,7 @@ fn metric_cards(view:&Snapshot,cfg:MetricOptions)->Vec<Card>{
 }
 struct Panel {
     hwnd:HWND,owner:HWND,tag:usize,anchor:chrome::Anchor,dpi:u32,layer:Layer,
-    fonts:[HFONT;3], view:View, metrics:Option<Metrics>, index:Option<usize>, pressed:Option<usize>, page:usize,
+    fonts:[HFONT;4], view:View, metrics:Option<Metrics>, index:Option<usize>, pressed:Option<usize>, page:usize,
     cols:usize,per_page:usize, row_height:i32,
 }
 impl Drop for Panel {
@@ -141,28 +141,29 @@ fn advance_inline_revision(){INLINE_REVISION.with(|n|n.set(n.get().wrapping_add(
 pub(super) fn inline_revision()->usize{INLINE_REVISION.with(Cell::get)}
 fn short_rate(value:Option<f64>)->Option<String>{
     let v=value.filter(|v|v.is_finite()&&*v>=0.0)?;
-    Some(if v>=1_000_000_000.0{format!("{:.1}G/s",v/1_000_000_000.0)}
-        else if v>=1_000_000.0{format!("{:.1}M/s",v/1_000_000.0)}
-        else if v>=1_000.0{format!("{:.1}k/s",v/1_000.0)}
+    Some(if v>=1_000_000_000.0{format!("{:.1} GB/s",v/1_000_000_000.0)}
+        else if v>=1_000_000.0{format!("{:.1} MB/s",v/1_000_000.0)}
+        else if v>=1_000.0{format!("{:.0} KB/s",v/1_000.0)}
         else{format!("{v:.0} B/s")})
 }
-pub(super) fn inline_lines(cfg:MetricOptions,vertical:bool)->Vec<String>{
+
+pub(super) struct InlineReading {
+    pub label:&'static str,
+    pub value:String,
+    pub network:bool,
+}
+fn readings(value:&Snapshot,cfg:MetricOptions)->Vec<InlineReading>{
+    let ram=if value.ram_total>0{percent(value.ram)}else{None};
+    [("CPU",percent(value.cpu)),("RAM",ram),("GPU",percent(value.gpu)),
+        ("↓",short_rate(value.down)),("↑",short_rate(value.up))]
+        .into_iter().enumerate().filter_map(|(i,(label,v))|{
+            (cfg.mask&(1<<i)!=0).then(||InlineReading{label,value:v.unwrap_or_else(||"—".into()),network:i>=3})
+        }).collect()
+}
+pub(super) fn inline_readings(cfg:MetricOptions)->Vec<InlineReading>{
     INLINE.with(|s|{
         let slot=s.borrow();
-        let Some(value)=slot.as_ref().and_then(|s|s.last.as_ref())else{return Vec::new();};
-        let ram=value.ram.filter(|_|value.ram_total>0).map(|_|{
-            let gib=value.ram_used as f64/1_073_741_824.0;
-            if vertical{format!("{gib:.1}G")}else{format!("{gib:.1} GiB")}
-        });
-        let results=[("CPU",percent(value.cpu)),("RAM",ram),("GPU",percent(value.gpu)),
-            ("↓",short_rate(value.down)),("↑",short_rate(value.up))];
-        let mut results=results.into_iter().enumerate().filter_map(|(i,(k,v))|{
-            if cfg.mask&(1<<i)==0{None}else{v.map(|v|(k,v))}
-        }).collect::<Vec<_>>();
-        if vertical{return results.into_iter().map(|(k,v)|format!("{k} {v}")).collect();}
-        let network=results.iter().position(|(k,_)|*k=="↓"||*k=="↑").map(|i|results.split_off(i)).unwrap_or_default();
-        let line=|s:&[(&str,String)]|s.iter().map(|(k,v)|format!("{k} {v}")).collect::<Vec<_>>().join("   ");
-        results.chunks(2).map(line).chain((!network.is_empty()).then(||line(&network))).collect()
+        slot.as_ref().and_then(|s|s.last.as_ref()).map_or_else(Vec::new,|sample|readings(sample,cfg))
     })
 }
 impl Panel{
@@ -206,17 +207,18 @@ impl Panel{
         for (i,c) in cards.iter().enumerate(){
             let r=self.rect(i);
             let focused=self.index==Some(i);
-            let fill=if self.anchor.dark{[67,53,43]}else{[246,239,231]};
+            let is_metric=self.metrics.is_some();
+            let fill=if self.anchor.dark{[65,58,53]}else{[249,245,242]};
             chrome::box_fill(g,r,px(17),fill,Some(if focused{p.accent}else{p.edge}));
             let inner=r.left+px(if c.icon.is_some(){37}else{11});
             let text_bounds=RECT{left:inner,top:r.top+px(if c.hint.is_empty(){2}else{3}),right:r.right-px(6),
-                bottom:if c.hint.is_empty(){r.bottom-px(2)}else{r.top+px(20)}};
-            SelectObject(g,self.fonts[1]);
-            chrome::text(g,text_bounds,&c.title,p.ink,SINGLE_LINE);
+                bottom:if c.hint.is_empty(){r.bottom-px(2)}else{r.top+px(22)}};
+            SelectObject(g,self.fonts[if is_metric{2}else{1}]);
+            chrome::text(g,text_bounds,&c.title,if is_metric{p.muted}else{p.ink},SINGLE_LINE);
             if !c.hint.is_empty(){
-                SelectObject(g,self.fonts[2]);
-                chrome::text(g,RECT{top:r.top+px(20),bottom:r.bottom-px(2),..text_bounds},&c.hint,
-                    if c.action.is_none(){p.accent}else{p.muted},SINGLE_LINE);
+                SelectObject(g,self.fonts[if is_metric{3}else{2}]);
+                chrome::text(g,RECT{top:r.top+px(if is_metric{22}else{20}),bottom:r.bottom-px(3),..text_bounds},&c.hint,
+                    if is_metric{p.ink}else{p.muted},SINGLE_LINE);
             }
             if let Some(icon)=c.icon{
                 let size=px(25) as f32;
@@ -254,7 +256,7 @@ pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){
     let double=view.metrics.map_or(view.cards.len()>3,|o|o.compact);
     let cols=if double&&work.right-work.left>=px(365){2}else{1};
     let width=px(if cols==2{392}else{306}).min(work.right-work.left);
-    let row_height=px(43);
+    let row_height=px(if view.metrics.is_some(){54}else{43});
     let budget=(work.bottom-work.top-px(132)).max(row_height);
     let rows=(budget/(row_height+px(7))).clamp(1,9) as usize;
     let per_page=cols*rows;
@@ -270,7 +272,7 @@ pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){
     if hwnd.is_null(){return;}
     chrome::frame(hwnd,width,height,dpi,anchor);
     let tag=serial();
-    let fonts=[chrome::choose_font(dpi,20,650),chrome::choose_font(dpi,13,630),chrome::choose_font(dpi,12,450)];
+    let fonts=[chrome::choose_font(dpi,20,650),chrome::choose_font(dpi,13,630),chrome::choose_font(dpi,12,450),chrome::choose_font(dpi,19,620)];
     let metrics=view.metrics.map(Metrics::new);
     let p=Panel{hwnd,owner,tag,anchor,dpi,layer,fonts,view,metrics,index:None,pressed:None,page:0,cols,per_page,row_height};
     PANE.with(|s|s.replace(Some(p)));
@@ -377,6 +379,19 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
 }
 #[cfg(test)] mod tests{
     use super::*;
+    #[test] fn inline_readings_keep_slots_stable_when_an_engine_has_no_sample(){
+        let mut sample=Snapshot::default();
+        sample.cpu=Some(12.0);
+        sample.ram=Some(43.0);
+        sample.ram_total=16;
+        sample.down=Some(244700.0);
+        let all=readings(&sample,MetricOptions::default());
+        assert_eq!(all.iter().map(|r|(r.label,r.value.as_str())).collect::<Vec<_>>(),
+            [("CPU","12%"),("RAM","43%"),("GPU","—"),("↓","245 KB/s"),("↑","—")]);
+        let net=readings(&sample,MetricOptions{mask:8,..Default::default()});
+        assert_eq!(net.len(),1);
+        assert!(net[0].network);
+    }
     #[test] fn metrics_only_show_selected_available_values(){
         let mut s=Snapshot::default();s.cpu=Some(17.8);s.ram_used=3*1_073_741_824;s.ram_total=16*1_073_741_824;s.down=Some(1_515_000.0);s.up=Some(12.0);
         let c=metric_cards(&s,MetricOptions{mask:1|4|8,interval:5,enabled:true,..MetricOptions::default()});
