@@ -2,6 +2,38 @@
 
 Current P0 build and scoped native evidence: [Dock P0 verification](DOCK_P0_VERIFICATION.md). The full owner acceptance gates remain pending.
 
+## Daily-use verification — Settings recovery and fixture recording
+
+The [Settings lifecycle revision `1930cd4`](https://github.com/tuanngbc/Deskland-VN-Custom/commit/1930cd43d15e7e5708eebef4a9b8989716ae1712) passed [Windows CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44993592974). The [exact x64 package](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44993592974/artifacts/14742089367) was verified against both archive hashes and BUILD-COMMIT before using the isolated owner profile. Its EXE SHA-256 was `b4a47188ca28f3e86e9db4a4f6064a9c8c0901bfa4b5b7abd43a0d152bcdafaf`.
+
+| Gate | Evidence at `1930cd4` |
+|---|---|
+| SETTINGS_COLD_OPEN_NATIVE_PASS | One request, hidden process launch, native Clock visible, both modules enabled. WebView reported ready after 2,845 ms and the Settings HWND was visible with rendered content. A privacy-reviewed Settings-only image is retained locally. |
+| SETTINGS_FAILURE_FALLBACK_PASS | Three isolated trials: injected controller creation failure, withheld page ready signal over the real 8-second deadline, and a real crash of that trial's WebView renderer. In each the Win32 HWND was visible and no WebView Settings HWND remained. Five extra requests during the timeout did not duplicate the pending HWND. Clock remained visible. |
+| Settings cancel and stale completions | Windows CI creates real hidden Win32 hosts and closes the first one before feeding simulated stale callbacks into the second. A WebView COM callback arriving after cancellation on the owner host is not timed deterministically by that test. |
+| Settings outside tested cases | Runtime removal and opening during a timed Dock/Stage animation still require evidence. The crash test above confirms fallback, not retrying WebView after closing the fallback. |
+
+The controller simulation finishes via the real callback path and closes the trial controller. The renderer test invokes the isolated renderer and records a real WebView2 `RenderProcessExited` event. No installed runtime or Registry change was made. The profile manifest, installed EXE, scoped Registry and Windows taskbar all matched after each session; the normal production process was restarted.
+
+### Daily-use native fixture — `09f89a5`
+
+[Source](https://github.com/tuanngbc/Deskland-VN-Custom/commit/09f89a57d54b96075af3efd9c358e15995ef3da1) · [Windows CI PASS](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44994262488) · [verified Windows x64 artifact](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44994262488/artifacts/14743507037). BUILD-COMMIT and both archive hashes matched; EXE SHA-256 `cdc0faf6a8ba4fcc2bc68e777331859595e8fd0f1326a33a992a48d3373d3157`. The preceding [failed run](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44993921436) used the wrong widget enum variant in the new regression test and did not produce the tested artifact.
+
+The latest Dock code binds press and release to the same app or control even as the row animates. The private demo filters Stage and Dock window discovery by both fixture PID and title prefix. Its audio endpoint is in memory, and ordinary trial mode blocks real endpoint writes. Bluetooth display names are replaced in the visual demo. The light/dark materials are still premultiplied alpha; no Acrylic retest.
+
+| Gate | Native evidence and boundary |
+|---|---|
+| DOCK_VISUAL_CANDIDATE_READY | PENDING. Current native stills at normal scale on 2560×1080 landscape and 1080×1920 negative-coordinate portrait at 96 DPI. Separate placements of small utilities inspected. No complete hover/reveal sequence, maximum magnification or mixed DPI proof. |
+| DOCK_INTERACTION_NATIVE_PARTIAL | Landscape overflow and inline sound opened via actual pointer input. Previous `0441a31` reorder PASS remains scoped to its artifact. Reorder at all positions, picker across different apps, tooltip, keyboard focus and Reduced Motion remain open. |
+| STAGE_VISUAL_CANDIDATE_READY | PENDING. Native fixture stills show aligned DWM content on landscape and portrait. A landscape group grew from one to two members and retained the appropriate thumbnail. Long similar titles visibly truncate. Transition pacing and ghost-free switching throughout the sequence remain unreviewed. |
+| STAGE_INTERACTION_NATIVE_PARTIAL | A group was created through the real context menu, then Lagoon was added to Coral. Protected and pre-minimized fixtures were configured before Stage ran; actual visual fallback is scoped to the shown cards. Third member, detach, dissolve, close/reopen, mid-switch disable and all restore cases remain open on this SHA. |
+| UTILITIES_FUNCTIONAL_PARTIAL | Opened overflow; it showed an actual Wi-Fi signal and Bluetooth Classic connected state. Opened the real volume popup reading 46% from the fixture endpoint. The pointer attempt closed the popup without a verified level change; set/mute protocol passed its test double unit test, not a native slider-write pass. `AUDIO_WRITE_NATIVE_PENDING`. |
+| WINDOW_MANAGEMENT_NATIVE_PARTIAL | Each fixture was maximized and restored to its exact normal rectangle. A borderless monitor-sized fixture hid only local Dock and Stage, and restore brought both back; Windows taskbar stayed visible. WinForms bounds include invisible frame margins, so this sample alone does not establish a DWM safe-area gate. A synthetic borderless cover is not a game or video fullscreen test. |
+| VIDEO_EVIDENCE_PENDING | The recorder targeted the verified nonzero Dock HWND and produced a 30 fps file, but the layered pixels were black. The file is rejected. Desktop-wide recording was not used for delivery; private owner content surrounding the trial prevents using a broad crop as a workaround. |
+| OWNER_VISUAL_ACCEPTED / OWNER_NATIVE_ACCEPTED | Unset. Owner only. |
+
+Native visuals retained offline contain reviewed fixture content only. Normal trial Exit, production executable hash, original profile manifest, scoped Registry and taskbar were verified after restoration. Previous Dock Idle and Stage Idle `SCOPED_PASS` entries remain untouched.
+
 ## Product finishing — interaction and first open
 
 [4afbd03 source](https://github.com/tuanngbc/Deskland-VN-Custom/commit/4afbd03dccb7eee9355e9dfccbf24fe42c799214) adds insertion boundaries and a visible insertion guide to the moving Dock row, stable Stage group order and press/release identity checks, plus non-blocking WebView2 Settings initialization. Settings stays hidden until the page sends its ready message and falls back to Win32 on error or after eight seconds without a ready message. Regression coverage includes insertion gaps at 150% for three edges, repeated Win32 group switches and Stage-disable restore, and ignored callbacks from earlier Settings attempts.

@@ -23,6 +23,8 @@ Updated after owner smoke at `fa93c16`, CI 44852504957, 2026-11-21. See [native 
 | K17 | First-open Settings HWND could stay hidden despite page ready | Reproduced at 0441a31, d16e455 verified for first-open WebView2 and explicit Win32. Forced WebView failure and delayed-ready paths remain separate. |
 | K18 | Documented Acrylic backdrop displays as opaque on the owner host | Three unobscured scanlines at d16e455 show no spatial contrast under the Acrylic candidate. Alpha remains the supported fallback. |
 
+Daily-use follow-up: native Settings recovery now closes the failed controller on the owner loop and opens Win32. [Exact results and gaps](DOCK_VISUAL_ACCEPTANCE.md#daily-use-verification--settings-recovery-and-fixture-recording). Stage captions can truncate similar titles to the same prefix at the default card width. Layered Dock pixels were black in the window-targeted recorder; keep `VIDEO_EVIDENCE_PENDING` until a compositor-aware fixture-only clip is captured and reviewed.
+
 K12 clarification: earlier owner smoke verifies basic same-PID/two-monitor geometry, eight toggle combinations, configuration preservation, saved startup and normal Exit. Overlay actions, mixed DPI/hotplug, real shell/login recovery and long-run evidence remain pending. Same-process integration provides no process crash isolation. See [current scopes](DOCK_VISUAL_ACCEPTANCE.md).
 
 No baseline/installed binary replacement. Owner state restored and verified, including reviewed runtime cache/image changes during production restarts. No taskbar hiding/Explorer termination. No merge without OWNER_NATIVE_ACCEPTED.

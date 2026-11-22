@@ -4,6 +4,8 @@ Current P0 build and scoped native evidence: [Dock P0 verification](DOCK_P0_VERI
 
 See the [current product gates and exact native evidence](DOCK_VISUAL_ACCEPTANCE.md#owner-host-windows-11-results). Older D0–D9 rows below describe broader milestone gates; scoped interaction and Settings PASS results do not close them.
 
+The latest [daily-use gate table](DOCK_VISUAL_ACCEPTANCE.md#daily-use-native-fixture--09f89a5) records current Dock/Stage/Utilities/Window coverage. [Cold Settings and real trial renderer recovery](DOCK_VISUAL_ACCEPTANCE.md#daily-use-verification--settings-recovery-and-fixture-recording) were tested separately with Clock. No owner gate closed.
+
 Vocabulary: NOT_STARTED, IN_PROGRESS, IMPLEMENTED_UNVERIFIED, CI_PASS, CI_FAIL, NATIVE_PENDING, NATIVE_PASS, OWNER_NATIVE_ACCEPTED, BLOCKED. CI_PASS never implies native acceptance.
 
 2026-11-21 owner smoke at fa93c16 added partial native evidence: eight module combinations via Win32 Settings, selected WebView controls, same-PID/negative-coordinate geometry, saved configuration/startup and normal cleanup. See [case results](DOCK_NATIVE_SMOKE_REPORT.md). NATIVE_PENDING below still applies to each complete milestone; do not erase narrower PASS or promote it to whole-gate PASS.

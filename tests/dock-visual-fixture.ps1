@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory)][string]$Directory,
-    [switch]$Primary
+    [switch]$Primary,
+    [switch]$Anchors
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,6 +22,7 @@ $side = if ($Primary) {'Landscape'} else {'Portrait'}
 $forms = [ordered]@{}
 $normal = @{}
 $protected = $false
+$anchorWindows = @()
 try {
     foreach ($name in 'Slate','Lagoon','Coral','Protected','Pre-minimized') {
         $i = $forms.Count
@@ -42,6 +44,26 @@ try {
         # Show can apply the initial STARTUPINFO; apply the iconic state afterwards.
         if ($name -eq 'Pre-minimized') { $form.WindowState = 'Minimized' }
         $forms[$name] = $form
+    }
+
+    if ($Anchors) {
+        $work = $screen.WorkingArea
+        $bottomWidth = [Math]::Min(924, $work.Width - 24)
+        $stageX = if ($Primary) { $work.X } else { $work.Right - 244 }
+        foreach ($edge in 'Dock', 'Stage') {
+            $anchor = [Windows.Forms.Form]::new()
+            $anchor.Text = "Deskland visual anchor $side $edge"
+            $anchor.StartPosition = 'Manual'
+            $anchor.FormBorderStyle = 'FixedSingle'
+            $anchor.BackColor = if ($Primary) { [Drawing.Color]::FromArgb(219,235,234) } else { [Drawing.Color]::FromArgb(33,51,72) }
+            $anchor.Bounds = if ($edge -eq 'Dock') {
+                [Drawing.Rectangle]::new($work.X + [int](($work.Width-$bottomWidth)/2),$work.Bottom - 150,$bottomWidth,150)
+            } else {
+                [Drawing.Rectangle]::new($stageX,$work.Y + 36,244,$work.Height - 190)
+            }
+            $anchor.Show()
+            $anchorWindows += $anchor
+        }
     }
 
     function Report-Fixture($file) {
@@ -86,4 +108,5 @@ try {
     }
 } finally {
     foreach ($form in $forms.Values) { if (!$form.IsDisposed) { $form.Close(); $form.Dispose() } }
+    foreach ($anchor in $anchorWindows) { if (!$anchor.IsDisposed) { $anchor.Close(); $anchor.Dispose() } }
 }
