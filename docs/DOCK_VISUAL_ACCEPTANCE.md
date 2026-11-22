@@ -125,3 +125,31 @@ The first rebuild [d2ba9e5](https://github.com/tuanngbc/Deskland-VN-Custom/actio
 Compared with [Apple's Stage Manager behavior](https://support.apple.com/en-us/guide/mac-help/mchl534ba392/mac), standalone thumbnail groups and negative space are present. Windows Stage still shows recent cards in a vertical stack, uses a compact pager and preserves the existing context-menu grouping workflow. Full scale/slide transition, final typography, wallpaper comparisons, actual video, brightness/mixed DPI and owner review remain open. Do not mark VISUAL_PASS.
 
 On owner Windows 11, the verified 099a4eb build displayed a separate utility area and real Wi-Fi, speaker and Settings glyphs on the landscape Dock. Menu and native volume-panel stills are private. Per-display placement and reconfiguration were observed at 96 DPI, including a relaunch. Overlay animation, glass comparison on wallpaper, all mixed DPI cases and two-display motion video remain pending. No visual sign-off.
+
+## Owner feedback round — Dock, utilities and Stage
+
+The owner rejected the previous light Dock crop and Quick Settings panel. The submitted Windows screenshots showed a nearly opaque status block competing with the apps and metric values packed into three text lines. No owner screenshots, profiles or device names are stored in the repository.
+
+| Milestone | Implementation and evidence |
+| --- | --- |
+| M1 — Dock and metrics | [Windows CI and package](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/45005151749/artifacts/14747218376). The resting capsule measures from the physical display center and clamps to the available work area; magnification varies continuously across slot boundaries. Separate labels/values, explicit network units and a lighter utility backing replace the status block. On the owner's Windows 11 host, dark rest and hover crops were collected on 2560×1080 and 1080×1920 @ 96 DPI, along with the expanded metrics panel. |
+| M2 — Control Center | [Windows CI and package](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/45005568234/artifacts/14748185495). Redesigned cards; WLAN catalog and signal from Windows; Classic Bluetooth devices and a live audio read while the panel is open. |
+| M3 — App actions | [Windows CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/45005991522). The native card menu supports pin/unpin, an EXE/LNK picker, reopening an app, and normal close of listed windows. Window selection checks the current HWND/PID/TID. “More apps” in the Dock context menu lists entries past the main row. Advanced Win32 window actions remain available. |
+| M4 — Stage and Settings | [Windows CI and verified package](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/45006554824/artifacts/14747199305). Stage card and caption hierarchy revised; existing DWM previews and title tooltips retained. Settings visually groups controls already wired to the shared configuration. The orange attention indicator uses Shell flash events and no animation timer. |
+| M5 — Taskbar replacement | **PENDING**. Settings shows the blocked option. This build has no shell hide/restore path. Before enabling it, test an independent recovery process, emergency restore, restart of Explorer, process failure and exit on both displays. Windows taskbar auto-hide changes its normal behavior; that API is not a substitute for taskbar replacement. |
+
+- **NATIVE_IMPLEMENTED:** volume/mute and live reads; Wi-Fi catalog, signal and explicit connect/disconnect for eligible saved WLAN profiles. The WLAN request and eventual association are distinct. The panel reports the immediate result and lets the user refresh. Windows can deny access to WLAN data if location consent is unavailable. Trial mode blocks all Wi-Fi writes and blocks real audio writes.
+- **WINDOWS_DELEGATED:** setting up a new Wi-Fi profile, entering a new password, Bluetooth device management and selecting the sound output device.
+- **UNSUPPORTED:** generic Bluetooth connect/disconnect and BLE enumeration in the Dock. The displayed Bluetooth catalog covers Classic devices reported by the OS.
+- **Still required:** owner review, mixed-DPI capture, device actions on authorized test hardware and crash-safe taskbar replacement. CI does not count as owner native acceptance.
+
+### Final light native capture — b197ed3
+
+The verified Windows x64 artifact ran with an isolated profile on Windows 11. Compositor crops show the Dock at rest and during hover, plus Stage on both physical displays (2560×1080 landscape and 1080×1920 portrait at 96 DPI, with negative desktop coordinates on the portrait display). A short hover recording used an isolated backdrop. The same run captured inline metrics, the metric details panel, Quick Settings, network, volume, calendar, Bluetooth and overflow, and the app menu with a five-window fixture. The WLAN and Bluetooth captures used safe fixture data. These captures are private and are not a performance benchmark.
+
+- **Fixture PASS:** the Windows file picker opened, a fixture app was pinned and then unpinned, and keyboard control updated the fixture volume from 46 to 47 without writing to the real endpoint. The app menu displayed five separate window entries. This evidence does not cover manual selection and activation for arbitrary real apps.
+- **Visual PENDING:** the Settings window opened, but UI Automation could not navigate to the Dock section; no Settings screenshot was collected. The final light capture shows some labels truncated earlier than ideal in the cards. The previous dark capture belongs to M1, not this commit. Mixed DPI, final-build dark review and owner visual acceptance remain pending.
+- **Device and shell PENDING:** actual WLAN association/disconnection, physical Bluetooth control and output switching were not exercised. Optional taskbar replacement is disabled and has no recovery watchdog in this candidate.
+- **Rollback PASS:** the trial exited and the previous isolated UAT was restored. The rollback check found no changes to taskbar state, production executable bytes, monitored Registry values or the main profile.
+
+The owner UAT shortcuts use the same verified artifact with a separate copy of the existing UAT settings. Visual acceptance is still pending.
