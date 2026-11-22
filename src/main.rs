@@ -782,7 +782,7 @@ fn web_init(app: &App) -> serde_json::Value {
         .and_then(|p| std::fs::read_to_string(p.join("themes.json")).ok())
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .unwrap_or(serde_json::Value::Null);
-    serde_json::json!({
+    let mut init=serde_json::json!({
         "t": "init",
         "registry": registry,
         "theme": app.cfg.theme,
@@ -809,7 +809,6 @@ fn web_init(app: &App) -> serde_json::Value {
         "dockDisplays": dock::display_json(),
         "dockRunning": app.dock_runtime.as_ref().is_some_and(|r|!r.finished()),
         "dockError": app.dock_error,
-        "dockTaskbarHidden": app.dock_taskbar_hidden,
         "miniToolsHotkeys": TOOL_HOTKEYS.with(|c|c.get()),
         "autostartWarn": false,
         "interactions": app.interactions_enabled,
@@ -858,7 +857,9 @@ fn web_init(app: &App) -> serde_json::Value {
             "hide": ["showBoy", "showCat"],
             "force": { "showBoy": 0, "showCat": 0 },
         },
-    })
+    });
+    init["dockTaskbarHidden"]=serde_json::Value::Bool(app.dock_taskbar_hidden);
+    init
 }
 
 fn away_state(app: &App, status: &str) -> serde_json::Value {
