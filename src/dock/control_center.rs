@@ -92,7 +92,7 @@ fn metric_cards(view:&Snapshot,cfg:MetricOptions)->Vec<Card>{
         }).collect()
 }
 struct Panel {
-    hwnd:HWND,owner:HWND,tag:usize,anchor:chrome::Anchor,dpi:u32,layer:Layer,
+    hwnd:HWND,owner:HWND,tag:usize,anchor:chrome::Anchor,dpi:u32,layer:Layer,ink:Option<Layer>,
     fonts:[HFONT;4], view:View, metrics:Option<Metrics>, index:Option<usize>, pressed:Option<usize>, page:usize,
     cols:usize,per_page:usize, row_height:i32,list:bool,
 }
@@ -191,13 +191,12 @@ impl Panel{
         self.page=self.page.saturating_add_signed(delta).min(self.pages()-1);
         self.index=self.cards().iter().position(|c|c.action.is_some());self.pressed=None;
     }
-    unsafe fn paint(&mut self,dc:HDC){
+    unsafe fn paint(&mut self){
         let (w,h)=self.layer.size;
-        let g=self.layer.dc();
+        let g=self.ink.as_ref().unwrap_or(&self.layer).dc();
         let p=Palette::new(self.anchor.dark);
         let px=|n|chrome::scale(self.dpi,n);
         super::fill(g,RECT{left:0,top:0,right:w,bottom:h},chrome::color(p.panel));
-        chrome::box_fill(g,RECT{left:0,top:0,right:w,bottom:h},px(32),p.panel,Some(p.edge));
         let old=SelectObject(g,self.fonts[0]);
         chrome::text(g,RECT{left:px(18),top:px(13),right:w-px(18),bottom:px(41)},&self.view.title,p.ink,SINGLE_LINE);
         SelectObject(g,self.fonts[2]);
@@ -249,6 +248,21 @@ impl Panel{
         }
         if !old.is_null(){SelectObject(g,old);}
         GdiFlush();
+        if let Some(ink)=self.ink.as_mut(){
+            let width=w as usize;
+            let original=ink.pixels();
+            for (i,dst) in self.layer.pixels().chunks_exact_mut(4).enumerate(){
+                let top=((i/width)*4*width+(i%width)*2)*4;
+                let bottom=top+width*8;
+                for c in 0..3{
+                    dst[c]=((original[top+c] as u16+original[top+4+c] as u16
+                        +original[bottom+c] as u16+original[bottom+4+c] as u16+2)/4) as u8;
+                }
+                dst[3]=255;
+            }
+        }else{
+            for pixel in self.layer.pixels().chunks_exact_mut(4){pixel[3]=255;}
+        }
         let scale=self.dpi as f32/96.0;
         for (icon,badge) in glyphs{
             let data=self.layer.pixels();
@@ -257,7 +271,7 @@ impl Panel{
             let slot=Rect{x:badge.x+inset,y:badge.y+inset,w:badge.w-2.0*inset,h:badge.h-2.0*inset};
             surface::status_on(data,w,h,slot,scale,p.accent,Some(icon));
         }
-        self.layer.blit(dc);
+        chrome::mask_popup(self.layer.pixels(),w,h,px(16) as f32,self.anchor.alpha());
     }
 }
 pub(super) fn open_for(owner:HWND)->bool{
@@ -286,18 +300,25 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool){
     let height=(px(84)+expected.clamp(1,per_page).div_ceil(cols) as i32*(row_height+gap)
         +if expected>per_page{px(30)}else{0}).min(work.bottom-work.top).max(1);
     let Some(layer)=Layer::new(width,height)else{return;};
+    let ink=Layer::new(width*2,height*2).inspect(|ink|{
+        let dc=ink.dc();
+        SetMapMode(dc,MM_ANISOTROPIC);
+        SetWindowExtEx(dc,width,height,ptr::null_mut());
+        SetViewportExtEx(dc,width*2,height*2,ptr::null_mut());
+    });
     let class=wide(CLASS);
     if !chrome::register(&class,Some(proc)){return;}
     let (x,y)=chrome::placement(work,anchor,width,height,px(8));
     let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST|WS_EX_LAYERED,class.as_ptr(),wide(&view.title).as_ptr(),
         WS_POPUP,x,y,width,height,owner,ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
     if hwnd.is_null(){return;}
-    chrome::frame(hwnd,width,height,dpi,anchor);
+    chrome::disable_system_border(hwnd);
     let tag=serial();
     let fonts=[chrome::choose_font(dpi,if list{18}else{21},550),chrome::choose_font(dpi,14,if list{455}else{530}),chrome::choose_font(dpi,12,420),chrome::choose_font(dpi,19,540)];
     let metrics=view.metrics.map(Metrics::new);
-    let p=Panel{hwnd,owner,tag,anchor,dpi,layer,fonts,view,metrics,index:None,pressed:None,page:0,cols,per_page,row_height,list};
+    let p=Panel{hwnd,owner,tag,anchor,dpi,layer,ink,fonts,view,metrics,index:None,pressed:None,page:0,cols,per_page,row_height,list};
     PANE.with(|s|s.replace(Some(p)));
+    InvalidateRect(hwnd,ptr::null(),0);UpdateWindow(hwnd);
     ShowWindow(hwnd,SW_SHOW);SetForegroundWindow(hwnd);SetFocus(hwnd);
     PANE.with(|s|{if let Some(m)=s.borrow().as_ref().and_then(|p|p.metrics.as_ref()){
         if m.cfg.mask!=0{
@@ -320,8 +341,8 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             DefWindowProcW(hwnd,msg,w,l)
         },
         WM_PAINT=>{
-            let mut ps:PAINTSTRUCT=mem::zeroed();let dc=BeginPaint(hwnd,&mut ps);
-            PANE.with(|s|{if let Some(p)=s.borrow_mut().as_mut().filter(|p|p.hwnd==hwnd){p.paint(dc);}});
+            let mut ps:PAINTSTRUCT=mem::zeroed();BeginPaint(hwnd,&mut ps);
+            PANE.with(|s|{if let Some(p)=s.borrow_mut().as_mut().filter(|p|p.hwnd==hwnd){p.paint();let _=p.layer.present(hwnd);}});
             EndPaint(hwnd,&ps);0
         },
         WM_TIMER if w==METRIC_TIMER=>{

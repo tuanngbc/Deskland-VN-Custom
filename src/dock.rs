@@ -37,7 +37,7 @@ pub(crate) use taskbar_guard::watchdog as taskbar_watchdog;
 pub use utilities::{HostAction,Profile as UtilityProfile,Widget as UtilityWidget};
 pub use control_center::MetricOptions;
 pub use glass_probe::probe as glass_probe;
-pub use appearance::{Appearance,DockSide,Theme};
+pub use appearance::{Appearance,DockSide,StartIcon,Theme};
 pub use options::{Options,Edit,DisplayMode,DisplayTarget,StageStyle,WindowMode,WindowPolicy};
 pub use runtime::{Runtime,Event};
 use runtime::Command;
@@ -56,7 +56,6 @@ const STAGE_MOTION_TIMER:usize=7;
 const STATUS_TIP_TIMER:usize=8;
 const FEEDBACK_TIMER:usize=9;
 const TASKBAR_GUARD_TIMER:usize=12;
-const TASKBAR_TRAY_TIMER:usize=13;
 const WM_DOCK_MOUSELEAVE:u32=0x02A3;
 // winuser.h macro: HSHELL_REDRAW | HSHELL_HIGHBIT.
 const HSHELL_FLASH:usize=6 | 0x8000;
@@ -1002,12 +1001,12 @@ unsafe fn paint(hwnd:HWND){
         let bar=state.bars.iter().find(|b|b.hwnd==hwnd)?;
         let feedback=bar.feedback.as_ref().and_then(|f|bar.items.iter().position(|i|i.path.eq_ignore_ascii_case(&f.path))
             .map(|i|(i,f.kind,if state.prefs.appearance.reduced_motion{0.2}else{f.start.elapsed().as_secs_f32()/0.42})));
-        Some((bar.layout.clone()?,bar.items.clone(),bar.hovered,bar.keyboard,state.material?,bar.active,bar.minimized,bar.attention,bar.drop_target(),bar.reveal.value.clamp(0.0,1.0),feedback,bar.motion.at,
+        Some((bar.layout.clone()?,bar.items.clone(),bar.hovered,bar.keyboard,state.material?,bar.active,bar.minimized,bar.attention,bar.drop_target(),bar.reveal.value.clamp(0.0,1.0),feedback,bar.motion.at,state.prefs.appearance.start_icon,
             state.screens.iter().find(|d|same_rect(d.bounds,bar.bounds))
                 .and_then(|d|state.prefs.utility_profiles.get(&d.id)).map(|p|p.metrics)))
     });
     let mut ps:PAINTSTRUCT=mem::zeroed();let dc=BeginPaint(hwnd,&mut ps);
-    if let Some((layout,items,hovered,keyboard,material,active,minimized,attention,drop_target,openness,feedback,animation_tick,metrics))=layered{
+    if let Some((layout,items,hovered,keyboard,material,active,minimized,attention,drop_target,openness,feedback,animation_tick,start_icon,metrics))=layered{
         EndPaint(hwnd,&ps);
         let key=hwnd as usize;
         let paint=animation_tick.filter(|_|perf::active()).map(|tick|(tick,std::time::Instant::now()));
@@ -1022,7 +1021,7 @@ unsafe fn paint(hwnd:HWND){
                 let mut a=a.borrow_mut();
                 a.as_mut().map(|atlas|atlas.request(&items)).unwrap_or_default()
             });
-            let applied=if openness<=0.003 {canvas.rail(hwnd,&layout)} else {canvas.paint(hwnd,&layout,&items,&atlas,active,minimized,attention,keyboard.or_else(||usize::try_from(hovered).ok()),drop_target,openness,feedback,metrics)};
+            let applied=if openness<=0.003 {canvas.rail(hwnd,&layout)} else {canvas.paint(hwnd,&layout,&items,&atlas,start_icon,active,minimized,attention,keyboard.or_else(||usize::try_from(hovered).ok()),drop_target,openness,feedback,metrics)};
             if applied{
                 if let Some((tick,paint))=paint{perf::submitted(key,tick,paint);}
                 SURFACES.with(|s|s.borrow_mut().insert(key,canvas));
@@ -1419,7 +1418,7 @@ unsafe fn set_taskbar_hidden(hidden:bool){
     if !hidden {show_taskbar("Đã trả thanh tác vụ cho Windows.");return;}
     if taskbar_active(){return;}
     if crate::trial::demo_active()||crate::trial::benchmark_active()
-        || !STATE.with(|s|{let s=s.borrow();!s.suspended&&s.bars.iter().any(|bar|!bar.hidden&&!bar.collapsed)}) {
+        || !STATE.with(|s|{let s=s.borrow();!s.suspended&&s.bars.iter().any(|bar|!bar.hidden)}) {
         emit(Event::Taskbar{hidden:false,message:"Cần bật và hiển thị Dock trước khi ẩn thanh tác vụ.".into()});
         return;
     }
@@ -1448,12 +1447,17 @@ unsafe fn poll_taskbar(hwnd:HWND){
         _=>{}
     }
 }
-unsafe fn activate_shell(target:shell_access::Target,context:bool){
-    if target==shell_access::Target::Tray&&taskbar_active(){
-        show_taskbar("Đã hiện lại thanh tác vụ để mở khay biểu tượng gốc.");
-        if SetTimer(CONTROL.with(Cell::get),TASKBAR_TRAY_TIMER,140,None)!=0{return;}
-    }
-    shell_access::activate(target,context);
+unsafe fn activate_shell(owner:HWND,target:shell_access::Target,context:bool){
+    let slot=STATE.with(|s|{
+        let state=s.borrow();
+        let bar=state.bars.iter().find(|b|b.hwnd==owner)?;
+        let layout=bar.layout.as_ref()?;
+        let rect=match target{shell_access::Target::Start=>layout.start,shell_access::Target::Tray=>layout.tray,shell_access::Target::Clock=>layout.clock};
+        let mut point=POINT{x:(rect.x+rect.w*0.5).round() as i32,y:(rect.y+rect.h*0.5).round() as i32};
+        (ClientToScreen(owner,&mut point)!=0).then_some(point)
+    });
+    let anchor=slot.map(|point|panel_chrome::Anchor::for_owner(owner,point));
+    shell_access::activate(target,context,anchor);
 }
 unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     let menu=CreatePopupMenu();if menu.is_null(){return;}
@@ -1862,7 +1866,6 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         },
         WM_TIMER if w==STATUS_TIP_TIMER=>{KillTimer(hwnd,STATUS_TIP_TIMER);show_status_tip(hwnd);0},
         WM_TIMER if w==TASKBAR_GUARD_TIMER=>{poll_taskbar(hwnd);0},
-        WM_TIMER if w==TASKBAR_TRAY_TIMER=>{KillTimer(hwnd,TASKBAR_TRAY_TIMER);shell_access::activate(shell_access::Target::Tray,false);0},
         WM_TIMER if w==FEEDBACK_TIMER=>{
             KillTimer(hwnd,FEEDBACK_TIMER);
             STATE.with(|s|{if let Some(bar)=s.borrow_mut().bars.iter_mut().find(|b|b.hwnd==hwnd){bar.feedback=None;}});
@@ -2137,7 +2140,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 Some((None,false,false,None,None,0))
             });
             if let Some((item,search,utilities,widget,shell,previous))=action{
-                if let Some(target)=shell{activate_shell(target,false);}
+                if let Some(target)=shell{activate_shell(hwnd,target,false);}
                 if let Some(item)=item{open_dock_item(hwnd,&item);}
                 if search {open_launcher();}
                 if utilities||widget.is_some(){request_utilities(hwnd,widget);}
@@ -2196,7 +2199,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                     Some(DockTarget::Launcher)=>open_launcher(),
                     Some(DockTarget::Overflow)=>request_utilities(hwnd,None),
                     Some(DockTarget::Utility(widget))=>request_utilities(hwnd,Some(widget)),
-                    Some(DockTarget::Shell(target))=>activate_shell(target,false),
+                    Some(DockTarget::Shell(target))=>activate_shell(hwnd,target,false),
                     None=>{},
                 }
             }
@@ -2209,7 +2212,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             let x=(l as u32&0xffff) as i16 as i32;
             let y=(l>>16) as i16 as i32;
             let system=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd).and_then(|b|b.shell_target(x as f32,y as f32)));
-            if system==Some(shell_access::Target::Start){activate_shell(shell_access::Target::Start,true);return 0;}
+            if system==Some(shell_access::Target::Start){activate_shell(hwnd,shell_access::Target::Start,true);return 0;}
             if system.is_some(){return 0;}
             let on_status=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd&&!b.collapsed)
                 .and_then(|b|b.layout.as_ref())

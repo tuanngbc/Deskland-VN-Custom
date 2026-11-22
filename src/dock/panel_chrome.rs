@@ -46,12 +46,30 @@ pub(super) unsafe fn register(name:&[u16],proc:WNDPROC)->bool{
     RegisterClassW(&wc)!=0||GetLastError()==ERROR_CLASS_ALREADY_EXISTS
 }
 pub(super) unsafe fn frame(hwnd:HWND,width:i32,height:i32,dpi:u32,anchor:Anchor){
-    let round:u32=2; // DWMWCP_ROUND. Rounded region is a fallback for the popup.
-    let _=DwmSetWindowAttribute(hwnd,33,&round as *const u32 as _,4);
+    disable_system_border(hwnd);
     let r=scale(dpi,32).max(2);
     let region=CreateRoundRectRgn(0,0,width+1,height+1,r,r);
     if !region.is_null()&&SetWindowRgn(hwnd,region,0)==0{DeleteObject(region);}
     SetLayeredWindowAttributes(hwnd,0,anchor.alpha(),LWA_ALPHA);
+}
+pub(super) unsafe fn disable_system_border(hwnd:HWND){
+    let no_round=1u32; // DWMWCP_DONOTROUND: this window supplies its own corners.
+    let no_border=0xfffffffeu32; // DWMWA_COLOR_NONE
+    let _=DwmSetWindowAttribute(hwnd,33,(&no_round as *const u32).cast(),4);
+    let _=DwmSetWindowAttribute(hwnd,34,(&no_border as *const u32).cast(),4);
+}
+pub(super) fn mask_popup(data:&mut [u8],w:i32,h:i32,radius:f32,opacity:u8){
+    let (w,h)=(w as usize,h as usize);
+    let r=radius.min(w.min(h) as f32*0.5);
+    for (y,row) in data.chunks_exact_mut(w*4).enumerate(){
+        let dy=(r-(y.min(h-1-y) as f32+0.5)).max(0.0);
+        for (x,pixel) in row.chunks_exact_mut(4).enumerate(){
+            let dx=(r-(x.min(w-1-x) as f32+0.5)).max(0.0);
+            let alpha=if dx==0.0||dy==0.0{opacity}else{((r+0.5-dx.hypot(dy)).clamp(0.0,1.0)*opacity as f32).round() as u8};
+            for channel in &mut pixel[..3]{*channel=((*channel as u16*alpha as u16+127)/255) as u8;}
+            pixel[3]=alpha;
+        }
+    }
 }
 pub(super) fn color(rgb:[u8;3])->u32{rgb[2] as u32|((rgb[1] as u32)<<8)|((rgb[0] as u32)<<16)}
 pub(super) unsafe fn text(dc:HDC,mut bounds:RECT,string:&str,ink:[u8;3],flags:u32){
@@ -83,6 +101,15 @@ pub(super) unsafe fn child_color(dc:HDC,dark:bool)->LRESULT{
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn popup_keeps_a_smooth_premultiplied_edge(){
+        let mut data=vec![255;24*24*4];
+        mask_popup(&mut data,24,24,10.0,230);
+        assert_eq!(&data[..4],&[0;4]);
+        assert_eq!(&data[12*4..13*4],&[230;4]);
+        assert!(data.chunks_exact(4).any(|p|p[3]>0&&p[3]<230));
+        assert!(data.chunks_exact(4).all(|p|p[..3].iter().all(|&v|v<=p[3])));
+    }
     #[test]
     fn all_anchors_remain_on_the_selected_negative_monitor(){
         let work=RECT{left:-1080,top:-731,right:0,bottom:1141};

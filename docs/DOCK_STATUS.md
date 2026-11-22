@@ -1,5 +1,7 @@
 # Deskland Rust Dock + Stage Manager — execution status
 
+The latest owner follow-up adds configurable, DPI-scaled Start icons, requests native Start and overflow anchoring from the clicked Dock, moves the taskbar toggle into the Win32 Settings fallback, and enables supervised mini tools in the interactive trial. Native flyout anchoring with taskbar visible/hidden, shortcut capture, and popup visual acceptance are pending on the owner host.
+
 The [owner feedback round](DOCK_VISUAL_ACCEPTANCE.md#owner-feedback-round--dock-utilities-and-stage) is the latest product checkpoint: [b197ed3 / Windows CI PASS](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/45006554824), [verified Windows x64 artifact](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/45006554824/artifacts/14747199305). Final light capture confirms Dock and Stage on two physical displays at 96 DPI; the file picker and pin/unpin passed with a fixture. Settings navigation, mixed DPI, device writes, owner visual approval and optional taskbar replacement remain pending. The installed build and profile are unchanged.
 
 See the [visual redesign and utility metrics checkpoint](DOCK_VISUAL_REDESIGN.md) for the current candidate, exact Windows CI, and the scope of the native evidence.

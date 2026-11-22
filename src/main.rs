@@ -1552,6 +1552,7 @@ impl App {
             interaction: self.interactions_enabled,
             wallpaper_enabled:self.cfg.wallpaper_enabled,
             dock:self.cfg.dock.clone(),
+            taskbar_hidden:self.dock_taskbar_hidden,
             displays:dock::displays(),
         }
     }
@@ -2585,6 +2586,7 @@ fn main() {
             }
             dock::Event::Taskbar{hidden,message}=>{
                 app.dock_taskbar_hidden=hidden;
+                settings::sync(&app.settings_state());
                 web::post(&serde_json::json!({"t":"dockTaskbarState","dockTaskbarHidden":hidden,"message":message}).to_string());
             }
             dock::Event::Error(error)=>{log!("Dock & Stage: {error}");app.dock_error=Some(error);app.post_dock_state();}
@@ -2664,6 +2666,7 @@ fn main() {
                 }
                 Action::Autostart(on) => settings::set_autostart(on),
                 Action::Wallpaper(on)=>{if let Err(error)=app.set_wallpaper_enabled(on){log!("Hình nền: {error}");}app.post_dock_state();}
+                Action::DockTaskbar(hide)=>{if let Some(runtime)=&app.dock_runtime{runtime.set_taskbar_hidden(hide);}}
                 Action::Dock(on)=>{app.cfg.dock.enabled=on;app.configure_dock();}
                 Action::Stage(on)=>{app.cfg.dock.stage_enabled=on;app.configure_dock();}
                 Action::DockDisplay(stage,target)=>{

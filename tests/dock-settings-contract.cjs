@@ -68,6 +68,18 @@ test('appearance edits do not overwrite placement, scope, or pins',()=>{
   assert.equal(m.appearance.transparency,64);
   assert.equal(m.appearance.position,'left');
 });
+test('Start icon selection survives acknowledgement and preserves Dock size',()=>{
+  context.syncDockSettings({dock:{appearance:{iconSize:52,position:'left'}}});
+  const icon=$('dockLook_startIcon');
+  assert.equal(icon.value,'windows');
+  icon.value='orb';icon.listeners.change();
+  const updated=messages.pop();
+  assert.equal(updated.appearance.startIcon,'orb');
+  assert.equal(updated.appearance.iconSize,52);
+  assert.equal(updated.appearance.position,'left');
+  context.syncDockSettings({dock:{appearance:updated.appearance}});
+  assert.equal(icon.value,'orb');
+});
 test('stage layout changes one display and leaves saved disconnected layouts untouched',()=>{
   const main={id:'landscape',name:'Main',w:2560,h:1080,dpi:96,primary:true};
   const vertical={...main,id:'portrait',name:'Vertical',primary:false};

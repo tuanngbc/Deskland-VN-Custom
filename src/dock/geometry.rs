@@ -159,7 +159,7 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     let pad=(if vertical || !display.primary && screen_h>screen_w {8.0}else{10.0}*scale).min(axis*0.04);
     let room=(axis-2.0*(edge+shadow+pad)).max(1.0);
     let chrome_scale=scale.min(room/260.0).max(0.2);
-    let start_span=38.0*chrome_scale;
+    let start_span=(style.icon_size as f32+3.0)*chrome_scale;
     let tray_span=32.0*chrome_scale;
     let clock_span=if vertical{42.0*chrome_scale}else{66.0*chrome_scale};
     let tail_span=tray_span+clock_span;
@@ -202,7 +202,9 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     let lanes=if host{rows.min(inline_count+2)}else{0};
     let grid_cross=lanes as f32*ideal_status+lanes.saturating_sub(1) as f32*gap;
     let metric_cross=if inline_metrics{(if vertical{62.0}else{56.0})*scale}else{0.0};
-    let panel_cross=(icon+18.0*scale).max(grid_cross.max(metric_cross).max(39.0*chrome_scale)+8.0*scale);
+    let start_size=icon.min(start_span-2.0*chrome_scale);
+    let start_size=if apps==0{start_span-2.0*chrome_scale}else{start_size};
+    let panel_cross=(icon.max(start_size)+18.0*scale).max(grid_cross.max(metric_cross).max(39.0*chrome_scale)+8.0*scale);
     let total_cross=(panel_cross.max(icon*(1.0+zoom)+18.0*scale)+2.0*shadow).ceil()
         .min((cross_axis-edge).max(1.0));
     let rest_apps=icon*apps as f32+gaps;
@@ -310,7 +312,7 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     let glass_right=content_end+pad+tail_span;
     let control_cross=(if vertical{54.0}else{39.0}*chrome_scale).min(panel_cross);
     let mid=panel_base+(panel_cross-control_cross)*0.5;
-    let start=bar(content_start-start_span,mid,start_span-2.0*chrome_scale,control_cross);
+    let start=bar(content_start-start_span+(start_span-start_size)*0.5,panel_base+(panel_cross-start_size)*0.5,start_size,start_size);
     let tray=bar(content_end+2.0*chrome_scale,mid,tray_span-2.0*chrome_scale,control_cross);
     let clock=bar(content_end+tray_span,mid,clock_span,control_cross);
     let glass=bar(glass_left,panel_base,(glass_right-glass_left).max(1.0),panel_cross);

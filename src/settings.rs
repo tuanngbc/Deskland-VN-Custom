@@ -28,6 +28,7 @@ pub enum Action {
     Interaction(bool),
     Wallpaper(bool),
     Dock(bool),
+    DockTaskbar(bool),
     Stage(bool),
     DockDisplay(bool, DisplayTarget),
     StageStyle(String, StageStyle),
@@ -49,6 +50,7 @@ pub struct State {
     pub interaction: bool,
     pub wallpaper_enabled:bool,
     pub dock:crate::dock::Options,
+    pub taskbar_hidden:bool,
     pub displays:Vec<Display>,
 }
 
@@ -295,6 +297,8 @@ struct Ui {
     interaction: HWND,
     wallpaper:HWND,
     dock:HWND,
+    dock_enabled:bool,
+    taskbar_hidden:bool,
     stage:HWND,
     dock_target:DisplayTarget,
     stage_target:DisplayTarget,
@@ -463,6 +467,8 @@ pub fn open(state: &State) {
             interaction: std::ptr::null_mut(),
             wallpaper:std::ptr::null_mut(),
             dock:std::ptr::null_mut(),
+            dock_enabled:false,
+            taskbar_hidden:false,
             stage:std::ptr::null_mut(),
             dock_target:DisplayTarget::default(),
             stage_target:DisplayTarget::default(),
@@ -553,6 +559,8 @@ pub fn sync(state: &State) {
             set_check(ui.auto, state.autostart);
             set_check(ui.wallpaper,state.wallpaper_enabled);
             set_check(ui.dock,state.dock.enabled);
+            ui.dock_enabled=state.dock.enabled;
+            ui.taskbar_hidden=state.taskbar_hidden;
             set_check(ui.stage,state.dock.stage_enabled);
             ui.dock_target=state.dock.dock_display.clone();
             ui.stage_target=state.dock.stage_display.clone();
@@ -599,6 +607,13 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
     let mut edits = Vec::new();
     let mut utility_edits=Vec::new();
     let mut policy_edits=Vec::new();
+    if !stage {
+        let taskbar=UI.with(|u|u.borrow().as_ref().map(|ui|(ui.dock_enabled,ui.taskbar_hidden)));
+        if let Some((true,hidden))=taskbar{
+            let label=if hidden{"Hiện lại thanh tác vụ Windows"}else{"Ẩn thanh tác vụ Windows (phiên này)"};
+            AppendMenuW(menu,MF_STRING,2998,wide(label).as_ptr());
+        }
+    }
     let mut appearance_edits=Vec::new();
     if !stage {
         let look=CreatePopupMenu();
@@ -621,6 +636,9 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
             item("Giảm chuyển động",appearance.reduced_motion,Appearance{reduced_motion:!appearance.reduced_motion,..appearance.clone()});
             item("Tự ẩn mặc định",appearance.auto_hide,Appearance{auto_hide:!appearance.auto_hide,..appearance.clone()});
             AppendMenuW(look,MF_SEPARATOR,0,std::ptr::null());
+            for (start_icon,title) in crate::dock::StartIcon::ALL {
+                item(&format!("Start: {title}"),appearance.start_icon==start_icon,Appearance{start_icon,..appearance.clone()});
+            }
             item("Khôi phục kiểu hiển thị Dock",false,Appearance::default());
             if AppendMenuW(menu,MF_POPUP,look as usize,wide("Kiểu hiển thị Dock").as_ptr())==0{DestroyMenu(look);}
         }
@@ -749,6 +767,10 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
     GetWindowRect(button,&mut rect);
     let command = TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,rect.left,rect.bottom,0,owner,std::ptr::null()) as usize;
     DestroyMenu(menu);
+    if id==2998 {
+        let hide=UI.with(|u|u.borrow().as_ref().is_some_and(|ui|!ui.taskbar_hidden));
+        push(Action::DockTaskbar(hide));return;
+    }
     if let Some(appearance)=command.checked_sub(3000).and_then(|i|appearance_edits.get(i)){
         push(Action::DockAppearance(appearance.clone()));return;
     }

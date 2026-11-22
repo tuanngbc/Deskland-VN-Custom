@@ -169,7 +169,7 @@ impl Surface {
         paint_rail(data,w,h,layout,self.material.dark,1.0);
         self.layer.present(hwnd)
     }
-    pub unsafe fn paint(&mut self,hwnd:HWND,layout:&Layout,items:&[super::Item],atlas:&Atlas,active:Option<usize>,minimized:u16,attention:u16,
+    pub unsafe fn paint(&mut self,hwnd:HWND,layout:&Layout,items:&[super::Item],atlas:&Atlas,start_icon:super::StartIcon,active:Option<usize>,minimized:u16,attention:u16,
         hover:Option<usize>,drop_target:Option<usize>,openness:f32,feedback:Option<(usize,FeedbackKind,f32)>,metrics:Option<MetricOptions>)->bool{
         let (w,h)=self.layer.size;
         let scale=layout.scale;
@@ -295,15 +295,7 @@ impl Surface {
         for (i,slot) in [layout.start,layout.tray,layout.clock].into_iter().enumerate(){
             if hover==Some(first+i){rounded(data,w,h,slot,8.0*scale,palette.ink,37);}
         }
-        let start=layout.start;
-        let size=(start.w.min(start.h)*0.49).min(19.0*scale);
-        let tile=size*0.46;
-        let blue=if self.material.dark{[255,186,105]}else{[210,115,22]};
-        let x=start.x+(start.w-size)*0.5;let y=start.y+(start.h-size)*0.5;
-        for col in 0..2{for row in 0..2{
-            let r=Rect{x:x+col as f32*(size-tile),y:y+row as f32*(size-tile),w:tile,h:tile};
-            rounded(data,w,h,r,0.8*scale,blue,255);
-        }}
+        paint_start(data,w,h,layout.start,start_icon,palette,self.material.dark);
         let t=layout.tray;
         let mid_x=t.x+t.w*0.5;let mid_y=t.y+t.h*0.5;
         let k=(t.w.min(t.h)*0.18).min(5.0*scale);
@@ -331,6 +323,30 @@ impl Surface {
         }
         self.layer.present(hwnd)
     }
+}
+
+fn paint_start(data:&mut[u8],w:i32,h:i32,slot:Rect,icon:super::StartIcon,palette:Palette,dark:bool){
+    use super::StartIcon::*;
+    let size=slot.w.min(slot.h)*0.91;
+    let base=Rect{x:slot.x+(slot.w-size)*0.5,y:slot.y+(slot.h-size)*0.5,w:size,h:size};
+    let (background,ink,rows)=match icon{
+        Windows=>(Some([205,121,26]),[255,252,248],2),
+        Grid=>(Some(if dark{[119,80,55]}else{[177,107,57]}),[255,248,238],3),
+        Orb=>(Some(if dark{[78,108,159]}else{[87,114,164]}),[255,251,246],2),
+        Minimal=>(None,palette.ink,2),
+    };
+    if let Some(color)=background{
+        rounded(data,w,h,base,size*if icon==Orb{0.5}else{0.24},color,255);
+    }
+    let glyph=size*if background.is_some(){0.57}else{0.72};
+    let pitch=glyph/rows as f32;
+    let tile=pitch*if rows==3{0.68}else{0.88};
+    let start_x=slot.x+(slot.w-(glyph-pitch+tile))*0.5;
+    let start_y=slot.y+(slot.h-(glyph-pitch+tile))*0.5;
+    for col in 0..rows{for row in 0..rows{
+        let r=Rect{x:start_x+col as f32*pitch,y:start_y+row as f32*pitch,w:tile,h:tile};
+        rounded(data,w,h,r,tile*if rows==3||icon==Orb{0.38}else{0.07},ink,255);
+    }}
 }
 
 fn paint_rail(data:&mut[u8],w:i32,h:i32,layout:&Layout,dark:bool,strength:f32) {

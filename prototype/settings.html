@@ -192,7 +192,7 @@
   </section>
   <section class="setting-card">
     <h3>Thanh tác vụ Windows</h3>
-    <p class="dock-section-copy">Áp dụng cho phiên này. Nhấn Ctrl+Alt+Shift+F12 để hiện lại thanh tác vụ. Nút khay trên Dock cũng sẽ hiện lại thanh tác vụ để dùng biểu tượng gốc.</p>
+    <p class="dock-section-copy">Áp dụng cho phiên này. Nhấn Ctrl+Alt+Shift+F12 để hiện lại thanh tác vụ.</p>
     <p class="dock-section-copy" id="taskbarTakeoverStatus" role="status" aria-live="polite"></p>
     <label class="setting-row switch-row"><b>Ẩn thanh tác vụ Windows</b><input id="dockTaskbarHidden" type="checkbox" role="switch" aria-describedby="taskbarTakeoverStatus"><i class="switch" aria-hidden="true"></i></label>
   </section>
@@ -218,6 +218,7 @@
   </section>
   <section class="setting-card"><h3 data-i18n="dockAppearanceTitle">Kiểu hiển thị Dock</h3><p class="dock-section-copy">Đổi màu, kích cỡ và cách Dock chuyển động.</p>
     <label class="setting-row"><b data-i18n="dockIconSize">Cỡ biểu tượng</b><span><input id="dockLook_iconSize" type="range" min="28" max="60" value="44"> <output id="dockValue_iconSize">44</output></span></label>
+    <label class="setting-row"><b>Biểu tượng nút Start</b><select id="dockLook_startIcon"><option value="windows">Logo Windows</option><option value="grid">Lưới ứng dụng</option><option value="orb">Huy hiệu Dock</option><option value="minimal">Bốn ô đơn sắc</option></select></label>
     <label class="setting-row"><b data-i18n="dockSpacing">Khoảng cách biểu tượng</b><span><input id="dockLook_spacing" type="range" min="4" max="22" value="10"> <output id="dockValue_spacing">10</output></span></label>
     <label class="setting-row"><b data-i18n="dockTransparency">Độ trong suốt</b><span><input id="dockLook_transparency" type="range" min="4" max="74" value="36"> <output id="dockValue_transparency">36</output></span></label>
     <label class="setting-row"><b data-i18n="dockMagnification">Phóng đại khi rê chuột</b><span><input id="dockLook_magnification" type="range" min="0" max="55" value="38"> <output id="dockValue_magnification">38</output></span></label>
@@ -818,10 +819,10 @@ const dockFallbackText={
   dockDisplayNone:'Chưa có màn hình',dockDisplayOff:'Đã tắt',dockDisplayTarget:'Màn hình hiển thị'
 };
 const dockText=key=>{const value=t(key);return value===key?dockFallbackText[key]||value:value;};
-const dockLookDefaults={iconSize:44,spacing:10,transparency:36,position:'bottom',theme:'auto',magnification:38,animationSpeed:100,reducedMotion:false,autoHide:false};
+const dockLookDefaults={iconSize:44,startIcon:'windows',spacing:10,transparency:36,position:'bottom',theme:'auto',magnification:38,animationSpeed:100,reducedMotion:false,autoHide:false};
 const dockLookRanges=['iconSize','spacing','transparency','magnification','animationSpeed'];
 const dockLookSwitches=['reducedMotion','autoHide'];
-const dockLookKeys=[...dockLookRanges,'position','theme',...dockLookSwitches];
+const dockLookKeys=[...dockLookRanges,'position','theme','startIcon',...dockLookSwitches];
 function showDockAppearance(){
   const appearance={...dockLookDefaults,...dockOptions.appearance};
   for(const key of dockLookKeys){
@@ -1092,7 +1093,7 @@ function syncDockSettings(m) {
 }
 for(const [id,key,type] of [['dockEnabled','enabled','checked'],['dockStageEnabled','stageEnabled','checked'],
       ['dockAllWindows','allWindows','checked'],['dockStageSide','stageSide','value']])$(id).addEventListener('change',()=>{
-  const value=$(id)[type]; dockOptions[key]=value; renderDockPlacement();
+  const value=$(id)[type]; dockOptions[key]=value; syncDockTaskbar({}); renderDockPlacement();
   send({t:'dock',[key]:value});
 });
 for(const key of ['dockDisplay','stageDisplay']){
