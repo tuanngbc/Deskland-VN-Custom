@@ -115,16 +115,17 @@ fn busiest_engine<'a>(values: impl Iterator<Item = (&'a str, f64)>) -> Option<f6
     engines.values().copied().reduce(f64::max).map(|value| value.clamp(0.0, 100.0))
 }
 
-pub(super) struct Sampler { cpu: Option<CpuTimes>, network: Option<Network>, at: Instant, gpu: Option<Gpu> }
+pub(super) struct Sampler { cpu: Option<CpuTimes>, network: Option<Network>, at: Instant, gpu: Option<Gpu>, gpu_checked: bool }
 impl Sampler {
-    pub fn new() -> Self { Self { cpu: None, network: None, at: Instant::now(), gpu: Gpu::new() } }
-    pub fn sample(&mut self) -> Snapshot {
+    pub fn new() -> Self { Self { cpu: None, network: None, at: Instant::now(), gpu: None, gpu_checked:false } }
+    pub fn sample(&mut self) -> Snapshot {self.sample_selected(31)}
+    pub fn sample_selected(&mut self, mask:u8) -> Snapshot {
         let started = Instant::now();
         let mut snapshot = Snapshot::default();
-        let cpu = cpu_times();
+        let cpu = if mask&1!=0{cpu_times()}else{None};
         snapshot.cpu = self.cpu.zip(cpu).and_then(|(previous, current)| cpu_percent(previous, current));
         self.cpu = cpu;
-        unsafe {
+        if mask&2!=0 {unsafe {
             let mut memory: MEMORYSTATUSEX = std::mem::zeroed();
             memory.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
             if GlobalMemoryStatusEx(&mut memory) != 0 && memory.ullTotalPhys > 0 {
@@ -132,8 +133,8 @@ impl Sampler {
                 snapshot.ram_used = memory.ullTotalPhys.saturating_sub(memory.ullAvailPhys);
                 snapshot.ram = Some(100.0 * snapshot.ram_used as f64 / snapshot.ram_total as f64);
             }
-        }
-        let network = network_totals();
+        }}
+        let network = if mask&24!=0{network_totals()}else{None};
         if let (Some(previous), Some(current)) = (&self.network, &network) {
             let (down, up) = network_rates(previous, current, started.duration_since(self.at).as_secs_f64());
             snapshot.down = Some(down);
@@ -141,7 +142,8 @@ impl Sampler {
         }
         self.network = network;
         self.at = started;
-        snapshot.gpu = self.gpu.as_mut().and_then(Gpu::sample);
+        if mask&4!=0 && !self.gpu_checked {self.gpu=Gpu::new();self.gpu_checked=true;}
+        if mask&4!=0 {snapshot.gpu=self.gpu.as_mut().and_then(Gpu::sample);}
         snapshot.sample_ms = started.elapsed().as_secs_f64() * 1000.0;
         snapshot
     }

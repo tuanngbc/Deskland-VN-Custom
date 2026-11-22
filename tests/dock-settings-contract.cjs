@@ -105,6 +105,21 @@ test('utility order, visibility and reset are isolated to the selected monitor',
   $('utilityDisplay').listeners.change({target:{value:'main'}});
   assert.equal($('utilityEnabled').checked,false);
 });
+test('two rows and metrics settings preserve per-display options',()=>{
+  const main={id:'main',name:'Main',w:2560,h:1080,dpi:96,primary:true};
+  const side={id:'side',name:'Side',w:1080,h:1920,dpi:120,primary:false};
+  context.syncDockSettings({dockDisplays:[main,side],dock:{utilityProfiles:{side:{rows:1,gap:8}}}});
+  $('utilityDisplay').listeners.change({target:{value:'side'}});
+  assert.equal($('utilityLanes').value,'1');
+  $('utilityLanes').value='2';$('utilityLanes').listeners.change();
+  let m=messages.pop();assert.equal(m.display,'side');assert.equal(m.profile.rows,2);assert.equal(m.profile.gap,8);
+  $('utilityMetrics').checked=true;$('utilityMetricGPU').checked=false;$('utilityMetricInterval').value='5';
+  $('utilityMetrics').listeners.change();
+  m=messages.pop();assert.equal(m.display,'side');assert.equal(m.profile.metrics.enabled,true);
+  assert.equal(m.profile.metrics.mask,27);assert.equal(m.profile.metrics.interval,5);
+  $('utilityDisplay').listeners.change({target:{value:'main'}});
+  assert.equal($('utilityMetrics').checked,false);
+});
 test('reset buttons send only the chosen appearance or display layout',()=>{
   const main={id:'main',name:'Main',w:1920,h:1080,dpi:96,primary:true};
   context.syncDockSettings({dockDisplays:[main,{...main,id:'vertical',primary:false}],dock:{

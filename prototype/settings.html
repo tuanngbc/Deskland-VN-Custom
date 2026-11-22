@@ -160,6 +160,17 @@
         <label class="setting-row"><b>Cỡ nút tiện ích</b><select id="utilityCell"><option value="24">Nhỏ · 24 px</option><option value="28">Chuẩn · 28 px</option><option value="32">Dễ bấm · 32 px</option></select></label>
         <label class="setting-row"><b>Bố cục cụm hệ thống</b><select id="utilityLanes"><option value="2">Hai hàng</option><option value="1">Một hàng</option></select></label>
         <label class="setting-row"><b>Khoảng cách tiện ích</b><select id="utilityGap"><option value="2">Gọn</option><option value="4">Chuẩn</option><option value="8">Thoáng</option></select></label>
+        <fieldset class="dock-utility-settings">
+          <legend>Chỉ số máy trong Dock</legend>
+          <label class="setting-row"><b>Hiện nút chỉ số máy</b><input id="utilityMetrics" type="checkbox"></label>
+          <div id="utilityMetricControls" hidden>
+            <label class="setting-row"><b>Bảng chỉ số dạng gọn</b><input id="utilityMetricCompact" type="checkbox"></label>
+            <label class="setting-row"><b>Chu kỳ cập nhật</b><select id="utilityMetricInterval"><option value="1">1 giây</option><option value="2">2 giây</option><option value="5">5 giây</option><option value="10">10 giây</option></select></label>
+            <div class="dock-display-choices"><label><input id="utilityMetricCPU" type="checkbox"> CPU</label>
+            <label><input id="utilityMetricRAM" type="checkbox"> RAM</label><label><input id="utilityMetricGPU" type="checkbox"> GPU</label>
+            <label><input id="utilityMetricDownload" type="checkbox"> Tải xuống</label><label><input id="utilityMetricUpload" type="checkbox"> Tải lên</label></div>
+          </div>
+        </fieldset>
         <ol id="utilityRows" class="dock-utility-rows"></ol>
         <button id="utilityReset" type="button" data-i18n="utilityReset">Khôi phục tiện ích mặc định</button>
       </div>
@@ -906,7 +917,10 @@ const utilityLabels={
 };
 const utilityKeys=Object.keys(utilityLabels);
 let utilityDisplay=null,utilityDrag=null;
-const utilityDefault=()=>({enabled:true,side:'right',details:true,cell:28,rows:2,gap:4,order:[...utilityKeys],hidden:[],inline:[]});
+const metricRows=['CPU','RAM','GPU','Download','Upload'];
+const metricDefault=()=>({enabled:false,mask:31,interval:2,compact:true});
+let metricDrafts=new Map();
+const utilityDefault=()=>({enabled:true,side:'right',details:true,cell:28,rows:2,gap:4,metrics:null,order:[...utilityKeys],hidden:[],inline:[]});
 function utilityProfile(){
   const map=dockOptions.utilityProfiles||{};
   return {...utilityDefault(),...(Object.hasOwn(map,utilityDisplay)?map[utilityDisplay]:{})};
@@ -924,6 +938,12 @@ function renderUtilityControls(){
   $('utilityDetails').checked=p.details;
   $('utilityCell').value=String(p.cell);
   $('utilityLanes').value=String(p.rows);$('utilityGap').value=String(p.gap);
+  const metrics=p.metrics||metricDrafts.get(utilityDisplay)||metricDefault();
+  $('utilityMetrics').checked=metrics.enabled;
+  $('utilityMetricControls').hidden=!metrics.enabled;
+  $('utilityMetricCompact').checked=metrics.compact;
+  $('utilityMetricInterval').value=String(metrics.interval);
+  metricRows.forEach((name,i)=>{$('utilityMetric'+name).checked=!!(metrics.mask&(1<<i));});
   $('utilityRows').innerHTML=p.order.filter(key=>Object.hasOwn(utilityLabels,key)).map((key,i)=>{
     const label=t('utilityItem_'+key);
     const name=label==='utilityItem_'+key?utilityLabels[key]:label;
@@ -953,7 +973,17 @@ $('utilityGap').addEventListener('change',()=>saveUtilityProfile({...utilityProf
 $('utilityEnabled').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),enabled:$('utilityEnabled').checked}));
 $('utilityDetails').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),details:$('utilityDetails').checked}));
 $('utilitySide').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),side:$('utilitySide').value}));
-$('utilityReset').addEventListener('click',()=>saveUtilityProfile(utilityDefault()));
+function saveMetrics(){
+  const p=utilityProfile();
+  const mask=metricRows.reduce((m,name,i)=>m+($('utilityMetric'+name).checked?1<<i:0),0);
+  const metrics={enabled:$('utilityMetrics').checked,mask,compact:$('utilityMetricCompact').checked,interval:Number($('utilityMetricInterval').value)};
+  metricDrafts.set(utilityDisplay,metrics);
+  saveUtilityProfile({...p,metrics});
+}
+for(const id of ['utilityMetrics','utilityMetricCompact','utilityMetricInterval',...metricRows.map(x=>'utilityMetric'+x)]){
+  $(id).addEventListener('change',saveMetrics);
+}
+$('utilityReset').addEventListener('click',()=>{metricDrafts.delete(utilityDisplay);saveUtilityProfile(utilityDefault());});
 const utilityRows=$('utilityRows');
 utilityRows.addEventListener('change',e=>{
   const key=e.target.dataset.utilityVisible;if(!Object.hasOwn(utilityLabels,key))return;

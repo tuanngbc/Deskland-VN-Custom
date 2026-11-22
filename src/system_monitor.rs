@@ -2,7 +2,7 @@
 mod stats;
 mod taskbar;
 
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::HWND;
 
@@ -25,14 +25,14 @@ impl Options {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(super) struct Snapshot {
-    cpu: Option<f64>,
-    ram: Option<f64>,
-    gpu: Option<f64>,
-    down: Option<f64>,
-    up: Option<f64>,
-    ram_used: u64,
-    ram_total: u64,
+pub(crate) struct Snapshot {
+    pub(crate) cpu: Option<f64>,
+    pub(crate) ram: Option<f64>,
+    pub(crate) gpu: Option<f64>,
+    pub(crate) down: Option<f64>,
+    pub(crate) up: Option<f64>,
+    pub(crate) ram_used: u64,
+    pub(crate) ram_total: u64,
     sequence: u64,
     sample_ms: f64,
 }
@@ -43,6 +43,41 @@ impl Snapshot {
     }
 }
 
+/// Weak ownership allows the counters to close when the last visible
+/// consumer goes away. Only background worker threads call sample().
+struct FeedState {
+    sampler: stats::Sampler,
+    recent: Option<(Instant, u8, Snapshot)>,
+    sequence: u64,
+}
+#[derive(Clone)]
+pub(crate) struct Feed(Arc<Mutex<Option<FeedState>>>);
+static LIVE_FEED: Mutex<Weak<Mutex<Option<FeedState>>>> = Mutex::new(Weak::new());
+impl Feed {
+    pub(crate) fn shared()->Self {
+        // Creating a lease on the UI thread does not open Windows counters.
+        let mut weak=LIVE_FEED.lock().unwrap_or_else(|e|e.into_inner());
+        if let Some(inner)=weak.upgrade(){return Self(inner);}
+        let inner=Arc::new(Mutex::new(None));
+        *weak=Arc::downgrade(&inner);
+        Self(inner)
+    }
+    pub(crate) fn sample(&self, mask:u8, interval:u64)->Snapshot {
+        let Ok(mut guard)=self.0.lock()else{return Snapshot::default();};
+        let state=guard.get_or_insert_with(||FeedState{sampler:stats::Sampler::new(),recent:None,sequence:0});
+        if let Some((at,sampled,value))=&state.recent{
+            let recently=at.elapsed()<Duration::from_millis(interval.saturating_mul(1000).saturating_sub(100));
+            if recently&&mask&!*sampled==0{return value.clone();}
+            // Reuse the existing counter baseline if another consumer still
+            // asks for fields this one does not show.
+        }
+        let mut value=state.sampler.sample_selected(mask);
+        state.sequence=state.sequence.wrapping_add(1);
+        value.sequence=state.sequence;
+        state.recent=Some((Instant::now(),mask,value.clone()));
+        value
+    }
+}
 #[derive(Clone, Default)]
 struct Shared {
     snapshot: Snapshot,
@@ -66,17 +101,14 @@ impl Monitor {
         std::thread::Builder::new().name("taskbar-stats".into()).spawn(move || {
             let com = unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED) };
             let mut probe = taskbar::Probe::new();
-            let mut sampler = Some(stats::Sampler::new());
+            let mut sampler = Some(Feed::shared());
             let mut interval = interval;
             let mut suspended = false;
             let mut next_dock = Instant::now();
-            let mut sequence = 0u64;
             loop {
                 if !suspended {
                     if let Some(sampler) = sampler.as_mut() {
-                        let mut snapshot = sampler.sample();
-                        sequence += 1;
-                        snapshot.sequence = sequence;
+                        let snapshot = sampler.sample(31,interval);
                         if let Ok(mut state) = worker_shared.lock() { state.snapshot = snapshot; }
                     }
                     if Instant::now() >= next_dock {
@@ -98,7 +130,7 @@ impl Monitor {
                         suspended = value;
                         // Close PDH handles while locked. Re-prime counters on
                         // resume so idle time is never reported as a new spike.
-                        sampler = if suspended { None } else { Some(stats::Sampler::new()) };
+                        sampler = if suspended { None } else { Some(Feed::shared()) };
                         next_dock = Instant::now();
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {}

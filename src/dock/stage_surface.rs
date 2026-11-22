@@ -8,7 +8,7 @@ use windows_sys::Win32::{Foundation::{HWND,RECT,SIZE},Graphics::Gdi::*};
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub(super) struct Box2 { pub x:i32,pub y:i32,pub w:i32,pub h:i32 }
 impl Box2 {
-    fn rect(self)->Rect{Rect{x:self.x as f32,y:self.y as f32,w:self.w as f32,h:self.h as f32}}
+    pub(super) fn rect(self)->Rect{Rect{x:self.x as f32,y:self.y as f32,w:self.w as f32,h:self.h as f32}}
     pub fn win(self)->RECT{RECT{left:self.x,top:self.y,right:self.x+self.w,bottom:self.y+self.h}}
     fn hit(self,x:i32,y:i32)->bool{x>=self.x&&x<self.x+self.w&&y>=self.y&&y<self.y+self.h}
     pub fn center(self)->(i32,i32){(self.x+self.w/2,self.y+self.h/2)}
@@ -281,7 +281,7 @@ unsafe fn fit_on_dc(dc:HDC,text:&str,width:i32)->String{
         GetTextExtentPoint32W(dc,ws.as_ptr(),(ws.len()-1) as i32,&mut size)!=0&&size.cx<=width
     })
 }
-unsafe fn draw_mask(data:&mut[u8],w:i32,h:i32,mask:&mut Layer,font:HFONT,b:Box2,text:&str,center:bool,ink:[u8;3]){
+pub(super) unsafe fn draw_mask(data:&mut[u8],w:i32,h:i32,mask:&mut Layer,font:HFONT,b:Box2,text:&str,center:bool,ink:[u8;3]){
     if b.w<1||b.h<1||b.x<0||b.y<0||b.x+b.w>w||b.y+b.h>h||b.w>mask.size.0||b.h>mask.size.1{return;}
     mask.pixels().fill(0);
     let dc=mask.dc();

@@ -706,6 +706,10 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
                 append("Hiện nút tiện ích",base.enabled,UtilityProfile{enabled:!base.enabled,..base.clone()});
                 append("Đặt bên trái",base.leading,UtilityProfile{leading:!base.leading,..base.clone()});
                 append("Hiện thông tin",base.details,UtilityProfile{details:!base.details,..base.clone()});
+                append("Hai hàng tiện ích",base.two_rows,UtilityProfile{two_rows:!base.two_rows,..base.clone()});
+                append("Chỉ số máy trong Dock",base.metrics.is_some(),UtilityProfile{
+                    metrics:if base.metrics.is_some(){None}else{Some(crate::dock::MetricOptions{mask:31,interval:2,compact:true})},..base.clone()
+                });
                 for (cell,label) in [(24,"Nút nhỏ · 24 px"),(28,"Nút chuẩn · 28 px"),(32,"Nút dễ bấm · 32 px")]{
                     append(label,base.cell==cell,UtilityProfile{cell,..base.clone()});
                 }

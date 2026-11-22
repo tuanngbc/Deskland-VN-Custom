@@ -1,0 +1,321 @@
+//! Native Control Center cards. Updates only for input or a visible metrics view.
+use super::{panel_chrome as chrome, surface::{self,Palette},geometry::Rect,glass_probe::Layer,UtilityWidget};
+use crate::{desktop::wide,system_monitor::{Feed,Snapshot}};
+use std::{cell::{Cell,RefCell},mem,ptr,sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}}};
+use windows_sys::Win32::{
+    Foundation::*,Graphics::Gdi::*,
+    System::{LibraryLoader::GetModuleHandleW,Threading::{TrySubmitThreadpoolCallback,PTP_CALLBACK_INSTANCE}},
+    UI::{Input::KeyboardAndMouse::{GetKeyState,ReleaseCapture,SetCapture,SetFocus,TrackMouseEvent,TRACKMOUSEEVENT,TME_LEAVE,
+        VK_DOWN,VK_END,VK_ESCAPE,VK_HOME,VK_LEFT,VK_RETURN,VK_RIGHT,VK_SHIFT,VK_SPACE,VK_TAB,VK_UP},
+        WindowsAndMessaging::*},
+};
+use super::utilities::Action;
+pub(super) const CLASS:&str="TuanpcDeskControlCenter";
+const METRIC_UPDATE:u32=WM_APP+99;
+const METRIC_TIMER:usize=1;
+const SINGLE_LINE:u32=DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS;
+#[derive(Clone,Copy)]
+pub(super) enum Command{Widget(UtilityWidget),Run(Action),Window{hwnd:usize,pid:u32,tid:u32}}
+#[derive(Clone)]
+pub(super) struct Card{pub icon:Option<UtilityWidget>,pub title:String,pub hint:String,pub action:Option<Command>}
+pub(super) struct View{pub title:String,pub hint:String,pub cards:Vec<Card>,pub metrics:Option<MetricOptions>}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct MetricOptions{pub mask:u8,pub interval:u64,pub compact:bool}
+impl MetricOptions{
+    pub(super) fn from_json(v:&serde_json::Value)->Option<Self>{
+        if !v["enabled"].as_bool().unwrap_or(false){return None;}
+        let mask=v["mask"].as_u64().unwrap_or(31).min(31) as u8;
+        let interval=match v["interval"].as_u64(){Some(1)=>1,Some(5)=>5,Some(10)=>10,_=>2};
+        Some(Self{mask,interval,compact:v["compact"].as_bool().unwrap_or(true)})
+    }
+    pub(super) fn json(self)->serde_json::Value{
+        serde_json::json!({"enabled":true,"mask":self.mask,"interval":self.interval,"compact":self.compact})
+    }
+}
+struct Stream{
+    values:Mutex<Option<Snapshot>>,
+    pending:AtomicBool,closed:AtomicBool,
+}
+struct Metrics{cfg:MetricOptions,feed:Feed,stream:Arc<Stream>}
+struct Job{h:usize,tag:usize,feed:Feed,cfg:MetricOptions,stream:Arc<Stream>}
+static ACTIVE:AtomicBool=AtomicBool::new(false);
+unsafe extern "system" fn metrics_worker(_:PTP_CALLBACK_INSTANCE,data:*mut std::ffi::c_void){
+    let job=*Box::from_raw(data.cast::<Job>());
+    if !job.stream.closed.load(Ordering::Acquire){
+        let snap=job.feed.sample(job.cfg.mask,job.cfg.interval);
+        if let Ok(mut slot)=job.stream.values.lock(){*slot=Some(snap);}
+    }
+    job.stream.pending.store(false,Ordering::Release);
+    ACTIVE.store(false,Ordering::Release);
+    if !job.stream.closed.load(Ordering::Acquire){PostMessageW(job.h as HWND,METRIC_UPDATE,job.tag,0);}
+}
+impl Metrics{
+    fn new(cfg:MetricOptions)->Self{
+        Self{cfg,feed:Feed::shared(),stream:Arc::new(Stream{
+            values:Mutex::new(None),pending:AtomicBool::new(false),closed:AtomicBool::new(false),
+        })}
+    }
+    fn request(&self,h:HWND,tag:usize){
+        if self.cfg.mask==0||self.stream.pending.swap(true,Ordering::AcqRel){return;}
+        if ACTIVE.swap(true,Ordering::AcqRel){
+            self.stream.pending.store(false,Ordering::Release);return;
+        }
+        let j=Box::into_raw(Box::new(Job{h:h as usize,tag,feed:self.feed.clone(),cfg:self.cfg,stream:self.stream.clone()}));
+        if unsafe{TrySubmitThreadpoolCallback(Some(metrics_worker),j.cast(),ptr::null())}==0{
+            unsafe{drop(Box::from_raw(j));}
+            self.stream.pending.store(false,Ordering::Release);
+            ACTIVE.store(false,Ordering::Release);
+        }
+    }
+}
+impl Drop for Metrics{fn drop(&mut self){self.stream.closed.store(true,Ordering::Release);}}
+fn percent(value:Option<f64>)->Option<String>{value.filter(|n|n.is_finite()).map(|n|format!("{:.0}%",n.clamp(0.0,100.0)))}
+fn rate(value:Option<f64>)->Option<String>{
+    let v=value.filter(|n|n.is_finite()&&*n>=0.0)?;
+    Some(if v>=1_000_000.0{format!("{:.1} MB/s",v/1_000_000.0)}
+        else if v>=1000.0{format!("{:.1} KB/s",v/1000.0)}
+        else{format!("{v:.0} B/s")})
+}
+fn metric_cards(view:&Snapshot,cfg:MetricOptions)->Vec<Card>{
+    let ram=if view.ram_total>0{
+        Some(if cfg.compact{format!("{:.1} GB",view.ram_used as f64/1_073_741_824.0)}
+            else{format!("{:.1} / {:.1} GB",view.ram_used as f64/1_073_741_824.0,view.ram_total as f64/1_073_741_824.0)})
+    }else{None};
+    [("CPU",percent(view.cpu)),("RAM",ram),("GPU",percent(view.gpu)),
+        ("↓ Tải xuống",rate(view.down)),("↑ Tải lên",rate(view.up))]
+        .into_iter().enumerate().filter_map(|(i,(title,value))|{
+            if cfg.mask&(1<<i)==0{return None;}
+            Some(Card{icon:None,title:title.into(),hint:value?,action:None})
+        }).collect()
+}
+struct Panel {
+    hwnd:HWND,owner:HWND,tag:usize,anchor:chrome::Anchor,dpi:u32,layer:Layer,
+    fonts:[HFONT;3], view:View, metrics:Option<Metrics>, index:Option<usize>, pressed:Option<usize>, page:usize,
+    cols:usize,per_page:usize, row_height:i32,
+}
+impl Drop for Panel {
+    fn drop(&mut self){unsafe{for &f in &self.fonts{if !f.is_null(){DeleteObject(f);}}}}
+}
+thread_local!{
+    static PANE:RefCell<Option<Panel>>=const{RefCell::new(None)};
+    static SERIAL:Cell<usize>=const{Cell::new(0)};
+}
+impl Panel{
+    fn rect(&self,i:usize)->RECT{
+        let pad=chrome::scale(self.dpi,14);
+        let gap=chrome::scale(self.dpi,7);
+        let top=chrome::scale(self.dpi,66)+(i/self.cols) as i32*(self.row_height+gap);
+        let w=((self.layer.size.0-2*pad-gap*(self.cols as i32-1))/self.cols as i32).max(1);
+        let left=pad+(i%self.cols) as i32*(w+gap);
+        RECT{left,top,right:left+w,bottom:top+self.row_height}
+    }
+    fn cards(&self)->&[Card]{
+        let start=(self.page*self.per_page).min(self.view.cards.len());
+        let end=(start+self.per_page).min(self.view.cards.len());
+        &self.view.cards[start..end]
+    }
+    fn hit(&self,x:i32,y:i32)->Option<usize>{
+        self.cards().iter().enumerate().find_map(|(i,c)|{
+            let r=self.rect(i);
+            (c.action.is_some()&&x>=r.left&&x<r.right&&y>=r.top&&y<r.bottom).then_some(i)
+        })
+    }
+    fn pages(&self)->usize{self.view.cards.len().div_ceil(self.per_page).max(1)}
+    fn page_delta(&mut self,delta:isize){
+        self.page=self.page.saturating_add_signed(delta).min(self.pages()-1);
+        self.index=self.cards().iter().position(|c|c.action.is_some());self.pressed=None;
+    }
+    unsafe fn paint(&mut self,dc:HDC){
+        let (w,h)=self.layer.size;
+        let g=self.layer.dc();
+        let p=Palette::new(self.anchor.dark);
+        let px=|n|chrome::scale(self.dpi,n);
+        super::fill(g,RECT{left:0,top:0,right:w,bottom:h},chrome::color(p.panel));
+        chrome::box_fill(g,RECT{left:0,top:0,right:w,bottom:h},px(32),p.panel,Some(p.edge));
+        let old=SelectObject(g,self.fonts[0]);
+        chrome::text(g,RECT{left:px(18),top:px(9),right:w-px(14),bottom:px(37)},&self.view.title,p.ink,SINGLE_LINE);
+        SelectObject(g,self.fonts[2]);
+        chrome::text(g,RECT{left:px(18),top:px(38),right:w-px(14),bottom:px(57)},&self.view.hint,p.muted,SINGLE_LINE);
+        let cards=self.cards();
+        let mut glyphs=Vec::with_capacity(cards.len());
+        for (i,c) in cards.iter().enumerate(){
+            let r=self.rect(i);
+            let focused=self.index==Some(i);
+            let fill=if self.anchor.dark{[67,53,43]}else{[246,239,231]};
+            chrome::box_fill(g,r,px(17),fill,Some(if focused{p.accent}else{p.edge}));
+            let inner=r.left+px(if c.icon.is_some(){37}else{11});
+            let text_bounds=RECT{left:inner,top:r.top+px(if c.hint.is_empty(){2}else{3}),right:r.right-px(6),
+                bottom:if c.hint.is_empty(){r.bottom-px(2)}else{r.top+px(20)}};
+            SelectObject(g,self.fonts[1]);
+            chrome::text(g,text_bounds,&c.title,p.ink,SINGLE_LINE);
+            if !c.hint.is_empty(){
+                SelectObject(g,self.fonts[2]);
+                chrome::text(g,RECT{top:r.top+px(20),bottom:r.bottom-px(2),..text_bounds},&c.hint,
+                    if c.action.is_none(){p.accent}else{p.muted},SINGLE_LINE);
+            }
+            if let Some(icon)=c.icon{
+                let size=px(25) as f32;
+                glyphs.push((icon,Rect{x:(r.left+px(7)) as f32,y:(r.top+(r.bottom-r.top-px(25))/2) as f32,w:size,h:size}));
+            }
+        }
+        if cards.is_empty(){
+            SelectObject(g,self.fonts[2]);
+            chrome::text(g,RECT{left:px(18),top:px(68),right:w-px(18),bottom:h-px(14)},
+                if self.metrics.as_ref().is_some_and(|m|m.cfg.mask==0){"Chưa chọn chỉ số."}else{"Đang chờ số liệu từ Windows…"},p.muted,DT_WORDBREAK);
+        }
+        if self.pages()>1 {
+            SelectObject(g,self.fonts[2]);
+            chrome::text(g,RECT{left:px(14),top:h-px(30),right:w-px(14),bottom:h-px(4)},
+                &format!("‹     {} / {}     ›",self.page+1,self.pages()),p.muted,DT_CENTER|SINGLE_LINE);
+        }
+        if !old.is_null(){SelectObject(g,old);}
+        GdiFlush();
+        for (icon,slot) in glyphs{surface::status_on(self.layer.pixels(),w,h,slot,self.dpi as f32/96.0,p.accent,Some(icon));}
+        self.layer.blit(dc);
+    }
+}
+pub(super) fn open_for(owner:HWND)->bool{
+    PANE.with(|s|s.borrow().as_ref().is_some_and(|p|p.owner==owner))
+}
+pub(super) unsafe fn close_for(owner:HWND){
+    let hwnd=PANE.with(|s|s.borrow().as_ref().filter(|p|owner.is_null()||owner==p.owner).map(|p|p.hwnd));
+    if let Some(h)=hwnd{DestroyWindow(h);}
+}
+pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){
+    super::utilities::close_panels();
+    let Some(work)=anchor.work()else{return;};
+    let dpi=windows_sys::Win32::UI::HiDpi::GetDpiForWindow(owner).clamp(72,288);
+    let px=|n|chrome::scale(dpi,n);
+    let double=view.metrics.map_or(view.cards.len()>3,|o|o.compact);
+    let cols=if double&&work.right-work.left>=px(365){2}else{1};
+    let width=px(if cols==2{392}else{306}).min(work.right-work.left);
+    let row_height=px(43);
+    let budget=(work.bottom-work.top-px(132)).max(row_height);
+    let rows=(budget/(row_height+px(7))).clamp(1,9) as usize;
+    let per_page=cols*rows;
+    let expected=view.metrics.map_or(view.cards.len(),|m|m.mask.count_ones() as usize);
+    let height=(px(89)+expected.clamp(1,per_page).div_ceil(cols) as i32*(row_height+px(7))
+        +if expected>per_page{px(30)}else{0}).min(work.bottom-work.top).max(1);
+    let Some(layer)=Layer::new(width,height)else{return;};
+    let class=wide(CLASS);
+    if !chrome::register(&class,Some(proc)){return;}
+    let (x,y)=chrome::placement(work,anchor,width,height,px(8));
+    let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST|WS_EX_LAYERED,class.as_ptr(),wide(&view.title).as_ptr(),
+        WS_POPUP,x,y,width,height,owner,ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
+    if hwnd.is_null(){return;}
+    chrome::frame(hwnd,width,height,dpi,anchor);
+    let tag=SERIAL.with(|s|{let tag=s.get().wrapping_add(1);s.set(tag);tag});
+    let fonts=[chrome::choose_font(dpi,20,650),chrome::choose_font(dpi,13,630),chrome::choose_font(dpi,12,450)];
+    let metrics=view.metrics.map(Metrics::new);
+    let p=Panel{hwnd,owner,tag,anchor,dpi,layer,fonts,view,metrics,index:None,pressed:None,page:0,cols,per_page,row_height};
+    PANE.with(|s|s.replace(Some(p)));
+    ShowWindow(hwnd,SW_SHOW);SetForegroundWindow(hwnd);SetFocus(hwnd);
+    PANE.with(|s|{if let Some(m)=s.borrow().as_ref().and_then(|p|p.metrics.as_ref()){
+        if m.cfg.mask!=0{
+            m.request(hwnd,tag);
+            SetTimer(hwnd,METRIC_TIMER,(m.cfg.interval*1000) as u32,None);
+        }
+    }});
+}
+unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
+    match msg{
+        WM_ERASEBKGND=>1,
+        WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{PostMessageW(hwnd,WM_CLOSE,0,0);0},
+        WM_NCDESTROY=>{
+            KillTimer(hwnd,METRIC_TIMER);
+            let owner=PANE.with(|s|{
+                let mut p=s.borrow_mut();
+                if p.as_ref().is_some_and(|p|p.hwnd==hwnd){p.take().map(|p|p.owner)}else{None}
+            });
+            if let Some(owner)=owner{super::panel_closed(owner);}
+            DefWindowProcW(hwnd,msg,w,l)
+        },
+        WM_PAINT=>{
+            let mut ps:PAINTSTRUCT=mem::zeroed();let dc=BeginPaint(hwnd,&mut ps);
+            PANE.with(|s|{if let Some(p)=s.borrow_mut().as_mut().filter(|p|p.hwnd==hwnd){p.paint(dc);}});
+            EndPaint(hwnd,&ps);0
+        },
+        WM_TIMER if w==METRIC_TIMER=>{
+            PANE.with(|s|{if let Some(p)=s.borrow().as_ref().filter(|p|p.hwnd==hwnd){
+                if let Some(m)=&p.metrics{m.request(hwnd,p.tag);}
+            }});0
+        },
+        METRIC_UPDATE=>{
+            let ready=PANE.with(|s|{
+                let mut p=s.borrow_mut();
+                let Some(p)=p.as_mut().filter(|p|p.hwnd==hwnd&&p.tag==w)else{return false;};
+                let Some(m)=&p.metrics else{return false;};
+                let Some(v)=m.stream.values.lock().ok().and_then(|mut s|s.take())else{return false;};
+                p.view.cards=metric_cards(&v,m.cfg);
+                p.view.hint=if p.view.cards.is_empty(){"Windows chưa cung cấp số liệu."}else{"Cập nhật trực tiếp · Chỉ số khả dụng"}.into();
+                true
+            });
+            if ready{InvalidateRect(hwnd,ptr::null(),0);}0
+        },
+        WM_MOUSEMOVE|super::WM_DOCK_MOUSELEAVE|WM_LBUTTONDOWN|WM_LBUTTONUP|WM_CAPTURECHANGED|WM_MOUSEWHEEL|WM_KEYDOWN=>{
+            if msg==WM_KEYDOWN&&w as u16==VK_ESCAPE{DestroyWindow(hwnd);return 0;}
+            let (action,repaint,capture)=PANE.with(|s|{
+                let mut p=s.borrow_mut();
+                let Some(p)=p.as_mut().filter(|p|p.hwnd==hwnd)else{return (None,false,false);};
+                let x=l as i16 as i32;let y=(l>>16) as i16 as i32;
+                let before=(p.index,p.page);
+                let mut action=None;
+                match msg{
+                    WM_MOUSEMOVE=>{p.index=p.hit(x,y);}
+                    super::WM_DOCK_MOUSELEAVE|WM_CAPTURECHANGED=>{p.index=None;p.pressed=None;}
+                    WM_LBUTTONDOWN=>{p.pressed=p.hit(x,y);}
+                    WM_LBUTTONUP=>{
+                        let from=p.pressed.take();
+                        if let Some(i)=p.hit(x,y).filter(|i|Some(*i)==from){action=p.cards()[i].action;}
+                        else if p.pages()>1&&y>=p.layer.size.1-chrome::scale(p.dpi,33){
+                            p.page_delta(if x>=p.layer.size.0/2{1}else{-1});
+                        }
+                    }
+                    WM_MOUSEWHEEL=>p.page_delta(if ((w>>16) as i16)<0{1}else{-1}),
+                    WM_KEYDOWN=>{
+                        let n=p.cards().len();
+                        let key=w as u16;
+                        if n>0{
+                            let i=p.index.unwrap_or(0);
+                            match key{
+                                VK_RETURN|VK_SPACE=>action=p.cards().get(i).and_then(|c|c.action),
+                                VK_HOME=>p.index=Some(0),VK_END=>p.index=Some(n-1),
+                                VK_UP|VK_DOWN|VK_LEFT|VK_RIGHT|VK_TAB=>{
+                                    let step=match key{VK_UP=>-(p.cols as isize),VK_DOWN=>p.cols as isize,
+                                        VK_LEFT=>-1,VK_TAB if GetKeyState(VK_SHIFT as i32)<0=>-1,_=>1};
+                                    let next=if p.index.is_some(){i as isize+step}else{0};
+                                    if (next<0||next>=n as isize)&&p.pages()>1{p.page_delta(step.signum());}
+                                    else{p.index=Some(next.rem_euclid(n as isize) as usize);}
+                                }
+                                _=>{}
+                            }
+                        }
+                    }
+                    _=>{}
+                }
+                (action.map(|a|(p.owner,a)),before!=(p.index,p.page),msg==WM_LBUTTONDOWN&&p.pressed.is_some())
+            });
+            if msg==WM_MOUSEMOVE{
+                let mut event=TRACKMOUSEEVENT{cbSize:mem::size_of::<TRACKMOUSEEVENT>() as u32,dwFlags:TME_LEAVE,hwndTrack:hwnd,dwHoverTime:0};
+                TrackMouseEvent(&mut event);
+            }
+            if capture{SetCapture(hwnd);}
+            if msg==WM_LBUTTONUP{ReleaseCapture();}
+            if let Some((owner,action))=action{
+                DestroyWindow(hwnd);
+                super::perform_control(owner,action);
+            }else if repaint{InvalidateRect(hwnd,ptr::null(),0);}
+            0
+        },
+        _=>DefWindowProcW(hwnd,msg,w,l),
+    }
+}
+#[cfg(test)] mod tests{
+    use super::*;
+    #[test] fn metrics_only_show_selected_available_values(){
+        let mut s=Snapshot::default();s.cpu=Some(17.8);s.ram_used=3*1_073_741_824;s.ram_total=16*1_073_741_824;s.down=Some(1_515_000.0);s.up=Some(12.0);
+        let c=metric_cards(&s,MetricOptions{mask:1|4|8,interval:5,compact:true});
+        assert_eq!(c.iter().map(|x|(&*x.title,&*x.hint)).collect::<Vec<_>>(),[("CPU","18%"),("↓ Tải xuống","1.5 MB/s")]);
+    }
+}
+

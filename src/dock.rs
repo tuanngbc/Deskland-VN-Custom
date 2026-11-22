@@ -27,8 +27,11 @@ mod workspaces;
 mod perf;
 mod stage_surface;
 mod utilities;
+mod control_center;
+mod panel_chrome;
 mod appbar;
 pub use utilities::{HostAction,Profile as UtilityProfile,Widget as UtilityWidget};
+pub use control_center::MetricOptions;
 pub use glass_probe::probe as glass_probe;
 pub use appearance::{Appearance,DockSide,Theme};
 pub use options::{Options,Edit,DisplayMode,DisplayTarget,StageStyle,WindowMode,WindowPolicy};
@@ -1063,7 +1066,7 @@ unsafe fn paint(hwnd:HWND){
 }
 unsafe fn request_utilities(hwnd:HWND,widget:Option<UtilityWidget>){
     if utility_profile(hwnd).is_none_or(|p|!p.enabled || widget.is_some_and(|w|p.hidden.contains(&w))){return;}
-    if let Some(action)=widget.and_then(UtilityWidget::simple){
+    if let Some(action)=widget.filter(|w|*w!=UtilityWidget::QuickSettings).and_then(UtilityWidget::simple){
         match action {utilities::Action::Host(action)=>emit(Event::Utility(action)),_=>utilities::delegated(action)}
         return;
     }
@@ -1073,13 +1076,24 @@ unsafe fn request_utilities(hwnd:HWND,widget:Option<UtilityWidget>){
         let bar=state.bars.iter().find(|b|b.hwnd==hwnd&&!b.hidden)?;
         bar.layout.as_ref().map(|l|{
             let r=widget.and_then(|id|l.inline.iter().find(|(w,_)|*w==id).map(|(_,r)|*r)).unwrap_or(l.utility);
-            (r.x as i32,r.y as i32-4)
+            let (x,y)=match l.side{
+                DockSide::Bottom=>(r.x+r.w*0.5,l.glass.y),
+                DockSide::Left=>(l.glass.x+l.glass.w,r.y+r.h*0.5),
+                DockSide::Right=>(l.glass.x,r.y+r.h*0.5),
+            };
+            (x.round() as i32,y.round() as i32)
         })
     });
     if let Some((x,y))=location{
         point.x=x;point.y=y;
         ClientToScreen(hwnd,&mut point);
     }else{GetCursorPos(&mut point);}
+    if widget==Some(UtilityWidget::Metrics){
+        if let Some(cfg)=utility_profile(hwnd).and_then(|p|p.metrics){
+            utilities::show_metrics(hwnd,panel_chrome::Anchor::for_owner(hwnd,point),cfg);
+        }
+        return;
+    }
     let control=CONTROL.with(Cell::get);
     let submitted=UTILITIES.with(|u|u.borrow_mut().get_or_insert_with(utilities::Provider::new).read(control));
     if submitted{UTILITY_ANCHOR.with(|a|a.set(Some((hwnd as usize,point,widget))));}
@@ -1102,20 +1116,24 @@ unsafe fn show_utilities(){
     let target=UTILITY_ANCHOR.with(|a|a.take());
     let Some((bar,point,widget))=target else{return;};
     let hwnd=bar as HWND;
-    let Some(mut profile)=utility_profile(hwnd).filter(|p|p.enabled) else{return;};
-    if let Some(widget)=widget {
-        if profile.hidden.contains(&widget){return;}
-        if widget==UtilityWidget::Sound&&utilities::audio_from_snapshot(hwnd,point,&snapshot){return;}
-        if widget==UtilityWidget::Calendar{utilities::calendar_panel(hwnd,point,snapshot.local);return;}
-        profile.order.retain(|&w|w==widget);
-    }
-    if let Some(action)=utilities::menu(hwnd,point,&snapshot,&profile){
-        match action{
-            utilities::Action::Host(action)=>emit(Event::Utility(action)),
-            utilities::Action::AudioPanel{level,muted}=>utilities::audio_panel(hwnd,point,level,muted),
-            utilities::Action::Calendar=>utilities::calendar_panel(hwnd,point,snapshot.local),
-            utilities::Action::SetVolume(_)|utilities::Action::Mute=>{apply_audio(action);}
-            _=>utilities::delegated(action),
+    let Some(profile)=utility_profile(hwnd).filter(|p|p.enabled) else{return;};
+    utilities::show_view(hwnd,point,&snapshot,&profile,widget);
+}
+unsafe fn panel_closed(owner:HWND){
+    if !owner.is_null()&&IsWindow(owner)!=0{SetTimer(owner,HIDE_TIMER,650,None);}
+}
+unsafe fn perform_control(owner:HWND,command:control_center::Command){
+    use control_center::Command;
+    match command{
+        Command::Widget(widget)=>request_utilities(owner,Some(widget)),
+        Command::Run(utilities::Action::Host(action))=>emit(Event::Utility(action)),
+        Command::Run(action)=>utilities::delegated(action),
+        Command::Window{hwnd,pid,tid}=>{
+            let hwnd=hwnd as HWND;
+            if window_owner(hwnd)!=Some((pid,tid)){return;}
+            let item=STATE.with(|s|s.borrow().windows.iter().find(|w|w.hwnd==hwnd)
+                .map(|w|Item{path:w.path.clone(),title:w.title.clone(),hwnd,count:1,pinned:false}));
+            if let Some(item)=item{activate(owner,&item);}
         }
     }
 }
@@ -1168,16 +1186,7 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
         if !item.hwnd.is_null() {
             owner=window_owner(item.hwnd);
             if choices.len()>1{
-                let list=CreatePopupMenu();
-                if !list.is_null(){
-                    for (i,(window,_)) in choices.iter().enumerate(){
-                        let title=window.title.chars().take(83).collect::<String>().replace('&',"&&");
-                        let status=if IsIconic(window.hwnd)!=0{" · Đã thu nhỏ"}else{""};
-                        AppendMenuW(list,MF_STRING|if window.hwnd==GetForegroundWindow(){MF_CHECKED}else{0},
-                            MENU_WINDOW_FIRST+i,wide(&format!("{title}{status}")).as_ptr());
-                    }
-                    if AppendMenuW(menu,MF_POPUP,list as usize,wide("Chọn cửa sổ").as_ptr())==0{DestroyMenu(list);}
-                }
+                AppendMenuW(menu,MF_STRING,MENU_WINDOW_FIRST,wide("Chọn cửa sổ…").as_ptr());
             }
             AppendMenuW(menu,MF_STRING,MENU_MINIMIZE,wide("Thu nhỏ cửa sổ").as_ptr());
             AppendMenuW(menu,MF_STRING,MENU_MAXIMIZE,wide("Phóng to theo vùng làm việc").as_ptr());
@@ -1233,12 +1242,32 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     let cmd=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,hwnd,ptr::null()) as usize;
     DestroyMenu(menu);
     match cmd {
-        id if (MENU_WINDOW_FIRST..MENU_WINDOW_FIRST+24).contains(&id)=>{
-            if let Some((window,expected))=choices.get(id-MENU_WINDOW_FIRST){
-                if expected.is_some()&&window_owner(window.hwnd)==*expected{
-                    activate(hwnd,&Item{path:window.path.clone(),title:window.title.clone(),hwnd:window.hwnd,count:1,pinned:false});
-                }
+        MENU_WINDOW_FIRST=>{
+            let mut anchor=panel_chrome::Anchor::for_owner(hwnd,point);
+            if let Some(at)=STATE.with(|s|{
+                let s=s.borrow();
+                let b=s.bars.iter().find(|b|b.hwnd==hwnd)?;
+                let layout=b.layout.as_ref()?;
+                let path=&selected.as_ref()?.path;
+                let index=b.items.iter().position(|i|&i.path==path)?;
+                let r=layout.slots[index];
+                let (x,y)=match layout.side{
+                    DockSide::Bottom=>(r.x+r.w*0.5,layout.glass.y),
+                    DockSide::Left=>(layout.glass.x+layout.glass.w,r.y+r.h*0.5),
+                    DockSide::Right=>(layout.glass.x,r.y+r.h*0.5),
+                };
+                Some(POINT{x:x as i32,y:y as i32})
+            }) {
+                anchor.point=at;ClientToScreen(hwnd,&mut anchor.point);
             }
+            let cards=choices.into_iter().filter_map(|(w,id)|{
+                let (pid,tid)=id?;
+                Some(control_center::Card{icon:Some(UtilityWidget::Windows),title:w.title,
+                    hint:if IsIconic(w.hwnd)!=0{"Đã thu nhỏ"}else{"Đang mở"}.into(),
+                    action:Some(control_center::Command::Window{hwnd:w.hwnd as usize,pid,tid})})
+            }).collect();
+            control_center::show(hwnd,anchor,control_center::View{title:"Chọn cửa sổ".into(),
+                hint:selected.map_or(String::new(),|i|basename(&i.path)),cards,metrics:None});
         },
         id if (MENU_MOVE_FIRST..MENU_MOVE_FIRST+24).contains(&id)=>{
             if let Some((item,target))=selected.as_ref().zip(destinations.get(id-MENU_MOVE_FIRST)){
@@ -1533,6 +1562,9 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 update_state(|s|{if let Some(p)=s.stages.iter_mut().find(|p|p.hwnd==hwnd){p.collapsed=true;}refresh(s,false);});
                 return 0;
             }
+            let open=utilities::panel_open_for(hwnd);
+            let mut pt:POINT=mem::zeroed();GetCursorPos(&mut pt);
+            if open||WindowFromPoint(pt)==hwnd{return 0;}
             let start=STATE.with(|state|{
                 let mut state=state.borrow_mut();
                 let reduced=state.prefs.appearance.reduced_motion;
@@ -1889,6 +1921,7 @@ unsafe fn drain_commands() {
         match command {
             Command::Configure(options)=>update_state(|state|{
                 close_status_tip(ptr::null_mut());
+                if state.prefs.appearance!=options.appearance||state.prefs.utility_profiles!=options.utility_profiles{utilities::close_panels();}
                 for b in &mut state.bars{KillTimer(b.hwnd,STATUS_TIP_TIMER);b.status_hover=None;}
                 let repaint=state.prefs.appearance!=options.appearance;
                 if repaint{state.material=None;}
