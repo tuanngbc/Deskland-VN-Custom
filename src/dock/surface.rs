@@ -1,7 +1,7 @@
 //! Dock surface: antialiased cached pixels; DWM composes the window.
 //! No desktop capture, timer, or per-frame allocation in the static path.
 use super::{appearance::Theme, geometry::{Layout,Rect}, glass_probe::Layer};
-use std::{collections::{HashMap,VecDeque}, sync::{Arc,Weak}};
+use std::{collections::{HashMap,VecDeque}, sync::{Arc,Weak},time::{Duration,Instant}};
 use windows_sys::Win32::{Foundation::HWND,Graphics::Gdi::*};
 use super::{control_center::{self,MetricOptions},stage_surface::{Box2,draw_mask}};
 use crate::launcher::IconPixels;
@@ -45,7 +45,7 @@ pub type Atlas = HashMap<String, Option<Arc<crate::launcher::IconPixels>>>;
 pub struct Surface {
     layer:Layer,glass:Rect,material:Material,static_pixels:Vec<u8>,icons:IconRasters,metric:Option<MetricInk>,
 }
-struct MetricInk{size:(i32,i32),font:HFONT,mask:Layer,pixels:Vec<u8>,key:Option<(usize,MetricOptions,[u8;3],bool)>}
+struct MetricInk{size:(i32,i32),font:HFONT,mask:Layer,pixels:Vec<u8>,key:Option<(usize,MetricOptions,[u8;3],bool)>,painted_at:Option<Instant>}
 impl Drop for MetricInk{fn drop(&mut self){unsafe{if !self.font.is_null(){DeleteObject(self.font);}}}}
 impl MetricInk{
     unsafe fn new(w:i32,h:i32,scale:f32)->Option<Self>{
@@ -53,13 +53,15 @@ impl MetricInk{
         let font=CreateFontW(-(11.0*scale).round().max(8.0) as i32,0,0,0,500,0,0,0,
             DEFAULT_CHARSET as u32,0,0,ANTIALIASED_QUALITY as u32,DEFAULT_PITCH as u32,
             crate::desktop::wide("Segoe UI").as_ptr());
-        Some(Self{size:(w,h),font,mask,pixels:vec![0;w as usize*h as usize*4],key:None})
+        Some(Self{size:(w,h),font,mask,pixels:vec![0;w as usize*h as usize*4],key:None,painted_at:None})
     }
     unsafe fn paint(&mut self,data:&mut[u8],w:i32,h:i32,x:i32,y:i32,scale:f32,cfg:MetricOptions,ink:[u8;3],vertical:bool)->bool{
         let (mw,mh)=self.size;
         if x<0||y<0||x+mw>w||y+mh>h{return false;}
         let key=(control_center::inline_revision(),cfg,ink,vertical);
-        if self.key!=Some(key){
+        let restyled=self.key.is_none_or(|(_,old,color,edge)|old!=cfg||color!=ink||edge!=vertical);
+        let due=self.painted_at.is_none_or(|at|at.elapsed()>=Duration::from_millis(cfg.interval*1000-100));
+        if self.key!=Some(key)&&(restyled||due){
             let lines=control_center::inline_lines(cfg,vertical);
             self.pixels.fill(0);
             let inset=(4.0*scale).round() as i32;
@@ -70,6 +72,7 @@ impl MetricInk{
                 draw_mask(&mut self.pixels,mw,mh,&mut self.mask,self.font,box_,line,false,ink);
             }
             self.key=Some(key);
+            self.painted_at=(!lines.is_empty()).then(Instant::now);
         }
         let mut drawn=false;
         for row in 0..mh as usize{

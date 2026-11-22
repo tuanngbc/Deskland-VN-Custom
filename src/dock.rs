@@ -2,7 +2,7 @@
 //! Managed UI thread, started/configured/stopped by Deskland's existing main loop.
 //! Compatibility mode deliberately leaves Explorer's notification area intact.
 use crate::desktop::wide;
-use std::{cell::{Cell,RefCell},collections::{HashMap,HashSet},mem,ptr,sync::mpsc};
+use std::{cell::{Cell,RefCell},collections::{HashMap,HashSet},mem,ptr,sync::mpsc,time::{Duration,Instant}};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Devices::Display::*;
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -94,7 +94,7 @@ struct Bar {
     hwnd:HWND, bounds:RECT, items:Vec<Item>, hovered:i32, hidden:bool,
     layout:Option<geometry::Layout>, pinned_widgets:Vec<UtilityWidget>, motion:Motion, collapsed:bool, auto_hide:bool,
     status_hover:Option<Option<UtilityWidget>>, pressed:Option<Press>, keyboard:Option<usize>, previous_focus:isize, pointer:Option<(f32,f32)>,
-    reveal:motion::Spring, feedback:Option<Feedback>, active:Option<usize>, minimized:u16,
+    reveal:motion::Spring, feedback:Option<Feedback>, active:Option<usize>, minimized:u16, metric_repaint:Option<Instant>,
 }
 #[derive(Clone,Debug,PartialEq,Eq)]
 enum DockTarget { App(String), Launcher, Overflow, Utility(UtilityWidget) }
@@ -176,6 +176,7 @@ impl Bar {
     fn collapse(&mut self, collapsed:bool, reduced:bool)->bool {
         if self.collapsed==collapsed{return false;}
         self.collapsed=collapsed;
+        self.metric_repaint=None;
         if reduced {self.reveal=motion::Spring::rest(if collapsed{0.0}else{1.0});false}
         else {self.schedule()}
     }
@@ -613,7 +614,7 @@ unsafe fn recreate(state:&mut State) {
         if !hwnd.is_null(){
         let auto_hide=state.prefs.dock_auto_hide(&screen.id);
         state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:true,layout:Some(layout),pinned_widgets,motion:Motion::default(),collapsed:auto_hide,auto_hide,status_hover:None,pressed:None,keyboard:None,previous_focus:0,pointer:None,
-            reveal:motion::Spring::rest(if auto_hide{0.0}else{1.0}),feedback:None,active:None,minimized:0});
+            reveal:motion::Spring::rest(if auto_hide{0.0}else{1.0}),feedback:None,active:None,minimized:0,metric_repaint:None});
         }else{emit(Event::Error(format!("Create Dock window: {}",GetLastError())));}
         }
         if stage_targets.contains(&i) && !state.stages.iter().any(|s|same_rect(s.bounds,screen.bounds)) {
@@ -1631,8 +1632,19 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER if w==control_center::INLINE_TIMER=>{control_center::inline_tick(hwnd);0},
         control_center::INLINE_UPDATE=>{
             if control_center::inline_receive(w){
-                for h in STATE.with(|s|s.borrow().bars.iter().filter(|b|!b.hidden&&!b.collapsed&&b.layout.as_ref().is_some_and(|l|l.metrics.is_some()))
-                    .map(|b|b.hwnd).collect::<Vec<_>>()){InvalidateRect(h,ptr::null(),0);}
+                STATE.with(|s|{
+                    let mut state=s.borrow_mut();
+                    let State{bars,screens,prefs,..}=&mut *state;
+                    let now=Instant::now();
+                    for b in bars.iter_mut().filter(|b|!b.hidden&&!b.collapsed&&b.layout.as_ref().is_some_and(|l|l.metrics.is_some())){
+                        let Some(interval)=screens.iter().find(|d|same_rect(d.bounds,b.bounds))
+                            .and_then(|d|prefs.utility_profiles.get(&d.id)).map(|p|p.metrics.interval)else{continue;};
+                        if b.metric_repaint.is_none_or(|at|now.duration_since(at)>=Duration::from_millis(interval*1000-100)){
+                            b.metric_repaint=Some(now);
+                            InvalidateRect(b.hwnd,ptr::null(),0);
+                        }
+                    }
+                });
             }
             0
         },
@@ -1950,7 +1962,7 @@ unsafe fn drain_commands() {
             Command::Configure(options)=>update_state(|state|{
                 close_status_tip(ptr::null_mut());
                 if state.prefs.appearance!=options.appearance||state.prefs.utility_profiles!=options.utility_profiles{utilities::close_panels();}
-                for b in &mut state.bars{KillTimer(b.hwnd,STATUS_TIP_TIMER);b.status_hover=None;}
+                for b in &mut state.bars{KillTimer(b.hwnd,STATUS_TIP_TIMER);b.status_hover=None;b.metric_repaint=None;}
                 let repaint=state.prefs.appearance!=options.appearance;
                 if repaint{state.material=None;}
                 if repaint { for b in &mut state.bars{

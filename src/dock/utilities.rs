@@ -14,7 +14,10 @@ use windows_sys::Win32::{
     Graphics::Gdi::*,
     NetworkManagement::{IpHelper::*,Ndis::IfOperStatusUp,WiFi::*},
     System::{LibraryLoader::GetModuleHandleW,Power::*,SystemInformation::GetLocalTime,Threading::{TrySubmitThreadpoolCallback,PTP_CALLBACK_INSTANCE}},
-    UI::{Controls::{InitCommonControlsEx,INITCOMMONCONTROLSEX,ICC_BAR_CLASSES,ICC_DATE_CLASSES,MCM_GETMINREQRECT,DRAWITEMSTRUCT,ODS_FOCUS,ODS_SELECTED,ODS_DISABLED,TBM_SETPOS,TBM_SETRANGEMAX,TB_THUMBTRACK,TBS_NOTICKS},Input::KeyboardAndMouse::*,WindowsAndMessaging::*},
+    UI::{Accessibility::{HIGHCONTRASTW,HCF_HIGHCONTRASTON},Controls::{InitCommonControlsEx,INITCOMMONCONTROLSEX,ICC_BAR_CLASSES,ICC_DATE_CLASSES,MCM_GETMINREQRECT,DRAWITEMSTRUCT,ODS_FOCUS,ODS_SELECTED,ODS_DISABLED,TBM_SETPOS,TBM_SETRANGEMAX,TB_THUMBTRACK,TBS_NOTICKS,NMHDR,NMCUSTOMDRAW,
+        NM_CUSTOMDRAW,CDDS_PREPAINT,CDDS_ITEMPREPAINT,CDRF_NOTIFYITEMDRAW,CDRF_DODEFAULT,CDRF_SKIPDEFAULT,
+        TBCD_CHANNEL,TBCD_THUMB,TBM_GETTHUMBRECT,MCM_SETCOLOR,MCSC_BACKGROUND,MCSC_MONTHBK,MCSC_TEXT,
+        MCSC_TITLEBK,MCSC_TITLETEXT,MCSC_TRAILINGTEXT,SetWindowTheme},Input::KeyboardAndMouse::*,WindowsAndMessaging::*},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -217,10 +220,10 @@ impl Widget {
     pub fn title(self)->&'static str{
         use Widget::*;
         match self{Network=>"Mạng",Sound=>"Âm thanh",Bluetooth=>"Bluetooth",Battery=>"Pin",Calendar=>"Ngày giờ và lịch",
-            Notifications=>"Trung tâm thông báo Windows",QuickSettings=>"Cài đặt nhanh Windows",Spotlight=>"Spotlight",
+            Notifications=>"Thông báo Windows",QuickSettings=>"Cài đặt nhanh",Spotlight=>"Spotlight",
             Explorer=>"File Explorer",Desktop=>"Hiện/ẩn desktop",Capture=>"Chụp màn hình",Record=>"Quay màn hình",
-            Stats=>"Bật/tắt chỉ số taskbar",Wallpaper=>"Bật/tắt hình nền động",Stage=>"Bật/tắt Stage Manager",
-            Settings=>"Cài đặt tuanpc-desk",Windows=>"Chuyển cửa sổ Windows",Metrics=>"Chỉ số máy"}
+            Stats=>"Chỉ số taskbar",Wallpaper=>"Bật/tắt hình nền",Stage=>"Stage Manager",
+            Settings=>"Cài đặt Deskland",Windows=>"Chuyển cửa sổ",Metrics=>"Chỉ số máy"}
     }
     pub(super) fn simple(self)->Option<Action>{
         use Widget::*;
@@ -425,6 +428,7 @@ const LABEL:usize=4604;
 thread_local! {
     static AUDIO_WINDOW:Cell<HWND>=const{Cell::new(ptr::null_mut())};
     static CALENDAR_WINDOW:Cell<HWND>=const{Cell::new(ptr::null_mut())};
+    static AUDIO_DEFAULT_COLORS:Cell<bool>=const{Cell::new(false)};
     static AUDIO_DARK:Cell<bool>=const{Cell::new(false)};
     static CALENDAR_DARK:Cell<bool>=const{Cell::new(false)};
     static TRACK_LAST:Cell<u32>=const{Cell::new(0)};
@@ -454,6 +458,56 @@ unsafe fn paint_shell(hwnd:HWND,dark:bool,title:&str,hint:&str){
     if !orig.is_null(){SelectObject(dc,orig);}
     DeleteObject(title_font);DeleteObject(description);
     EndPaint(hwnd,&ps);
+}
+// Keep the actual Win32 controls and honor Windows contrast themes. Only
+// change how controls owned by this process draw themselves.
+unsafe fn high_contrast()->bool{
+    let mut options:HIGHCONTRASTW=mem::zeroed();
+    options.cbSize=mem::size_of::<HIGHCONTRASTW>() as u32;
+    SystemParametersInfoW(SPI_GETHIGHCONTRAST,options.cbSize,(&mut options as *mut HIGHCONTRASTW).cast(),0)!=0
+        && options.dwFlags&HCF_HIGHCONTRASTON!=0
+}
+unsafe fn track_color(draw:&NMCUSTOMDRAW,dark:bool)->LRESULT{
+    if draw.dwDrawStage==CDDS_PREPAINT{return CDRF_NOTIFYITEMDRAW as LRESULT;}
+    if draw.dwDrawStage!=CDDS_ITEMPREPAINT{return CDRF_DODEFAULT as LRESULT;}
+    let p=Palette::new(dark);
+    let size=|n|chrome::scale(windows_sys::Win32::UI::HiDpi::GetDpiForWindow(draw.hdr.hwndFrom),n);
+    let r=draw.rc;
+    if r.right<=r.left||r.bottom<=r.top{return CDRF_DODEFAULT as LRESULT;}
+    let x=(r.left+r.right)/2;
+    let y=(r.top+r.bottom)/2;
+    match draw.dwItemSpec {
+        n if n==TBCD_CHANNEL as usize=>{
+            let bar=RECT{top:y-size(2),bottom:y+size(2)+1,..r};
+            let radius=size(5);
+            chrome::box_fill(draw.hdc,bar,radius,p.edge,None);
+            let mut thumb:RECT=mem::zeroed();
+            SendMessageW(draw.hdr.hwndFrom,TBM_GETTHUMBRECT,0,(&mut thumb as *mut RECT) as LPARAM);
+            let right=((thumb.left+thumb.right)/2).clamp(r.left,r.right);
+            if right>r.left{chrome::box_fill(draw.hdc,RECT{right,..bar},radius,p.accent,None);}
+        }
+        n if n==TBCD_THUMB as usize=>{
+            let radius=size(8).min((r.right-r.left).max(2)/2);
+            let focused=GetFocus()==draw.hdr.hwndFrom;
+            let thumb=RECT{left:x-radius,top:y-radius,right:x+radius+1,bottom:y+radius+1};
+            chrome::box_fill(draw.hdc,thumb,2*radius+1,if focused{p.accent}else{p.ink},Some(p.panel));
+        }
+        _=>return CDRF_DODEFAULT as LRESULT,
+    }
+    CDRF_SKIPDEFAULT as LRESULT
+}
+unsafe fn calendar_colors(control:HWND,dark:bool){
+    if high_contrast(){return;}
+    // The system theme otherwise ignores MCM_SETCOLOR for the calendar body.
+    // Empty strings scope this override to the one owned month control.
+    let empty=[0u16];
+    if SetWindowTheme(control,empty.as_ptr(),empty.as_ptr())<0{return;}
+    let p=Palette::new(dark);
+    let header=if dark{[73,56,43]}else{[245,236,227]};
+    for (slot,ink) in [(MCSC_BACKGROUND,p.panel),(MCSC_MONTHBK,p.panel),(MCSC_TEXT,p.ink),
+        (MCSC_TITLEBK,header),(MCSC_TITLETEXT,p.ink),(MCSC_TRAILINGTEXT,p.muted)]{
+        SendMessageW(control,MCM_SETCOLOR,slot as usize,chrome::color(ink) as LPARAM);
+    }
 }
 unsafe fn paint_button(item:&DRAWITEMSTRUCT,dark:bool){
     let p=Palette::new(dark);
@@ -488,8 +542,10 @@ pub(super) unsafe fn audio_panel(owner:HWND,point:POINT,level:u32,muted:bool){
     let (width,height)=(px(326),px(169));
     let anchor=chrome::Anchor::for_owner(owner,point);
     let Some(work)=anchor.work()else{return;};
+    if width>work.right-work.left||height>work.bottom-work.top{return;}
     let (x,y)=chrome::placement(work,anchor,width,height,px(8));
     AUDIO_DARK.with(|d|d.set(anchor.dark));
+    AUDIO_DEFAULT_COLORS.with(|s|s.set(high_contrast()));
     let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST|WS_EX_LAYERED,class.as_ptr(),wide("Âm lượng hệ thống").as_ptr(),
         WS_POPUP|WS_CLIPCHILDREN,x,y,width,height,owner,ptr::null_mut(),instance,ptr::null());
     if hwnd.is_null(){return;}
@@ -573,6 +629,12 @@ unsafe extern "system" fn audio_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
         WM_PAINT=>{paint_shell(hwnd,AUDIO_DARK.with(Cell::get),"Âm lượng","Thiết bị đầu ra mặc định");0},
         WM_CTLCOLORSTATIC|WM_CTLCOLORBTN=>chrome::child_color(w as HDC,AUDIO_DARK.with(Cell::get)),
         WM_DRAWITEM if l!=0=>{paint_button(&*(l as *const DRAWITEMSTRUCT),AUDIO_DARK.with(Cell::get));1},
+        WM_NOTIFY if l!=0=>{
+            let header=&*(l as *const NMHDR);
+            if header.idFrom==TRACK&&header.code==NM_CUSTOMDRAW&&!AUDIO_DEFAULT_COLORS.with(Cell::get){
+                track_color(&*(l as *const NMCUSTOMDRAW),AUDIO_DARK.with(Cell::get))
+            }else{DefWindowProcW(hwnd,msg,w,l)}
+        },
         WM_HSCROLL if l!=0&&l as HWND==GetDlgItem(hwnd,TRACK as i32)=>{
             let value=SendMessageW(l as HWND,TBM_GETPOS,0,0).clamp(0,100) as u32;
             SetWindowTextW(GetDlgItem(hwnd,LABEL as i32),wide(&format!("{value}%")).as_ptr());
@@ -618,8 +680,10 @@ pub(super) unsafe fn calendar_panel(owner:HWND,point:POINT,local:SYSTEMTIME){
     if hwnd.is_null(){return;}
     let cal=CreateWindowExW(0,wide("SysMonthCal32").as_ptr(),ptr::null(),WS_CHILD|WS_VISIBLE|WS_TABSTOP,
         0,0,0,0,hwnd,1usize as HMENU,instance,ptr::null());
+    if cal.is_null(){DestroyWindow(hwnd);return;}
+    calendar_colors(cal,anchor.dark);
     let mut inner:RECT=mem::zeroed();
-    if cal.is_null()||SendMessageW(cal,MCM_GETMINREQRECT,0,(&mut inner as *mut RECT) as LPARAM)==0{DestroyWindow(hwnd);return;}
+    if SendMessageW(cal,MCM_GETMINREQRECT,0,(&mut inner as *mut RECT) as LPARAM)==0{DestroyWindow(hwnd);return;}
     let dpi=windows_sys::Win32::UI::HiDpi::GetDpiForWindow(owner).clamp(72,288);
     let px=|n|chrome::scale(dpi,n);
     let pad=px(16);
