@@ -70,7 +70,7 @@ pub(super) unsafe fn box_fill(dc:HDC,rect:RECT,radius:i32,fill:[u8;3],edge:Optio
 }
 pub(super) unsafe fn choose_font(dpi:u32,n:i32,weight:i32)->HFONT{
     CreateFontW(-scale(dpi,n),0,0,0,weight,0,0,0,DEFAULT_CHARSET as u32,0,0,
-        CLEARTYPE_QUALITY as u32,DEFAULT_PITCH as u32,crate::desktop::wide("Segoe UI Variable").as_ptr())
+        ANTIALIASED_QUALITY as u32,DEFAULT_PITCH as u32,crate::desktop::wide("Segoe UI Variable Text").as_ptr())
 }
 pub(super) unsafe fn child_color(dc:HDC,dark:bool)->LRESULT{
     let p=Palette::new(dark);

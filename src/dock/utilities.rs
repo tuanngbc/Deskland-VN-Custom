@@ -13,11 +13,10 @@ use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
     NetworkManagement::{IpHelper::*,Ndis::IfOperStatusUp,WiFi::*},
-    System::{LibraryLoader::GetModuleHandleW,Power::*,SystemInformation::GetLocalTime,Threading::{TrySubmitThreadpoolCallback,PTP_CALLBACK_INSTANCE}},
-    UI::{Accessibility::{HIGHCONTRASTW,HCF_HIGHCONTRASTON},Controls::{InitCommonControlsEx,INITCOMMONCONTROLSEX,ICC_BAR_CLASSES,ICC_DATE_CLASSES,MCM_GETMINREQRECT,DRAWITEMSTRUCT,ODS_FOCUS,ODS_SELECTED,ODS_DISABLED,TBM_SETPOS,TBM_SETRANGEMAX,TB_THUMBTRACK,TBS_NOTICKS,NMHDR,NMCUSTOMDRAW,
+    System::{LibraryLoader::GetModuleHandleW,Power::*,Threading::{TrySubmitThreadpoolCallback,PTP_CALLBACK_INSTANCE}},
+    UI::{Accessibility::{HIGHCONTRASTW,HCF_HIGHCONTRASTON},Controls::{InitCommonControlsEx,INITCOMMONCONTROLSEX,ICC_BAR_CLASSES,DRAWITEMSTRUCT,ODS_FOCUS,ODS_SELECTED,ODS_DISABLED,TBM_SETPOS,TBM_SETRANGEMAX,TB_THUMBTRACK,TBS_NOTICKS,NMHDR,NMCUSTOMDRAW,
         NM_CUSTOMDRAW,CDDS_PREPAINT,CDDS_ITEMPREPAINT,CDRF_NOTIFYITEMDRAW,CDRF_DODEFAULT,CDRF_SKIPDEFAULT,
-        TBCD_CHANNEL,TBCD_THUMB,TBM_GETTHUMBRECT,MCM_SETCOLOR,MCSC_BACKGROUND,MCSC_MONTHBK,MCSC_TEXT,
-        MCSC_TITLEBK,MCSC_TITLETEXT,MCSC_TRAILINGTEXT,SetWindowTheme},Input::KeyboardAndMouse::*,WindowsAndMessaging::*},
+        TBCD_CHANNEL,TBCD_THUMB,TBM_GETTHUMBRECT},Input::KeyboardAndMouse::*,WindowsAndMessaging::*},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -27,7 +26,7 @@ enum BluetoothState { Unknown, Adapter(Vec<ClassicDevice>) }
 #[derive(Clone,Copy)]
 enum BatteryState { Unknown, Absent, Present{level:Option<u8>,ac:Option<bool>,charging:bool} }
 pub(super) struct Audio { level:u32, muted:bool }
-pub(super) struct Snapshot { network:Option<Link>, wlan:Option<wifi::View>, bluetooth:BluetoothState, battery:BatteryState, audio:Option<Audio>, pub(super) local:SYSTEMTIME }
+pub(super) struct Snapshot { network:Option<Link>, wlan:Option<wifi::View>, bluetooth:BluetoothState, battery:BatteryState, audio:Option<Audio> }
 
 #[derive(Clone,Copy)]
 enum JobKind { Read, AudioRead, Volume(u32), Mute }
@@ -88,7 +87,6 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut std::ffi::c_vo
         // Controls target the current default endpoint, not an old ID.
         let audio=audio(job.kind);
         if matches!(job.kind,JobKind::Read){
-            let mut local=mem::zeroed();GetLocalTime(&mut local);
             let mut bluetooth=bluetooth();
             if crate::trial::demo_active() {
                 if let BluetoothState::Adapter(devices)=&mut bluetooth {
@@ -96,7 +94,7 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut std::ffi::c_vo
                 }
             }
             let wlan=job.network.then(||wifi::read(job.change));
-            let snapshot=Snapshot{network:network(),wlan,bluetooth,battery:battery(),audio,local};
+            let snapshot=Snapshot{network:network(),wlan,bluetooth,battery:battery(),audio};
             if let Ok(mut result)=state.result.lock(){*result=Some(snapshot);}
         }else if let Ok(mut result)=state.audio_result.lock(){
             *result=Some((job.panel,audio));
@@ -208,23 +206,23 @@ unsafe fn battery()->BatteryState{
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum Widget {
-    Network, Sound, Bluetooth, Battery, Calendar, Notifications, QuickSettings,
+    Network, Sound, Bluetooth, Battery, Notifications, QuickSettings,
     Spotlight, Explorer, Desktop, Capture, Record, Stats, Wallpaper, Stage, Settings, Windows, Metrics,
 }
 impl Widget {
-    pub const ALL:[Self;18]=[Self::Network,Self::Sound,Self::Bluetooth,Self::Battery,Self::Calendar,
+    pub const ALL:[Self;17]=[Self::Network,Self::Sound,Self::Bluetooth,Self::Battery,
         Self::Notifications,Self::QuickSettings,Self::Spotlight,Self::Explorer,Self::Desktop,
         Self::Capture,Self::Record,Self::Stats,Self::Wallpaper,Self::Stage,Self::Settings,Self::Windows,Self::Metrics];
     pub fn key(self)->&'static str{
         use Widget::*;
-        match self {Network=>"network",Sound=>"audio",Bluetooth=>"bluetooth",Battery=>"battery",Calendar=>"calendar",
+        match self {Network=>"network",Sound=>"audio",Bluetooth=>"bluetooth",Battery=>"battery",
             Notifications=>"notifications",QuickSettings=>"quickSettings",Spotlight=>"spotlight",Explorer=>"explorer",
             Desktop=>"desktop",Capture=>"capture",Record=>"record",Stats=>"stats",Wallpaper=>"wallpaper",Stage=>"stage",
             Settings=>"settings",Windows=>"windows",Metrics=>"metrics"}
     }
     pub fn title(self)->&'static str{
         use Widget::*;
-        match self{Network=>"Mạng",Sound=>"Âm thanh",Bluetooth=>"Bluetooth",Battery=>"Pin",Calendar=>"Ngày giờ và lịch",
+        match self{Network=>"Mạng",Sound=>"Âm thanh",Bluetooth=>"Bluetooth",Battery=>"Pin",
             Notifications=>"Thông báo Windows",QuickSettings=>"Cài đặt nhanh",Spotlight=>"Spotlight",
             Explorer=>"File Explorer",Desktop=>"Hiện/ẩn desktop",Capture=>"Chụp màn hình",Record=>"Quay màn hình",
             Stats=>"Chỉ số taskbar",Wallpaper=>"Bật/tắt hình nền",Stage=>"Stage Manager",
@@ -248,7 +246,6 @@ impl Widget {
             Sound=>&[(0.20,0.43,0.34,0.43),(0.20,0.43,0.20,0.64),(0.20,0.64,0.34,0.64),(0.34,0.43,0.51,0.28),(0.51,0.28,0.51,0.79),(0.51,0.79,0.34,0.64),(0.62,0.41,0.72,0.54),(0.72,0.54,0.62,0.67),(0.72,0.29,0.83,0.54),(0.83,0.54,0.72,0.79)],
             Bluetooth=>&[(0.50,0.18,0.50,0.82),(0.50,0.18,0.70,0.34),(0.70,0.34,0.31,0.68),(0.31,0.32,0.70,0.66),(0.70,0.66,0.50,0.82)],
             Battery=>&[(0.18,0.35,0.73,0.35),(0.73,0.35,0.73,0.68),(0.73,0.68,0.18,0.68),(0.18,0.68,0.18,0.35),(0.79,0.45,0.79,0.58),(0.28,0.51,0.58,0.51)],
-            Calendar=>&[(0.24,0.30,0.76,0.30),(0.76,0.30,0.76,0.77),(0.76,0.77,0.24,0.77),(0.24,0.77,0.24,0.30),(0.24,0.45,0.76,0.45),(0.38,0.24,0.38,0.35),(0.62,0.24,0.62,0.35),(0.40,0.60,0.47,0.60),(0.54,0.60,0.61,0.60)],
             Notifications=>&[(0.21,0.68,0.79,0.68),(0.24,0.65,0.34,0.51),(0.34,0.51,0.34,0.38),(0.34,0.38,0.50,0.27),(0.50,0.27,0.66,0.38),(0.66,0.38,0.66,0.51),(0.66,0.51,0.76,0.65),(0.44,0.77,0.56,0.77)],
             QuickSettings|Settings=>&[(0.22,0.35,0.78,0.35),(0.22,0.65,0.78,0.65),(0.40,0.28,0.40,0.42),(0.61,0.58,0.61,0.72)],
             Spotlight=>&[(0.30,0.38,0.40,0.28),(0.40,0.28,0.55,0.28),(0.55,0.28,0.65,0.38),(0.65,0.38,0.65,0.53),(0.65,0.53,0.55,0.63),(0.55,0.63,0.40,0.63),(0.40,0.63,0.30,0.53),(0.30,0.53,0.30,0.38),(0.61,0.59,0.77,0.76)],
@@ -311,7 +308,7 @@ impl Profile {
 pub enum HostAction { Settings, Capture, Record, SystemMonitor, Wallpaper, Stage, Launcher }
 #[derive(Clone,Copy)]
 pub(super) enum Action {
-    Host(HostAction), Network, Bluetooth, Sound, Battery, Calendar, Notifications,
+    Host(HostAction), Network, Bluetooth, Sound, Battery, Notifications,
     QuickSettings, Explorer, Desktop, Windows, SetVolume(u32), Mute, AudioPanel{level:u32,muted:bool},
 }
 fn network_label(state:Option<Link>)->String{
@@ -340,7 +337,6 @@ fn utility_hint(widget:Widget,snapshot:&Snapshot)->String{
         Widget::Network=>network_label(snapshot.network).split_once(" · ").map_or(String::new(),|(_,s)|s.to_owned()),
         Widget::Sound=>snapshot.audio.as_ref().map_or("Không đọc được âm lượng".into(),|a|if a.muted{"Đang tắt tiếng".into()}else{format!("{}%",a.level)}),
         Widget::Bluetooth=>device_label(&snapshot.bluetooth),
-        Widget::Calendar=>format!("{:02}:{:02} · {:02}/{:02}",snapshot.local.wHour,snapshot.local.wMinute,snapshot.local.wDay,snapshot.local.wMonth),
         Widget::Battery=>match snapshot.battery{
             BatteryState::Present{level,charging,..}=>level.map_or("".into(),|n|format!("{n}%{}",if charging{" · Đang sạc"}else{""})),
             _=>String::new(),
@@ -356,7 +352,6 @@ pub(super) unsafe fn show_view(owner:HWND,point:POINT,snapshot:&Snapshot,profile
         if profile.hidden.contains(&w){return;}
         match w{
             Widget::Sound if audio_from_snapshot(owner,point,snapshot)=>return,
-            Widget::Calendar=>{calendar_panel(owner,point,snapshot.local);return;},
             Widget::Metrics=>{if profile.metrics.enabled{show_metrics(owner,anchor,profile.metrics);}return;},
             _=>{}
         }
@@ -398,7 +393,7 @@ pub(super) unsafe fn show_view(owner:HWND,point:POINT,snapshot:&Snapshot,profile
             Widget::QuickSettings=>Some(Action::QuickSettings),_=>None,
         };
         if widget==Widget::QuickSettings{
-            for w in [Widget::Network,Widget::Sound,Widget::Bluetooth,Widget::Calendar]{
+            for w in [Widget::Network,Widget::Sound,Widget::Bluetooth]{
                 if !profile.hidden.contains(&w){
                     cards.push(make(w.title().into(),utility_hint(w,snapshot),Some(w),Some(Command::Widget(w))));
                 }
@@ -433,27 +428,12 @@ pub(super) unsafe fn delegated(action:Action){
     match action{
         Network=>open("ms-settings:network-wifi"), Bluetooth=>open("ms-settings:bluetooth"),
         Sound=>open("ms-settings:sound"),Battery=>open("ms-settings:powersleep"), Explorer=>open("explorer.exe"),
-        Notifications=>shell_key(b'N' as u16),QuickSettings=>shell_key(b'A' as u16),
-        Desktop=>shell_key(b'D' as u16),Windows=>shell_key(VK_TAB),
+        Notifications=>super::shell_access::win_chord(b'N' as u16),QuickSettings=>super::shell_access::win_chord(b'A' as u16),
+        Desktop=>super::shell_access::win_chord(b'D' as u16),Windows=>super::shell_access::win_chord(VK_TAB),
         _=>{}
     }
 }
-unsafe fn shell_key(key:u16){
-    // These are explicit user clicks. Avoid injecting a chord into an
-    // existing held modifier state and releasing the user's physical keys.
-    if [VK_LWIN,VK_RWIN,VK_SHIFT,VK_CONTROL,VK_MENU,key].into_iter().any(|vk|GetAsyncKeyState(vk as i32)<0){return;}
-    let event=|vk,flags| INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{ki:KEYBDINPUT{
-        wVk:vk,wScan:0,dwFlags:flags,time:0,dwExtraInfo:0}}};
-    let input=[event(VK_LWIN,0),event(key,0),event(key,KEYEVENTF_KEYUP),event(VK_LWIN,KEYEVENTF_KEYUP)];
-    let n=SendInput(input.len() as u32,input.as_ptr(),mem::size_of::<INPUT>() as i32);
-    if n>0&&n<4 {
-        let tail=if n==2{&input[2..]}else{&input[3..]};
-        SendInput(tail.len() as u32,tail.as_ptr(),mem::size_of::<INPUT>() as i32);
-    }
-}
-
 const AUDIO_CLASS:&str="TuanpcDeskAudioControl";
-const CALENDAR_CLASS:&str="TuanpcDeskCalendar";
 const TBM_GETPOS:u32=WM_USER;
 const TRACK:usize=4601;
 const MUTE:usize=4602;
@@ -463,10 +443,8 @@ const AUDIO_TIMER:usize=1;
 fn audio_read_only()->bool{crate::trial::active()&&!crate::trial::demo_active()}
 thread_local! {
     static AUDIO_WINDOW:Cell<HWND>=const{Cell::new(ptr::null_mut())};
-    static CALENDAR_WINDOW:Cell<HWND>=const{Cell::new(ptr::null_mut())};
     static AUDIO_DEFAULT_COLORS:Cell<bool>=const{Cell::new(false)};
     static AUDIO_DARK:Cell<bool>=const{Cell::new(false)};
-    static CALENDAR_DARK:Cell<bool>=const{Cell::new(false)};
     static TRACK_LAST:Cell<u32>=const{Cell::new(0)};
     static AUDIO_PENDING:Cell<bool>=const{Cell::new(false)};
     static TRACK_DRAGGING:Cell<bool>=const{Cell::new(false)};
@@ -474,7 +452,7 @@ thread_local! {
 }
 
 pub(super) unsafe fn panel_open_for(owner:HWND)->bool{
-    control_center::open_for(owner)||[AUDIO_WINDOW.with(Cell::get),CALENDAR_WINDOW.with(Cell::get)]
+    control_center::open_for(owner)||[AUDIO_WINDOW.with(Cell::get)]
         .into_iter().any(|h|!h.is_null()&&GetWindow(h,GW_OWNER)==owner)
 }
 unsafe fn paint_shell(hwnd:HWND,dark:bool,title:&str,hint:&str){
@@ -532,19 +510,6 @@ unsafe fn track_color(draw:&NMCUSTOMDRAW,dark:bool)->LRESULT{
     }
     CDRF_SKIPDEFAULT as LRESULT
 }
-unsafe fn calendar_colors(control:HWND,dark:bool){
-    if high_contrast(){return;}
-    // The system theme otherwise ignores MCM_SETCOLOR for the calendar body.
-    // Empty strings scope this override to the one owned month control.
-    let empty=[0u16];
-    if SetWindowTheme(control,empty.as_ptr(),empty.as_ptr())<0{return;}
-    let p=Palette::new(dark);
-    let header=if dark{[73,56,43]}else{[245,236,227]};
-    for (slot,ink) in [(MCSC_BACKGROUND,p.panel),(MCSC_MONTHBK,p.panel),(MCSC_TEXT,p.ink),
-        (MCSC_TITLEBK,header),(MCSC_TITLETEXT,p.ink),(MCSC_TRAILINGTEXT,p.muted)]{
-        SendMessageW(control,MCM_SETCOLOR,slot as usize,chrome::color(ink) as LPARAM);
-    }
-}
 unsafe fn paint_button(item:&DRAWITEMSTRUCT,dark:bool){
     let p=Palette::new(dark);
     let active=item.itemState&(ODS_FOCUS|ODS_SELECTED)!=0;
@@ -557,7 +522,7 @@ unsafe fn paint_button(item:&DRAWITEMSTRUCT,dark:bool){
         if item.itemState&ODS_DISABLED!=0{p.muted}else{p.ink},DT_CENTER|DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);
 }
 pub(super) unsafe fn close_panels(){
-    for hwnd in [AUDIO_WINDOW.with(Cell::get),CALENDAR_WINDOW.with(Cell::get)] {
+    for hwnd in [AUDIO_WINDOW.with(Cell::get)] {
         if !hwnd.is_null(){DestroyWindow(hwnd);}
     }
     control_center::close_for(ptr::null_mut());
@@ -615,7 +580,7 @@ pub(super) unsafe fn audio_panel(owner:HWND,point:POINT,level:u32,muted:bool){
 }
 
 pub(super) unsafe fn close_panels_for(owner:HWND){
-    for hwnd in [AUDIO_WINDOW.with(Cell::get),CALENDAR_WINDOW.with(Cell::get)] {
+    for hwnd in [AUDIO_WINDOW.with(Cell::get)] {
         if !hwnd.is_null()&&GetWindow(hwnd,GW_OWNER)==owner{DestroyWindow(hwnd);}
     }
     control_center::close_for(owner);
@@ -623,7 +588,7 @@ pub(super) unsafe fn close_panels_for(owner:HWND){
 
 pub(super) unsafe fn route_panel_keyboard(message:&MSG)->bool{
     if !(WM_KEYFIRST..=WM_KEYLAST).contains(&message.message){return false;}
-    let panel=[AUDIO_WINDOW.with(Cell::get),CALENDAR_WINDOW.with(Cell::get)].into_iter()
+    let panel=[AUDIO_WINDOW.with(Cell::get)].into_iter()
         .find(|&p|!p.is_null()&&(message.hwnd==p||IsChild(p,message.hwnd)!=0)).unwrap_or(ptr::null_mut());
     if panel.is_null(){return false;}
     if message.message==WM_KEYDOWN&&message.wParam as u16==VK_ESCAPE{
@@ -716,57 +681,6 @@ unsafe extern "system" fn audio_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
     }
 }
 
-pub(super) unsafe fn calendar_panel(owner:HWND,point:POINT,local:SYSTEMTIME){
-    close_panels();
-    let instance=GetModuleHandleW(ptr::null());
-    let class=wide(CALENDAR_CLASS);
-    if !chrome::register(&class,Some(calendar_proc)){return;}
-    if InitCommonControlsEx(&INITCOMMONCONTROLSEX{dwSize:mem::size_of::<INITCOMMONCONTROLSEX>() as u32,dwICC:ICC_DATE_CLASSES})==0{return;}
-    let anchor=chrome::Anchor::for_owner(owner,point);
-    let Some(work)=anchor.work()else{return;};
-    CALENDAR_DARK.with(|d|d.set(anchor.dark));
-    let caption=wide(&format!("Lịch  ·  {:02}:{:02}",local.wHour,local.wMinute));
-    let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST|WS_EX_LAYERED,class.as_ptr(),caption.as_ptr(),
-        WS_POPUP|WS_CLIPCHILDREN,point.x,point.y,0,0,owner,ptr::null_mut(),instance,ptr::null());
-    if hwnd.is_null(){return;}
-    let cal=CreateWindowExW(0,wide("SysMonthCal32").as_ptr(),ptr::null(),WS_CHILD|WS_VISIBLE|WS_TABSTOP,
-        0,0,0,0,hwnd,1usize as HMENU,instance,ptr::null());
-    if cal.is_null(){DestroyWindow(hwnd);return;}
-    calendar_colors(cal,anchor.dark);
-    let mut inner:RECT=mem::zeroed();
-    if SendMessageW(cal,MCM_GETMINREQRECT,0,(&mut inner as *mut RECT) as LPARAM)==0{DestroyWindow(hwnd);return;}
-    let dpi=windows_sys::Win32::UI::HiDpi::GetDpiForWindow(owner).clamp(72,288);
-    let px=|n|chrome::scale(dpi,n);
-    let pad=px(16);
-    let (cw,ch)=(inner.right-inner.left,inner.bottom-inner.top);
-    let (width,height)=(cw+2*pad,ch+px(84));
-    if width>work.right-work.left||height>work.bottom-work.top{DestroyWindow(hwnd);return;}
-    SetWindowPos(cal,ptr::null_mut(),pad,px(66),cw,ch,SWP_NOACTIVATE|SWP_NOZORDER);
-    let (x,y)=chrome::placement(work,anchor,width,height,px(8));
-    chrome::frame(hwnd,width,height,dpi,anchor);
-    CALENDAR_WINDOW.with(|s|s.set(hwnd));
-    SetWindowPos(hwnd,HWND_TOPMOST,x,y,width,height,SWP_SHOWWINDOW);
-    SetForegroundWindow(hwnd);SetFocus(cal);
-}
-unsafe extern "system" fn calendar_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
-    match msg{
-        WM_ERASEBKGND=>1,
-        WM_PAINT=>{
-            let mut title=[0u16;128];let n=GetWindowTextW(hwnd,title.as_mut_ptr(),128).max(0) as usize;
-            let mut local=mem::zeroed();GetLocalTime(&mut local);
-            let hint=format!("{:02}/{:02}/{}",local.wDay,local.wMonth,local.wYear);
-            paint_shell(hwnd,CALENDAR_DARK.with(Cell::get),&String::from_utf16_lossy(&title[..n]),&hint);0
-        },
-        WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{PostMessageW(hwnd,WM_CLOSE,0,0);0},
-        WM_NCDESTROY=>{
-            super::panel_closed(GetWindow(hwnd,GW_OWNER));
-            if CALENDAR_WINDOW.with(Cell::get)==hwnd{CALENDAR_WINDOW.with(|s|s.set(ptr::null_mut()));}
-            DefWindowProcW(hwnd,msg,w,l)
-        },
-        _=>DefWindowProcW(hwnd,msg,w,l)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -788,29 +702,6 @@ mod tests {
         assert_ne!(network_label(Some(Link::None)),network_label(None));
     }
     #[test]
-    #[ignore = "Windows calendar control and owned panel cleanup; explicitly run in CI"]
-    fn native_calendar_uses_a_real_control_and_closes_with_utilities(){
-        unsafe{
-            let parent=CreateWindowExW(0,wide("STATIC").as_ptr(),ptr::null(),WS_POPUP,0,0,1,1,
-                ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),ptr::null());
-            assert!(!parent.is_null());
-            let mut local=mem::zeroed();GetLocalTime(&mut local);
-            calendar_panel(parent,POINT{x:120,y:250},local);
-            let panel=CALENDAR_WINDOW.with(Cell::get);
-            assert!(!panel.is_null());
-            assert_eq!(GetWindow(panel,GW_OWNER),parent);
-            let month=GetDlgItem(panel,1);
-            assert!(!month.is_null());
-            let mut size:RECT=mem::zeroed();
-            assert_ne!(SendMessageW(month,MCM_GETMINREQRECT,0,(&mut size as *mut RECT) as LPARAM),0);
-            assert!(size.right>size.left&&size.bottom>size.top);
-            close_panels();
-            assert_eq!(IsWindow(panel),0);
-            assert!(CALENDAR_WINDOW.with(Cell::get).is_null());
-            DestroyWindow(parent);
-        }
-    }
-    #[test]
     #[ignore = "Windows on-demand hardware queries; explicitly run in CI"]
     fn native_on_demand_provider_completes_without_an_assumed_device(){
         unsafe {
@@ -827,7 +718,6 @@ mod tests {
             };
             DestroyWindow(hwnd);
             let report=snapshot.expect("read-only probe must complete in a bounded time");
-            assert!((1..=12).contains(&report.local.wMonth));
             assert!(report.wlan.is_some());
             if let Some(audio)=report.audio{assert!(audio.level<=100);}
             if let BatteryState::Present{level:Some(level),..}=report.battery{assert!(level<=100);}

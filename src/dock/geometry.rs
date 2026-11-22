@@ -36,6 +36,9 @@ pub struct Layout {
     pub glass: Rect,
     pub slots: Vec<Rect>,
     pub scan: Rect,
+    pub start: Rect,
+    pub tray: Rect,
+    pub clock: Rect,
     pub utility: Rect,
     pub utility_leading:bool,
     pub cluster:Option<Rect>,
@@ -54,9 +57,11 @@ impl Layout {
         self.hit(x,y).or_else(||{
             if self.is_launch_button(x,y){Some(self.slots.len())}
             else if self.is_utility_button(x,y){Some(self.slots.len()+1)}
-            else{self.inline.iter().position(|(_,r)|r.contains(x,y)).map(|i|self.slots.len()+2+i)}
+            else if let Some(i)=self.inline.iter().position(|(_,r)|r.contains(x,y)){Some(self.slots.len()+2+i)}
+            else { [self.start,self.tray,self.clock].iter().position(|r|r.contains(x,y)).map(|i|self.shell_index()+i) }
         })
     }
+    pub fn shell_index(&self)->usize{self.slots.len()+2+self.inline.len()}
     pub fn inline_at(&self,x:f32,y:f32)->Option<UtilityWidget>{
         self.inline.iter().find(|(_,r)|r.contains(x,y)).map(|(w,_)|*w)
     }
@@ -103,9 +108,11 @@ impl Layout {
             out.extend(n+2..n+2+self.inline.len());
             if self.utility.w>0.0{out.push(n+1);}
         };
+        indexes.push(self.shell_index());
         if self.utility_leading{append_status(&mut indexes);}
         indexes.extend(0..n+usize::from(self.cluster.is_none()));
         if !self.utility_leading{append_status(&mut indexes);}
+        indexes.extend(self.shell_index()+1..=self.shell_index()+2);
         indexes
     }
 }
@@ -151,13 +158,19 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     let shadow=(6.0*scale).min(axis.min(cross_axis)*0.035);
     let pad=(if vertical || !display.primary && screen_h>screen_w {8.0}else{10.0}*scale).min(axis*0.04);
     let room=(axis-2.0*(edge+shadow+pad)).max(1.0);
+    let chrome_scale=scale.min(room/260.0).max(0.2);
+    let start_span=38.0*chrome_scale;
+    let tray_span=32.0*chrome_scale;
+    let clock_span=if vertical{42.0*chrome_scale}else{66.0*chrome_scale};
+    let tail_span=tray_span+clock_span;
+    let content=(room-start_span-tail_span).max(1.0);
     let style_gap=style.spacing as f32*scale;
     let spacing=style_gap.min(if vertical||screen_h>screen_w{8.0*scale}else{14.0*scale})
-        .min(room/(count.max(1) as f32*5.0));
-    let gap=(cluster.gap as f32*scale).min(room*0.06);
-    let group_gap=(10.0*scale).min(room*0.06);
+        .min(content/(count.max(1) as f32*5.0));
+    let gap=(cluster.gap as f32*scale).min(content*0.06);
+    let group_gap=(10.0*scale).min(content*0.06);
     let rows=if cluster.two_rows{2}else{1};
-    let ideal_status=(cluster.cell as f32*scale).min(room*0.32).min((cross_axis*0.75-gap)/rows as f32).max(1.0);
+    let ideal_status=(cluster.cell as f32*scale).min((content*0.55-10.0*scale-gap)/2.0).min((cross_axis*0.75-gap)/rows as f32).max(1.0);
     let apps=count+usize::from(!host);
     let gaps=apps.saturating_sub(1) as f32*spacing;
     let zoom=if style.reduced_motion{0.0}else{style.magnification as f32/100.0};
@@ -173,28 +186,28 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     let minimum=if apps>0{gaps+app_gap+min_icon*(apps as f32+spill)}else{0.0};
     let metric_span=(if vertical{91.0}else{128.0})*scale;
     let inline_metrics=host&&cluster.inline_metrics&&widgets.contains(&UtilityWidget::Metrics)
-        && minimum+span(0)+metric_span+gap<=room;
+        && minimum+span(0)+metric_span+gap<=content;
     let extras=if inline_metrics{metric_span+gap}else{0.0};
     if inline_metrics{widgets.retain(|&w|w!=UtilityWidget::Metrics);}
     widgets.truncate(10);
     let inline_count=if host{
-        (0..=widgets.len()).rev().find(|&n|span(n)+minimum+extras<=room).unwrap_or(0)
+        (0..=widgets.len()).rev().find(|&n|span(n)+minimum+extras<=content).unwrap_or(0)
     }else{0};
     let status_span=span(inline_count)+extras;
     let icon=if apps==0{0.0}else{
         (style.icon_size as f32*scale).min(
-            ((room-status_span-app_gap-gaps)/(apps as f32+spill)).max(1.0)
+            ((content-status_span-app_gap-gaps)/(apps as f32+spill)).max(1.0)
         )
     };
     let lanes=if host{rows.min(inline_count+2)}else{0};
     let grid_cross=lanes as f32*ideal_status+lanes.saturating_sub(1) as f32*gap;
     let metric_cross=if inline_metrics{(if vertical{62.0}else{56.0})*scale}else{0.0};
-    let panel_cross=(icon+18.0*scale).max(grid_cross.max(metric_cross)+8.0*scale);
+    let panel_cross=(icon+18.0*scale).max(grid_cross.max(metric_cross).max(39.0*chrome_scale)+8.0*scale);
     let total_cross=(panel_cross.max(icon*(1.0+zoom)+18.0*scale)+2.0*shadow).ceil()
         .min((cross_axis-edge).max(1.0));
     let rest_apps=icon*apps as f32+gaps;
     let slack=if apps>0{icon*spill}else{0.0};
-    let rest_span=rest_apps+status_span+app_gap+2.0*pad;
+    let rest_span=rest_apps+status_span+app_gap+2.0*pad+start_span+tail_span;
     let extent=(rest_span+slack+2.0*shadow).ceil().min((axis-2.0*edge).max(1.0));
     // Keep the resting capsule centered on the monitor. Reserve motion
     // clearance on the app side; utility anchors never slide during zoom.
@@ -217,7 +230,7 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     let bar=|major:f32,minor:f32,along:f32,across:f32|if vertical{
         Rect{x:minor,y:major,w:across,h:along}
     }else{Rect{x:major,y:minor,w:along,h:across}};
-    let base=rest_start+pad;
+    let base=rest_start+pad+start_span;
     let status_start=if leading{base}else{base+rest_apps+app_gap};
     let app_rest=if leading{base+status_span+app_gap}else{base};
     let widths=(0..apps).map(|i|{
@@ -227,8 +240,8 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     }).collect::<Vec<_>>();
     let app_len=widths.iter().sum::<f32>()+gaps;
     let expanded=app_len-rest_apps;
-    let range_start=if leading{app_rest}else{shadow+pad};
-    let range_end=if host&&!leading{status_start-app_gap}else{extent-shadow-pad};
+    let range_start=if leading{app_rest}else{shadow+pad+start_span};
+    let range_end=if host&&!leading{status_start-app_gap}else{extent-shadow-pad-tail_span};
     let app_start=if apps==0{app_rest}else{
         let ideal=focus.filter(|_|icon>0.0).map_or(app_rest-expanded*0.5,|pos|{
             // Anchor continuously between icon centers so crossing a slot boundary
@@ -291,16 +304,46 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
         }
     }
     let app_end=app_start+app_len;
-    let glass_left=(if host&&leading{status_start}else if apps>0{app_start}else{status_start})-pad;
-    let glass_right=(if host&&!leading||apps==0{status_start+status_span}else{app_end})+pad;
+    let content_start=if host&&leading{status_start}else if apps>0{app_start}else{status_start};
+    let content_end=if host&&!leading||apps==0{status_start+status_span}else{app_end};
+    let glass_left=content_start-pad-start_span;
+    let glass_right=content_end+pad+tail_span;
+    let control_cross=(if vertical{54.0}else{39.0}*chrome_scale).min(panel_cross);
+    let mid=panel_base+(panel_cross-control_cross)*0.5;
+    let start=bar(content_start-start_span,mid,start_span-2.0*chrome_scale,control_cross);
+    let tray=bar(content_end+2.0*chrome_scale,mid,tray_span-2.0*chrome_scale,control_cross);
+    let clock=bar(content_end+tray_span,mid,clock_span,control_cross);
     let glass=bar(glass_left,panel_base,(glass_right-glass_left).max(1.0),panel_cross);
-    Layout{window:RECT{left:x,top:y,right:x+w as i32,bottom:y+h as i32},glass,slots,scan,utility,utility_leading:leading,
+    Layout{window:RECT{left:x,top:y,right:x+w as i32,bottom:y+h as i32},glass,slots,scan,start,tray,clock,utility,utility_leading:leading,
         cluster:group,divider,metrics,inline,indicators,scale,side:style.position}
 }
 
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn windows_controls_bookend_the_dock_without_overlapping_apps_or_utilities(){
+        let bounds=RECT{left:-1080,top:-700,right:0,bottom:1220};
+        let work=Display{id:"portrait".into(),name:String::new(),bounds,work:bounds,dpi:144,primary:false};
+        for position in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
+            for leading in [true,false]{
+                let style=Appearance{position,..Default::default()};
+                let l=measure_widgets(&work,&style,5,None,0.0,Some(leading),&[UtilityWidget::Network],28);
+                let along=|r:Rect|if position==DockSide::Bottom{(r.x,r.x+r.w)}else{(r.y,r.y+r.h)};
+                let controls=[l.scan,l.utility].into_iter().chain(l.slots.iter().copied()).chain(l.inline.iter().map(|(_,r)|*r));
+                for r in controls{
+                    assert!(along(l.start).1<=along(r).0&&along(l.tray).0>=along(r).1);
+                }
+                assert!(along(l.tray).1<=along(l.clock).0);
+                let order=l.key_order();
+                assert_eq!(order[0],l.shell_index());
+                assert_eq!(&order[order.len()-2..],&[l.shell_index()+1,l.shell_index()+2]);
+                for (i,r) in [l.start,l.tray,l.clock].into_iter().enumerate(){
+                    assert_eq!(l.hot(r.x+r.w/2.0,r.y+r.h/2.0),Some(l.shell_index()+i));
+                }
+            }
+        }
+    }
     #[test]
     fn insertion_targets_gaps_and_row_ends_at_rest_and_during_zoom(){
         for side in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
@@ -319,7 +362,7 @@ mod tests{
     }
     #[test]
     fn two_lane_status_has_stable_hit_boxes_and_fits_both_orientations(){
-        let pins=[UtilityWidget::Network,UtilityWidget::Sound,UtilityWidget::Bluetooth,UtilityWidget::Calendar,UtilityWidget::QuickSettings];
+        let pins=[UtilityWidget::Network,UtilityWidget::Sound,UtilityWidget::Bluetooth,UtilityWidget::Notifications,UtilityWidget::QuickSettings];
         for (width,height) in [(1080,1920),(1920,1080),(600,960)]{
             for dpi in [96,144,192]{
                 let work=RECT{left:-width,top:-200,right:0,bottom:height-200};
@@ -477,8 +520,8 @@ mod tests{
                 assert!(l.inline.iter().all(|(_,r)|r.w==28.0));
                 assert_eq!(l.slots[0].w,44.0);
                 let lead=measure_widgets(&d,&Appearance::default(),10,None,0.0,Some(true),pins,28);
-                assert_eq!(&lead.key_order()[..7],&[10,12,13,14,15,16,11]);
-                assert_eq!(l.key_order(),(0..=10).chain(12..17).chain([11]).collect::<Vec<_>>());
+                assert_eq!(&lead.key_order()[..8],&[17,10,12,13,14,15,16,11]);
+                assert_eq!(l.key_order(),[17].into_iter().chain(0..=10).chain(12..17).chain([11,18,19]).collect::<Vec<_>>());
                 for (i,(_,r)) in lead.inline.iter().enumerate(){
                     assert_eq!(lead.hot(r.x+r.w*0.5,r.y+r.h*0.5),Some(i+12));
                 }

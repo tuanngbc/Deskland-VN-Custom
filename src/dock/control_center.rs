@@ -94,7 +94,7 @@ fn metric_cards(view:&Snapshot,cfg:MetricOptions)->Vec<Card>{
 struct Panel {
     hwnd:HWND,owner:HWND,tag:usize,anchor:chrome::Anchor,dpi:u32,layer:Layer,
     fonts:[HFONT;4], view:View, metrics:Option<Metrics>, index:Option<usize>, pressed:Option<usize>, page:usize,
-    cols:usize,per_page:usize, row_height:i32,
+    cols:usize,per_page:usize, row_height:i32,list:bool,
 }
 impl Drop for Panel {
     fn drop(&mut self){unsafe{for &f in &self.fonts{if !f.is_null(){DeleteObject(f);}}}}
@@ -169,7 +169,7 @@ pub(super) fn inline_readings(cfg:MetricOptions)->Vec<InlineReading>{
 impl Panel{
     fn rect(&self,i:usize)->RECT{
         let pad=chrome::scale(self.dpi,14);
-        let gap=chrome::scale(self.dpi,8);
+        let gap=chrome::scale(self.dpi,if self.list{3}else{8});
         let top=chrome::scale(self.dpi,67)+(i/self.cols) as i32*(self.row_height+gap);
         let w=((self.layer.size.0-2*pad-gap*(self.cols as i32-1))/self.cols as i32).max(1);
         let left=pad+(i%self.cols) as i32*(w+gap);
@@ -199,7 +199,7 @@ impl Panel{
         super::fill(g,RECT{left:0,top:0,right:w,bottom:h},chrome::color(p.panel));
         chrome::box_fill(g,RECT{left:0,top:0,right:w,bottom:h},px(32),p.panel,Some(p.edge));
         let old=SelectObject(g,self.fonts[0]);
-        chrome::text(g,RECT{left:px(18),top:px(13),right:w-px(14),bottom:px(41)},&self.view.title,p.ink,SINGLE_LINE);
+        chrome::text(g,RECT{left:px(18),top:px(13),right:w-px(18),bottom:px(41)},&self.view.title,p.ink,SINGLE_LINE);
         SelectObject(g,self.fonts[2]);
         chrome::text(g,RECT{left:px(18),top:px(41),right:w-px(14),bottom:px(59)},&self.view.hint,p.muted,SINGLE_LINE);
         let cards=self.cards();
@@ -212,21 +212,28 @@ impl Panel{
                 (true,true)=>[82,72,63],(true,false)=>[70,62,56],
                 (false,true)=>[255,239,226],(false,false)=>[255,253,251],
             };
-            chrome::box_fill(g,r,px(24),fill,focused.then_some(p.accent));
-            let inner=r.left+px(if c.icon.is_some(){47}else{12});
-            let first=px(if is_metric{6}else{7});
+            if self.list {
+                if focused {chrome::box_fill(g,r,px(12),fill,None);}
+                let boundary=i>0&&matches!(cards[i-1].action.as_ref(),Some(Command::Window{..}))
+                    && !matches!(c.action.as_ref(),Some(Command::Window{..}));
+                if boundary{
+                    super::fill(g,RECT{left:r.left+px(8),top:r.top-px(2),right:r.right-px(8),bottom:r.top-px(1)},chrome::color(p.edge));
+                }
+            }else{chrome::box_fill(g,r,px(20),fill,focused.then_some(p.accent));}
+            let inner=r.left+px(if c.icon.is_some(){if self.list{38}else{44}}else{12});
+            let first=px(if is_metric||self.list{4}else{6});
             let text_bounds=RECT{left:inner,top:r.top+first,right:r.right-px(9),
-                bottom:if c.hint.is_empty(){r.bottom-first}else{r.top+px(25)}};
+                bottom:if c.hint.is_empty(){r.bottom-first}else{r.top+px(if self.list{20}else{25})}};
             SelectObject(g,self.fonts[if is_metric{2}else{1}]);
             chrome::text(g,text_bounds,&c.title,if is_metric{p.muted}else{p.ink},SINGLE_LINE);
             if !c.hint.is_empty(){
                 SelectObject(g,self.fonts[if is_metric{3}else{2}]);
-                chrome::text(g,RECT{top:r.top+px(25),bottom:r.bottom-px(5),..text_bounds},&c.hint,
+                chrome::text(g,RECT{top:r.top+px(if self.list{20}else{25}),bottom:r.bottom-px(5),..text_bounds},&c.hint,
                     if is_metric{p.ink}else{p.muted},SINGLE_LINE);
             }
             if let Some(icon)=c.icon{
-                let size=px(32) as f32;
-                let badge=Rect{x:(r.left+px(8)) as f32,y:(r.top+(r.bottom-r.top-px(32))/2) as f32,w:size,h:size};
+                let size=px(if self.list{24}else{30});
+                let badge=Rect{x:(r.left+px(8)) as f32,y:(r.top+(r.bottom-r.top-size)/2) as f32,w:size as f32,h:size as f32};
                 glyphs.push((icon,badge));
             }
         }
@@ -260,20 +267,23 @@ pub(super) unsafe fn close_for(owner:HWND){
     let hwnd=PANE.with(|s|s.borrow().as_ref().filter(|p|owner.is_null()||owner==p.owner).map(|p|p.hwnd));
     if let Some(h)=hwnd{DestroyWindow(h);}
 }
-pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){
+pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false);}
+pub(super) unsafe fn show_list(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,true);}
+unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool){
     super::utilities::close_panels();
     let Some(work)=anchor.work()else{return;};
     let dpi=windows_sys::Win32::UI::HiDpi::GetDpiForWindow(owner).clamp(72,288);
     let px=|n|chrome::scale(dpi,n);
-    let double=view.metrics.map_or(view.cards.len()>3,|o|o.compact);
+    let double=!list&&view.metrics.map_or(view.cards.len()>3,|o|o.compact);
     let cols=if double&&work.right-work.left>=px(365){2}else{1};
-    let width=px(if cols==2{392}else{306}).min(work.right-work.left);
-    let row_height=px(if view.metrics.is_some(){56}else{52});
+    let width=px(if list{350}else if cols==2{432}else{328}).min(work.right-work.left);
+    let row_height=px(if list{40}else if view.metrics.is_some(){57}else{52});
+    let gap=px(if list{3}else{8});
     let budget=(work.bottom-work.top-px(132)).max(row_height);
-    let rows=(budget/(row_height+px(8))).clamp(1,9) as usize;
+    let rows=(budget/(row_height+gap)).clamp(1,9) as usize;
     let per_page=cols*rows;
     let expected=view.metrics.map_or(view.cards.len(),|m|m.mask.count_ones() as usize);
-    let height=(px(84)+expected.clamp(1,per_page).div_ceil(cols) as i32*(row_height+px(8))
+    let height=(px(84)+expected.clamp(1,per_page).div_ceil(cols) as i32*(row_height+gap)
         +if expected>per_page{px(30)}else{0}).min(work.bottom-work.top).max(1);
     let Some(layer)=Layer::new(width,height)else{return;};
     let class=wide(CLASS);
@@ -284,9 +294,9 @@ pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){
     if hwnd.is_null(){return;}
     chrome::frame(hwnd,width,height,dpi,anchor);
     let tag=serial();
-    let fonts=[chrome::choose_font(dpi,20,650),chrome::choose_font(dpi,13,630),chrome::choose_font(dpi,12,450),chrome::choose_font(dpi,19,620)];
+    let fonts=[chrome::choose_font(dpi,if list{18}else{21},550),chrome::choose_font(dpi,14,if list{455}else{530}),chrome::choose_font(dpi,12,420),chrome::choose_font(dpi,19,540)];
     let metrics=view.metrics.map(Metrics::new);
-    let p=Panel{hwnd,owner,tag,anchor,dpi,layer,fonts,view,metrics,index:None,pressed:None,page:0,cols,per_page,row_height};
+    let p=Panel{hwnd,owner,tag,anchor,dpi,layer,fonts,view,metrics,index:None,pressed:None,page:0,cols,per_page,row_height,list};
     PANE.with(|s|s.replace(Some(p)));
     ShowWindow(hwnd,SW_SHOW);SetForegroundWindow(hwnd);SetFocus(hwnd);
     PANE.with(|s|{if let Some(m)=s.borrow().as_ref().and_then(|p|p.metrics.as_ref()){

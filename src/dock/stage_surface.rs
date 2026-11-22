@@ -121,13 +121,13 @@ impl Layout {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Look {pub dark:bool,pub layout:Layout,pub active:u8,pub alpha:Option<u8>}
 
-pub(super) struct Panel {layer:Layer,look:Option<Look>,static_pixels:Vec<u8>,mask:Option<Layer>,font:HFONT,detail_font:HFONT,dpi:u32,icons:IconRasters}
+pub(super) struct Panel {layer:Layer,look:Option<Look>,static_pixels:Vec<u8>,mask:Option<Layer>,font:HFONT,large_fonts:[HFONT;2],dpi:u32,icons:IconRasters}
 impl Panel {
     pub unsafe fn new(w:i32,h:i32,dpi:u32)->Option<Self>{
         let layer=Layer::new(w,h)?;
         let font=|size,weight|CreateFontW(-super::panel_chrome::scale(dpi,size),0,0,0,weight,0,0,0,
             DEFAULT_CHARSET as u32,0,0,ANTIALIASED_QUALITY as u32,DEFAULT_PITCH as u32,wide("Segoe UI Variable Text").as_ptr());
-        Some(Self{layer,look:None,static_pixels:Vec::new(),mask:None,font:font(12,600),detail_font:font(10,450),dpi,icons:IconRasters::default()})
+        Some(Self{layer,look:None,static_pixels:Vec::new(),mask:None,font:font(13,540),large_fonts:[font(26,540),font(22,420)],dpi,icons:IconRasters::default()})
     }
     pub fn geometry(&self)->(i32,i32,u32){(self.layer.size.0,self.layer.size.1,self.dpi)}
     pub fn font(&self)->HFONT{self.font}
@@ -224,15 +224,15 @@ impl Panel {
             }
         }
         if let Some((hwnd,labels,page,pages))=layered {
-            let mask_h=layout.caption.max(layout.nav_h);
-            if self.mask.as_ref().is_none_or(|m|m.size!=(w,mask_h)){self.mask=Layer::new(w,mask_h);}
+            let mask_h=layout.caption.max(layout.nav_h)*2;
+            if self.mask.as_ref().is_none_or(|m|m.size!=(w*2,mask_h)){self.mask=Layer::new(w*2,mask_h);}
             if let Some(mask)=self.mask.as_mut(){
                 let ink=palette.ink;
                 for (i,title) in labels.iter().enumerate(){
                     let r=caption_box(layout,i);
                     let main=Box2{y:r.y+(r.h/10),h:r.h/2,..r};
                     let small=Box2{y:main.y+main.h,h:r.h-main.h-r.h/5,..r};
-                    draw_mask(data,w,h,mask,self.font,main,title,false,ink);
+                    draw_mask_scaled(data,w,h,mask,self.large_fonts[0],main,title,false,ink,2);
                     let context=if layout.stack&(1<<i)!=0{
                         format!("Nhóm · {} cửa sổ",items[i].count)
                     }else if look.active&(1<<i)!=0{
@@ -240,7 +240,7 @@ impl Panel {
                     }else{
                         "Cửa sổ".to_owned()
                     };
-                    draw_mask(data,w,h,mask,self.detail_font,small,&context,false,palette.muted);
+                    draw_mask_scaled(data,w,h,mask,self.large_fonts[1],small,&context,false,palette.muted,2);
                 }
                 if let Some(nav)=layout.pages(pages){
                     let muted=if look.dark{[161,154,148]}else{[125,114,103]};
@@ -264,7 +264,7 @@ impl Panel {
     }
 }
 impl Drop for Panel {
-    fn drop(&mut self){for font in [self.font,self.detail_font]{if !font.is_null(){unsafe{DeleteObject(font);}}}}
+    fn drop(&mut self){for font in [self.font,self.large_fonts[0],self.large_fonts[1]]{if !font.is_null(){unsafe{DeleteObject(font);}}}}
 }
 fn caption_box(layout:Layout,i:usize)->Box2{
     let c=layout.card(i);
@@ -291,21 +291,30 @@ unsafe fn fit_on_dc(dc:HDC,text:&str,width:i32)->String{
     })
 }
 pub(super) unsafe fn draw_mask(data:&mut[u8],w:i32,h:i32,mask:&mut Layer,font:HFONT,b:Box2,text:&str,center:bool,ink:[u8;3]){
-    if b.w<1||b.h<1||b.x<0||b.y<0||b.x+b.w>w||b.y+b.h>h||b.w>mask.size.0||b.h>mask.size.1{return;}
-    mask.pixels().fill(0);
+    draw_mask_scaled(data,w,h,mask,font,b,text,center,ink,1);
+}
+pub(super) unsafe fn draw_mask_scaled(data:&mut[u8],w:i32,h:i32,mask:&mut Layer,font:HFONT,b:Box2,text:&str,center:bool,ink:[u8;3],scale:i32){
+    let (mw,mh)=(b.w*scale,b.h*scale);
+    if b.w<1||b.h<1||b.x<0||b.y<0||b.x+b.w>w||b.y+b.h>h||mw>mask.size.0||mh>mask.size.1{return;}
+    let stride=mask.size.0 as usize*4;
+    for row in mask.pixels()[..mh as usize*stride].chunks_exact_mut(stride){row[..mw as usize*4].fill(0);}
     let dc=mask.dc();
     let previous=if font.is_null(){std::ptr::null_mut()}else{SelectObject(dc,font)};
     SetBkMode(dc,TRANSPARENT as i32);SetTextColor(dc,0x00ffffff);
-    let mut rect=RECT{left:0,top:0,right:b.w,bottom:b.h};
-    let value=if center{text.to_owned()}else{fit_on_dc(dc,text,b.w)};
+    let mut rect=RECT{left:0,top:0,right:mw,bottom:mh};
+    let value=if center{text.to_owned()}else{fit_on_dc(dc,text,mw)};
     DrawTextW(dc,wide(&value).as_ptr(),-1,&mut rect,DT_SINGLELINE|DT_END_ELLIPSIS|DT_VCENTER|DT_NOPREFIX|if center{DT_CENTER}else{0});
     GdiFlush();
     if !previous.is_null(){SelectObject(dc,previous);}
-    let stride=mask.size.0 as usize*4;
     let mask=mask.pixels();
+    let scale=scale as usize;
     for y in 0..b.h as usize {
         for x in 0..b.w as usize {
-            let a=mask[y*stride+x*4] as u32;
+            let at_mask=(y*stride+x*4)*scale;
+            let a=if scale==2 {
+                let sum=mask[at_mask] as u32+mask[at_mask+4] as u32+mask[at_mask+stride] as u32+mask[at_mask+stride+4] as u32;
+                (sum+2)/4
+            }else{mask[at_mask] as u32};
             if a==0{continue;}
             let at=((b.y as usize+y)*w as usize+b.x as usize+x)*4;
             let d=&mut data[at..at+4];

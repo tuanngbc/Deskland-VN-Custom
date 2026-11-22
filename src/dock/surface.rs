@@ -3,7 +3,7 @@
 use super::{appearance::Theme, geometry::{Layout,Rect}, glass_probe::Layer};
 use std::{collections::{HashMap,VecDeque}, sync::{Arc,Weak},time::{Duration,Instant}};
 use windows_sys::Win32::{Foundation::HWND,Graphics::Gdi::*};
-use super::{control_center::{self,MetricOptions},stage_surface::{Box2,draw_mask}};
+use super::{control_center::{self,MetricOptions},stage_surface::{Box2,draw_mask,draw_mask_scaled}};
 use crate::launcher::IconPixels;
 use super::{FeedbackKind,UtilityWidget};
 
@@ -43,7 +43,7 @@ pub(super) fn control_backing(base: f32) -> f32 {
 
 pub type Atlas = HashMap<String, Option<Arc<crate::launcher::IconPixels>>>;
 pub struct Surface {
-    layer:Layer,glass:Rect,material:Material,static_pixels:Vec<u8>,icons:IconRasters,metric:Option<MetricInk>,
+    layer:Layer,glass:Rect,material:Material,static_pixels:Vec<u8>,icons:IconRasters,metric:Option<MetricInk>,clock:Option<ClockInk>,
 }
 struct MetricInk{size:(i32,i32),fonts:[HFONT;3],mask:Layer,pixels:Vec<u8>,key:Option<(usize,MetricOptions,bool,bool)>,painted_at:Option<Instant>}
 impl Drop for MetricInk{fn drop(&mut self){unsafe{for &font in &self.fonts{if !font.is_null(){DeleteObject(font);}}}}}
@@ -113,10 +113,51 @@ impl MetricInk{
         drawn
     }
 }
+struct ClockInk{
+    mask:Layer, pixels:Vec<u8>, fonts:[HFONT;2], size:(i32,i32), stamp:Option<(u16,u16,u16,u16,u16,bool,bool)>,
+}
+impl Drop for ClockInk{
+    fn drop(&mut self){unsafe{for font in self.fonts{if !font.is_null(){DeleteObject(font);}}}}
+}
+impl ClockInk{
+    unsafe fn new(w:i32,h:i32,scale:f32)->Option<Self>{
+        let dpi=(scale*96.0).round() as u32;
+        Some(Self{mask:Layer::new(w*2,h*2)?,pixels:vec![0;w as usize*h as usize*4],size:(w,h),
+            fonts:[super::panel_chrome::choose_font(dpi,26,510),super::panel_chrome::choose_font(dpi,22,430)],stamp:None})
+    }
+    unsafe fn paint(&mut self,data:&mut[u8],w:i32,h:i32,x:i32,y:i32,scale:f32,p:Palette,dark:bool,vertical:bool){
+        use windows_sys::Win32::{Foundation::SYSTEMTIME,System::SystemInformation::GetLocalTime};
+        let (cw,ch)=self.size;
+        if x<0||y<0||x+cw>w||y+ch>h{return;}
+        let mut t:SYSTEMTIME=std::mem::zeroed();GetLocalTime(&mut t);
+        let stamp=Some((t.wYear,t.wMonth,t.wDay,t.wHour,t.wMinute,dark,vertical));
+        if self.stamp!=stamp{
+            self.pixels.fill(0);
+            let line=(16.0*scale).round() as i32;
+            let top=(ch-2*line)/2;
+            let time=format!("{:02}:{:02}",t.wHour,t.wMinute);
+            let date=if vertical{format!("{:02}/{:02}",t.wDay,t.wMonth)}else{format!("{:02}/{:02}/{}",t.wDay,t.wMonth,t.wYear)};
+            for (i,(value,ink)) in [(&time,p.ink),(&date,p.muted)].into_iter().enumerate(){
+                let b=Box2{x:0,y:top+i as i32*line,w:cw,h:line};
+                draw_mask_scaled(&mut self.pixels,cw,ch,&mut self.mask,self.fonts[i],b,value,true,ink,2);
+            }
+            self.stamp=stamp;
+        }
+        for row in 0..ch as usize{
+            let src=&self.pixels[row*cw as usize*4..][..cw as usize*4];
+            let dest=&mut data[((y as usize+row)*w as usize+x as usize)*4..][..src.len()];
+            for (src,dest) in src.chunks_exact(4).zip(dest.chunks_exact_mut(4)){
+                if src[3]==0{continue;}
+                let inv=255-src[3] as u16;
+                for i in 0..4{dest[i]=(src[i] as u16+(dest[i] as u16*inv+127)/255).min(255) as u8;}
+            }
+        }
+    }
+}
 impl Surface {
     pub unsafe fn new(w:i32,h:i32,glass:Rect,material:Material)->Option<Self>{
         let layer=Layer::new(w,h)?;
-        Some(Self{layer,glass,material,static_pixels:Vec::new(),icons:IconRasters::default(),metric:None})
+        Some(Self{layer,glass,material,static_pixels:Vec::new(),icons:IconRasters::default(),metric:None,clock:None})
     }
     pub fn size(&self)->(i32,i32){self.layer.size}
     pub fn set_material(&mut self,value:Material){
@@ -137,7 +178,7 @@ impl Surface {
             self.static_pixels.resize(w as usize*h as usize*4,0);
             let rect=self.glass;
             let tint=self.material;
-            let radius=rect.w.min(rect.h)*0.37;
+            let radius=rect.w.min(rect.h)*0.40;
             for (i,p) in self.static_pixels.chunks_exact_mut(4).enumerate() {
                 let x=(i%w as usize) as f32+0.5;
                 let y=(i/w as usize) as f32+0.5;
@@ -197,8 +238,8 @@ impl Surface {
         let scan=layout.scan;
         let tint=palette.ink;
         if let Some(cluster)=layout.cluster {
-            let radius=cluster.w.min(cluster.h).min(34.0*scale)*0.44;
-            let backing=control_backing((100-self.material.transparency) as f32*2.55);
+            let radius=cluster.w.min(cluster.h).min(28.0*scale)*0.42;
+            let backing=(control_backing((100-self.material.transparency) as f32*2.55)*0.45).min(86.0);
             rounded(data,w,h,cluster,radius,control_tint,backing.ceil() as u8);
         }else if control_alpha!=0{rounded(data,w,h,scan,scan.w*0.32,control_tint,control_alpha);}
         if hover==Some(items.len()){rounded(data,w,h,scan,scan.w*0.22,tint,50);}
@@ -250,6 +291,35 @@ impl Surface {
             status_on(data,w,h,slot,scale,tint,Some(widget));
         }
         status_on(data,w,h,utility,scale,tint,None);
+        let first=layout.shell_index();
+        for (i,slot) in [layout.start,layout.tray,layout.clock].into_iter().enumerate(){
+            if hover==Some(first+i){rounded(data,w,h,slot,8.0*scale,palette.ink,37);}
+        }
+        let start=layout.start;
+        let size=(start.w.min(start.h)*0.49).min(19.0*scale);
+        let tile=size*0.46;
+        let blue=if self.material.dark{[255,186,105]}else{[210,115,22]};
+        let x=start.x+(start.w-size)*0.5;let y=start.y+(start.h-size)*0.5;
+        for col in 0..2{for row in 0..2{
+            let r=Rect{x:x+col as f32*(size-tile),y:y+row as f32*(size-tile),w:tile,h:tile};
+            rounded(data,w,h,r,0.8*scale,blue,255);
+        }}
+        let t=layout.tray;
+        let mid_x=t.x+t.w*0.5;let mid_y=t.y+t.h*0.5;
+        let k=(t.w.min(t.h)*0.18).min(5.0*scale);
+        draw(data,w,h,t,|x,y|{
+            let a=segment_distance(x,y,mid_x-k,mid_y+k*0.38,mid_x,mid_y-k*0.50);
+            let b=segment_distance(x,y,mid_x,mid_y-k*0.50,mid_x+k,mid_y+k*0.38);
+            Some((tint,(0.5+0.78*scale-a.min(b)).clamp(0.0,1.0)*238.0))
+        });
+        let c=layout.clock;
+        let x=c.x.ceil() as i32;let y=c.y.ceil() as i32;
+        let cw=(c.x+c.w).floor() as i32-x;let ch=(c.y+c.h).floor() as i32-y;
+        if cw>=24&&ch>=22{
+            let font_scale=scale.min(ch as f32/36.0).min(cw as f32/46.0);
+            if self.clock.as_ref().is_none_or(|old|old.size!=(cw,ch)){self.clock=ClockInk::new(cw,ch,font_scale);}
+            if let Some(clock)=self.clock.as_mut(){clock.paint(data,w,h,x,y,font_scale,palette,self.material.dark,layout.side!=super::DockSide::Bottom);}
+        }
         if let Some(marker)=drop_target.and_then(|i|layout.pin_marker(i,items.iter().take_while(|item|item.pinned).count())){
             let ink=if self.material.dark{[244,219,180]}else{[171,106,44]};
             rounded(data,w,h,marker,scale,ink,242);
@@ -400,8 +470,6 @@ pub(super) fn status_on(data:&mut[u8],w:i32,h:i32,cell:Rect,scale:f32,tint:[u8;3
                 let bands=[0.54,0.365,0.195].into_iter().map(|r|arc(x,y,0.50,0.73,r,0.0,-1.0)).fold(f32::INFINITY,f32::min);
                 bands.min((x-0.50).hypot(y-0.76)-0.025)
             }
-            Some(Calendar)=>((x-0.50).hypot(y-0.50)-0.39).abs()
-                .min(line(x,y,0.50,0.28,0.50,0.51)).min(line(x,y,0.50,0.51,0.65,0.59)),
             Some(Sound)=>{
                 let horn=[(0.10,0.39,0.25,0.39),(0.10,0.39,0.10,0.61),(0.10,0.61,0.25,0.61),
                     (0.25,0.39,0.48,0.22),(0.25,0.61,0.48,0.78),(0.48,0.22,0.48,0.78)]

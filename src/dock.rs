@@ -31,6 +31,7 @@ mod wifi;
 mod control_center;
 mod panel_chrome;
 mod appbar;
+mod shell_access;
 pub use utilities::{HostAction,Profile as UtilityProfile,Widget as UtilityWidget};
 pub use control_center::MetricOptions;
 pub use glass_probe::probe as glass_probe;
@@ -102,7 +103,7 @@ struct Bar {
     reveal:motion::Spring, feedback:Option<Feedback>, active:Option<usize>, minimized:u16, attention:u16, metric_repaint:Option<Instant>,
 }
 #[derive(Clone,Debug,PartialEq,Eq)]
-enum DockTarget { App(String), Launcher, Overflow, Utility(UtilityWidget) }
+enum DockTarget { App(String), Launcher, Overflow, Utility(UtilityWidget), Shell(shell_access::Target) }
 #[derive(Clone)]
 struct Press { target:DockTarget, x:i32, y:i32, dragged:bool }
 impl Press {
@@ -144,13 +145,18 @@ impl Motion {
     }
 }
 impl Bar {
+    fn shell_target(&self,x:f32,y:f32)->Option<shell_access::Target>{
+        let l=self.layout.as_ref()?;
+        if self.hidden||self.collapsed{return None;}
+        [l.start,l.tray,l.clock].into_iter().zip(shell_access::Target::ALL).find_map(|(r,t)|r.contains(x,y).then_some(t))
+    }
     fn target(&self,x:f32,y:f32)->Option<DockTarget>{
         let layout=self.layout.as_ref()?;
         if self.hidden||self.collapsed{return None;}
         if let Some(item)=layout.hit(x,y).and_then(|i|self.items.get(i)){return Some(DockTarget::App(item.path.clone()));}
         if layout.is_launch_button(x,y){return Some(DockTarget::Launcher);}
         if layout.is_utility_button(x,y){return Some(DockTarget::Overflow);}
-        layout.inline_at(x,y).map(DockTarget::Utility)
+        layout.inline_at(x,y).map(DockTarget::Utility).or_else(||self.shell_target(x,y).map(DockTarget::Shell))
     }
     fn fallback_target(&self,x:i32,y:i32,width:i32,utilities:bool)->Option<DockTarget>{
         if self.hidden|| !(9..60).contains(&y)||x<0||x>=width{return None;}
@@ -165,7 +171,7 @@ impl Bar {
         let pins=self.items.iter().take_while(|item|item.pinned).count();
         let from=self.items[..pins].iter().position(|item|item.path==*path)?;
         if !press.moved(x,y,layout.scale)||self.hidden||self.collapsed
-            ||layout.is_launch_button(x,y)||layout.is_utility_button(x,y)||layout.inline_at(x,y).is_some()
+            ||layout.is_launch_button(x,y)||layout.is_utility_button(x,y)||layout.inline_at(x,y).is_some()||self.shell_target(x,y).is_some()
             ||layout.hit(x,y).is_some_and(|i|i>=pins){return None;}
         layout.pin_boundary(x,y,pins).filter(|&i|i!=from&&i!=from+1)
     }
@@ -938,7 +944,9 @@ unsafe fn show_status_tip(owner:HWND){
                 format!("{} · {} cửa sổ",item.title,item.count)
             }else{item.title.chars().take(512).collect()});
         }
-        let item=state.bars.iter().find(|b|b.hwnd==owner&&!b.hidden&&!b.collapsed)?.status_hover?;
+        let bar=state.bars.iter().find(|b|b.hwnd==owner&&!b.hidden&&!b.collapsed)?;
+        if let Some(target)=bar.pointer.and_then(|(x,y)|bar.shell_target(x,y)){return Some(target.title().to_owned());}
+        let item=bar.status_hover?;
         Some(item.map_or("Bảng tiện ích",UtilityWidget::title).to_owned())
     });
     let Some(label)=label.filter(|label|!label.is_empty())else{return;};
@@ -1164,6 +1172,17 @@ fn queue_inline_refresh_if_needed(hwnd:HWND){
     if exists{unsafe{SetTimer(CONTROL.with(Cell::get),INLINE_WAKE,35,None);}}
 }
 const INLINE_WAKE:usize=11;
+fn refresh_dock_clock(){
+    use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+    thread_local!{static CLOCK:Cell<Option<(u16,u16,u16,u16,u16)>>=const{Cell::new(None)};}
+    unsafe {
+        let mut t:SYSTEMTIME=mem::zeroed();GetLocalTime(&mut t);
+        let stamp=Some((t.wYear,t.wMonth,t.wDay,t.wHour,t.wMinute));
+        if CLOCK.with(|c|c.replace(stamp))!=stamp{
+            STATE.with(|s|for bar in s.borrow().bars.iter().filter(|b|!b.hidden&&!b.collapsed){InvalidateRect(bar.hwnd,ptr::null(),0);});
+        }
+    }
+}
 unsafe fn panel_closed(owner:HWND){
     if !owner.is_null()&&IsWindow(owner)!=0{SetTimer(owner,HIDE_TIMER,650,None);}
 }
@@ -1289,43 +1308,40 @@ unsafe fn app_menu(owner:HWND,path:&str,picker:bool){
     })else{return;};
     let foreground=GetForegroundWindow();
     windows.sort_by_key(|(window,_)|(window.hwnd!=foreground,IsIconic(window.hwnd)!=0));
-    let name=basename(&item.path);
+    let stem=basename(&item.path);
+    let name=match stem.to_ascii_lowercase().as_str(){
+        "explorer"=>"File Explorer".into(),"chrome"=>"Google Chrome".into(),"msedge"=>"Microsoft Edge".into(),
+        "powershell"|"pwsh"=>"PowerShell".into(),"notepad"=>"Notepad".into(),_=>stem,
+    };
     let mut cards=Vec::new();
-    let mut add=|title:&str,hint:&str,operation|cards.push(Card{icon:None,title:title.into(),hint:hint.into(),
-        action:Some(Command::App{path:item.path.clone(),operation})});
-    if !picker{
-        if windows.len()<2{
-            add(if windows.is_empty(){"Mở ứng dụng"}else{"Chuyển đến cửa sổ"},"",AppOperation::Open);
-        }
-        if !windows.is_empty(){
-            add("Mở thêm","Ứng dụng quyết định có mở cửa sổ mới hay không",AppOperation::NewWindow);
-        }
-        add(if item.pinned{"Bỏ ghim"}else{"Ghim vào Dock"},"",AppOperation::TogglePin);
-        if let Some((_,id))=windows.first(){
-            if advanced{
-                add("Quản lý cửa sổ","Thu nhỏ, phóng to, chia màn hình",AppOperation::Advanced);
-            }
-            add(if windows.len()>1{"Đóng cửa sổ đầu tiên"}else{"Đóng cửa sổ"},
-                "Ứng dụng sẽ hỏi lưu nếu cần",AppOperation::Close(vec![*id]));
-        }
-        if windows.len()>1{
-            add("Đóng các cửa sổ đang liệt kê","Ứng dụng sẽ hỏi lưu nếu cần",
-                AppOperation::Close(windows.iter().map(|(_,id)|*id).collect()));
-        }
-    }
-    if !picker{cards.push(Card{icon:None,title:"Thêm ứng dụng…".into(),hint:String::new(),action:Some(Command::AddApp)});}
     let all=windows.len();
-    for (i,(w,id)) in windows.into_iter().enumerate(){
+    for (w,id) in &windows{
         let status=if w.hwnd==foreground{"Đang dùng"}else if IsIconic(w.hwnd)!=0{"Đã thu nhỏ"}else{"Đang mở"};
         cards.push(Card{icon:Some(UtilityWidget::Windows),
-            title:if w.title.trim().is_empty(){name.clone()}else{w.title},
-            hint:if all>1{format!("Cửa sổ {} · {status}",i+1)}else{status.into()},
-            action:Some(Command::Window{hwnd:id.hwnd,pid:id.pid,tid:id.tid})});
+            title:if w.title.trim().is_empty(){name.clone()}else{w.title.clone()},
+            hint:status.into(),action:Some(Command::Window{hwnd:id.hwnd,pid:id.pid,tid:id.tid})});
+    }
+    if !picker{
+        let mut add=|title:&str,operation|cards.push(Card{icon:None,title:title.into(),hint:String::new(),
+            action:Some(Command::App{path:item.path.clone(),operation})});
+        if windows.is_empty(){
+            add("Mở ứng dụng",AppOperation::Open);
+        }else{
+            add("Mở thêm",AppOperation::NewWindow);
+        }
+        add(if item.pinned{"Bỏ ghim khỏi Dock"}else{"Ghim vào Dock"},AppOperation::TogglePin);
+        if advanced&&!windows.is_empty(){
+            add("Quản lý cửa sổ…",AppOperation::Advanced);
+        }
+        if !windows.is_empty(){
+            add(if windows.len()==1{"Đóng cửa sổ"}else{"Đóng các cửa sổ của ứng dụng"},
+                AppOperation::Close(windows.iter().map(|(_,id)|*id).collect()));
+        }
     }
     if cards.is_empty(){return;}
     let hint=if all==0{if item.pinned{"Đã ghim".into()}else{String::new()}}
         else{format!("{all} cửa sổ{}",if item.pinned{" · Đã ghim"}else{""})};
-    control_center::show(owner,dock_app_anchor(owner,Some(path)),View{title:if picker{"Chọn cửa sổ".into()}else{name},hint,cards,metrics:None});
+    control_center::show_list(owner,dock_app_anchor(owner,Some(path)),View{title:if picker{"Chọn cửa sổ".into()}else{name},hint,cards,metrics:None});
 }
 unsafe fn more_apps(owner:HWND){
     use control_center::{Card,Command,View};
@@ -1339,7 +1355,7 @@ unsafe fn more_apps(owner:HWND){
         }).collect::<Vec<_>>()
     });
     if !cards.is_empty(){
-        control_center::show(owner,dock_app_anchor(owner,None),View{title:"Ứng dụng khác".into(),hint:"Ứng dụng ngoài hàng chính của Dock".into(),cards,metrics:None});
+        control_center::show_list(owner,dock_app_anchor(owner,None),View{title:"Ứng dụng khác".into(),hint:"Ứng dụng ngoài hàng chính của Dock".into(),cards,metrics:None});
     }
 }
 unsafe fn perform_app_action(owner:HWND,path:&str,operation:AppOperation){
@@ -1868,7 +1884,8 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_TIMER if w==WORKSPACE_TIMER=>{update_state(|state|{state.workspaces.advance();});0},
-        WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
+        WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}else{refresh_dock_clock();}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
+        WM_TIMECHANGE=>{refresh_dock_clock();0},
         WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_DPICHANGED=>{DISPLAY_DIRTY.with(|d|d.set(true));queue_refresh();0},
         WM_MOUSEMOVE=>{
             let x=l as i16 as i32;
@@ -1930,7 +1947,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                     let mut s=s.borrow_mut();
                     let b=s.bars.iter_mut().find(|b|b.hwnd==hwnd)?;
                     let layout=b.layout.as_ref()?;
-                    let status=if layout.is_utility_button(x as f32,y as f32){Some(None)}
+                    let status=if layout.is_utility_button(x as f32,y as f32)||b.shell_target(x as f32,y as f32).is_some(){Some(None)}
                         else{layout.inline_at(x as f32,y as f32).map(Some)};
                     if b.status_hover==status{return None;}
                     b.status_hover=status;
@@ -2045,14 +2062,16 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                     VK_LEFT|VK_UP=>order[i.saturating_sub(1)],VK_RIGHT|VK_DOWN=>order[(i+1).min(order.len()-1)],
                     VK_HOME=>order[0],VK_END=>order[order.len()-1],
                     VK_RETURN=>return Some((bar.items.get(current).cloned(),current==bar.items.len(),has_utilities&&current==bar.items.len()+1,
-                        current.checked_sub(bar.items.len()+2).and_then(|i|bar.layout.as_ref()?.inline.get(i)).map(|(w,_)|*w),0)),
-                    VK_ESCAPE=>return Some((None,false,false,None,bar.previous_focus)),
+                        current.checked_sub(bar.items.len()+2).and_then(|i|bar.layout.as_ref()?.inline.get(i)).map(|(w,_)|*w),
+                        bar.layout.as_ref().and_then(|l|current.checked_sub(l.shell_index())).and_then(|i|shell_access::Target::ALL.get(i)).copied(),0)),
+                    VK_ESCAPE=>return Some((None,false,false,None,None,bar.previous_focus)),
                     _=>return None,
                 };
                 bar.keyboard=Some(next);
-                Some((None,false,false,None,0))
+                Some((None,false,false,None,None,0))
             });
-            if let Some((item,search,utilities,widget,previous))=action{
+            if let Some((item,search,utilities,widget,shell,previous))=action{
+                if let Some(target)=shell{shell_access::activate(target,false);}
                 if let Some(item)=item{open_dock_item(hwnd,&item);}
                 if search {open_launcher();}
                 if utilities||widget.is_some(){request_utilities(hwnd,widget);}
@@ -2111,6 +2130,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                     Some(DockTarget::Launcher)=>open_launcher(),
                     Some(DockTarget::Overflow)=>request_utilities(hwnd,None),
                     Some(DockTarget::Utility(widget))=>request_utilities(hwnd,Some(widget)),
+                    Some(DockTarget::Shell(target))=>shell_access::activate(target,false),
                     None=>{},
                 }
             }
@@ -2122,6 +2142,9 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             }
             let x=(l as u32&0xffff) as i16 as i32;
             let y=(l>>16) as i16 as i32;
+            let system=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd).and_then(|b|b.shell_target(x as f32,y as f32)));
+            if system==Some(shell_access::Target::Start){shell_access::activate(shell_access::Target::Start,true);return 0;}
+            if system.is_some(){return 0;}
             let on_status=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd&&!b.collapsed)
                 .and_then(|b|b.layout.as_ref())
                 .is_some_and(|layout|layout.is_utility_button(x as f32,y as f32)||layout.inline_at(x as f32,y as f32).is_some()));
