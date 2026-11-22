@@ -48,7 +48,7 @@ impl Layout {
         let inset=px(6);
         let nav_h=px(21);
         let gap=gap.max(px(8));
-        let min_h=px(63);
+        let min_h=px(68);
         let rows_for=|nav:i32|((height-inset*2-nav+gap)/(min_h+gap)).max(1) as usize;
         let limit=limit.clamp(1,8);
         let paged=total>rows_for(0).min(limit);
@@ -56,9 +56,9 @@ impl Layout {
         let rows=rows_for(reserve).min(limit);
         let shown=total.min(rows).max(1) as i32;
         let available=(height-2*inset-reserve-(shown-1)*gap)/shown;
-        let ideal=((width-2*inset)*2/3+px(18)).clamp(min_h,px(160));
+        let ideal=((width-4*inset)*3/5+px(42)).clamp(min_h,px(160));
         let card_h=available.min(ideal).max(1);
-        Self{width,height,card_h,inset,gap,radius:px(16),caption:px(30),rows,count:0,paged,stack:0,nav_h,right}
+        Self{width,height,card_h,inset,gap,radius:px(18),caption:px(37),rows,count:0,paged,stack:0,nav_h,right}
     }
     pub fn card(self,i:usize)->Box2 {
         // Reserve the same margin for the stack on every card so thumbnails
@@ -121,14 +121,13 @@ impl Layout {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Look {pub dark:bool,pub layout:Layout,pub active:u8,pub alpha:Option<u8>}
 
-pub(super) struct Panel {layer:Layer,look:Option<Look>,static_pixels:Vec<u8>,mask:Option<Layer>,font:HFONT,dpi:u32,icons:IconRasters}
+pub(super) struct Panel {layer:Layer,look:Option<Look>,static_pixels:Vec<u8>,mask:Option<Layer>,font:HFONT,detail_font:HFONT,dpi:u32,icons:IconRasters}
 impl Panel {
     pub unsafe fn new(w:i32,h:i32,dpi:u32)->Option<Self>{
         let layer=Layer::new(w,h)?;
-        let font_height=((12*dpi.clamp(72,288)+48)/96) as i32;
-        let font=CreateFontW(-font_height,0,0,0,500,0,0,0,DEFAULT_CHARSET as u32,0,0,
-            ANTIALIASED_QUALITY as u32,DEFAULT_PITCH as u32,wide("Segoe UI Variable").as_ptr());
-        Some(Self{layer,look:None,static_pixels:Vec::new(),mask:None,font,dpi,icons:IconRasters::default()})
+        let font=|size,weight|CreateFontW(-super::panel_chrome::scale(dpi,size),0,0,0,weight,0,0,0,
+            DEFAULT_CHARSET as u32,0,0,ANTIALIASED_QUALITY as u32,DEFAULT_PITCH as u32,wide("Segoe UI Variable Text").as_ptr());
+        Some(Self{layer,look:None,static_pixels:Vec::new(),mask:None,font:font(12,600),detail_font:font(10,450),dpi,icons:IconRasters::default()})
     }
     pub fn geometry(&self)->(i32,i32,u32){(self.layer.size.0,self.layer.size.1,self.dpi)}
     pub fn font(&self)->HFONT{self.font}
@@ -153,12 +152,12 @@ impl Panel {
                     });
                 }
                 if layout.stack&(1<<i)!=0 {
-                    rounded(data,w,h,layout.rear(i,3).rect(),radius,if look.dark{[70,59,49]}else{[168,151,136]},alpha);
-                    rounded(data,w,h,layout.rear(i,2).rect(),radius,if look.dark{[108,91,74]}else{[221,210,199]},alpha);
+                    rounded(data,w,h,layout.rear(i,3).rect(),radius,if look.dark{[78,69,61]}else{[208,202,197]},alpha);
+                    rounded(data,w,h,layout.rear(i,2).rect(),radius,if look.dark{[103,92,80]}else{[238,232,226]},alpha);
                 }
                 let active=look.active&(1<<i)!=0;
-                let edge=if active{palette.accent}else{palette.edge};
-                let tint=palette.panel;
+                let edge=if active{palette.accent}else if look.dark{[102,92,82]}else{[224,215,208]};
+                let tint=if look.dark{[50,43,37]}else{[253,249,246]};
                 draw(data,w,h,b,|x,y|{
                     let d=distance(b,radius,x,y);
                     let coverage=(0.5-d).clamp(0.0,1.0);
@@ -210,7 +209,7 @@ impl Panel {
         let tint=if look.dark{[222,219,216]}else{[64,59,53]};
         for (i,item) in items.iter().enumerate(){
             let c=layout.card(i);
-            let size=(layout.caption-9).max(1) as f32;
+            let size=(layout.caption*2/3).max(1) as f32;
             let small=Rect{x:(c.x+layout.inset) as f32,y:(c.y+c.h) as f32-(layout.caption as f32+size)/2.0,w:size,h:size};
             if let Some(Some(icon))=atlas.get(&item.path){self.icons.paint(data,w,h,small,icon);}
             else{fallback_icon(data,w,h,small,tint);}
@@ -231,7 +230,17 @@ impl Panel {
                 let ink=palette.ink;
                 for (i,title) in labels.iter().enumerate(){
                     let r=caption_box(layout,i);
-                    draw_mask(data,w,h,mask,self.font,r,title,false,ink);
+                    let main=Box2{y:r.y+(r.h/10),h:r.h/2,..r};
+                    let small=Box2{y:main.y+main.h,h:r.h-main.h-r.h/5,..r};
+                    draw_mask(data,w,h,mask,self.font,main,title,false,ink);
+                    let context=if layout.stack&(1<<i)!=0{
+                        format!("Nhóm · {} cửa sổ",items[i].count)
+                    }else if look.active&(1<<i)!=0{
+                        "Đang dùng".to_owned()
+                    }else{
+                        "Cửa sổ".to_owned()
+                    };
+                    draw_mask(data,w,h,mask,self.detail_font,small,&context,false,palette.muted);
                 }
                 if let Some(nav)=layout.pages(pages){
                     let muted=if look.dark{[161,154,148]}else{[125,114,103]};
@@ -255,7 +264,7 @@ impl Panel {
     }
 }
 impl Drop for Panel {
-    fn drop(&mut self){if !self.font.is_null(){unsafe{DeleteObject(self.font);}}}
+    fn drop(&mut self){for font in [self.font,self.detail_font]{if !font.is_null(){unsafe{DeleteObject(font);}}}}
 }
 fn caption_box(layout:Layout,i:usize)->Box2{
     let c=layout.card(i);

@@ -130,9 +130,13 @@
       <p class="launcher-note" data-i18n="miniToolsNote">Kéo chọn vùng để chụp hoặc quay. Ảnh chụp mở trình sửa ngay. Video MP4 lưu trong Videos/tuanpc-desk. Đóng tiện ích để giải phóng bộ nhớ.</p>
     </section></div></section>
 <section class="settings-page" id="page-dock" hidden>
+  <div class="dock-intro">
+    <div><span class="dock-eyebrow">DESKTOP</span><h2 data-i18n="nav_dock">Dock &amp; Stage Manager</h2>
+      <p data-i18n="dockDescription">Chọn các thành phần cho không gian làm việc của bạn.</p></div>
+    <div class="dock-miniature" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+  </div>
   <section class="setting-card">
-    <h3 data-i18n="nav_dock">Dock &amp; Stage Manager</h3>
-    <p class="monitor-detail" data-i18n="dockDescription">Chọn các thành phần cho không gian làm việc của bạn.</p>
+    <h3>Thành phần</h3>
     <label class="setting-row switch-row"><b data-i18n="dockWallpaper">Hình nền động</b><input type="checkbox" id="dockWallpaperEnabled" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <label class="setting-row switch-row"><b data-i18n="dockEnabled">Bật Dock</b><input type="checkbox" id="dockEnabled" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <label class="setting-row switch-row"><b data-i18n="dockStageEnabled">Bật thanh Stage Manager</b><input type="checkbox" id="dockStageEnabled" role="switch"><i class="switch" aria-hidden="true"></i></label>
@@ -142,7 +146,7 @@
     <p id="dockRuntimeStatus" class="monitor-detail" role="status" aria-live="polite"></p>
   </section>
   <section class="setting-card dock-placement">
-    <h3>Dock</h3>
+    <h3>Màn hình và tiện ích Dock</h3><p class="dock-section-copy">Chọn màn hình, sắp xếp tiện ích và chỉ số cho từng Dock.</p>
     <label class="setting-row"><b data-i18n="dockDisplayTarget">Màn hình hiển thị</b><select id="dockDisplayMode">
       <option value="all" data-i18n="dockDisplayAll">Tất cả màn hình</option>
       <option value="primary" data-i18n="dockDisplayPrimary">Chỉ màn hình chính</option>
@@ -179,15 +183,20 @@
   </section>
   <section class="setting-card dock-placement">
     <h3>Hành vi cửa sổ</h3>
-    <p>Giữ chỗ dùng vùng làm việc của Windows và giữ thanh tác vụ. Ứng dụng toàn màn hình sẽ ẩn Dock và Stage trên màn hình đó.</p>
+    <p class="dock-section-copy">Giữ chỗ dùng vùng làm việc của Windows. Khi ứng dụng vào toàn màn hình, Dock và Stage tự ẩn trên màn hình đó.</p>
     <label class="setting-row"><b>Màn hình</b><select id="dockPolicyDisplay"></select></label>
     <div id="dockPolicyControls" hidden>
       <label class="setting-row"><b>Dock</b><select id="dockPolicy_dock"><option value="default">Dùng cài đặt Dock chung</option><option value="reserve">Giữ chỗ khi phóng to</option><option value="floating">Nổi trên cửa sổ</option><option value="autoHide">Tự ẩn</option></select></label>
       <label class="setting-row"><b>Stage Manager</b><select id="dockPolicy_stage"><option value="default">Mặc định (nổi)</option><option value="reserve">Giữ chỗ khi có thẻ Stage</option><option value="floating">Nổi trên cửa sổ</option><option value="autoHide">Tự ẩn</option></select></label>
     </div>
   </section>
+  <section class="setting-card">
+    <h3>Thanh tác vụ Windows</h3>
+    <p class="dock-section-copy" id="taskbarTakeoverStatus">Chưa mở tính năng này: cần kiểm tra khôi phục thanh tác vụ khi Deskland bị dừng đột ngột.</p>
+    <label class="setting-row switch-row"><b>Ẩn thanh tác vụ Windows</b><input type="checkbox" role="switch" disabled aria-describedby="taskbarTakeoverStatus"><i class="switch" aria-hidden="true"></i></label>
+  </section>
   <section class="setting-card dock-placement">
-    <h3>Stage Manager</h3>
+    <h3>Stage Manager</h3><p class="dock-section-copy">Chọn cách các thẻ cửa sổ và nhóm xuất hiện trên từng màn hình.</p>
     <label class="setting-row"><b data-i18n="dockDisplayTarget">Màn hình hiển thị</b><select id="stageDisplayMode">
       <option value="all" data-i18n="dockDisplayAll">Tất cả màn hình</option>
       <option value="primary" data-i18n="dockDisplayPrimary">Chỉ màn hình chính</option>
@@ -206,7 +215,7 @@
       <button class="ghost-btn" id="stageStyleReset" type="button" data-i18n="stageStyleReset">Khôi phục bố cục màn hình này</button>
     </div>
   </section>
-  <section class="setting-card"><h3 data-i18n="dockAppearanceTitle">Kiểu hiển thị Dock</h3>
+  <section class="setting-card"><h3 data-i18n="dockAppearanceTitle">Kiểu hiển thị Dock</h3><p class="dock-section-copy">Đổi màu, kích cỡ và cách Dock chuyển động.</p>
     <label class="setting-row"><b data-i18n="dockIconSize">Cỡ biểu tượng</b><span><input id="dockLook_iconSize" type="range" min="28" max="60" value="44"> <output id="dockValue_iconSize">44</output></span></label>
     <label class="setting-row"><b data-i18n="dockSpacing">Khoảng cách biểu tượng</b><span><input id="dockLook_spacing" type="range" min="4" max="22" value="10"> <output id="dockValue_spacing">10</output></span></label>
     <label class="setting-row"><b data-i18n="dockTransparency">Độ trong suốt</b><span><input id="dockLook_transparency" type="range" min="4" max="74" value="36"> <output id="dockValue_transparency">36</output></span></label>
@@ -222,7 +231,7 @@
     <button class="ghost-btn" id="dockLookReset" type="button" data-i18n="dockLookReset">Khôi phục kiểu hiển thị Dock</button>
   </section>
   <section class="setting-card">
-    <h3 data-i18n="dockDisplayPreview">Bố cục hiển thị</h3>
+    <h3 data-i18n="dockDisplayPreview">Bố cục hiển thị</h3><p class="dock-section-copy">Xem Dock và Stage sẽ xuất hiện ở đâu trên các màn hình của anh.</p>
     <div id="dockDisplayPreview" class="dock-display-preview"></div>
     <p class="monitor-detail" id="dockDisplayFallback" hidden data-i18n="dockDisplayFallback">Màn hình đã chọn không có mặt. Tạm hiển thị trên màn hình chính; lựa chọn cũ được giữ lại.</p>
   </section>

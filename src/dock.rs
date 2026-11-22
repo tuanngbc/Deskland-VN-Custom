@@ -97,7 +97,7 @@ struct Bar {
     hwnd:HWND, bounds:RECT, items:Vec<Item>, hovered:i32, hidden:bool,
     layout:Option<geometry::Layout>, pinned_widgets:Vec<UtilityWidget>, motion:Motion, collapsed:bool, auto_hide:bool,
     status_hover:Option<Option<UtilityWidget>>, pressed:Option<Press>, keyboard:Option<usize>, previous_focus:isize, pointer:Option<(f32,f32)>,
-    reveal:motion::Spring, feedback:Option<Feedback>, active:Option<usize>, minimized:u16, metric_repaint:Option<Instant>,
+    reveal:motion::Spring, feedback:Option<Feedback>, active:Option<usize>, minimized:u16, attention:u16, metric_repaint:Option<Instant>,
 }
 #[derive(Clone,Debug,PartialEq,Eq)]
 enum DockTarget { App(String), Launcher, Overflow, Utility(UtilityWidget) }
@@ -276,6 +276,8 @@ thread_local! {
     static STAGE_SURFACES:RefCell<HashMap<usize,stage_surface::Panel>>=RefCell::new(HashMap::new());
     static UTILITIES:RefCell<Option<utilities::Provider>>=const{RefCell::new(None)};
     static UTILITY_ANCHOR:Cell<Option<(usize,POINT,Option<UtilityWidget>)>>=const{Cell::new(None)};
+    static ATTENTION_MSG:Cell<u32>=const{Cell::new(0)};
+    static ATTENTION:RefCell<HashMap<usize,(u32,u32)>>=RefCell::new(HashMap::new());
     static STATUS_TIP:RefCell<Option<StatusTip>>=const{RefCell::new(None)};
     static ATLAS:RefCell<Option<icon_atlas::Worker>>=const{RefCell::new(None)};
 }
@@ -622,7 +624,7 @@ unsafe fn recreate(state:&mut State) {
         if !hwnd.is_null(){
         let auto_hide=state.prefs.dock_auto_hide(&screen.id);
         state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:true,layout:Some(layout),pinned_widgets,motion:Motion::default(),collapsed:auto_hide,auto_hide,status_hover:None,pressed:None,keyboard:None,previous_focus:0,pointer:None,
-            reveal:motion::Spring::rest(if auto_hide{0.0}else{1.0}),feedback:None,active:None,minimized:0,metric_repaint:None});
+            reveal:motion::Spring::rest(if auto_hide{0.0}else{1.0}),feedback:None,active:None,minimized:0,attention:0,metric_repaint:None});
         }else{emit(Event::Error(format!("Create Dock window: {}",GetLastError())));}
         }
         if stage_targets.contains(&i) && !state.stages.iter().any(|s|same_rect(s.bounds,screen.bounds)) {
@@ -665,6 +667,9 @@ unsafe fn refresh(state:&mut State, topology:bool) {
     sync_appbars(state,topology);
     let fullscreen_outputs:HashSet<String>=state.screens.iter().filter(|s|!state.suspended&&display_fullscreen(s.bounds,&state.windows)).map(|s|s.id.clone()).collect();
     let foreground=GetForegroundWindow() as isize;let active_changed=foreground!=state.foreground;state.foreground=foreground;
+    ATTENTION.with(|queue|queue.borrow_mut().retain(|&hwnd,id|{
+        hwnd!=foreground as usize && state.prefs.enabled && !state.suspended && window_owner(hwnd as HWND)==Some(*id)
+    }));
     for b in &mut state.bars {
         let items=item_list(&state.windows,b.bounds,&state.prefs);
         let mut changed=b.items!=items || active_changed || material_changed;
@@ -676,8 +681,17 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             if item.count!=0&&!state.windows.iter().any(|w|w.path.eq_ignore_ascii_case(&item.path)
                 &&(state.prefs.all_windows||rect_intersects(b.bounds,w.rect))&&IsIconic(w.hwnd)==0){mask|(1<<i)}else{mask}
         });
-        changed|=b.active!=active||b.minimized!=minimized;
-        b.active=active;b.minimized=minimized;
+        let attention=ATTENTION.with(|queue|{
+            let queue=queue.borrow();
+            b.items.iter().enumerate().fold(0u16,|mask,(i,item)|{
+                if active!=Some(i)&&state.windows.iter().any(|w|w.path.eq_ignore_ascii_case(&item.path)
+                    &&(state.prefs.all_windows||rect_intersects(b.bounds,w.rect))&&queue.contains_key(&(w.hwnd as usize))){
+                    mask|(1<<i)
+                }else{mask}
+            })
+        });
+        changed|=b.active!=active||b.minimized!=minimized||b.attention!=attention;
+        b.active=active;b.minimized=minimized;b.attention=attention;
         let screen=state.screens.iter().find(|s|same_rect(s.bounds,b.bounds));
         if let Some(screen)=screen {
             let (placed,_)=state.appbars.placement(screen,false);
@@ -973,12 +987,12 @@ unsafe fn paint(hwnd:HWND){
         let bar=state.bars.iter().find(|b|b.hwnd==hwnd)?;
         let feedback=bar.feedback.as_ref().and_then(|f|bar.items.iter().position(|i|i.path.eq_ignore_ascii_case(&f.path))
             .map(|i|(i,f.kind,if state.prefs.appearance.reduced_motion{0.2}else{f.start.elapsed().as_secs_f32()/0.42})));
-        Some((bar.layout.clone()?,bar.items.clone(),bar.hovered,bar.keyboard,state.material?,bar.active,bar.minimized,bar.drop_target(),bar.reveal.value.clamp(0.0,1.0),feedback,bar.motion.at,
+        Some((bar.layout.clone()?,bar.items.clone(),bar.hovered,bar.keyboard,state.material?,bar.active,bar.minimized,bar.attention,bar.drop_target(),bar.reveal.value.clamp(0.0,1.0),feedback,bar.motion.at,
             state.screens.iter().find(|d|same_rect(d.bounds,bar.bounds))
                 .and_then(|d|state.prefs.utility_profiles.get(&d.id)).map(|p|p.metrics)))
     });
     let mut ps:PAINTSTRUCT=mem::zeroed();let dc=BeginPaint(hwnd,&mut ps);
-    if let Some((layout,items,hovered,keyboard,material,active,minimized,drop_target,openness,feedback,animation_tick,metrics))=layered{
+    if let Some((layout,items,hovered,keyboard,material,active,minimized,attention,drop_target,openness,feedback,animation_tick,metrics))=layered{
         EndPaint(hwnd,&ps);
         let key=hwnd as usize;
         let paint=animation_tick.filter(|_|perf::active()).map(|tick|(tick,std::time::Instant::now()));
@@ -993,7 +1007,7 @@ unsafe fn paint(hwnd:HWND){
                 let mut a=a.borrow_mut();
                 a.as_mut().map(|atlas|atlas.request(&items)).unwrap_or_default()
             });
-            let applied=if openness<=0.003 {canvas.rail(hwnd,&layout)} else {canvas.paint(hwnd,&layout,&items,&atlas,active,minimized,keyboard.or_else(||usize::try_from(hovered).ok()),drop_target,openness,feedback,metrics)};
+            let applied=if openness<=0.003 {canvas.rail(hwnd,&layout)} else {canvas.paint(hwnd,&layout,&items,&atlas,active,minimized,attention,keyboard.or_else(||usize::try_from(hovered).ok()),drop_target,openness,feedback,metrics)};
             if applied{
                 if let Some((tick,paint))=paint{perf::submitted(key,tick,paint);}
                 SURFACES.with(|s|s.borrow_mut().insert(key,canvas));
@@ -1027,7 +1041,7 @@ unsafe fn paint(hwnd:HWND){
         let active_mask=(0..items.len()).filter(|&i|selected(i)).fold(0u8,|bits,i|bits|(1<<i));
         let atlas=ATLAS.with(|a|a.borrow_mut().as_mut().map(|w|w.request(&items)).unwrap_or_default());
         let labels=items.iter().enumerate().map(|(i,item)|{
-            if groups[i].is_some(){return format!("{} · {}",item.title,item.count);}
+            if groups[i].is_some(){return item.title.clone();}
             stage_caption(&item.title,items.iter().enumerate().filter(|(j,o)|*j!=i&&groups[*j].is_none()&&o.path==item.path).map(|(_,o)|o.title.as_str()))
         }).collect::<Vec<_>>();
         let look=stage_surface::Look{dark,layout,active:active_mask,alpha:layered.then_some((opacity*255/100) as u8)};
@@ -1668,6 +1682,21 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     if msg!=0&&SHELL_MESSAGE.with(Cell::get)==msg&&CONTROL.with(Cell::get)==hwnd{
         SHELL_RESTARTED.with(|f|f.set(true));DISPLAY_DIRTY.with(|f|f.set(true));queue_refresh();return 0;
     }
+    if msg!=0&&ATTENTION_MSG.with(Cell::get)==msg&&CONTROL.with(Cell::get)==hwnd{
+        if w==HSHELL_FLASH as usize&&STATE.with(|state|state.borrow().prefs.enabled){
+            let target=l as HWND;
+            if target!=GetForegroundWindow(){
+                if let Some(id)=window_owner(target){
+                    ATTENTION.with(|queue|{
+                        let mut queue=queue.borrow_mut();
+                        if queue.len()<64{queue.insert(l as usize,id);}
+                    });
+                    queue_refresh();
+                }
+            }
+        }
+        return 0;
+    }
     match msg {
         appbar::CALLBACK=>{if w as u32==ABN_POSCHANGED{APPBAR_DIRTY.with(|f|f.set(true));queue_refresh();}0},
         WM_CONFIG=>{drain_commands();0},
@@ -2222,6 +2251,10 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         let control=CreateWindowExW(WS_EX_TOOLWINDOW,class.as_ptr(),wide("Deskland Dock controller").as_ptr(),WS_POPUP,0,0,0,0,ptr::null_mut(),ptr::null_mut(),wc.hInstance,ptr::null());
         if control.is_null(){let _=ready.send(Err(format!("Create Dock controller: {}",GetLastError())));if com.is_ok(){CoUninitialize();}return;}
         CONTROL.with(|c|c.set(control));DIRTY.with(|c|c.set(false));
+        let shell_hook=RegisterWindowMessageW(wide("SHELLHOOK").as_ptr());
+        if shell_hook!=0&&RegisterShellHookWindow(control)!=0{
+            ATTENTION_MSG.with(|id|id.set(shell_hook));
+        }
         perf::start();
         OWNER.with(|o|o.set(owner as HWND));
         COMMANDS.with(|c|{c.replace(Some(commands));});EVENTS.with(|e|{e.replace(Some(events));});
@@ -2244,6 +2277,8 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         update_state(|s|{s.appbars.clear();s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){destroy_stage(&mut b);}});
         SURFACES.with(|s|s.borrow_mut().clear());STAGE_SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
         utilities::close_panels();UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));
+        if ATTENTION_MSG.with(|id|id.replace(0))!=0{DeregisterShellHookWindow(control);}
+        ATTENTION.with(|queue|queue.borrow_mut().clear());
         CONTROL.with(|c|c.set(ptr::null_mut()));DestroyWindow(control);
         OWNER.with(|o|o.set(ptr::null_mut()));
         COMMANDS.with(|c|{c.take();});EVENTS.with(|e|{e.take();});STATE.with(|s|{s.take();});

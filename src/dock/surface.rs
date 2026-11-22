@@ -45,15 +45,15 @@ pub type Atlas = HashMap<String, Option<Arc<crate::launcher::IconPixels>>>;
 pub struct Surface {
     layer:Layer,glass:Rect,material:Material,static_pixels:Vec<u8>,icons:IconRasters,metric:Option<MetricInk>,
 }
-struct MetricInk{size:(i32,i32),fonts:[HFONT;2],mask:Layer,pixels:Vec<u8>,key:Option<(usize,MetricOptions,bool,bool)>,painted_at:Option<Instant>}
+struct MetricInk{size:(i32,i32),fonts:[HFONT;3],mask:Layer,pixels:Vec<u8>,key:Option<(usize,MetricOptions,bool,bool)>,painted_at:Option<Instant>}
 impl Drop for MetricInk{fn drop(&mut self){unsafe{for &font in &self.fonts{if !font.is_null(){DeleteObject(font);}}}}}
 impl MetricInk{
     unsafe fn new(w:i32,h:i32,scale:f32)->Option<Self>{
         let mask=Layer::new(w,h)?;
         let font=|size:f32,weight|CreateFontW(-(size*scale).round().max(7.0) as i32,0,0,0,weight,0,0,0,
             DEFAULT_CHARSET as u32,0,0,ANTIALIASED_QUALITY as u32,DEFAULT_PITCH as u32,
-            crate::desktop::wide("Segoe UI").as_ptr());
-        Some(Self{size:(w,h),fonts:[font(9.0,500),font(11.0,600)],mask,pixels:vec![0;w as usize*h as usize*4],key:None,painted_at:None})
+            crate::desktop::wide("Segoe UI Variable Text").as_ptr());
+        Some(Self{size:(w,h),fonts:[font(9.0,500),font(11.0,600),font(9.5,500)],mask,pixels:vec![0;w as usize*h as usize*4],key:None,painted_at:None})
     }
     unsafe fn paint(&mut self,data:&mut[u8],w:i32,h:i32,x:i32,y:i32,scale:f32,cfg:MetricOptions,palette:Palette,dark:bool,vertical:bool)->bool{
         let (mw,mh)=self.size;
@@ -71,7 +71,7 @@ impl MetricInk{
                 }
             };
             if vertical{
-                let row=px(16.0);
+                let row=px(16.0).min(mh/readings.len().max(1) as i32);
                 let top=(mh-row*readings.len() as i32)/2;
                 for (i,r) in readings.iter().enumerate(){
                     let y=top+i as i32*row;
@@ -93,7 +93,7 @@ impl MetricInk{
                     let width=(i as i32+1)*mw/network.len() as i32-x;
                     let y=top+if system.is_empty(){0}else{px(28.0)};
                     write(0,Box2{x:x+px(3.0),y,w:px(9.0),h:px(16.0)},r.label,true,palette.muted);
-                    write(1,Box2{x:x+px(14.0),y,w:width-px(15.0),h:px(16.0)},&r.value,false,palette.ink);
+                    write(2,Box2{x:x+px(13.0),y,w:width-px(13.0),h:px(16.0)},&r.value,false,palette.ink);
                 }
             }
             self.key=Some(key);
@@ -128,7 +128,7 @@ impl Surface {
         paint_rail(data,w,h,layout,self.material.dark,1.0);
         self.layer.present(hwnd)
     }
-    pub unsafe fn paint(&mut self,hwnd:HWND,layout:&Layout,items:&[super::Item],atlas:&Atlas,active:Option<usize>,minimized:u16,
+    pub unsafe fn paint(&mut self,hwnd:HWND,layout:&Layout,items:&[super::Item],atlas:&Atlas,active:Option<usize>,minimized:u16,attention:u16,
         hover:Option<usize>,drop_target:Option<usize>,openness:f32,feedback:Option<(usize,FeedbackKind,f32)>,metrics:Option<MetricOptions>)->bool{
         let (w,h)=self.layer.size;
         let scale=layout.scale;
@@ -168,10 +168,13 @@ impl Surface {
             }
             let (x,y)=layout.indicators[i];
             if item.count>0 {
-                let (a,b)=if front {(5.0,1.9)}else{(1.9,1.9)};
+                let alert=(attention & (1<<i))!=0;
+                let (a,b)=if front {(5.0,1.9)}else if alert{(3.5,2.0)}else{(1.9,1.9)};
                 let (kx,ky)=if layout.side==super::DockSide::Bottom{(a*scale,b*scale)}else{(b*scale,a*scale)};
                 let r=Rect{x:x-kx,y:y-ky,w:kx*2.0,h:ky*2.0};
-                if asleep {
+                if alert{
+                    rounded(data,w,h,r,kx.min(ky),if self.material.dark{[113,200,255]}else{[35,104,174]},255);
+                }else if asleep {
                     draw(data,w,h,r,|x,y|{
                         let t=(distance(r,kx.min(ky),x,y)+0.5*scale).abs();
                         Some((tint,(0.8*scale-t).clamp(0.0,1.0)*200.0))
