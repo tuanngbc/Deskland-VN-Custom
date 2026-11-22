@@ -852,6 +852,15 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             .fold((0, 0), |(a, b), (c, d)| (a + c, b + d));
         crate::trial::benchmark_stage_links(fixture, other);
     }
+    let live_profiles=state.bars.iter().filter(|b|!b.hidden&&!b.collapsed&&b.layout.as_ref().is_some_and(|l|l.metrics.is_some()))
+        .filter_map(|b|state.screens.iter().find(|d|same_rect(d.bounds,b.bounds)))
+        .filter_map(|d|state.prefs.utility_profiles.get(&d.id)).map(|p|p.metrics)
+        .filter(|p|p.enabled&&p.inline&&p.mask!=0);
+    let inline=live_profiles.fold(None,|current:Option<MetricOptions>,p|Some(match current{
+        None=>p,
+        Some(v)=>MetricOptions{mask:v.mask|p.mask,interval:v.interval.min(p.interval),..v},
+    }));
+    control_center::inline_config(CONTROL.with(Cell::get),inline);
     // Pick at most one cacheful across both modules; otherwise icon-complete
     // messages could continually evict and re-request visible icons.
     ATLAS.with(|a|{
@@ -955,10 +964,12 @@ unsafe fn paint(hwnd:HWND){
         let bar=state.bars.iter().find(|b|b.hwnd==hwnd)?;
         let feedback=bar.feedback.as_ref().and_then(|f|bar.items.iter().position(|i|i.path.eq_ignore_ascii_case(&f.path))
             .map(|i|(i,f.kind,if state.prefs.appearance.reduced_motion{0.2}else{f.start.elapsed().as_secs_f32()/0.42})));
-        Some((bar.layout.clone()?,bar.items.clone(),bar.hovered,bar.keyboard,state.material?,bar.active,bar.minimized,bar.drop_target(),bar.reveal.value.clamp(0.0,1.0),feedback,bar.motion.at))
+        Some((bar.layout.clone()?,bar.items.clone(),bar.hovered,bar.keyboard,state.material?,bar.active,bar.minimized,bar.drop_target(),bar.reveal.value.clamp(0.0,1.0),feedback,bar.motion.at,
+            state.screens.iter().find(|d|same_rect(d.bounds,bar.bounds))
+                .and_then(|d|state.prefs.utility_profiles.get(&d.id)).map(|p|p.metrics)))
     });
     let mut ps:PAINTSTRUCT=mem::zeroed();let dc=BeginPaint(hwnd,&mut ps);
-    if let Some((layout,items,hovered,keyboard,material,active,minimized,drop_target,openness,feedback,animation_tick))=layered{
+    if let Some((layout,items,hovered,keyboard,material,active,minimized,drop_target,openness,feedback,animation_tick,metrics))=layered{
         EndPaint(hwnd,&ps);
         let key=hwnd as usize;
         let paint=animation_tick.filter(|_|perf::active()).map(|tick|(tick,std::time::Instant::now()));
@@ -973,7 +984,7 @@ unsafe fn paint(hwnd:HWND){
                 let mut a=a.borrow_mut();
                 a.as_mut().map(|atlas|atlas.request(&items)).unwrap_or_default()
             });
-            let applied=if openness<=0.003 {canvas.rail(hwnd,&layout)} else {canvas.paint(hwnd,&layout,&items,&atlas,active,minimized,keyboard.or_else(||usize::try_from(hovered).ok()),drop_target,openness,feedback)};
+            let applied=if openness<=0.003 {canvas.rail(hwnd,&layout)} else {canvas.paint(hwnd,&layout,&items,&atlas,active,minimized,keyboard.or_else(||usize::try_from(hovered).ok()),drop_target,openness,feedback,metrics)};
             if applied{
                 if let Some((tick,paint))=paint{perf::submitted(key,tick,paint);}
                 SURFACES.with(|s|s.borrow_mut().insert(key,canvas));
@@ -1089,8 +1100,8 @@ unsafe fn request_utilities(hwnd:HWND,widget:Option<UtilityWidget>){
         ClientToScreen(hwnd,&mut point);
     }else{GetCursorPos(&mut point);}
     if widget==Some(UtilityWidget::Metrics){
-        if let Some(cfg)=utility_profile(hwnd).and_then(|p|p.metrics){
-            utilities::show_metrics(hwnd,panel_chrome::Anchor::for_owner(hwnd,point),cfg);
+        if let Some(p)=utility_profile(hwnd).filter(|p|p.metrics.enabled){
+            utilities::show_metrics(hwnd,panel_chrome::Anchor::for_owner(hwnd,point),p.metrics);
         }
         return;
     }
@@ -1119,6 +1130,12 @@ unsafe fn show_utilities(){
     let Some(profile)=utility_profile(hwnd).filter(|p|p.enabled) else{return;};
     utilities::show_view(hwnd,point,&snapshot,&profile,widget);
 }
+fn queue_inline_refresh_if_needed(hwnd:HWND){
+    let exists=STATE.with(|s|s.borrow().bars.iter().any(|b|b.hwnd==hwnd&&b.layout.as_ref().is_some_and(|l|l.metrics.is_some())));
+    // The timer tick only changes the sampling demand on a reveal.
+    if exists{unsafe{SetTimer(CONTROL.with(Cell::get),INLINE_WAKE,35,None);}}
+}
+const INLINE_WAKE:usize=11;
 unsafe fn panel_closed(owner:HWND){
     if !owner.is_null()&&IsWindow(owner)!=0{SetTimer(owner,HIDE_TIMER,650,None);}
 }
@@ -1572,6 +1589,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                     .is_some_and(|b|b.collapse(true,reduced))
             });
             if start{SetTimer(hwnd,MOTION_TIMER,16,None);}
+            queue_refresh();
             InvalidateRect(hwnd,ptr::null(),0);
             0
         },
@@ -1609,6 +1627,15 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if delta!=0{turn_stage_page(hwnd,delta<0);}
             0
         },
+        WM_TIMER if w==INLINE_WAKE=>{KillTimer(hwnd,INLINE_WAKE);update_state(|s|refresh(s,false));0},
+        WM_TIMER if w==control_center::INLINE_TIMER=>{control_center::inline_tick(hwnd);0},
+        control_center::INLINE_UPDATE=>{
+            if control_center::inline_receive(w){
+                for h in STATE.with(|s|s.borrow().bars.iter().filter(|b|!b.hidden&&!b.collapsed&&b.layout.as_ref().is_some_and(|l|l.metrics.is_some()))
+                    .map(|b|b.hwnd).collect::<Vec<_>>()){InvalidateRect(h,ptr::null(),0);}
+            }
+            0
+        },
         WM_TIMER if w==WORKSPACE_TIMER=>{update_state(|state|{state.workspaces.advance();});0},
         WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
         WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_DPICHANGED=>{DISPLAY_DIRTY.with(|d|d.set(true));queue_refresh();0},
@@ -1636,11 +1663,11 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 if changed{InvalidateRect(hwnd,ptr::null(),0);}
                 return 0;
             }
-            let (changed,animate,track)=STATE.with(|s|{
+            let (changed,animate,track,reveal)=STATE.with(|s|{
                 let mut state=s.borrow_mut();
                 let reduced=state.prefs.appearance.reduced_motion;
                 let magnify=!reduced&&state.prefs.appearance.magnification!=0;
-                let Some(b)=state.bars.iter_mut().find(|b|b.hwnd==hwnd) else{return (false,false,false)};
+                let Some(b)=state.bars.iter_mut().find(|b|b.hwnd==hwnd) else{return (false,false,false,false)};
                 let prev=b.hovered;
                 let prev_drop=b.drop_target();
                 // Capture on a non-activating window can miss an off-window
@@ -1658,10 +1685,10 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                     let changed=desired!=b.motion.target;
                     b.motion.target=desired;
                     let start=start_reveal||(changed&&b.schedule());
-                    (reveal||prev!=b.hovered||prev_drop!=b.drop_target(),start,true)
+                    (reveal||prev!=b.hovered||prev_drop!=b.drop_target(),start,true,reveal)
                 }else{
                     b.hovered=if x>=12&&(x-12)/ITEM_WIDTH<b.items.len() as i32{(x-12)/ITEM_WIDTH}else{-1};
-                    (prev!=b.hovered,false,true)
+                    (prev!=b.hovered,false,true,reveal)
                 }
             });
             if track{
@@ -1684,6 +1711,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 }
             }
             if animate{SetTimer(hwnd,MOTION_TIMER,16,None);}
+            if reveal{queue_inline_refresh_if_needed(hwnd);}
             if changed{InvalidateRect(hwnd,ptr::null(),0);}
             0
         }
@@ -1933,7 +1961,7 @@ unsafe fn drain_commands() {
                 if repaint{for b in &state.bars{InvalidateRect(b.hwnd,ptr::null(),0);}}
             }),
             Command::Suspend(on)=>update_state(|state|{if state.suspended!=on{state.suspended=on;refresh(state,!on);}}),
-            Command::Stop=>{EndMenu();PostQuitMessage(0);},
+            Command::Stop=>{control_center::inline_config(CONTROL.with(Cell::get),None);EndMenu();PostQuitMessage(0);},
             Command::Focus=>focus_dock(),
             #[cfg(test)] Command::Inspect{reply,paint}=>{
                 let handles:Vec<usize>=STATE.with(|s|{let s=s.borrow();s.bars.iter().map(|b|b.hwnd as usize)
@@ -1960,10 +1988,12 @@ unsafe fn focus_dock(){
         let idx=state.bars.iter().position(|bar|!bar.hidden&&pos.x>=bar.bounds.left&&pos.x<bar.bounds.right&&pos.y>=bar.bounds.top&&pos.y<bar.bounds.bottom)
             .or_else(||state.bars.iter().position(|b|!b.hidden))?;
         let bar=&mut state.bars[idx];
+        let reveal=bar.collapsed;
         bar.collapse(false,true);bar.keyboard=Some(bar.layout.as_ref().map_or(0,|l|l.key_order()[0]));bar.previous_focus=foreground as isize;
-        Some(bar.hwnd)
+        Some((bar.hwnd,reveal))
     });
-    if let Some(hwnd)=target{
+    if let Some((hwnd,reveal))=target{
+        if reveal{queue_inline_refresh_if_needed(hwnd);}
         KillTimer(hwnd,HIDE_TIMER);
         SetForegroundWindow(hwnd);
         SetFocus(hwnd);

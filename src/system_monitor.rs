@@ -47,8 +47,8 @@ impl Snapshot {
 /// consumer goes away. Only background worker threads call sample().
 struct FeedState {
     sampler: stats::Sampler,
-    recent: Option<(Instant, u8, Snapshot)>,
-    sequence: u64,
+    updated: [Option<Instant>;4],
+    recent: Snapshot,
 }
 #[derive(Clone)]
 pub(crate) struct Feed(Arc<Mutex<Option<FeedState>>>);
@@ -64,18 +64,29 @@ impl Feed {
     }
     pub(crate) fn sample(&self, mask:u8, interval:u64)->Snapshot {
         let Ok(mut guard)=self.0.lock()else{return Snapshot::default();};
-        let state=guard.get_or_insert_with(||FeedState{sampler:stats::Sampler::new(),recent:None,sequence:0});
-        if let Some((at,sampled,value))=&state.recent{
-            let recently=at.elapsed()<Duration::from_millis(interval.saturating_mul(1000).saturating_sub(100));
-            if recently&&mask&!*sampled==0{return value.clone();}
-            // Reuse the existing counter baseline if another consumer still
-            // asks for fields this one does not show.
+        let state=guard.get_or_insert_with(||FeedState{sampler:stats::Sampler::new(),updated:[None;4],recent:Snapshot::default()});
+        let interval=Duration::from_millis(interval.saturating_mul(1000).saturating_sub(100));
+        // RX and TX share the same pair of counters. Refresh each category
+        // independently so a consumer asking for RAM cannot disturb CPU/RX/TX.
+        let groups=[1,2,4,24];
+        let stale=groups.iter().zip(&state.updated).filter(|(group,time)|
+            mask&**group!=0&&time.is_none_or(|t|t.elapsed()>=interval))
+            .fold(0,|bits,(group,_)|bits|*group);
+        if stale!=0{
+            let value=state.sampler.sample_selected(stale);
+            let out=&mut state.recent;
+            if stale&1!=0{out.cpu=value.cpu;}
+            if stale&2!=0{out.ram=value.ram;out.ram_used=value.ram_used;out.ram_total=value.ram_total;}
+            if stale&4!=0{out.gpu=value.gpu;}
+            if stale&24!=0{out.down=value.down;out.up=value.up;}
+            out.sequence=out.sequence.wrapping_add(1);
+            out.sample_ms=value.sample_ms;
+            let now=Instant::now();
+            for (group,at) in groups.into_iter().zip(&mut state.updated){
+                if stale&group!=0{*at=Some(now);}
+            }
         }
-        let mut value=state.sampler.sample_selected(mask);
-        state.sequence=state.sequence.wrapping_add(1);
-        value.sequence=state.sequence;
-        state.recent=Some((Instant::now(),mask,value.clone()));
-        value
+        state.recent.clone()
     }
 }
 #[derive(Clone, Default)]

@@ -257,10 +257,10 @@ impl Widget {
 #[derive(Clone,Debug,PartialEq,Eq)]
 pub struct Profile {
     pub enabled:bool,pub leading:bool,pub details:bool,pub cell:u32,pub two_rows:bool,pub gap:u32,
-    pub metrics:Option<MetricOptions>,pub order:Vec<Widget>,pub hidden:Vec<Widget>,pub inline:Vec<Widget>,
+    pub metrics:MetricOptions,pub order:Vec<Widget>,pub hidden:Vec<Widget>,pub inline:Vec<Widget>,
 }
 impl Default for Profile {
-    fn default()->Self{Self{enabled:true,leading:false,details:true,cell:28,two_rows:true,gap:4,metrics:None,order:Widget::ALL.to_vec(),hidden:Vec::new(),inline:Vec::new()}}
+    fn default()->Self{Self{enabled:true,leading:false,details:true,cell:28,two_rows:true,gap:4,metrics:MetricOptions::default(),order:Widget::ALL.to_vec(),hidden:Vec::new(),inline:Vec::new()}}
 }
 impl Profile {
     pub fn from_json(v:&Value)->Self{
@@ -282,7 +282,7 @@ impl Profile {
             two_rows:v["rows"].as_u64()!=Some(1),gap:v["gap"].as_u64().map_or(4,|n|n.clamp(2,8) as u32),metrics:MetricOptions::from_json(&v["metrics"]),order,hidden,inline}
     }
     pub fn json(&self)->Value{
-        json!({"enabled":self.enabled,"side":if self.leading{"left"}else{"right"},"details":self.details,"cell":self.cell,"rows":if self.two_rows{2}else{1},"gap":self.gap,"metrics":self.metrics.map(MetricOptions::json),
+        json!({"enabled":self.enabled,"side":if self.leading{"left"}else{"right"},"details":self.details,"cell":self.cell,"rows":if self.two_rows{2}else{1},"gap":self.gap,"metrics":self.metrics.json(),
             "order":self.order.iter().map(|w|w.key()).collect::<Vec<_>>(),
             "hidden":self.hidden.iter().map(|w|w.key()).collect::<Vec<_>>(),
             "inline":self.inline.iter().map(|w|w.key()).collect::<Vec<_>>()})
@@ -291,7 +291,7 @@ impl Profile {
         if !self.enabled{return Vec::new();}
         let show_battery=self.inline.contains(&Widget::Battery)&&unsafe{matches!(battery(),BatteryState::Present{..})};
         self.order.iter().copied().filter(|w|!self.hidden.contains(w)&&match *w{
-            Widget::Metrics=>self.metrics.is_some(),
+            Widget::Metrics=>self.metrics.enabled,
             Widget::Battery=>show_battery,
             _=>self.inline.contains(w),
         }).collect()
@@ -346,7 +346,7 @@ pub(super) unsafe fn show_view(owner:HWND,point:POINT,snapshot:&Snapshot,profile
         match w{
             Widget::Sound if audio_from_snapshot(owner,point,snapshot)=>return,
             Widget::Calendar=>{calendar_panel(owner,point,snapshot.local);return;},
-            Widget::Metrics=>{if let Some(cfg)=profile.metrics{show_metrics(owner,anchor,cfg);}return;},
+            Widget::Metrics=>{if profile.metrics.enabled{show_metrics(owner,anchor,profile.metrics);}return;},
             _=>{}
         }
     }
@@ -378,7 +378,7 @@ pub(super) unsafe fn show_view(owner:HWND,point:POINT,snapshot:&Snapshot,profile
         (widget.title().to_owned(),label,cards)
     }else{
         let cards=profile.order.iter().copied().filter(|w|!profile.hidden.contains(w)
-            && (*w!=Widget::Metrics||profile.metrics.is_some())
+            && (*w!=Widget::Metrics||profile.metrics.enabled)
             && (*w!=Widget::Battery||matches!(snapshot.battery,BatteryState::Present{..})))
             .map(|w|{
                 let hint=if profile.details{utility_hint(w,snapshot)}else{String::new()};

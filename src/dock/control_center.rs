@@ -20,16 +20,19 @@ pub(super) enum Command{Widget(UtilityWidget),Run(Action),Window{hwnd:usize,pid:
 pub(super) struct Card{pub icon:Option<UtilityWidget>,pub title:String,pub hint:String,pub action:Option<Command>}
 pub(super) struct View{pub title:String,pub hint:String,pub cards:Vec<Card>,pub metrics:Option<MetricOptions>}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub struct MetricOptions{pub mask:u8,pub interval:u64,pub compact:bool}
+pub struct MetricOptions{pub enabled:bool,pub inline:bool,pub mask:u8,pub interval:u64,pub compact:bool}
+impl Default for MetricOptions{
+    fn default()->Self{Self{enabled:false,inline:false,mask:31,interval:2,compact:true}}
+}
 impl MetricOptions{
-    pub(super) fn from_json(v:&serde_json::Value)->Option<Self>{
-        if !v["enabled"].as_bool().unwrap_or(false){return None;}
+    pub(super) fn from_json(v:&serde_json::Value)->Self{
         let mask=v["mask"].as_u64().unwrap_or(31).min(31) as u8;
         let interval=match v["interval"].as_u64(){Some(1)=>1,Some(5)=>5,Some(10)=>10,_=>2};
-        Some(Self{mask,interval,compact:v["compact"].as_bool().unwrap_or(true)})
+        Self{enabled:v["enabled"].as_bool().unwrap_or(false),inline:v["mode"].as_str()==Some("inline"),
+            mask,interval,compact:v["compact"].as_bool().unwrap_or(true)}
     }
     pub(super) fn json(self)->serde_json::Value{
-        serde_json::json!({"enabled":true,"mask":self.mask,"interval":self.interval,"compact":self.compact})
+        serde_json::json!({"enabled":self.enabled,"mode":if self.inline{"inline"}else{"popover"},"mask":self.mask,"interval":self.interval,"compact":self.compact})
     }
 }
 struct Stream{
@@ -37,7 +40,7 @@ struct Stream{
     pending:AtomicBool,closed:AtomicBool,
 }
 struct Metrics{cfg:MetricOptions,feed:Feed,stream:Arc<Stream>}
-struct Job{h:usize,tag:usize,feed:Feed,cfg:MetricOptions,stream:Arc<Stream>}
+struct Job{h:usize,tag:usize,message:u32,feed:Feed,cfg:MetricOptions,stream:Arc<Stream>}
 static ACTIVE:AtomicBool=AtomicBool::new(false);
 unsafe extern "system" fn metrics_worker(_:PTP_CALLBACK_INSTANCE,data:*mut std::ffi::c_void){
     let job=*Box::from_raw(data.cast::<Job>());
@@ -47,7 +50,7 @@ unsafe extern "system" fn metrics_worker(_:PTP_CALLBACK_INSTANCE,data:*mut std::
     }
     job.stream.pending.store(false,Ordering::Release);
     ACTIVE.store(false,Ordering::Release);
-    if !job.stream.closed.load(Ordering::Acquire){PostMessageW(job.h as HWND,METRIC_UPDATE,job.tag,0);}
+    if !job.stream.closed.load(Ordering::Acquire){PostMessageW(job.h as HWND,job.message,job.tag,0);}
 }
 impl Metrics{
     fn new(cfg:MetricOptions)->Self{
@@ -55,12 +58,12 @@ impl Metrics{
             values:Mutex::new(None),pending:AtomicBool::new(false),closed:AtomicBool::new(false),
         })}
     }
-    fn request(&self,h:HWND,tag:usize){
+    fn request(&self,h:HWND,tag:usize,message:u32){
         if self.cfg.mask==0||self.stream.pending.swap(true,Ordering::AcqRel){return;}
         if ACTIVE.swap(true,Ordering::AcqRel){
             self.stream.pending.store(false,Ordering::Release);return;
         }
-        let j=Box::into_raw(Box::new(Job{h:h as usize,tag,feed:self.feed.clone(),cfg:self.cfg,stream:self.stream.clone()}));
+        let j=Box::into_raw(Box::new(Job{h:h as usize,tag,message,feed:self.feed.clone(),cfg:self.cfg,stream:self.stream.clone()}));
         if unsafe{TrySubmitThreadpoolCallback(Some(metrics_worker),j.cast(),ptr::null())}==0{
             unsafe{drop(Box::from_raw(j));}
             self.stream.pending.store(false,Ordering::Release);
@@ -78,8 +81,8 @@ fn rate(value:Option<f64>)->Option<String>{
 }
 fn metric_cards(view:&Snapshot,cfg:MetricOptions)->Vec<Card>{
     let ram=if view.ram_total>0{
-        Some(if cfg.compact{format!("{:.1} GB",view.ram_used as f64/1_073_741_824.0)}
-            else{format!("{:.1} / {:.1} GB",view.ram_used as f64/1_073_741_824.0,view.ram_total as f64/1_073_741_824.0)})
+        Some(if cfg.compact{format!("{:.1} GiB",view.ram_used as f64/1_073_741_824.0)}
+            else{format!("{:.1} / {:.1} GiB",view.ram_used as f64/1_073_741_824.0,view.ram_total as f64/1_073_741_824.0)})
     }else{None};
     [("CPU",percent(view.cpu)),("RAM",ram),("GPU",percent(view.gpu)),
         ("↓ Tải xuống",rate(view.down)),("↑ Tải lên",rate(view.up))]
@@ -99,6 +102,68 @@ impl Drop for Panel {
 thread_local!{
     static PANE:RefCell<Option<Panel>>=const{RefCell::new(None)};
     static SERIAL:Cell<usize>=const{Cell::new(0)};
+    static INLINE_REVISION:Cell<usize>=const{Cell::new(0)};
+    static INLINE:RefCell<Option<Inline>>=const{RefCell::new(None)};
+}
+pub(super) const INLINE_UPDATE:u32=WM_APP+100;
+pub(super) const INLINE_TIMER:usize=10;
+struct Inline{metrics:Metrics,tag:usize,last:Option<Snapshot>}
+fn serial()->usize{SERIAL.with(|s|{let tag=s.get().wrapping_add(1);s.set(tag);tag})}
+pub(super) unsafe fn inline_config(control:HWND,cfg:Option<MetricOptions>){
+    if control.is_null(){return;}
+    INLINE.with(|s|{
+        let mut slot=s.borrow_mut();
+        if slot.as_ref().map(|s|s.metrics.cfg)==cfg{return;}
+        KillTimer(control,INLINE_TIMER);
+        advance_inline_revision();
+        *slot=cfg.map(|cfg|{
+            let state=Inline{metrics:Metrics::new(cfg),tag:serial(),last:None};
+            state.metrics.request(control,state.tag,INLINE_UPDATE);
+            SetTimer(control,INLINE_TIMER,(cfg.interval*1000) as u32,None);
+            state
+        });
+    });
+}
+pub(super) fn inline_tick(control:HWND){
+    INLINE.with(|s|if let Some(state)=s.borrow().as_ref(){state.metrics.request(control,state.tag,INLINE_UPDATE);});
+}
+pub(super) fn inline_receive(tag:usize)->bool{
+    INLINE.with(|s|{
+        let mut slot=s.borrow_mut();
+        let Some(state)=slot.as_mut().filter(|s|s.tag==tag)else{return false;};
+        let Some(value)=state.metrics.stream.values.lock().ok().and_then(|mut s|s.take())else{return false;};
+        state.last=Some(value);
+        advance_inline_revision();
+        true
+    })
+}
+fn advance_inline_revision(){INLINE_REVISION.with(|n|n.set(n.get().wrapping_add(1)));}
+pub(super) fn inline_revision()->usize{INLINE_REVISION.with(Cell::get)}
+fn short_rate(value:Option<f64>)->Option<String>{
+    let v=value.filter(|v|v.is_finite()&&*v>=0.0)?;
+    Some(if v>=1_000_000_000.0{format!("{:.1}G/s",v/1_000_000_000.0)}
+        else if v>=1_000_000.0{format!("{:.1}M/s",v/1_000_000.0)}
+        else if v>=1_000.0{format!("{:.1}k/s",v/1_000.0)}
+        else{format!("{v:.0} B/s")})
+}
+pub(super) fn inline_lines(cfg:MetricOptions,vertical:bool)->Vec<String>{
+    INLINE.with(|s|{
+        let slot=s.borrow();
+        let Some(value)=slot.as_ref().and_then(|s|s.last.as_ref())else{return Vec::new();};
+        let ram=value.ram.filter(|_|value.ram_total>0).map(|_|{
+            let gib=value.ram_used as f64/1_073_741_824.0;
+            if vertical{format!("{gib:.1}G")}else{format!("{gib:.1} GiB")}
+        });
+        let results=[("CPU",percent(value.cpu)),("RAM",ram),("GPU",percent(value.gpu)),
+            ("↓",short_rate(value.down)),("↑",short_rate(value.up))];
+        let mut results=results.into_iter().enumerate().filter_map(|(i,(k,v))|{
+            if cfg.mask&(1<<i)==0{None}else{v.map(|v|(k,v))}
+        }).collect::<Vec<_>>();
+        if vertical{return results.into_iter().map(|(k,v)|format!("{k} {v}")).collect();}
+        let network=results.iter().position(|(k,_)|*k=="↓"||*k=="↑").map(|i|results.split_off(i)).unwrap_or_default();
+        let line=|s:&[(&str,String)]|s.iter().map(|(k,v)|format!("{k} {v}")).collect::<Vec<_>>().join("   ");
+        results.chunks(2).map(line).chain((!network.is_empty()).then(||line(&network))).collect()
+    })
 }
 impl Panel{
     fn rect(&self,i:usize)->RECT{
@@ -204,7 +269,7 @@ pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){
         WS_POPUP,x,y,width,height,owner,ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
     if hwnd.is_null(){return;}
     chrome::frame(hwnd,width,height,dpi,anchor);
-    let tag=SERIAL.with(|s|{let tag=s.get().wrapping_add(1);s.set(tag);tag});
+    let tag=serial();
     let fonts=[chrome::choose_font(dpi,20,650),chrome::choose_font(dpi,13,630),chrome::choose_font(dpi,12,450)];
     let metrics=view.metrics.map(Metrics::new);
     let p=Panel{hwnd,owner,tag,anchor,dpi,layer,fonts,view,metrics,index:None,pressed:None,page:0,cols,per_page,row_height};
@@ -212,7 +277,7 @@ pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){
     ShowWindow(hwnd,SW_SHOW);SetForegroundWindow(hwnd);SetFocus(hwnd);
     PANE.with(|s|{if let Some(m)=s.borrow().as_ref().and_then(|p|p.metrics.as_ref()){
         if m.cfg.mask!=0{
-            m.request(hwnd,tag);
+            m.request(hwnd,tag,METRIC_UPDATE);
             SetTimer(hwnd,METRIC_TIMER,(m.cfg.interval*1000) as u32,None);
         }
     }});
@@ -237,7 +302,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         },
         WM_TIMER if w==METRIC_TIMER=>{
             PANE.with(|s|{if let Some(p)=s.borrow().as_ref().filter(|p|p.hwnd==hwnd){
-                if let Some(m)=&p.metrics{m.request(hwnd,p.tag);}
+                if let Some(m)=&p.metrics{m.request(hwnd,p.tag,METRIC_UPDATE);}
             }});0
         },
         METRIC_UPDATE=>{
@@ -314,7 +379,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     use super::*;
     #[test] fn metrics_only_show_selected_available_values(){
         let mut s=Snapshot::default();s.cpu=Some(17.8);s.ram_used=3*1_073_741_824;s.ram_total=16*1_073_741_824;s.down=Some(1_515_000.0);s.up=Some(12.0);
-        let c=metric_cards(&s,MetricOptions{mask:1|4|8,interval:5,compact:true});
+        let c=metric_cards(&s,MetricOptions{mask:1|4|8,interval:5,enabled:true,..MetricOptions::default()});
         assert_eq!(c.iter().map(|x|(&*x.title,&*x.hint)).collect::<Vec<_>>(),[("CPU","18%"),("↓ Tải xuống","1.5 MB/s")]);
     }
 }

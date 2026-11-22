@@ -40,6 +40,7 @@ pub struct Layout {
     pub utility_leading:bool,
     pub cluster:Option<Rect>,
     pub divider:Option<Rect>,
+    pub metrics:Option<Rect>,
     pub inline:Vec<(UtilityWidget,Rect)>,
     pub indicators: Vec<(f32,f32)>,
     pub scale:f32,
@@ -123,17 +124,20 @@ pub(super) struct Cluster {
     pub cell:u32,
     pub gap:u32,
     pub two_rows:bool,
+    pub inline_metrics:bool,
 }
 impl Cluster {
     pub fn cross(self)->f32{
         if self.side.is_none(){0.0}
-        else if self.two_rows{2.0*self.cell as f32+self.gap as f32+8.0}
-        else{self.cell as f32+12.0}
+        else{
+            let grid=if self.two_rows{2.0*self.cell as f32+self.gap as f32+8.0}else{self.cell as f32+12.0};
+            grid.max(if self.inline_metrics{68.0}else{0.0})
+        }
     }
 }
 #[cfg(test)]
 fn measure_widgets(display:&Display,style:&Appearance,count:usize,focus:Option<f32>,amount:f32,side:Option<bool>,pinned:&[UtilityWidget],cell:u32)->Layout{
-    measure_cluster(display,style,count,focus,amount,pinned,Cluster{side,cell,gap:4,two_rows:false})
+    measure_cluster(display,style,count,focus,amount,pinned,Cluster{side,cell,gap:4,two_rows:false,inline_metrics:false})
 }
 pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,focus:Option<f32>,amount:f32,pinned:&[UtilityWidget],cluster:Cluster)->Layout{
     let vertical=style.position!=DockSide::Bottom;
@@ -163,15 +167,20 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
         let cols=(n+2).div_ceil(rows);
         cols as f32*ideal_status+cols.saturating_sub(1) as f32*gap+10.0*scale
     };
-    let widgets=pinned.iter().copied().filter(|&w|w!=UtilityWidget::Spotlight).take(10).collect::<Vec<_>>();
+    let mut widgets=pinned.iter().copied().filter(|&w|w!=UtilityWidget::Spotlight).collect::<Vec<_>>();
     let min_icon=(style.icon_size.min(29) as f32)*scale;
-    let inline_count=if host{
-        (0..=widgets.len()).rev()
-            .find(|&n| span(n)+gaps+if apps>0{group_gap+min_icon*(apps as f32+spill)}else{0.0}<=room)
-            .unwrap_or(0)
-    }else{0};
     let app_gap=if host&&apps>0{group_gap}else{0.0};
-    let status_span=span(inline_count);
+    let minimum=if apps>0{gaps+app_gap+min_icon*(apps as f32+spill)}else{0.0};
+    let metric_span=(if vertical{96.0}else{144.0})*scale;
+    let inline_metrics=host&&cluster.inline_metrics&&widgets.contains(&UtilityWidget::Metrics)
+        && minimum+span(0)+metric_span+gap<=room;
+    let extras=if inline_metrics{metric_span+gap}else{0.0};
+    if inline_metrics{widgets.retain(|&w|w!=UtilityWidget::Metrics);}
+    widgets.truncate(10);
+    let inline_count=if host{
+        (0..=widgets.len()).rev().find(|&n|span(n)+minimum+extras<=room).unwrap_or(0)
+    }else{0};
+    let status_span=span(inline_count)+extras;
     let icon=if apps==0{0.0}else{
         (style.icon_size as f32*scale).min(
             ((room-status_span-app_gap-gaps)/(apps as f32+spill)).max(1.0)
@@ -179,7 +188,8 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     };
     let lanes=if host{rows.min(inline_count+2)}else{0};
     let grid_cross=lanes as f32*ideal_status+lanes.saturating_sub(1) as f32*gap;
-    let panel_cross=(icon+18.0*scale).max(grid_cross+8.0*scale);
+    let metric_cross=if inline_metrics{(if vertical{62.0}else{56.0})*scale}else{0.0};
+    let panel_cross=(icon+18.0*scale).max(grid_cross.max(metric_cross)+8.0*scale);
     let total_cross=(panel_cross.max(icon*(1.0+zoom)+18.0*scale)+2.0*shadow).ceil()
         .min((cross_axis-edge).max(1.0));
     let rest_apps=icon*apps as f32+gaps;
@@ -240,6 +250,7 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     let mut utility=Rect::default();
     let mut group=None;
     let mut divider=None;
+    let mut metrics=None;
     if host{
         let n=inline_count+2;
         let cols=n.div_ceil(rows);
@@ -256,7 +267,13 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
         scan=slot(0);
         utility=slot(n-1);
         inline.extend(widgets.into_iter().take(inline_count).enumerate().map(|(i,w)|(w,slot(i+1))));
-        group=Some(bar(status_start,minor-3.0*scale,status_span,grid_cross+6.0*scale));
+        if inline_metrics{
+            let r=bar(status_start+span(inline_count)+gap-4.0*scale,panel_base+(panel_cross-metric_cross)*0.5,metric_span,metric_cross);
+            metrics=Some(r);
+            inline.push((UtilityWidget::Metrics,r));
+        }
+        let inner_cross=grid_cross.max(metric_cross);
+        group=Some(bar(status_start,panel_base+(panel_cross-inner_cross)*0.5-3.0*scale,status_span,inner_cross+6.0*scale));
         if apps>0{
             let major=if leading{status_start+status_span+app_gap/2.0}else{status_start-app_gap/2.0};
             divider=Some(bar(major-scale*0.5,panel_base+panel_cross*0.26,scale,panel_cross*0.48));
@@ -267,7 +284,7 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     let glass_right=(if host&&!leading||apps==0{status_start+status_span}else{app_end})+pad;
     let glass=bar(glass_left,panel_base,(glass_right-glass_left).max(1.0),panel_cross);
     Layout{window:RECT{left:x,top:y,right:x+w as i32,bottom:y+h as i32},glass,slots,scan,utility,utility_leading:leading,
-        cluster:group,divider,inline,indicators,scale,side:style.position}
+        cluster:group,divider,metrics,inline,indicators,scale,side:style.position}
 }
 
 #[cfg(test)]
@@ -299,7 +316,7 @@ mod tests{
                 for position in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
                     for side in [Some(true),Some(false)]{
                         let style=Appearance{position,magnification:55,..Default::default()};
-                        let cfg=Cluster{side,two_rows:true,cell:28,gap:4};
+                        let cfg=Cluster{side,two_rows:true,cell:28,gap:4,inline_metrics:false};
                         let a=measure_cluster(&screen,&style,7,None,0.0,&pins,cfg);
                         let b=measure_cluster(&screen,&style,7,Some(a.axis(a.slots[3].x,a.slots[3].y)),1.0,&pins,cfg);
                         assert_eq!(a.scan,b.scan);assert_eq!(a.utility,b.utility);assert_eq!(a.inline,b.inline);
@@ -314,6 +331,27 @@ mod tests{
                 }
             }
         }
+    }
+    #[test]
+    fn metric_tile_stays_clickable_during_zoom_and_yields_to_overflow_on_narrow_displays(){
+        let pins=[UtilityWidget::Network,UtilityWidget::Sound,UtilityWidget::Bluetooth,UtilityWidget::Metrics];
+        for position in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
+            let r=RECT{left:-1080,top:-240,right:0,bottom:1680};
+            let screen=Display{id:"display".into(),name:String::new(),bounds:r,work:r,primary:false,dpi:144};
+            let style=Appearance{position,magnification:55,..Default::default()};
+            let cfg=Cluster{side:Some(false),two_rows:true,cell:28,gap:4,inline_metrics:true};
+            let a=measure_cluster(&screen,&style,6,None,0.0,&pins,cfg);
+            let b=measure_cluster(&screen,&style,6,Some(a.axis(a.slots[2].x,a.slots[2].y)),1.0,&pins,cfg);
+            let rect=a.metrics.unwrap();
+            assert_eq!(b.metrics,Some(rect));
+            assert_eq!(b.inline_at(rect.x+rect.w/2.0,rect.y+rect.h/2.0),Some(UtilityWidget::Metrics));
+            assert!(!overlaps(rect,b.utility)&&b.slots.iter().all(|r|!overlaps(rect,*r)));
+        }
+        let r=RECT{left:0,top:0,right:440,bottom:800};
+        let screen=Display{id:"narrow".into(),name:String::new(),bounds:r,work:r,primary:false,dpi:192};
+        let cfg=Cluster{side:Some(false),two_rows:true,cell:28,gap:4,inline_metrics:true};
+        let result=measure_cluster(&screen,&Appearance::default(),10,None,0.0,&pins,cfg);
+        assert!(result.metrics.is_none()&&result.utility.w>0.0);
     }
     fn overlaps(a:Rect,b:Rect)->bool{a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y}
     #[test]

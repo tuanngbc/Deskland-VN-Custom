@@ -695,7 +695,8 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
     if !stage&&!displays.is_empty(){
         let options=CreatePopupMenu();
         if !options.is_null(){
-            for d in displays.iter().take(32){
+            // Keep the generated command IDs below the window-policy range.
+            for d in displays.iter().take(24){
                 let list=CreatePopupMenu();
                 if list.is_null(){continue;}
                 let base=utility_profiles.get(&d.id).cloned().unwrap_or_default();
@@ -707,9 +708,28 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
                 append("Đặt bên trái",base.leading,UtilityProfile{leading:!base.leading,..base.clone()});
                 append("Hiện thông tin",base.details,UtilityProfile{details:!base.details,..base.clone()});
                 append("Hai hàng tiện ích",base.two_rows,UtilityProfile{two_rows:!base.two_rows,..base.clone()});
-                append("Chỉ số máy trong Dock",base.metrics.is_some(),UtilityProfile{
-                    metrics:if base.metrics.is_some(){None}else{Some(crate::dock::MetricOptions{mask:31,interval:2,compact:true})},..base.clone()
+                append("Chỉ số máy trong Dock",base.metrics.enabled,UtilityProfile{
+                    metrics:crate::dock::MetricOptions{enabled:!base.metrics.enabled,..base.metrics},..base.clone()
                 });
+                append("Chỉ số ngay trên Dock",base.metrics.inline,UtilityProfile{
+                    metrics:crate::dock::MetricOptions{inline:!base.metrics.inline,..base.metrics},..base.clone()
+                });
+                append("Chỉ số dạng gọn",base.metrics.compact,UtilityProfile{
+                    metrics:crate::dock::MetricOptions{compact:!base.metrics.compact,..base.metrics},..base.clone()
+                });
+                for (bit,label) in [(1,"CPU"),(2,"RAM"),(4,"GPU"),(8,"Tốc độ tải xuống"),(16,"Tốc độ tải lên")]{
+                    append(label,base.metrics.mask&bit!=0,UtilityProfile{
+                        metrics:crate::dock::MetricOptions{mask:base.metrics.mask^bit,..base.metrics},..base.clone()
+                    });
+                }
+                for interval in [1,2,5,10]{
+                    append(&format!("Làm mới mỗi {interval} giây"),base.metrics.interval==interval,UtilityProfile{
+                        metrics:crate::dock::MetricOptions{interval,..base.metrics},..base.clone()
+                    });
+                }
+                for gap in [2,4,8]{
+                    append(&format!("Khoảng cách tiện ích {gap} px"),base.gap==gap,UtilityProfile{gap,..base.clone()});
+                }
                 for (cell,label) in [(24,"Nút nhỏ · 24 px"),(28,"Nút chuẩn · 28 px"),(32,"Nút dễ bấm · 32 px")]{
                     append(label,base.cell==cell,UtilityProfile{cell,..base.clone()});
                 }

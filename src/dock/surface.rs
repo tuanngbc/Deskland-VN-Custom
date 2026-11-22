@@ -2,7 +2,8 @@
 //! No desktop capture, timer, or per-frame allocation in the static path.
 use super::{appearance::Theme, geometry::{Layout,Rect}, glass_probe::Layer};
 use std::{collections::{HashMap,VecDeque}, sync::{Arc,Weak}};
-use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::{Foundation::HWND,Graphics::Gdi::*};
+use super::{control_center::{self,MetricOptions},stage_surface::{Box2,draw_mask}};
 use crate::launcher::IconPixels;
 use super::{FeedbackKind,UtilityWidget};
 
@@ -41,11 +42,53 @@ pub(super) fn control_backing(base: f32) -> f32 {
 }
 
 pub type Atlas = HashMap<String, Option<Arc<crate::launcher::IconPixels>>>;
-pub struct Surface { layer:Layer, glass:Rect, material:Material, static_pixels:Vec<u8>, icons:IconRasters }
+pub struct Surface {
+    layer:Layer,glass:Rect,material:Material,static_pixels:Vec<u8>,icons:IconRasters,metric:Option<MetricInk>,
+}
+struct MetricInk{size:(i32,i32),font:HFONT,mask:Layer,pixels:Vec<u8>,key:Option<(usize,MetricOptions,[u8;3],bool)>}
+impl Drop for MetricInk{fn drop(&mut self){unsafe{if !self.font.is_null(){DeleteObject(self.font);}}}}
+impl MetricInk{
+    unsafe fn new(w:i32,h:i32,scale:f32)->Option<Self>{
+        let mask=Layer::new(w,h)?;
+        let font=CreateFontW(-(11.0*scale).round().max(8.0) as i32,0,0,0,500,0,0,0,
+            DEFAULT_CHARSET as u32,0,0,ANTIALIASED_QUALITY as u32,DEFAULT_PITCH as u32,
+            crate::desktop::wide("Segoe UI").as_ptr());
+        Some(Self{size:(w,h),font,mask,pixels:vec![0;w as usize*h as usize*4],key:None})
+    }
+    unsafe fn paint(&mut self,data:&mut[u8],w:i32,h:i32,x:i32,y:i32,scale:f32,cfg:MetricOptions,ink:[u8;3],vertical:bool)->bool{
+        let (mw,mh)=self.size;
+        if x<0||y<0||x+mw>w||y+mh>h{return false;}
+        let key=(control_center::inline_revision(),cfg,ink,vertical);
+        if self.key!=Some(key){
+            let lines=control_center::inline_lines(cfg,vertical);
+            self.pixels.fill(0);
+            let inset=(4.0*scale).round() as i32;
+            let line_h=(15.0*scale).round() as i32;
+            let top=(mh-line_h*lines.len() as i32)/2;
+            for (i,line) in lines.iter().enumerate(){
+                let box_=Box2{x:inset,y:top+i as i32*line_h,w:mw-2*inset,h:line_h};
+                draw_mask(&mut self.pixels,mw,mh,&mut self.mask,self.font,box_,line,false,ink);
+            }
+            self.key=Some(key);
+        }
+        let mut drawn=false;
+        for row in 0..mh as usize{
+            let src=&self.pixels[row*mw as usize*4..][..mw as usize*4];
+            let dest=&mut data[((y as usize+row)*w as usize+x as usize)*4..][..src.len()];
+            for (src,dest) in src.chunks_exact(4).zip(dest.chunks_exact_mut(4)){
+                if src[3]==0{continue;}
+                drawn=true;
+                let inv=255-src[3] as u16;
+                for i in 0..4{dest[i]=(src[i] as u16+(dest[i] as u16*inv+127)/255).min(255) as u8;}
+            }
+        }
+        drawn
+    }
+}
 impl Surface {
     pub unsafe fn new(w:i32,h:i32,glass:Rect,material:Material)->Option<Self>{
         let layer=Layer::new(w,h)?;
-        Some(Self{layer,glass,material,static_pixels:Vec::new(),icons:IconRasters::default()})
+        Some(Self{layer,glass,material,static_pixels:Vec::new(),icons:IconRasters::default(),metric:None})
     }
     pub fn size(&self)->(i32,i32){self.layer.size}
     pub fn set_material(&mut self,value:Material){
@@ -58,7 +101,7 @@ impl Surface {
         self.layer.present(hwnd)
     }
     pub unsafe fn paint(&mut self,hwnd:HWND,layout:&Layout,items:&[super::Item],atlas:&Atlas,active:Option<usize>,minimized:u16,
-        hover:Option<usize>,drop_target:Option<usize>,openness:f32,feedback:Option<(usize,FeedbackKind,f32)>)->bool{
+        hover:Option<usize>,drop_target:Option<usize>,openness:f32,feedback:Option<(usize,FeedbackKind,f32)>,metrics:Option<MetricOptions>)->bool{
         let (w,h)=self.layer.size;
         let scale=layout.scale;
         if self.glass!=layout.glass||self.static_pixels.is_empty() {
@@ -152,9 +195,22 @@ impl Surface {
             let group=divider(layout.slots[split],layout.slots[split+1]);
             rounded(data,w,h,group,scale*0.5,tint,58);
         }
+        if layout.metrics.is_none(){self.metric=None;}
         for (i,(widget,slot)) in layout.inline.iter().copied().enumerate(){
-
-            if hover==Some(items.len()+2+i){rounded(data,w,h,slot,slot.w*0.22,tint,50);}
+            if hover==Some(items.len()+2+i){rounded(data,w,h,slot,7.0*scale,tint,50);}
+            if let Some(cfg)=metrics.filter(|_|layout.metrics==Some(slot)&&widget==UtilityWidget::Metrics){
+                let x=slot.x.ceil() as i32;let y=slot.y.ceil() as i32;
+                let mw=(slot.x+slot.w).floor() as i32-x;
+                let mh=(slot.y+slot.h).floor() as i32-y;
+                if self.metric.as_ref().is_none_or(|s|s.size!=(mw,mh)){
+                    self.metric=MetricInk::new(mw,mh,scale);
+                }
+                if self.metric.as_mut().is_some_and(|r|r.paint(data,w,h,x,y,scale,cfg,tint,layout.side!=super::DockSide::Bottom)){continue;}
+                let edge=21.0*scale;
+                let badge=Rect{x:slot.x+(slot.w-edge)/2.0,y:slot.y+(slot.h-edge)/2.0,w:edge,h:edge};
+                status_on(data,w,h,badge,scale,palette.muted,Some(widget));
+                continue;
+            }
             status_on(data,w,h,slot,scale,tint,Some(widget));
         }
         status_on(data,w,h,utility,scale,tint,None);

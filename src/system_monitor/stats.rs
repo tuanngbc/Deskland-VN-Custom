@@ -122,9 +122,11 @@ impl Sampler {
     pub fn sample_selected(&mut self, mask:u8) -> Snapshot {
         let started = Instant::now();
         let mut snapshot = Snapshot::default();
-        let cpu = if mask&1!=0{cpu_times()}else{None};
-        snapshot.cpu = self.cpu.zip(cpu).and_then(|(previous, current)| cpu_percent(previous, current));
-        self.cpu = cpu;
+        if mask&1!=0{
+            let cpu = cpu_times();
+            snapshot.cpu = self.cpu.zip(cpu).and_then(|(previous, current)| cpu_percent(previous, current));
+            self.cpu = cpu;
+        }
         if mask&2!=0 {unsafe {
             let mut memory: MEMORYSTATUSEX = std::mem::zeroed();
             memory.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
@@ -134,14 +136,16 @@ impl Sampler {
                 snapshot.ram = Some(100.0 * snapshot.ram_used as f64 / snapshot.ram_total as f64);
             }
         }}
-        let network = if mask&24!=0{network_totals()}else{None};
-        if let (Some(previous), Some(current)) = (&self.network, &network) {
-            let (down, up) = network_rates(previous, current, started.duration_since(self.at).as_secs_f64());
-            snapshot.down = Some(down);
-            snapshot.up = Some(up);
+        if mask&24!=0{
+            let network = network_totals();
+            if let (Some(previous), Some(current)) = (&self.network, &network) {
+                let (down, up) = network_rates(previous, current, started.duration_since(self.at).as_secs_f64());
+                snapshot.down = Some(down);
+                snapshot.up = Some(up);
+            }
+            self.network = network;
+            self.at = started;
         }
-        self.network = network;
-        self.at = started;
         if mask&4!=0 && !self.gpu_checked {self.gpu=Gpu::new();self.gpu_checked=true;}
         if mask&4!=0 {snapshot.gpu=self.gpu.as_mut().and_then(Gpu::sample);}
         snapshot.sample_ms = started.elapsed().as_secs_f64() * 1000.0;
