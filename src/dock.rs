@@ -76,6 +76,8 @@ const MENU_RESTORE:usize=516;
 const MENU_SNAP_LEFT:usize=517;
 const MENU_SNAP_RIGHT:usize=518;
 const MENU_EXPAND:usize=519;
+const MENU_ADD_APP:usize=520;
+const MENU_MORE_APPS:usize=521;
 const MENU_WINDOW_FIRST:usize=2000;
 const MENU_MOVE_FIRST:usize=2100;
 const STAGE_RAIL_CLASS:&str="TuanpcDeskStageReveal";
@@ -495,6 +497,11 @@ fn windows()->Vec<AppWindow>{
 // Prefer a window on this monitor for pinned apps, and keep counts consistent with
 // the selected local/all-monitors scope. An off-screen pinned app stays launchable.
 fn item_list(all:&[AppWindow],screen:RECT,prefs:&Preferences)->Vec<Item>{
+    let mut items=available_items(all,screen,prefs);
+    items.truncate(MAX_ITEMS);
+    items
+}
+fn available_items(all:&[AppWindow],screen:RECT,prefs:&Preferences)->Vec<Item>{
     let mut result=Vec::<Item>::new();let mut seen=HashSet::<String>::new();
     for path in &prefs.pinned {
         if !seen.insert(path.to_lowercase()){continue;}
@@ -513,7 +520,7 @@ fn item_list(all:&[AppWindow],screen:RECT,prefs:&Preferences)->Vec<Item>{
             count:all.iter().filter(|v|v.path.eq_ignore_ascii_case(&w.path) && (prefs.all_windows || rect_intersects(screen,v.rect))).count(),
             pinned:false});
     }
-    result.truncate(MAX_ITEMS);result
+    result
 }
 fn dock_depth(screen:&Screen,style:&Appearance,cluster:geometry::Cluster)->i32 {
     let scale=(screen.dpi as f32/96.0).clamp(0.75,3.0);
@@ -1148,6 +1155,8 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
     use control_center::Command;
     match command{
         Command::Widget(widget)=>request_utilities(owner,Some(widget)),
+        Command::App{path,operation}=>perform_app_action(owner,&path,operation),
+        Command::AddApp=>pin_from_file(owner),
         Command::Wifi(change)=>request_utilities_with_change(owner,Some(UtilityWidget::Network),Some(change)),
         Command::Run(utilities::Action::Host(action))=>emit(Event::Utility(action)),
         Command::Run(action)=>utilities::delegated(action),
@@ -1189,6 +1198,171 @@ unsafe fn activate(hwnd:HWND,item:&Item) {
         let result=ShellExecuteW(ptr::null_mut(),wide("open").as_ptr(),wide(&item.path).as_ptr(),ptr::null(),ptr::null(),SW_SHOWNORMAL) as isize;
         show_feedback(hwnd,item,if result>32{FeedbackKind::Launch}else{FeedbackKind::Failed});
     }
+}
+#[derive(Clone)]
+enum AppOperation{
+    Open, NewWindow, ShowMenu, TogglePin, Close(Vec<WindowIdentity>), Advanced,
+}
+#[derive(Clone,Copy)]
+struct WindowIdentity{hwnd:usize,pid:u32,tid:u32}
+impl WindowIdentity{
+    unsafe fn read(hwnd:HWND)->Option<Self>{
+        let (pid,tid)=window_owner(hwnd)?;
+        Some(Self{hwnd:hwnd as usize,pid,tid})
+    }
+    unsafe fn matches(self,hwnd:HWND)->bool{
+        self.hwnd==hwnd as usize&&window_owner(hwnd)==Some((self.pid,self.tid))
+    }
+}
+
+unsafe fn pin_from_file(hwnd:HWND){
+    use windows_sys::Win32::UI::Controls::Dialogs::*;
+    let mut file=[0u16;32768];
+    let filter=wide("Ứng dụng và lối tắt (*.exe;*.lnk)\0*.exe;*.lnk\0\0");
+    let title=wide("Thêm ứng dụng vào Dock");
+    let mut dialog:OPENFILENAMEW=mem::zeroed();
+    dialog.lStructSize=mem::size_of::<OPENFILENAMEW>() as u32;
+    dialog.hwndOwner=hwnd;
+    dialog.lpstrFilter=filter.as_ptr();
+    dialog.lpstrFile=file.as_mut_ptr();
+    dialog.nMaxFile=file.len() as u32;
+    dialog.lpstrTitle=title.as_ptr();
+    dialog.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_NOCHANGEDIR|OFN_NODEREFERENCELINKS|OFN_EXPLORER;
+    if GetOpenFileNameW(&mut dialog)==0{return;}
+    let path=utf16(&file);
+    let selected=std::path::Path::new(&path);
+    if selected.is_absolute()&&selected.is_file()&&selected.extension().and_then(|e|e.to_str())
+        .is_some_and(|v|v.eq_ignore_ascii_case("exe")||v.eq_ignore_ascii_case("lnk")){
+        emit(Event::Edit(Edit::Pin(path)));
+    }
+}
+unsafe fn dock_app_anchor(owner:HWND,path:Option<&str>)->panel_chrome::Anchor{
+    let mut point=POINT{x:0,y:0};
+    GetCursorPos(&mut point);
+    if let Some(local)=STATE.with(|s|{
+        let state=s.borrow();
+        let bar=state.bars.iter().find(|b|b.hwnd==owner&&!b.hidden)?;
+        let layout=bar.layout.as_ref()?;
+        let slot=path.and_then(|path|bar.items.iter().position(|i|i.path.eq_ignore_ascii_case(path)))
+            .and_then(|index|layout.slots.get(index).copied()).unwrap_or(layout.scan);
+        let (x,y)=match layout.side{
+            DockSide::Bottom=>(slot.x+slot.w*0.5,layout.glass.y),
+            DockSide::Left=>(layout.glass.x+layout.glass.w,slot.y+slot.h*0.5),
+            DockSide::Right=>(layout.glass.x,slot.y+slot.h*0.5),
+        };
+        Some(POINT{x:x.round() as i32,y:y.round() as i32})
+    }){
+        point=local;
+        ClientToScreen(owner,&mut point);
+    }
+    panel_chrome::Anchor::for_owner(owner,point)
+}
+
+unsafe fn app_menu(owner:HWND,path:&str,picker:bool){
+    use control_center::{Card,Command,View};
+    let Some((item,mut windows,advanced))=STATE.with(|s|{
+        let state=s.borrow();
+        let bar=state.bars.iter().find(|b|b.hwnd==owner&&!b.hidden)?;
+        let visible=bar.items.iter().find(|i|i.path.eq_ignore_ascii_case(path)).cloned();
+        let advanced=visible.is_some();
+        let item=visible.or_else(||available_items(&state.windows,bar.bounds,&state.prefs).into_iter().find(|i|i.path.eq_ignore_ascii_case(path)))?;
+        let windows=state.windows.iter().filter(|w|w.path.eq_ignore_ascii_case(path)&&
+            (state.prefs.all_windows||rect_intersects(w.rect,bar.bounds))).take(24)
+            .filter_map(|w|Some((w.clone(),WindowIdentity::read(w.hwnd)?))).collect::<Vec<_>>();
+        Some((item,windows,advanced))
+    })else{return;};
+    let foreground=GetForegroundWindow();
+    windows.sort_by_key(|(window,_)|(window.hwnd!=foreground,IsIconic(window.hwnd)!=0));
+    let name=basename(&item.path);
+    let mut cards=Vec::new();
+    let mut add=|title:&str,hint:&str,operation|cards.push(Card{icon:None,title:title.into(),hint:hint.into(),
+        action:Some(Command::App{path:item.path.clone(),operation})});
+    if !picker{
+        if windows.len()<2{
+            add(if windows.is_empty(){"Mở ứng dụng"}else{"Chuyển đến cửa sổ"},"",AppOperation::Open);
+        }
+        if !windows.is_empty(){
+            add("Mở thêm","Ứng dụng quyết định có mở cửa sổ mới hay không",AppOperation::NewWindow);
+        }
+        add(if item.pinned{"Bỏ ghim"}else{"Ghim vào Dock"},"",AppOperation::TogglePin);
+        if let Some((_,id))=windows.first(){
+            if advanced{
+                add("Quản lý cửa sổ","Thu nhỏ, phóng to, chia màn hình",AppOperation::Advanced);
+            }
+            add(if windows.len()>1{"Đóng cửa sổ đầu tiên"}else{"Đóng cửa sổ"},
+                "Ứng dụng sẽ hỏi lưu nếu cần",AppOperation::Close(vec![*id]));
+        }
+        if windows.len()>1{
+            add("Đóng các cửa sổ đang liệt kê","Ứng dụng sẽ hỏi lưu nếu cần",
+                AppOperation::Close(windows.iter().map(|(_,id)|*id).collect()));
+        }
+    }
+    if !picker{cards.push(Card{icon:None,title:"Thêm ứng dụng…".into(),hint:String::new(),action:Some(Command::AddApp)});}
+    let all=windows.len();
+    for (i,(w,id)) in windows.into_iter().enumerate(){
+        let status=if w.hwnd==foreground{"Đang dùng"}else if IsIconic(w.hwnd)!=0{"Đã thu nhỏ"}else{"Đang mở"};
+        cards.push(Card{icon:Some(UtilityWidget::Windows),
+            title:if w.title.trim().is_empty(){name.clone()}else{w.title},
+            hint:if all>1{format!("Cửa sổ {} · {status}",i+1)}else{status.into()},
+            action:Some(Command::Window{hwnd:id.hwnd,pid:id.pid,tid:id.tid})});
+    }
+    if cards.is_empty(){return;}
+    let hint=if all==0{if item.pinned{"Đã ghim".into()}else{String::new()}}
+        else{format!("{all} cửa sổ{}",if item.pinned{" · Đã ghim"}else{""})};
+    control_center::show(owner,dock_app_anchor(owner,Some(path)),View{title:if picker{"Chọn cửa sổ".into()}else{name},hint,cards,metrics:None});
+}
+unsafe fn more_apps(owner:HWND){
+    use control_center::{Card,Command,View};
+    let cards=STATE.with(|s|{
+        let state=s.borrow();
+        let Some(bar)=state.bars.iter().find(|b|b.hwnd==owner&&!b.hidden)else{return Vec::new();};
+        available_items(&state.windows,bar.bounds,&state.prefs).into_iter().skip(MAX_ITEMS).take(48).map(|item|Card{
+            icon:Some(UtilityWidget::Windows), title:basename(&item.path),
+            hint:if item.pinned{"Đã ghim"}else{"Đang mở"}.into(),
+            action:Some(Command::App{path:item.path,operation:AppOperation::ShowMenu}),
+        }).collect::<Vec<_>>()
+    });
+    if !cards.is_empty(){
+        control_center::show(owner,dock_app_anchor(owner,None),View{title:"Ứng dụng khác".into(),hint:"Ứng dụng ngoài hàng chính của Dock".into(),cards,metrics:None});
+    }
+}
+unsafe fn perform_app_action(owner:HWND,path:&str,operation:AppOperation){
+    let selected=STATE.with(|s|{
+        let state=s.borrow();
+        let bar_index=state.bars.iter().position(|bar|bar.hwnd==owner&&!bar.hidden)?;
+        let bar=&state.bars[bar_index];
+        let index=bar.items.iter().position(|item|item.path.eq_ignore_ascii_case(path));
+        let item=index.map(|i|bar.items[i].clone()).or_else(||available_items(&state.windows,bar.bounds,&state.prefs).into_iter()
+            .find(|item|item.path.eq_ignore_ascii_case(path)))?;
+        Some((bar_index,index,item))
+    });
+    let Some((bar,index,mut item))=selected else{return;};
+    match operation{
+        AppOperation::ShowMenu=>app_menu(owner,path,false),
+        AppOperation::Open=>activate(owner,&item),
+        AppOperation::NewWindow=>{item.hwnd=ptr::null_mut();activate(owner,&item);},
+        AppOperation::TogglePin=>emit(Event::Edit(if item.pinned{Edit::Unpin(item.path)}else{Edit::Pin(item.path)})),
+        AppOperation::Close(ids)=>{
+            let safe=STATE.with(|s|{
+                let state=s.borrow();
+                let Some(bar)=state.bars.iter().find(|b|b.hwnd==owner&&!b.hidden)else{return Vec::new();};
+                state.windows.iter().filter(|w|w.path.eq_ignore_ascii_case(path)&&
+                    (state.prefs.all_windows||rect_intersects(w.rect,bar.bounds))&&ids.iter().any(|id|id.matches(w.hwnd)))
+                    .map(|w|w.hwnd).collect::<Vec<_>>()
+            });
+            for hwnd in safe{PostMessageW(hwnd,WM_CLOSE,0,0);}
+        },
+        AppOperation::Advanced=>{if let Some(index)=index{native_menu(owner,bar,index);}},
+    }
+}
+unsafe fn open_dock_item(owner:HWND,item:&Item){
+    if item.count>1{app_menu(owner,&item.path,true);}else{activate(owner,item);}
+}
+unsafe fn dock_context(owner:HWND,bar:usize,index:usize,advanced:bool){
+    let path=STATE.with(|s|s.borrow().bars.get(bar).filter(|b|b.hwnd==owner)
+        .and_then(|b|b.items.get(index)).map(|item|item.path.clone()));
+    if let Some(path)=path.filter(|_|!advanced){app_menu(owner,&path,false);}
+    else{native_menu(owner,bar,index);}
 }
 unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     let menu=CreatePopupMenu();if menu.is_null(){return;}
@@ -1237,6 +1411,13 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
         }
         AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
     }
+    AppendMenuW(menu,MF_STRING,MENU_ADD_APP,wide("Thêm ứng dụng…").as_ptr());
+    let extra=STATE.with(|s|{
+        let state=s.borrow();
+        state.bars.get(bar_index).is_some_and(|b|available_items(&state.windows,b.bounds,&prefs).len()>MAX_ITEMS)
+    });
+    if extra{AppendMenuW(menu,MF_STRING,MENU_MORE_APPS,wide("Ứng dụng khác…").as_ptr());}
+    AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
     AppendMenuW(menu,MF_STRING|if prefs.all_windows{MF_CHECKED}else{0},MENU_ALL,wide("Hiện ứng dụng từ mọi màn hình").as_ptr());
     AppendMenuW(menu,MF_STRING|if !prefs.all_windows{MF_CHECKED}else{0},MENU_LOCAL,wide("Chỉ ứng dụng trên màn hình này").as_ptr());
     AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
@@ -1265,6 +1446,8 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     let cmd=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,hwnd,ptr::null()) as usize;
     DestroyMenu(menu);
     match cmd {
+        MENU_ADD_APP=>pin_from_file(hwnd),
+        MENU_MORE_APPS=>more_apps(hwnd),
         MENU_WINDOW_FIRST=>{
             let mut anchor=panel_chrome::Anchor::for_owner(hwnd,point);
             if let Some(at)=STATE.with(|s|{
@@ -1815,7 +1998,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let cursor=STATE.with(|s|s.borrow().bars.iter().enumerate().find(|(_,b)|b.hwnd==hwnd)
                     .and_then(|(i,b)|b.keyboard.map(|cell|(i,cell,b.items.len()))));
                 if let Some((bar,cell,count))=cursor{
-                    if cell<count{native_menu(hwnd,bar,cell);}else{request_utilities(hwnd,None);}
+                    if cell<count{dock_context(hwnd,bar,cell,false);}else{request_utilities(hwnd,None);}
                 }
                 return 0;
             }
@@ -1839,7 +2022,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 Some((None,false,false,None,0))
             });
             if let Some((item,search,utilities,widget,previous))=action{
-                if let Some(item)=item{activate(hwnd,&item);}
+                if let Some(item)=item{open_dock_item(hwnd,&item);}
                 if search {open_launcher();}
                 if utilities||widget.is_some(){request_utilities(hwnd,widget);}
                 if previous!=0 && IsWindow(previous as _)!=0{SetForegroundWindow(previous as _);}
@@ -1893,7 +2076,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 }
                 if auto&&(px<0||y<0||px>=area.right||y>=area.bottom){SetTimer(hwnd,HIDE_TIMER,650,None);}
                 match click{
-                    Some(DockTarget::App(_))=>{if let Some(item)=item{activate(hwnd,&item);}},
+                    Some(DockTarget::App(_))=>{if let Some(item)=item{open_dock_item(hwnd,&item);}},
                     Some(DockTarget::Launcher)=>open_launcher(),
                     Some(DockTarget::Overflow)=>request_utilities(hwnd,None),
                     Some(DockTarget::Utility(widget))=>request_utilities(hwnd,Some(widget)),
@@ -1918,7 +2101,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                   if let Some(layout)=b.layout.as_ref(){layout.hit(x as f32,y)}
                   else if x>=12{Some(((x-12)/ITEM_WIDTH) as usize)}else{None});
               (i,hit.unwrap_or(usize::MAX))});
-            native_menu(hwnd,bar,index);0
+            dock_context(hwnd,bar,index,GetKeyState(VK_SHIFT as i32)<0);0
         }
         WM_CLOSE=>{
             if CONTROL.with(|c|c.get())==hwnd{EndMenu();PostQuitMessage(0);}
