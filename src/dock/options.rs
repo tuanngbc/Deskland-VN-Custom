@@ -228,7 +228,11 @@ impl Options {
             _=>false,
         }
     }
-    pub fn utility_cell(&self,id:&str)->u32{ self.utility_profiles.get(id).map_or(28,|p|p.cell) }
+    pub(super) fn utility_cluster(&self,id:&str)->super::geometry::Cluster{
+        let p=self.utility_profiles.get(id);
+        super::geometry::Cluster{side:self.utility_position(id),cell:p.map_or(28,|p|p.cell),
+            gap:p.map_or(4,|p|p.gap),two_rows:p.is_none_or(|p|p.two_rows)}
+    }
     pub fn utility_position(&self,id:&str)->Option<bool>{
         match self.utility_profiles.get(id){Some(p) if !p.enabled||p.hidden.len()==super::utilities::Widget::ALL.len()=>None,Some(p)=>Some(p.leading),None=>Some(false)}
     }

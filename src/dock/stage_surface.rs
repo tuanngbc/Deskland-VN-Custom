@@ -1,8 +1,9 @@
 //! The layered Stage surface paints premultiplied cards and caption masks.
 //! A regular owned HWND displays the live DWM rectangles above it.
+use super::surface::Palette;
 use super::{geometry::Rect,surface::{rounded,draw,distance,control_backing,CONTROL_OPACITY,IconRasters,fallback_icon,Atlas},glass_probe::Layer,Item};
 use crate::desktop::wide;
-use windows_sys::Win32::{Foundation::{HWND,RECT},Graphics::Gdi::*};
+use windows_sys::Win32::{Foundation::{HWND,RECT,SIZE},Graphics::Gdi::*};
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub(super) struct Box2 { pub x:i32,pub y:i32,pub w:i32,pub h:i32 }
@@ -46,8 +47,8 @@ impl Layout {
         let px=|n:i32|(n*dpi.clamp(72,288) as i32+48)/96;
         let inset=px(6);
         let nav_h=px(21);
-        let gap=gap.max(px(5));
-        let min_h=px(48);
+        let gap=gap.max(px(8));
+        let min_h=px(63);
         let rows_for=|nav:i32|((height-inset*2-nav+gap)/(min_h+gap)).max(1) as usize;
         let limit=limit.clamp(1,8);
         let paged=total>rows_for(0).min(limit);
@@ -57,7 +58,7 @@ impl Layout {
         let available=(height-2*inset-reserve-(shown-1)*gap)/shown;
         let ideal=((width-2*inset)*2/3+px(18)).clamp(min_h,px(160));
         let card_h=available.min(ideal).max(1);
-        Self{width,height,card_h,inset,gap,radius:px(12),caption:px(25),rows,count:0,paged,stack:0,nav_h,right}
+        Self{width,height,card_h,inset,gap,radius:px(16),caption:px(30),rows,count:0,paged,stack:0,nav_h,right}
     }
     pub fn card(self,i:usize)->Box2 {
         // Reserve the same margin for the stack on every card so thumbnails
@@ -73,7 +74,7 @@ impl Layout {
         c.y+=d/2;c.h=(c.h-d).max(1);c
     }
     pub fn preview(self,i:usize)->RECT{
-        let c=self.card(i);let p=(self.inset/2).max(2);
+        let c=self.card(i);let p=self.inset.max(2);
         RECT{left:c.x+p,top:c.y+p,right:c.x+c.w-p,bottom:c.y+c.h-self.caption}
     }
     pub fn nav(self)->Option<Box2>{
@@ -134,6 +135,7 @@ impl Panel {
     pub unsafe fn paint(&mut self,target:HDC,look:Look,items:&[Item],atlas:&Atlas,ready:&[bool],emphasis:Option<(usize,u8)>,layered:Option<(HWND,&[String],usize,usize)>)->bool {
         let (w,h)=self.layer.size;
         let layout=look.layout;
+        let palette=Palette::new(look.dark);
         if self.look!=Some(look){
             self.static_pixels.resize(w as usize*h as usize*4,0);
             self.static_pixels.fill(0);
@@ -155,15 +157,12 @@ impl Panel {
                     rounded(data,w,h,layout.rear(i,2).rect(),radius,if look.dark{[108,91,74]}else{[221,210,199]},alpha);
                 }
                 let active=look.active&(1<<i)!=0;
-                let edge=match (look.dark,active){
-                    (true,true)=>[215,177,132],(false,true)=>[185,134,86],
-                    (true,false)=>[113,97,81],(false,false)=>[223,215,208],
-                };
-                let tint:[u8;3]=if look.dark{[37,30,24]}else{[246,241,237]};
+                let edge=if active{palette.accent}else{palette.edge};
+                let tint=palette.panel;
                 draw(data,w,h,b,|x,y|{
                     let d=distance(b,radius,x,y);
                     let coverage=(0.5-d).clamp(0.0,1.0);
-                    let line=(1.1+d).clamp(0.0,1.0);
+                    let line=(if active{1.8+d}else{1.1+d}).clamp(0.0,1.0);
                     let shine=(1.0-((y-b.y)/b.h).clamp(0.0,1.0)).powi(4);
                     let rgb=std::array::from_fn(|i|{
                         let base=(tint[i] as f32+shine*if look.dark{29.0}else{13.0}).min(255.0);
@@ -201,7 +200,7 @@ impl Panel {
         if let Some((i,strength))=emphasis.filter(|&(i,a)|i<layout.count&&a>0){
             let b=layout.card(i).rect();
             let radius=(layout.radius as f32).min(b.h/2.0);
-            let tint=if look.dark{[241,216,192]}else{[201,144,96]};
+            let tint=palette.accent;
             draw(data,w,h,b,|x,y|{
                 let d=distance(b,radius,x,y);
                 let coverage=(0.5-d).clamp(0.0,1.0)*(d+2.0).clamp(0.0,1.0);
@@ -211,24 +210,25 @@ impl Panel {
         let tint=if look.dark{[222,219,216]}else{[64,59,53]};
         for (i,item) in items.iter().enumerate(){
             let c=layout.card(i);
-            let size=(layout.caption-5).max(1) as f32;
+            let size=(layout.caption-9).max(1) as f32;
             let small=Rect{x:(c.x+layout.inset) as f32,y:(c.y+c.h) as f32-(layout.caption as f32+size)/2.0,w:size,h:size};
-            let mut badge=|r|{
-                if let Some(Some(icon))=atlas.get(&item.path){self.icons.paint(data,w,h,r,icon);}
-                else{fallback_icon(data,w,h,r,tint);}
-            };
-            badge(small);
+            if let Some(Some(icon))=atlas.get(&item.path){self.icons.paint(data,w,h,small,icon);}
+            else{fallback_icon(data,w,h,small,tint);}
             let slot=layout.preview(i);
             if !ready[i]&&slot.bottom-slot.top>6 {
-                let s=((slot.bottom-slot.top-4) as f32).min(size*2.1);
-                badge(Rect{x:(slot.left+slot.right) as f32/2.0-s/2.0,y:(slot.top+slot.bottom) as f32/2.0-s/2.0,w:s,h:s});
+                let s=((slot.bottom-slot.top-5) as f32/1.4).min(size*1.7);
+                let tile=Rect{x:(slot.left+slot.right) as f32/2.0-s*0.69,y:(slot.top+slot.bottom) as f32/2.0-s*0.69,w:s*1.38,h:s*1.38};
+                rounded(data,w,h,tile,tile.w*0.31,palette.accent,if look.dark{42}else{33});
+                let center=Rect{x:tile.x+s*0.19,y:tile.y+s*0.19,w:s,h:s};
+                if let Some(Some(icon))=atlas.get(&item.path){self.icons.paint(data,w,h,center,icon);}
+                else{fallback_icon(data,w,h,center,tint);}
             }
         }
         if let Some((hwnd,labels,page,pages))=layered {
             let mask_h=layout.caption.max(layout.nav_h);
             if self.mask.as_ref().is_none_or(|m|m.size!=(w,mask_h)){self.mask=Layer::new(w,mask_h);}
             if let Some(mask)=self.mask.as_mut(){
-                let ink=if look.dark{[247,244,240]}else{[49,37,31]};
+                let ink=palette.ink;
                 for (i,title) in labels.iter().enumerate(){
                     let r=caption_box(layout,i);
                     draw_mask(data,w,h,mask,self.font,r,title,false,ink);
@@ -261,6 +261,26 @@ fn caption_box(layout:Layout,i:usize)->Box2{
     let c=layout.card(i);
     Box2{x:c.x+layout.inset+layout.caption,y:c.y+c.h-layout.caption,w:c.w-2*layout.inset-layout.caption,h:layout.caption}
 }
+fn fit_caption(text:&str,mut fits:impl FnMut(&str)->bool)->String {
+    if fits(text){return text.to_owned();}
+    if !fits("…"){return String::new();}
+    for (at,c) in text.char_indices().skip(1){
+        if matches!(c,'\u{0300}'..='\u{036f}'){continue;}
+        let candidate=format!("…{}",text[at..].trim_start());
+        if fits(&candidate){return candidate;}
+    }
+    "…".into()
+}
+unsafe fn fit_on_dc(dc:HDC,text:&str,width:i32)->String{
+    // Limit work on external titles; reserve the final identifying part.
+    let count=text.chars().count();
+    let clipped=if count>96{format!("…{}",text.chars().skip(count-95).collect::<String>())}else{text.to_owned()};
+    fit_caption(&clipped,|s|{
+        let ws=wide(s);
+        let mut size:SIZE=std::mem::zeroed();
+        GetTextExtentPoint32W(dc,ws.as_ptr(),(ws.len()-1) as i32,&mut size)!=0&&size.cx<=width
+    })
+}
 unsafe fn draw_mask(data:&mut[u8],w:i32,h:i32,mask:&mut Layer,font:HFONT,b:Box2,text:&str,center:bool,ink:[u8;3]){
     if b.w<1||b.h<1||b.x<0||b.y<0||b.x+b.w>w||b.y+b.h>h||b.w>mask.size.0||b.h>mask.size.1{return;}
     mask.pixels().fill(0);
@@ -268,7 +288,8 @@ unsafe fn draw_mask(data:&mut[u8],w:i32,h:i32,mask:&mut Layer,font:HFONT,b:Box2,
     let previous=if font.is_null(){std::ptr::null_mut()}else{SelectObject(dc,font)};
     SetBkMode(dc,TRANSPARENT as i32);SetTextColor(dc,0x00ffffff);
     let mut rect=RECT{left:0,top:0,right:b.w,bottom:b.h};
-    DrawTextW(dc,wide(text).as_ptr(),-1,&mut rect,DT_SINGLELINE|DT_END_ELLIPSIS|DT_VCENTER|DT_NOPREFIX|if center{DT_CENTER}else{0});
+    let value=if center{text.to_owned()}else{fit_on_dc(dc,text,b.w)};
+    DrawTextW(dc,wide(&value).as_ptr(),-1,&mut rect,DT_SINGLELINE|DT_END_ELLIPSIS|DT_VCENTER|DT_NOPREFIX|if center{DT_CENTER}else{0});
     GdiFlush();
     if !previous.is_null(){SelectObject(dc,previous);}
     let stride=mask.size.0 as usize*4;
@@ -288,7 +309,8 @@ pub(super) unsafe fn caption(dc:HDC,layout:Layout,i:usize,text:&str,ink:u32){
     let mut r=caption_box(layout,i).win();
     if r.left>=r.right{return;}
     SetTextColor(dc,ink);SetBkMode(dc,TRANSPARENT as i32);
-    DrawTextW(dc,wide(text).as_ptr(),-1,&mut r,DT_SINGLELINE|DT_END_ELLIPSIS|DT_VCENTER|DT_NOPREFIX);
+    let value=fit_on_dc(dc,text,r.right-r.left);
+    DrawTextW(dc,wide(&value).as_ptr(),-1,&mut r,DT_SINGLELINE|DT_END_ELLIPSIS|DT_VCENTER|DT_NOPREFIX);
 }
 pub(super) unsafe fn nav_label(dc:HDC,b:Box2,label:&str,ink:u32){
     let mut r=b.win();
@@ -298,6 +320,13 @@ pub(super) unsafe fn nav_label(dc:HDC,b:Box2,label:&str,ink:u32){
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn measured_caption_keeps_a_vietnamese_suffix_and_short_titles(){
+        assert_eq!(fit_caption("Lịch",|t|t.chars().count()<=8),"Lịch");
+        assert_eq!(fit_caption("Tài liệu của nhóm · Đà Nẵng",|t|t.chars().count()<=8),"…Đà Nẵng");
+        assert_eq!(fit_caption("Ảnh",|_|false),"");
+    }
+
     #[test]
     fn floating_layout_reserves_click_through_gaps_and_paging() {
         for dpi in [96,120,144,192] {

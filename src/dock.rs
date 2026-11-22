@@ -510,10 +510,10 @@ fn item_list(all:&[AppWindow],screen:RECT,prefs:&Preferences)->Vec<Item>{
     }
     result.truncate(MAX_ITEMS);result
 }
-fn dock_depth(screen:&Screen,style:&Appearance)->i32 {
+fn dock_depth(screen:&Screen,style:&Appearance,cluster:geometry::Cluster)->i32 {
     let scale=(screen.dpi as f32/96.0).clamp(0.75,3.0);
     let zoom=if style.reduced_motion{0.0}else{style.magnification as f32/100.0};
-    (8.0*scale+(style.icon_size as f32*scale*(1.0+zoom)+32.0*scale).ceil()).ceil() as i32
+    (8.0*scale+((style.icon_size as f32*(1.0+zoom)+18.0).max(cluster.cross())*scale+12.0*scale).ceil()).ceil() as i32
 }
 fn stage_width(screen:&Screen,style:StageStyle)->i32{
     let scale=(screen.dpi as f32/96.0).clamp(0.75,3.0);
@@ -531,7 +531,7 @@ unsafe fn sync_appbars(state:&mut State,topology:bool){
         let policy=state.prefs.window_policy(&screen.id);
         if policy.dock==WindowMode::Reserve&&state.bars.iter().any(|b|same_rect(b.bounds,screen.bounds)){
             requests.push(appbar::Request{display:screen.id.clone(),stage:false,monitor:screen.bounds,
-                side:state.prefs.appearance.position,depth:dock_depth(screen,&state.prefs.appearance)});
+                side:state.prefs.appearance.position,depth:dock_depth(screen,&state.prefs.appearance,state.prefs.utility_cluster(&screen.id))});
         }
         if policy.stage==WindowMode::Reserve&&state.stages.iter().any(|p|p.display==screen.id){
             let (cards,_)=state.workspaces.cards(&screen.id,screen.bounds,&state.windows,state.prefs.all_windows);
@@ -601,7 +601,7 @@ unsafe fn recreate(state:&mut State) {
         if dock_targets.contains(&i) && !state.bars.iter().any(|b|same_rect(b.bounds,screen.bounds)) {
         let items=item_list(&state.windows,screen.bounds,&state.prefs);
         let pinned_widgets=state.prefs.utility_profiles.get(&screen.id).map_or_else(Vec::new,UtilityProfile::pinned);
-        let layout=geometry::measure_widgets(screen,&state.prefs.appearance,items.len(),None,0.0,state.prefs.utility_position(&screen.id),&pinned_widgets,state.prefs.utility_cell(&screen.id));
+        let layout=geometry::measure_cluster(screen,&state.prefs.appearance,items.len(),None,0.0,&pinned_widgets,state.prefs.utility_cluster(&screen.id));
         let r=layout.window;
         let hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|WS_EX_LAYERED,
             class.as_ptr(),wide("tuanpc-desk Dock").as_ptr(),WS_POPUP,
@@ -677,8 +677,8 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             }
             let r=if b.layout.is_some(){
                 b.pinned_widgets=state.prefs.utility_profiles.get(&screen.id).map_or_else(Vec::new,UtilityProfile::pinned);
-                let layout=geometry::measure_widgets(&placed,&state.prefs.appearance,b.items.len(),b.motion.focus_value(),b.motion.zoom.value,
-                    state.prefs.utility_position(&screen.id),&b.pinned_widgets,state.prefs.utility_cell(&screen.id));
+                let layout=geometry::measure_cluster(&placed,&state.prefs.appearance,b.items.len(),b.motion.focus_value(),b.motion.zoom.value,
+                    &b.pinned_widgets,state.prefs.utility_cluster(&screen.id));
                 changed|=b.layout.as_ref().is_some_and(|old|old.glass!=layout.glass||old.slots!=layout.slots||old.utility!=layout.utility||old.inline!=layout.inline);
                 let r=layout.window;b.layout=Some(layout);r
             }else{bar_rect(&placed,b.items.len())};
@@ -925,6 +925,27 @@ unsafe fn show_status_tip(owner:HWND){
     SendMessageW(tip.window,TTM_TRACKACTIVATE,1,(&tool as *const TTTOOLINFOW) as isize);
     STATUS_TIP.with(|value|value.replace(Some(tip)));
 }
+fn stage_caption<'a>(title:&str,peers:impl Iterator<Item=&'a str>)->String{
+    let mut best=0;
+    for peer in peers{
+        if title==peer{continue;}
+        let mut common=0;
+        for (a,b) in title.chars().zip(peer.chars()){
+            if a!=b{break;}
+            common+=a.len_utf8();
+        }
+        if common==title.len()||common==peer.len(){continue;}
+        // Cut only at a word boundary; never choose a partially shared word.
+        let cut=title[..common].char_indices().filter(|&(_,c)|c.is_whitespace()||matches!(c,'-'|'–'|'—'|'·'|'|'|':'|'/'|'»'))
+            .map(|(i,c)|i+c.len_utf8()).next_back().unwrap_or(0);
+        best=best.max(cut);
+    }
+    if title[..best].chars().count()>=12 {
+        let tail=title[best..].trim();
+        if !tail.is_empty(){return tail.to_owned();}
+    }
+    title.to_owned()
+}
 unsafe fn paint(hwnd:HWND){
     let layered=STATE.with(|s|{
         let state=s.borrow();
@@ -984,10 +1005,7 @@ unsafe fn paint(hwnd:HWND){
         let atlas=ATLAS.with(|a|a.borrow_mut().as_mut().map(|w|w.request(&items)).unwrap_or_default());
         let labels=items.iter().enumerate().map(|(i,item)|{
             if groups[i].is_some(){return format!("{} · {}",item.title,item.count);}
-            let app=basename(&item.path).trim_end_matches(".exe").to_owned();
-            let same_app=items.iter().enumerate().any(|(j,other)|j!=i&&other.path==item.path);
-            let name=if app.is_empty()||item.path.starts_with("shell:AppsFolder")||same_app{&item.title}else{&app};
-            name.to_owned()
+            stage_caption(&item.title,items.iter().enumerate().filter(|(j,o)|*j!=i&&groups[*j].is_none()&&o.path==item.path).map(|(_,o)|o.title.as_str()))
         }).collect::<Vec<_>>();
         let look=stage_surface::Look{dark,layout,active:active_mask,alpha:layered.then_some((opacity*255/100) as u8)};
         if layered{EndPaint(hwnd,&ps);}
@@ -1538,7 +1556,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let mut again=b.motion.tick(now,prefs.appearance.animation_speed,&mut b.reveal,!b.collapsed);
                 if old_zoom!=b.motion.zoom.value||old_focus!=b.motion.focus_value(){
                     let (placement,_)=appbars.placement(display,false);
-                    let layout=geometry::measure_widgets(&placement,&prefs.appearance,b.items.len(),b.motion.focus_value(),b.motion.zoom.value,prefs.utility_position(&display.id),&b.pinned_widgets,prefs.utility_cell(&display.id));
+                    let layout=geometry::measure_cluster(&placement,&prefs.appearance,b.items.len(),b.motion.focus_value(),b.motion.zoom.value,&b.pinned_widgets,prefs.utility_cluster(&display.id));
                     b.hovered=b.pointer.and_then(|(x,y)|layout.hot(x,y)).map_or(-1,|i|i as i32);
                     b.layout=Some(layout);
                 }
@@ -1604,7 +1622,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let start_reveal=b.collapse(false,reduced);
                 if let Some(layout)=b.layout.as_ref(){
                     b.hovered=layout.hot(x as f32,y as f32).map_or(-1,|i|i as i32);
-                    let desired=if magnify&&(layout.glass.contains(x as f32,y as f32)||b.hovered>=0){Some(layout.axis(x as f32,y as f32))}else{None};
+                    let desired=if magnify&&layout.hit(x as f32,y as f32).is_some(){Some(layout.axis(x as f32,y as f32))}else{None};
                     let changed=desired!=b.motion.target;
                     b.motion.target=desired;
                     let start=start_reveal||(changed&&b.schedule());
@@ -1974,6 +1992,12 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
 mod tests{
     use super::*;
     fn rect(a:[i32;4])->RECT{RECT{left:a[0],top:a[1],right:a[2],bottom:a[3]}}
+    #[test] fn stage_titles_keep_different_names_after_shared_unicode_prefix(){
+        let titles=["Bản thiết kế của nhóm - Đà Nẵng","Bản thiết kế của nhóm - Hải Phòng","Bản thiết kế của nhóm - New York"];
+        assert_eq!(stage_caption(titles[0],titles[1..].iter().copied()),"Đà Nẵng");
+        assert_eq!(stage_caption("Sơn",["Sơn Tùng"].into_iter()),"Sơn");
+        assert_eq!(stage_caption("Untitled",["Untitled"].into_iter()),"Untitled");
+    }
     #[test] fn pointer_release_cannot_activate_a_control_that_shifted_under_it(){
         let pin=DockTarget::App("a.exe".into());
         let mut down=Press::new(pin.clone(),100,12);

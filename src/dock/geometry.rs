@@ -38,6 +38,8 @@ pub struct Layout {
     pub scan: Rect,
     pub utility: Rect,
     pub utility_leading:bool,
+    pub cluster:Option<Rect>,
+    pub divider:Option<Rect>,
     pub inline:Vec<(UtilityWidget,Rect)>,
     pub indicators: Vec<(f32,f32)>,
     pub scale:f32,
@@ -96,12 +98,12 @@ impl Layout {
         let n=self.slots.len();
         let mut indexes=Vec::with_capacity(n+self.inline.len()+2);
         let append_status=|out:&mut Vec<usize>| {
-            if self.utility_leading{out.extend(n+2..n+2+self.inline.len());}
+            if self.cluster.is_some(){out.push(n);}
+            out.extend(n+2..n+2+self.inline.len());
             if self.utility.w>0.0{out.push(n+1);}
-            if !self.utility_leading{out.extend(n+2..n+2+self.inline.len());}
         };
         if self.utility_leading{append_status(&mut indexes);}
-        indexes.extend(0..=n);
+        indexes.extend(0..n+usize::from(self.cluster.is_none()));
         if !self.utility_leading{append_status(&mut indexes);}
         indexes
     }
@@ -115,109 +117,157 @@ pub fn measure(display:&Display,style:&Appearance,count:usize,focus:Option<f32>,
 pub fn measure_utilities(display:&Display,style:&Appearance,count:usize,focus:Option<f32>,amount:f32,utility_position:Option<bool>)->Layout{
     measure_widgets(display,style,count,focus,amount,utility_position,&[],28)
 }
-pub fn measure_widgets(display:&Display, style:&Appearance, count:usize, focus:Option<f32>, amount:f32, utility_position:Option<bool>, pinned:&[UtilityWidget],utility_cell:u32)->Layout {
-    let oriented=style.position!=DockSide::Bottom;
-    let scale=(display.dpi as f32/96.0).clamp(0.75,3.0);
-    let edge=8.0*scale;
-    let shadow=6.0*scale;
-    let pad=12.0*scale;
-    let max_span=if oriented {display.work.bottom-display.work.top} else {display.work.right-display.work.left};
-    let max_span=max_span as f32-2.0*(edge+shadow);
-    let utility_leading=utility_position==Some(true);
-    let host=usize::from(utility_position.is_some());
-    let app_cells=count+1; // The launcher uses an app-sized cell.
-    let status_gap=2.0*scale;
-    let group_gap=6.0*scale;
-    let ideal_icon=style.icon_size as f32*scale;
-    let min_icon=ideal_icon.min(28.0*scale);
-    let ideal_status=utility_cell.clamp(24,32) as f32*scale;
-    let zoom_range=if style.reduced_motion {0.0}else{style.magnification as f32/100.0};
-    let extra=2.6*zoom_range;
-    let app_room=(max_span-2.0*pad).max(0.0);
-    let spacing=(style.spacing as f32*scale)
-        .min(((app_room-app_cells as f32*min_icon)/app_cells as f32).max(scale));
-    let app_gaps=count as f32*spacing;
-    let status_total=|n:usize,cell:f32| if n==0{0.0}else{group_gap+n as f32*cell+(n-1) as f32*status_gap};
-    let inline_count=if host==1 {
-        (0..=pinned.len().min(5)).rev().find(|&n| {
-            status_total(n+1,ideal_status)+app_gaps+min_icon*(app_cells as f32+extra)<=app_room
-        }).unwrap_or(0)
-    }else{0};
-    let status_count=host+inline_count;
-    let status=ideal_status.min((app_room-app_gaps-app_cells as f32*8.0).max(8.0));
-    let cells=app_cells+status_count;
-    let lead_count=if utility_leading{status_count}else{0};
-    let icon=ideal_icon.min(((app_room-status_total(status_count,status)-app_gaps)/(app_cells as f32+extra)).max(1.0));
-    let gap=|i:usize| {
-        if i+1==cells{return 0.0;}
-        let app=|k:usize|k>=lead_count&&k<lead_count+app_cells;
-        match (app(i),app(i+1)){(true,true)=>spacing,(false,false)=>status_gap,_=>group_gap}
-    };
-    let is_app=|i:usize| i>=lead_count&&i<lead_count+app_cells;
-    let base_span=icon*app_cells as f32+app_gaps+status_total(status_count,status)+2.0*pad;
-    let cross=icon*(1.0+zoom_range)+20.0*scale;
-    let reserved=(base_span+(icon*zoom_range*2.6).min(max_span-base_span).max(0.0)).ceil();
-    let extent=reserved+2.0*shadow;
-    let total_cross=(cross+2.0*shadow).ceil();
-    let available_x=display.work.right-display.work.left;
-    let available_y=display.work.bottom-display.work.top;
-    let (x,y,w,h)=match style.position{
-        DockSide::Bottom=>(display.work.left+(available_x-extent as i32)/2,
-            display.work.bottom-(edge+total_cross) as i32,extent,total_cross),
-        DockSide::Left=>(display.work.left+edge as i32,display.work.top+(available_y-extent as i32)/2,
-            total_cross,extent),
-        DockSide::Right=>(display.work.right-(edge+total_cross) as i32,display.work.top+(available_y-extent as i32)/2,
-            total_cross,extent),
-    };
-    let mut unscaled=(extent-base_span)*0.5+pad;
-    let widths:Vec<f32>=(0..cells).map(|i|{
-        let size=if is_app(i){icon}else{status};
-        let center=unscaled+size*0.5;
-        unscaled+=size+gap(i);
-        if !is_app(i){return size;}
-        let delta=focus.map(|p|(center-p)/(icon+spacing)).unwrap_or(10.0);
-        let weight=(-delta*delta/1.60).exp();
-        icon*(1.0+amount.clamp(0.0,1.0)*zoom_range*weight)
-    }).collect();
-    let span=widths.iter().sum::<f32>()+(0..cells).map(gap).sum::<f32>()+2.0*pad;
-    let start=(extent-span)*0.5;
-    let mut cursor=start+pad;
-    let mut all=Vec::with_capacity(cells);
-    let mut indicators=Vec::with_capacity(count);
-    for (i,size) in widths.into_iter().enumerate(){
-        let cross_axis=if is_app(i){match style.position{
-            DockSide::Bottom|DockSide::Right=>total_cross-shadow-size-13.0*scale,
-            DockSide::Left=>shadow+13.0*scale,
-        }}else{match style.position {
-            DockSide::Bottom|DockSide::Right=>total_cross-shadow-(icon+20.0*scale+size)*0.5,
-            DockSide::Left=>shadow+(icon+20.0*scale-size)*0.5,
-        }};
-        let r=if oriented{Rect{x:cross_axis,y:cursor,w:size,h:size}}else{Rect{x:cursor,y:cross_axis,w:size,h:size}};
-        let item_index=i.checked_sub(lead_count);
-        if item_index.is_some_and(|index|index<count){
-            let center=cursor+size*0.5;
-            indicators.push(match style.position{
-                DockSide::Bottom=>(center,total_cross-shadow-6.0*scale),
-                DockSide::Right=>(total_cross-shadow-6.0*scale,center),
-                DockSide::Left=>(shadow+6.0*scale,center),
-            });
-        }
-        all.push(r);
-        cursor+=size+gap(i);
+#[derive(Clone,Copy)]
+pub(super) struct Cluster {
+    pub side:Option<bool>,
+    pub cell:u32,
+    pub gap:u32,
+    pub two_rows:bool,
+}
+impl Cluster {
+    pub fn cross(self)->f32{
+        if self.side.is_none(){0.0}
+        else if self.two_rows{2.0*self.cell as f32+self.gap as f32+8.0}
+        else{self.cell as f32+12.0}
     }
-    let inline_rects=if utility_leading{all.drain(..inline_count).collect::<Vec<_>>()}
-        else{all.split_off(cells-inline_count)};
-    let inline=pinned.iter().copied().zip(inline_rects).collect();
-    let utility=match utility_position{Some(true)=>all.remove(0),Some(false)=>all.pop().unwrap_or_default(),None=>Rect::default()};
-    let scan=all.pop().unwrap_or_default();
-    // The background follows the app row; empty hover slack remains alpha 0.
-    let height=icon+20.0*scale;
-    let glass=match style.position{
-        DockSide::Bottom=>Rect{x:start,y:total_cross-shadow-height,w:span,h:height},
-        DockSide::Right=>Rect{x:total_cross-shadow-height,y:start,w:height,h:span},
-        DockSide::Left=>Rect{x:shadow,y:start,w:height,h:span},
+}
+#[cfg(test)]
+fn measure_widgets(display:&Display,style:&Appearance,count:usize,focus:Option<f32>,amount:f32,side:Option<bool>,pinned:&[UtilityWidget],cell:u32)->Layout{
+    measure_cluster(display,style,count,focus,amount,pinned,Cluster{side,cell,gap:4,two_rows:false})
+}
+pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,focus:Option<f32>,amount:f32,pinned:&[UtilityWidget],cluster:Cluster)->Layout{
+    let vertical=style.position!=DockSide::Bottom;
+    let leading=cluster.side==Some(true);
+    let host=cluster.side.is_some();
+    let scale=(display.dpi as f32/96.0).clamp(0.75,3.0);
+    let screen_w=(display.work.right-display.work.left).max(1) as f32;
+    let screen_h=(display.work.bottom-display.work.top).max(1) as f32;
+    let (axis,cross_axis)=if vertical{(screen_h,screen_w)}else{(screen_w,screen_h)};
+    let edge=(8.0*scale).min(axis.min(cross_axis)*0.04);
+    let shadow=(6.0*scale).min(axis.min(cross_axis)*0.035);
+    let pad=(if vertical || !display.primary && screen_h>screen_w {8.0}else{10.0}*scale).min(axis*0.04);
+    let room=(axis-2.0*(edge+shadow+pad)).max(1.0);
+    let style_gap=style.spacing as f32*scale;
+    let spacing=style_gap.min(if vertical||screen_h>screen_w{8.0*scale}else{14.0*scale})
+        .min(room/(count.max(1) as f32*5.0));
+    let gap=(cluster.gap as f32*scale).min(room*0.06);
+    let group_gap=(10.0*scale).min(room*0.06);
+    let rows=if cluster.two_rows{2}else{1};
+    let ideal_status=(cluster.cell as f32*scale).min(room*0.32).min((cross_axis*0.75-gap)/rows as f32).max(1.0);
+    let apps=count+usize::from(!host);
+    let gaps=apps.saturating_sub(1) as f32*spacing;
+    let zoom=if style.reduced_motion{0.0}else{style.magnification as f32/100.0};
+    // The sum of these Gaussian weights is below 2.6 over all slot phases.
+    let spill=2.6*zoom;
+    let span=|n:usize| if !host{0.0}else{
+        let cols=(n+2).div_ceil(rows);
+        cols as f32*ideal_status+cols.saturating_sub(1) as f32*gap+10.0*scale
     };
-    Layout{window:RECT{left:x,top:y,right:x+w as i32,bottom:y+h as i32},glass,slots:all,scan,utility,utility_leading,inline,indicators,scale,side:style.position}
+    let widgets=pinned.iter().copied().filter(|&w|w!=UtilityWidget::Spotlight).take(10).collect::<Vec<_>>();
+    let min_icon=(style.icon_size.min(29) as f32)*scale;
+    let inline_count=if host{
+        (0..=widgets.len()).rev()
+            .find(|&n| span(n)+gaps+if apps>0{group_gap+min_icon*(apps as f32+spill)}else{0.0}<=room)
+            .unwrap_or(0)
+    }else{0};
+    let app_gap=if host&&apps>0{group_gap}else{0.0};
+    let status_span=span(inline_count);
+    let icon=if apps==0{0.0}else{
+        (style.icon_size as f32*scale).min(
+            ((room-status_span-app_gap-gaps)/(apps as f32+spill)).max(1.0)
+        )
+    };
+    let lanes=if host{rows.min(inline_count+2)}else{0};
+    let grid_cross=lanes as f32*ideal_status+lanes.saturating_sub(1) as f32*gap;
+    let panel_cross=(icon+18.0*scale).max(grid_cross+8.0*scale);
+    let total_cross=(panel_cross.max(icon*(1.0+zoom)+18.0*scale)+2.0*shadow).ceil()
+        .min((cross_axis-edge).max(1.0));
+    let rest_apps=icon*apps as f32+gaps;
+    let slack=if apps>0{icon*spill}else{0.0};
+    let rest_span=rest_apps+status_span+app_gap+2.0*pad;
+    let extent=(rest_span+slack+2.0*shadow).ceil().min((axis-2.0*edge).max(1.0));
+    // Keep the resting capsule centered on the monitor. Reserve motion
+    // clearance on the app side; utility anchors never slide during zoom.
+    let rest_start=shadow+if host && !leading{slack}else if !host{slack*0.5}else{0.0};
+    let center=(axis-rest_span)*0.5-rest_start;
+    let offset=center.clamp(edge,(axis-edge-extent).max(edge)).round();
+    let (x,y,w,h)=match style.position{
+        DockSide::Bottom=>(display.work.left+offset as i32,display.work.bottom-(edge+total_cross).ceil() as i32,extent,total_cross),
+        DockSide::Left=>(display.work.left+edge.ceil() as i32,display.work.top+offset as i32,total_cross,extent),
+        DockSide::Right=>(display.work.right-(edge+total_cross).ceil() as i32,display.work.top+offset as i32,total_cross,extent),
+    };
+    let wall=if style.position==DockSide::Left{shadow}else{total_cross-shadow};
+    let panel_base=if style.position==DockSide::Left{wall}else{wall-panel_cross};
+    let bar=|major:f32,minor:f32,along:f32,across:f32|if vertical{
+        Rect{x:minor,y:major,w:across,h:along}
+    }else{Rect{x:major,y:minor,w:along,h:across}};
+    let base=rest_start+pad;
+    let status_start=if leading{base}else{base+rest_apps+app_gap};
+    let app_rest=if leading{base+status_span+app_gap}else{base};
+    let widths=(0..apps).map(|i|{
+        let center=app_rest+i as f32*(icon+spacing)+icon*0.5;
+        let delta=focus.map_or(10.0,|pos|(center-pos)/(icon+spacing).max(1.0));
+        icon*(1.0+amount.clamp(0.0,1.0)*zoom*(-delta*delta/1.60).exp())
+    }).collect::<Vec<_>>();
+    let app_len=widths.iter().sum::<f32>()+gaps;
+    let expanded=app_len-rest_apps;
+    let range_start=if leading{app_rest}else{shadow+pad};
+    let range_end=if host&&!leading{status_start-app_gap}else{extent-shadow-pad};
+    let app_start=if apps==0{app_rest}else{
+        let ideal=focus.filter(|_|icon>0.0).map_or(app_rest-expanded*0.5,|pos|{
+            let idx=((pos-app_rest)/(icon+spacing).max(1.0)).floor().clamp(0.0,(apps-1) as f32) as usize;
+            let before=widths[..idx].iter().sum::<f32>()-icon*idx as f32;
+            app_rest-before-(widths[idx]-icon)*0.5
+        });
+        ideal.clamp(range_start,(range_end-app_len).max(range_start))
+    };
+    let mut cursor=app_start;
+    let mut slots=Vec::with_capacity(count);
+    let mut indicators=Vec::with_capacity(count);
+    let mut scan=Rect::default();
+    for (i,&size) in widths.iter().enumerate(){
+        let minor=if style.position==DockSide::Left{wall+12.0*scale}else{wall-12.0*scale-size};
+        let slot=bar(cursor,minor,size,size);
+        if i<count{
+            slots.push(slot);
+            let marker=if style.position==DockSide::Left{wall+5.5*scale}else{wall-5.5*scale};
+            let mid=cursor+size/2.0;
+            indicators.push(if vertical{(marker,mid)}else{(mid,marker)});
+        }else{scan=slot;}
+        cursor+=size+spacing;
+    }
+    let mut inline=Vec::with_capacity(inline_count);
+    let mut utility=Rect::default();
+    let mut group=None;
+    let mut divider=None;
+    if host{
+        let n=inline_count+2;
+        let cols=n.div_ceil(rows);
+        let first=status_start+5.0*scale;
+        let minor=panel_base+(panel_cross-grid_cross)*0.5;
+        // Row-major ordering matches keyboard traversal even when rotated.
+        let slot=|idx:usize| {
+            let row=idx/cols;
+            let col=idx%cols;
+            let len=(n-row*cols).min(cols);
+            let bias=(cols-len) as f32*(ideal_status+gap)*0.5;
+            bar(first+bias+col as f32*(ideal_status+gap),minor+row as f32*(ideal_status+gap),ideal_status,ideal_status)
+        };
+        scan=slot(0);
+        utility=slot(n-1);
+        inline.extend(widgets.into_iter().take(inline_count).enumerate().map(|(i,w)|(w,slot(i+1))));
+        group=Some(bar(status_start,minor-3.0*scale,status_span,grid_cross+6.0*scale));
+        if apps>0{
+            let major=if leading{status_start+status_span+app_gap/2.0}else{status_start-app_gap/2.0};
+            divider=Some(bar(major-scale*0.5,panel_base+panel_cross*0.26,scale,panel_cross*0.48));
+        }
+    }
+    let app_end=app_start+app_len;
+    let glass_left=(if host&&leading{status_start}else if apps>0{app_start}else{status_start})-pad;
+    let glass_right=(if host&&!leading||apps==0{status_start+status_span}else{app_end})+pad;
+    let glass=bar(glass_left,panel_base,(glass_right-glass_left).max(1.0),panel_cross);
+    Layout{window:RECT{left:x,top:y,right:x+w as i32,bottom:y+h as i32},glass,slots,scan,utility,utility_leading:leading,
+        cluster:group,divider,inline,indicators,scale,side:style.position}
 }
 
 #[cfg(test)]
@@ -236,6 +286,32 @@ mod tests{
                     assert_eq!(layout.pin_boundary(marker.x+marker.w/2.0,marker.y+marker.h/2.0,3),Some(edge));
                 }
                 assert_eq!(layout.pin_boundary(-100.0,-100.0,3),None);
+            }
+        }
+    }
+    #[test]
+    fn two_lane_status_has_stable_hit_boxes_and_fits_both_orientations(){
+        let pins=[UtilityWidget::Network,UtilityWidget::Sound,UtilityWidget::Bluetooth,UtilityWidget::Calendar,UtilityWidget::QuickSettings];
+        for (width,height) in [(1080,1920),(1920,1080),(600,960)]{
+            for dpi in [96,144,192]{
+                let work=RECT{left:-width,top:-200,right:0,bottom:height-200};
+                let screen=Display{id:"test".into(),name:String::new(),bounds:work,work,primary:false,dpi};
+                for position in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
+                    for side in [Some(true),Some(false)]{
+                        let style=Appearance{position,magnification:55,..Default::default()};
+                        let cfg=Cluster{side,two_rows:true,cell:28,gap:4};
+                        let a=measure_cluster(&screen,&style,7,None,0.0,&pins,cfg);
+                        let b=measure_cluster(&screen,&style,7,Some(a.axis(a.slots[3].x,a.slots[3].y)),1.0,&pins,cfg);
+                        assert_eq!(a.scan,b.scan);assert_eq!(a.utility,b.utility);assert_eq!(a.inline,b.inline);
+                        assert_eq!(a.hot(a.scan.x+a.scan.w/2.0,a.scan.y+a.scan.h/2.0),Some(7));
+                        let cells=[a.scan,a.utility].into_iter().chain(a.inline.iter().map(|(_,r)|*r)).collect::<Vec<_>>();
+                        let cross=|r:Rect|if position==DockSide::Bottom{r.y}else{r.x};
+                        assert_ne!(cross(a.scan),cross(a.utility));
+                        assert!(cells.iter().enumerate().all(|(i,r)|cells[i+1..].iter().all(|&other|!overlaps(*r,other))
+                            && b.slots.iter().all(|&slot|!overlaps(*r,slot))));
+                        assert!(a.window.left>=work.left&&a.window.right<=work.right&&a.window.top>=work.top&&a.window.bottom<=work.bottom);
+                    }
+                }
             }
         }
     }
@@ -297,7 +373,7 @@ mod tests{
             assert_eq!(l.hot(l.scan.x+1.0,l.scan.y+1.0),Some(10));
             match side {
                 Some(true)=>assert!(l.utility.x+l.utility.w<=l.slots[0].x),
-                Some(false)=>assert!(l.utility.x>=l.scan.x+l.scan.w),
+                Some(false)=>assert!(l.utility.x>=l.slots.last().unwrap().x+l.slots.last().unwrap().w),
                 None=>assert_eq!(l.utility.w,0.0),
             }
             if side.is_some(){assert_eq!(l.hot(l.utility.x+1.0,l.utility.y+1.0),Some(11));}
@@ -319,8 +395,8 @@ mod tests{
                 assert!(l.inline.iter().all(|(_,r)|r.w==28.0));
                 assert_eq!(l.slots[0].w,44.0);
                 let lead=measure_widgets(&d,&Appearance::default(),10,None,0.0,Some(true),pins,28);
-                assert_eq!(&lead.key_order()[..6],&[12,13,14,15,16,11]);
-                assert_eq!(l.key_order(),(0..17).collect::<Vec<_>>());
+                assert_eq!(&lead.key_order()[..7],&[10,12,13,14,15,16,11]);
+                assert_eq!(l.key_order(),(0..=10).chain(12..17).chain([11]).collect::<Vec<_>>());
                 for (i,(_,r)) in lead.inline.iter().enumerate(){
                     assert_eq!(lead.hot(r.x+r.w*0.5,r.y+r.h*0.5),Some(i+12));
                 }

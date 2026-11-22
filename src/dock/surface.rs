@@ -23,6 +23,17 @@ impl Material {
 // behind monochrome controls need enough backing to survive any wallpaper.
 pub(super) const CONTROL_OPACITY: u8 = 218;
 
+/// Shared color tokens for native Dock, Stage and utility controls (BGR order).
+#[derive(Clone,Copy)]
+pub(super) struct Palette {
+    pub panel:[u8;3],pub ink:[u8;3],pub muted:[u8;3],pub accent:[u8;3],pub edge:[u8;3],
+}
+impl Palette {
+    pub fn new(dark:bool)->Self{
+        if dark{Self{panel:[51,39,31],ink:[252,248,241],muted:[216,198,182],accent:[255,198,124],edge:[149,125,107]}}
+        else{Self{panel:[255,251,247],ink:[52,38,26],muted:[100,79,65],accent:[184,99,37],edge:[220,199,181]}}
+    }
+}
 pub(super) fn control_backing(base: f32) -> f32 {
     // Source-over opacity needed to bring the existing material to the floor.
     let floor = CONTROL_OPACITY as f32;
@@ -65,7 +76,8 @@ impl Surface {
         }
         let data=self.layer.pixels();
         data.copy_from_slice(&self.static_pixels);
-        let control_tint=if self.material.dark{[34,27,23]}else{[242,236,231]};
+        let palette=Palette::new(self.material.dark);
+        let control_tint=palette.panel;
         let control_alpha=control_backing((100-self.material.transparency) as f32*2.55).ceil() as u8;
         for (i,(slot,item)) in layout.slots.iter().zip(items).enumerate(){
             let front=active==Some(i);
@@ -75,7 +87,9 @@ impl Surface {
                 let r=Rect{x:slot.x+slot.w*0.10,y:slot.y+slot.h*0.10,w:slot.w*0.80,h:slot.h*0.80};
                 rounded(data,w,h,r,r.w*0.26,control_tint,control_alpha);
             }
-            if front||hover==Some(i){rounded(data,w,h,*slot,slot.w*0.25,tint,if front{38}else{29});}
+            if front||hover==Some(i){
+                rounded(data,w,h,*slot,slot.w*0.25,if front{palette.accent}else{palette.ink},if front{53}else{34});
+            }
             if let Some(Some(icon))=atlas.get(&item.path){
                 self.icons.paint(data,w,h,*slot,icon);
             }else{
@@ -91,7 +105,7 @@ impl Surface {
                         let t=(distance(r,kx.min(ky),x,y)+0.5*scale).abs();
                         Some((tint,(0.8*scale-t).clamp(0.0,1.0)*200.0))
                     });
-                }else{rounded(data,w,h,r,kx.min(ky),tint,if front{239}else{187});}
+                }else{rounded(data,w,h,r,kx.min(ky),if front{palette.accent}else{tint},if front{255}else{185});}
             }
             if let Some((_,kind,t))=feedback.filter(|(index,_,_)|*index==i) {
                 let strength=((1.0-t).max(0.0).powf(0.75)*if matches!(kind,FeedbackKind::Failed){220.0}else{160.0}) as f32;
@@ -107,8 +121,14 @@ impl Surface {
             }
         }
         let scan=layout.scan;
-        let tint=if self.material.dark{[238,244,252]}else{[43,53,64]};
-        if control_alpha!=0{rounded(data,w,h,scan,scan.w*0.37,control_tint,control_alpha);}
+        let tint=palette.ink;
+        if let Some(cluster)=layout.cluster {
+            let radius=cluster.w.min(cluster.h).min(28.0*scale)*0.45;
+            rounded(data,w,h,cluster,radius,palette.edge,if self.material.dark{145}else{126});
+            let inset=scale;
+            let body=Rect{x:cluster.x+inset,y:cluster.y+inset,w:cluster.w-2.0*inset,h:cluster.h-2.0*inset};
+            rounded(data,w,h,body,(radius-inset).max(0.0),control_tint,if self.material.dark{235}else{228});
+        }else if control_alpha!=0{rounded(data,w,h,scan,scan.w*0.32,control_tint,control_alpha);}
         if hover==Some(items.len()){rounded(data,w,h,scan,scan.w*0.22,tint,50);}
         let center=(scan.x+0.45*scan.w,scan.y+0.44*scan.h);
         let radius=scan.w*0.19;
@@ -118,7 +138,7 @@ impl Surface {
             Some((tint,(0.5-ring.min(tail)).clamp(0.0,1.0)*238.0))
         });
         let utility=layout.utility;
-        if control_alpha!=0{rounded(data,w,h,utility,utility.w*0.37,control_tint,control_alpha);}
+        if utility.w>0.0{rounded(data,w,h,utility,utility.w*0.31,palette.accent,if self.material.dark{28}else{22});}
         if hover==Some(items.len()+1){rounded(data,w,h,utility,utility.w*0.22,tint,50);}
         let divider=|a:Rect,b:Rect|{
             if layout.side==super::DockSide::Bottom{
@@ -127,17 +147,13 @@ impl Surface {
                 Rect{x:layout.glass.x+layout.glass.w*0.22,y:(a.y+a.h+b.y)*0.5-0.5*scale,w:layout.glass.w*0.56,h:scale}
             }
         };
-        if utility.w>0.0 {
-            let group=if layout.utility_leading{divider(utility,layout.slots.first().copied().unwrap_or(scan))}
-                else{divider(scan,utility)};
-            rounded(data,w,h,group,scale*0.5,tint,82);
-        }
+        if let Some(group)=layout.divider{rounded(data,w,h,group,scale*0.5,palette.edge,154);}
         if let Some(split)=items.windows(2).position(|pair|pair[0].pinned&&!pair[1].pinned){
             let group=divider(layout.slots[split],layout.slots[split+1]);
             rounded(data,w,h,group,scale*0.5,tint,58);
         }
         for (i,(widget,slot)) in layout.inline.iter().copied().enumerate(){
-            if control_alpha!=0{rounded(data,w,h,slot,slot.w*0.37,control_tint,control_alpha);}
+
             if hover==Some(items.len()+2+i){rounded(data,w,h,slot,slot.w*0.22,tint,50);}
             status_on(data,w,h,slot,scale,tint,Some(widget));
         }
@@ -265,10 +281,10 @@ pub(super) fn fallback_icon(data:&mut[u8],w:i32,h:i32,slot:Rect,tint:[u8;3]){
         rounded(data,w,h,Rect{x:slot.x+u*slot.w-k,y:slot.y+v*slot.h-k,w:k*2.0,h:k*2.0},k,tint,188);
     }
 }
-fn status_on(data:&mut[u8],w:i32,h:i32,cell:Rect,scale:f32,tint:[u8;3],widget:Option<UtilityWidget>){
+pub(super) fn status_on(data:&mut[u8],w:i32,h:i32,cell:Rect,scale:f32,tint:[u8;3],widget:Option<UtilityWidget>){
     use UtilityWidget::*;
     if cell.w<=0.0||cell.h<=0.0{return;}
-    let edge=(18.0*scale).min(cell.w.min(cell.h));
+    let edge=(20.0*scale).min(cell.w.min(cell.h));
     let px=(cell.x+(cell.w-edge)*0.5).round();
     let py=(cell.y+(cell.h-edge)*0.5).round();
     let ink=Rect{x:px,y:py,w:edge,h:edge};

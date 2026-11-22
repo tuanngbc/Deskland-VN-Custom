@@ -158,6 +158,8 @@
         <label class="setting-row"><b data-i18n="utilitySide">Vị trí trong Dock</b><select id="utilitySide"><option value="left" data-i18n="dockLeft">Bên trái</option><option value="right" data-i18n="dockRight">Bên phải</option></select></label>
         <label class="setting-row"><b data-i18n="utilityDetails">Hiện thông tin trong bảng tiện ích</b><input id="utilityDetails" type="checkbox"></label>
         <label class="setting-row"><b>Cỡ nút tiện ích</b><select id="utilityCell"><option value="24">Nhỏ · 24 px</option><option value="28">Chuẩn · 28 px</option><option value="32">Dễ bấm · 32 px</option></select></label>
+        <label class="setting-row"><b>Bố cục cụm hệ thống</b><select id="utilityLanes"><option value="2">Hai hàng</option><option value="1">Một hàng</option></select></label>
+        <label class="setting-row"><b>Khoảng cách tiện ích</b><select id="utilityGap"><option value="2">Gọn</option><option value="4">Chuẩn</option><option value="8">Thoáng</option></select></label>
         <ol id="utilityRows" class="dock-utility-rows"></ol>
         <button id="utilityReset" type="button" data-i18n="utilityReset">Khôi phục tiện ích mặc định</button>
       </div>
@@ -904,7 +906,7 @@ const utilityLabels={
 };
 const utilityKeys=Object.keys(utilityLabels);
 let utilityDisplay=null,utilityDrag=null;
-const utilityDefault=()=>({enabled:true,side:'right',details:true,cell:28,order:[...utilityKeys],hidden:[],inline:[]});
+const utilityDefault=()=>({enabled:true,side:'right',details:true,cell:28,rows:2,gap:4,order:[...utilityKeys],hidden:[],inline:[]});
 function utilityProfile(){
   const map=dockOptions.utilityProfiles||{};
   return {...utilityDefault(),...(Object.hasOwn(map,utilityDisplay)?map[utilityDisplay]:{})};
@@ -921,12 +923,13 @@ function renderUtilityControls(){
   $('utilitySide').value=p.side;
   $('utilityDetails').checked=p.details;
   $('utilityCell').value=String(p.cell);
+  $('utilityLanes').value=String(p.rows);$('utilityGap').value=String(p.gap);
   $('utilityRows').innerHTML=p.order.filter(key=>Object.hasOwn(utilityLabels,key)).map((key,i)=>{
     const label=t('utilityItem_'+key);
     const name=label==='utilityItem_'+key?utilityLabels[key]:label;
     return '<li draggable="true" data-widget="'+esc(key)+'"><span aria-hidden="true">⋮⋮</span><label>'+
       '<input type="checkbox" data-utility-visible="'+esc(key)+'"'+(p.hidden.includes(key)?'':' checked')+'> '+esc(name)+'</label>'+
-      '<button type="button" data-utility-pin="'+esc(key)+'" aria-pressed="'+(p.inline.includes(key)?'true':'false')+'" aria-label="'+esc(dockText('utilityPin')+': '+name)+'"'+(!p.inline.includes(key)&&p.inline.length>=5?' disabled':'')+'>'+(p.inline.includes(key)?'★':'☆')+'</button>'+
+      '<button type="button" data-utility-pin="'+esc(key)+'" aria-pressed="'+(p.inline.includes(key)?'true':'false')+'" aria-label="'+esc(dockText('utilityPin')+': '+name)+'"'+(!p.inline.includes(key)&&p.inline.length>=10?' disabled':'')+'>'+(p.inline.includes(key)?'★':'☆')+'</button>'+
       '<button type="button" data-utility-move="-1" aria-label="'+esc(dockText('utilityUp')+': '+name)+'"'+(i===0?' disabled':'')+'>↑</button>'+
       '<button type="button" data-utility-move="1" aria-label="'+esc(dockText('utilityDown')+': '+name)+'"'+(i===p.order.length-1?' disabled':'')+'>↓</button></li>';
   }).join('');
@@ -945,6 +948,8 @@ function moveUtility(key,to){
 }
 $('utilityDisplay').addEventListener('change',e=>{utilityDisplay=e.target.value;renderUtilityControls();});
 $('utilityCell').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),cell:Number($('utilityCell').value)}));
+$('utilityLanes').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),rows:Number($('utilityLanes').value)}));
+$('utilityGap').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),gap:Number($('utilityGap').value)}));
 $('utilityEnabled').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),enabled:$('utilityEnabled').checked}));
 $('utilityDetails').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),details:$('utilityDetails').checked}));
 $('utilitySide').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),side:$('utilitySide').value}));
@@ -960,7 +965,7 @@ utilityRows.addEventListener('click',e=>{
   const pin=e.target.closest('[data-utility-pin]');
   if(pin){
     const p=utilityProfile(),key=pin.dataset.utilityPin;
-    const inline=p.inline.includes(key)?p.inline.filter(w=>w!==key):p.inline.length<5?[...p.inline,key]:p.inline;
+    const inline=p.inline.includes(key)?p.inline.filter(w=>w!==key):p.inline.length<10?[...p.inline,key]:p.inline;
     saveUtilityProfile({...p,inline});
     return;
   }
