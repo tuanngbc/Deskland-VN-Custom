@@ -53,6 +53,8 @@ const STAGE_MOTION_TIMER:usize=7;
 const STATUS_TIP_TIMER:usize=8;
 const FEEDBACK_TIMER:usize=9;
 const WM_DOCK_MOUSELEAVE:u32=0x02A3;
+// winuser.h macro: HSHELL_REDRAW | HSHELL_HIGHBIT.
+const HSHELL_FLASH:usize=6 | 0x8000;
 const MOUSE_LEFT_DOWN:WPARAM=0x0001; // MK_LBUTTON in WM_MOUSEMOVE
 const ITEM_WIDTH:i32=66;
 const HEIGHT:i32=70;
@@ -1683,7 +1685,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         SHELL_RESTARTED.with(|f|f.set(true));DISPLAY_DIRTY.with(|f|f.set(true));queue_refresh();return 0;
     }
     if msg!=0&&ATTENTION_MSG.with(Cell::get)==msg&&CONTROL.with(Cell::get)==hwnd{
-        if w==HSHELL_FLASH as usize&&STATE.with(|state|state.borrow().prefs.enabled){
+        if w==HSHELL_FLASH&&STATE.with(|state|state.borrow().prefs.enabled){
             let target=l as HWND;
             if target!=GetForegroundWindow(){
                 if let Some(id)=window_owner(target){
