@@ -2,10 +2,13 @@
 
 Current P0 build and scoped native evidence: [Dock P0 verification](DOCK_P0_VERIFICATION.md). The full owner acceptance gates remain pending.
 
-Checkpoint: 2026-11-21 14:48 UTC. Development only on `codex/rust-dock`, [Draft PR #1](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1).
+Checkpoint: 2026-11-22 01:15 UTC. Development only on `codex/rust-dock`, [Draft PR #1](https://github.com/tuanngbc/Deskland-VN-Custom/pull/1).
 Accepted source baseline remains `a604519acaf4d5881b9e13e5476d52f97ac29c0f` on `codex/rust-test`, clean. Owner subsequently authorized isolated native smoke, fixes and CI, without production replacement or merge. See [native report](DOCK_NATIVE_SMOKE_REPORT.md). Installed EXE bytes were preserved; their source lineage lacks a BUILD-COMMIT marker and is not independently confirmed.
 
 ## Verified source and CI
+
+- Latest product code tested on the owner Windows 11 host: [d16e455](https://github.com/tuanngbc/Deskland-VN-Custom/commit/d16e455c7f81dd598aca6e4e6939607fbf2d1e9e), [Windows CI PASS](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44969854057), [verified x64 artifact](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44969854057/artifacts/14733500944). First-open WebView2 and explicitly requested Win32 Settings, independent toggles and Win32-to-WebView persistence across a normal process relaunch passed in isolation. [Native evidence and open gates](DOCK_VISUAL_ACCEPTANCE.md#owner-host-windows-11-results).
+- [4afbd03 / Windows CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44968952504) fixes the Dock insertion boundary under magnification, stable Stage group identity and asynchronous Settings initialization. Real reorder and two-group DWM interaction were observed in the next `0441a31` package. Its first-open Settings failure is documented and was retested after d16e455. The measured Acrylic candidate rendered opaque; the current alpha renderer remains. No full visual, interaction or owner acceptance gate was closed.
 
 - Product-quality development now takes priority over idle benchmark work. The [visual and daily-use checkpoint](DOCK_VISUAL_ACCEPTANCE.md#product-quality-checkpoint--dock-stage-and-daily-controls) records implementation, Windows evidence requirements, and which controls remain delegated.
 - [bc33de8 / CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44915090278) adds Stage placement recovery for disconnected displays, local contrast backing, responsive volume slider and per-output flyout cleanup. Owner-host evidence verifies the sound flyout opens and Dock OFF survives isolated relaunch without disabling either Stage output. The previously accepted scoped idle baselines are unchanged; no general UX or owner gate is closed.
@@ -35,7 +38,7 @@ Accepted source baseline remains `a604519acaf4d5881b9e13e5476d52f97ac29c0f` on `
 - Window events coalesce through an out-of-context hook; one 5-second recovery timer replaces per-monitor polling. Unchanged items do not repaint; cached Shell icons bounded and released. Monitor detection reused from main; work-area changes reconciled. Suspend hides overlays.
 - Running-app grouping remains EXE-based. D1 locality regression fixed for both pinned/unpinned global apps; DWM-cloaked windows excluded, iconic windows use their restored monitor. Foreign show-state requests asynchronous.
 - Stage has live DWM previews, protected/minimized fallbacks, session-local window groups and per-display layout controls. The owner-host fixture verified basic switching and placement recovery at d708b09. Visual acceptance, monitor changes and exact Z-order remain open.
-- Windows taskbar/tray preserved. Wi-Fi, Bluetooth, sound, notifications and taskbar entries are WINDOWS_DELEGATED Settings links, not native system-status flyouts or third-party tray hosting.
+- Windows taskbar/tray preserved. The Dock reads network, Bluetooth and audio from Windows and has owned volume and calendar controls. Network/device management, output selection, notifications and Quick Settings remain Windows-delegated; third-party tray hosting remains out of scope.
 - Explicit --trial-dir protects real Startup/saver/lock/wallpaper changes and uses a separate marked profile. Windows 11 smoke verified eight module combinations in native Settings, selected WebView controls, negative-coordinate two-monitor HWND geometry, preserved module HWNDs, saved startup and normal cleanup. This is partial acceptance, not D1–D9 completion. No performance improvement is established.
 
 ## Milestone gates

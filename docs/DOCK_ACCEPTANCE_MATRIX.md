@@ -2,6 +2,8 @@
 
 Current P0 build and scoped native evidence: [Dock P0 verification](DOCK_P0_VERIFICATION.md). The full owner acceptance gates remain pending.
 
+See the [current product gates and exact native evidence](DOCK_VISUAL_ACCEPTANCE.md#owner-host-windows-11-results). Older D0–D9 rows below describe broader milestone gates; scoped interaction and Settings PASS results do not close them.
+
 Vocabulary: NOT_STARTED, IN_PROGRESS, IMPLEMENTED_UNVERIFIED, CI_PASS, CI_FAIL, NATIVE_PENDING, NATIVE_PASS, OWNER_NATIVE_ACCEPTED, BLOCKED. CI_PASS never implies native acceptance.
 
 2026-11-21 owner smoke at fa93c16 added partial native evidence: eight module combinations via Win32 Settings, selected WebView controls, same-PID/negative-coordinate geometry, saved configuration/startup and normal cleanup. See [case results](DOCK_NATIVE_SMOKE_REPORT.md). NATIVE_PENDING below still applies to each complete milestone; do not erase narrower PASS or promote it to whole-gate PASS.
@@ -10,12 +12,12 @@ Vocabulary: NOT_STARTED, IN_PROGRESS, IMPLEMENTED_UNVERIFIED, CI_PASS, CI_FAIL, 
 |---|---|---|---|
 | D0 | Lifecycle/resource/API audit, benchmark protocol, CI | CI_PASS at 45bacf4, run 44844337708 | NATIVE_PENDING |
 | D1 | Identity/filtering/local activation, multiple windows, pin/order, events | Coalesced hooks, cloaked/minimized handling, local/global regression; EXE identity still incomplete | NATIVE_PENDING |
-| D2 | Glass, crisp icons, magnification, auto-hide, keyboard/drag, idle budget | GDI scaffold, bounded icon cache; actual glass/motion/drag pending | NATIVE_PENDING |
+| D2 | Glass, crisp icons, magnification, auto-hide, keyboard/drag, idle budget | Premultiplied capsule, bounded Shell icon cache, computed spring, insertion guides and conservative alpha fallback. Dock idle workload has a scoped PASS; paired visual evidence required. | NATIVE_PENDING |
 | D3 | Real previews, group switch/restore, privacy | d708b09 owner-host fixture verified content updates, one protected source, two groups and Stage OFF restoration; full gate pending | NATIVE_PENDING |
 | D4 | Reversible snap/quadrants/move; explicit fullscreen limits | Basic controls; no saved geometry | NATIVE_PENDING |
 | D5 | Negative coords/work-area/DPI/hotplug/stable display preferences | Pure geometry tests, manifest PerMonitorV2 | NATIVE_PENDING |
-| D6 | Accurate states/controls with explicit classification | Settings links WINDOWS_DELEGATED; remaining statuses PENDING | NATIVE_PENDING |
-| D7 A | Windows tray retained, Explorer recovery | Compatibility intent only | NATIVE_PENDING |
+| D6 | Accurate states/controls with explicit classification | Native volume/calendar and hardware reads; network control, output selection and Bluetooth management delegated. | NATIVE_PENDING |
+| D7 A | Windows tray retained, Explorer recovery | Explorer taskbar retained; AppBar registration/cleanup and recovery replay verified. Actual Explorer restart remains open. | NATIVE_PENDING |
 | D7 B | Tray parity/AppBar/watchdog/restore | BLOCKED; supported tray strategy unresolved | NATIVE_PENDING |
 | D8 | Regression/performance/leaks/RC hashes/rollback | Development package only, no RC | NATIVE_PENDING |
 | D9 | Same EXE/config/Settings/autostart, independent modules, cleanup | Managed same-process runtime + common Settings/tray/config migration; CI lifecycle PASS at 3526fcc. Per-display appearance/behavior and full desktop acceptance pending | NATIVE_PENDING |
@@ -63,10 +65,10 @@ Stage moving previews must be real; independent groups restore minimized/maximiz
 | Capability | Native behavior implemented | Delegated / remaining |
 |---|---|---|
 | Network | NATIVE_IMPLEMENTED: physical link state and Wi-Fi signal only when Windows returns it | WINDOWS_DELEGATED: network Settings; link does not prove internet reachability |
-| Audio | NATIVE_IMPLEMENTED: default multimedia endpoint volume/mute, levels; native Trackbar follows the menu snapshot and commits drag on release | WINDOWS_DELEGATED: default output selection; external-volume callbacks and actual device interaction verification pending |
+| Audio | NATIVE_IMPLEMENTED: default multimedia endpoint volume/mute; native Trackbar sends coalesced writes during drag and reads back the Windows endpoint | WINDOWS_DELEGATED: default output selection; external-volume callbacks and authorized endpoint-write verification pending |
 | Bluetooth | NATIVE_IMPLEMENTED: adapter enumeration and known Classic connection observation | WINDOWS_DELEGATED: Bluetooth Settings; UNSUPPORTED: comprehensive LE/radio on-off status |
 | Battery | NATIVE_IMPLEMENTED: percent, AC, charge, hide without a readable battery | WINDOWS_DELEGATED: Power Settings; real battery host pending |
-| Date/calendar | NATIVE_IMPLEMENTED: local date/time at menu open | WINDOWS_DELEGATED: Windows calendar |
+| Date/calendar | NATIVE_IMPLEMENTED: local date/time at menu open and owned Win32 month view | No integration with calendar accounts or events |
 | Notifications / Quick Settings | UNSUPPORTED: unread count or notifications from other apps | WINDOWS_DELEGATED: Windows panels |
 | Deskland | NATIVE_IMPLEMENTED: commands reuse existing Spotlight, capture/record, taskbar stats, wallpaper, Stage and Settings | WINDOWS_DELEGATED: Explorer, Show Desktop, Task View |
 | Utilities layout | Per-display enable/disable, leading/trailing button, menu details, order/visibility, reset; native Settings has essentials | Up to five individually pinned vector icons; narrow layouts keep overflow access. Always-visible inline live values and per-widget spacing/size/opacity pending. D7 third-party tray stays out of scope. |

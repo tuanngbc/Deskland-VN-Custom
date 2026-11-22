@@ -2,6 +2,33 @@
 
 Current P0 build and scoped native evidence: [Dock P0 verification](DOCK_P0_VERIFICATION.md). The full owner acceptance gates remain pending.
 
+## Product finishing — interaction and first open
+
+[4afbd03 source](https://github.com/tuanngbc/Deskland-VN-Custom/commit/4afbd03dccb7eee9355e9dfccbf24fe42c799214) adds insertion boundaries and a visible insertion guide to the moving Dock row, stable Stage group order and press/release identity checks, plus non-blocking WebView2 Settings initialization. Settings stays hidden until the page sends its ready message and falls back to Win32 on error or after eight seconds without a ready message. Regression coverage includes insertion gaps at 150% for three edges, repeated Win32 group switches and Stage-disable restore, and ignored callbacks from earlier Settings attempts.
+
+[0441a31 probe source](https://github.com/tuanngbc/Deskland-VN-Custom/commit/0441a3190bb64ca42849e4dfd528d3cb31ac4171) compares contrast and the sharpest edge in a single scanline of each real fixture surface. Samples are accepted only within visible probe windows and only aggregate values are saved. The production path keeps the alpha fallback; no active backdrop setting or capture loop was added. The [documented DWM backdrop](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwm_systembackdrop_type) is a whole-window system material; [Microsoft documents](https://learn.microsoft.com/en-us/windows/apps/develop/ui/materials) a solid fallback when system transparency is disabled. There is no BLUR_PASS based on HRESULT alone.
+
+### Owner-host Windows 11 results
+
+The exact [d16e455 build](https://github.com/tuanngbc/Deskland-VN-Custom/commit/d16e455c7f81dd598aca6e4e6939607fbf2d1e9e) passed [Windows CI](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44969854057) and produced the [unified x64 artifact](https://github.com/tuanngbc/Deskland-VN-Custom/actions/runs/44969854057/artifacts/14733500944). BUILD-COMMIT, both archive hashes, package inventory and EXE hash were verified before execution. EXE SHA-256: `93e869e0bbcf1a149a2e3e53b55a3e1a21887d6cd5fc2eede9f3e39436061931`.
+
+- **Cold Settings — scoped native PASS.** At `0441a31` the page reported ready but the top-level Settings HWND stayed hidden until a second request. `d16e455` explicitly shows the HWND once ready instead of relying on the initial `ShowWindow` state inherited from the hidden process launch. Separate fresh processes filled their visible WebView2 and explicitly requested Win32 Settings on the first request, with no retries or foreground activation before inspection. This does not exercise a deliberately failed WebView2 instance or the eight-second fallback deadline.
+- **Shared configuration — scoped native PASS.** WebView2 Stage OFF removed both Stage surfaces and preserved both Dock HWNDs; Stage ON recreated the Stage surfaces. Win32 Dock OFF kept both Stage surfaces and wallpaper enabled. After a normal isolated relaunch, the fresh process kept Dock OFF and Stage ON on both monitors, and WebView2 showed the same state. The two 96-DPI displays were 2560×1080 and 1080×1920, the latter at negative coordinates. This is process persistence, not login or reboot evidence.
+- **Dock reorder — scoped native PASS at `0441a31`.** Dragged packaged Notepad from third pin to before the first during magnification. Native feedback was observed and the trial profile saved `Packaged Notepad | Explorer EXE | Fixture shortcut`. This is one real pointer sequence, not all positions, app types or magnification levels.
+- **Stage group switching — scoped native PASS at `0441a31`.** Created two groups with real fixture windows, added a second member to the first group, switched back from the second group and observed a real Pink DWM preview. The second-group Aqua minimized, Pink and Protected returned to their recorded rectangles, and unmanaged Amber was untouched. The separately named pre-minimized fixture did not start minimized in this run; no native claim for that case or Stage OFF during the switch is inferred. Protected fallback and pre-minimized restoration are covered separately by CI tests.
+- **Optical backdrop — FAIL for this path on this host.** In `d16e455`, all three scanlines were unobscured (204 points per row). Luma spread / strongest adjacent edge: sharp reference **133/128**, alpha **80/79**, native Acrylic **0/0**. Both DWM calls returned success. The Acrylic row was flat rather than blurred; the alpha row retained a visible sharp edge. Keep alpha. No production backdrop change and no `BLUR_PASS`.
+- Fixture evidence, first-open stills and rollback snapshots remain local. Existing Stage and Dock crops retain their earlier build labels; whole Stage captures with nonfixture previews are excluded from delivery. **VIDEO_PENDING**: no safe fixture-only video went through review. Normal trial Exit restored the installed production process; before/after EXE bytes, profile manifest and scoped Registry matched.
+
+| Product gate | Status | Boundary |
+|---|---|---|
+| DOCK_VISUAL_CANDIDATE_READY | PENDING | Composed Dock observed; light/dark and portrait comparison, max magnification, mixed DPI and motion evidence missing. |
+| STAGE_VISUAL_CANDIDATE_READY | PENDING | Live previews and groups observed; side-by-side motion evidence and both-output visual review missing. |
+| DOCK_INTERACTION_NATIVE_PASS | PENDING | Pin reorder observed; full picker, focus, overflow, keyboard and reveal coverage remains open. |
+| STAGE_INTERACTION_NATIVE_PASS | PENDING | Group switches/placement observed; full editing, Stage OFF mid-switch and topology recovery still need native proof. |
+| UTILITIES_FUNCTIONAL_PARTIAL/PASS | PARTIAL | Native month and audio reads were observed on earlier exact builds. Endpoint writes and both-output navigation not accepted. |
+| WINDOW_MANAGEMENT_NATIVE_PARTIAL/PASS | PARTIAL | Existing AppBar fixture evidence stays scoped; true fullscreen video/game and mixed-DPI topology coverage remain open. |
+| OWNER_VISUAL_ACCEPTED / OWNER_NATIVE_ACCEPTED | Unset | Owner only. |
+
 ## Product quality checkpoint — Dock, Stage and daily controls
 
 The owner closed the idle benchmark phase at [babde93](https://github.com/tuanngbc/Deskland-VN-Custom/commit/babde93100c3b9d34a4d26ff30bc6a67f4796233). Keep both scoped idle results as regression references. This increment does not repeat the 12-scenario matrix or soak.
