@@ -13,6 +13,7 @@ const CLASS: &str = "TuanpcDeskGlassTrial";
 const ROLE_ACRYLIC: usize = 1;
 const ROLE_ALPHA: usize = 2;
 const ROLE_REFERENCE: usize = 3;
+const SAMPLE_TIMER: usize = 2;
 
 unsafe fn dwm_value<T>(hwnd: HWND, attribute: DWMWINDOWATTRIBUTE, value: &T) -> HRESULT {
     DwmSetWindowAttribute(hwnd, attribute as u32, value as *const T as _, mem::size_of::<T>() as u32)
@@ -118,13 +119,46 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM) -> LRESULT {
             EndPaint(hwnd,&ps);
             0
         }
-        WM_TIMER|WM_CLOSE=>{PostQuitMessage(0);0},
+        WM_TIMER if w==1=>{PostQuitMessage(0);0},
+        WM_CLOSE=>{PostQuitMessage(0);0},
         _=>DefWindowProcW(hwnd,msg,w,l),
     }
 }
 
 struct Window(HWND);
 impl Drop for Window {fn drop(&mut self){unsafe{DestroyWindow(self.0);}}}
+
+/// A sharp edge changes much more over one pixel than a broad blur does.
+/// Measure both edge concentration and spatial variation to separate blur
+/// from a flat, opaque fallback. Only aggregate values leave the probe.
+fn edge_profile(samples:&[u8])->(u8,u8){
+    let spread=samples.iter().max().zip(samples.iter().min()).map_or(0,|(&a,&b)|a-b);
+    let edge=samples.windows(2).map(|pair|pair[0].abs_diff(pair[1])).max().unwrap_or(0);
+    (spread,edge)
+}
+
+#[test]
+fn stripe_measurement_separates_blur_from_flat_and_translucent(){
+    assert_eq!(edge_profile(&[10,10,200,200]),(190,190));
+    assert_eq!(edge_profile(&[80,80,120,120]),(40,40));
+    assert_eq!(edge_profile(&[80,90,100,110,120]),(40,10));
+    assert_eq!(edge_profile(&[82,82,82,82]),(0,0));
+}
+
+unsafe fn fixture_row(window:HWND,x:i32,y:i32,width:i32)->Option<(u8,u8)>{
+    // Reject an obstructed reference or overlay. Never sample elsewhere,
+    // retain the scanline, or emit a desktop image from this diagnostic.
+    if (x..x+width).any(|col|WindowFromPoint(POINT{x:col,y})!=window){return None;}
+    let mut row=Layer::new(width,1)?;
+    let dc=GetDC(ptr::null_mut());
+    if dc.is_null(){return None;}
+    let ok=BitBlt(row.dc(),0,0,width,1,dc,x,y,SRCCOPY|CAPTUREBLT)!=0;
+    ReleaseDC(ptr::null_mut(),dc);
+    if !ok{return None;}
+    GdiFlush();
+    let gray=row.pixels().chunks_exact(4).map(|p|((29*p[0] as u32+150*p[1] as u32+77*p[2] as u32)/256) as u8).collect::<Vec<_>>();
+    Some(edge_profile(&gray))
+}
 
 /// Called only by explicit trial dispatch. Profiles and the Explorer UI are
 /// unchanged. Uses two tiny surfaces; timeout guarantees clean normal exit.
@@ -165,16 +199,35 @@ pub fn probe(dir:&std::path::Path,duration:u32) -> Result<(),String> {
         }
         let (extend,backdrop)=request_acrylic(acrylic.0);
         let layered=layer.present(alpha.0);
-        let stat=serde_json::json!({"dpi":screen.dpi,"extent":[width,height],"extendHresult":extend,"backdropHresult":backdrop,
+        let mut stat=serde_json::json!({"dpi":screen.dpi,"extent":[width,height],"extendHresult":extend,"backdropHresult":backdrop,
             "alphaPresent":layered,"acrylic":[x,y],"layered":[x,y+height+10],"verifiedBackdropVisually":false});
-        std::fs::write(dir.join("dock-glass-probe.json"),stat.to_string()).map_err(|e|e.to_string())?;
         ShowWindow(reference.0,SW_SHOWNOACTIVATE);
         ShowWindow(acrylic.0,SW_SHOWNOACTIVATE);
         ShowWindow(alpha.0,SW_SHOWNOACTIVATE);
         if SetTimer(alpha.0,1,duration.clamp(5,150)*1000,None)==0 {return Err("Glass trial timeout not installed".into());}
+        SetTimer(alpha.0,SAMPLE_TIMER,900,None);
         let mut msg:MSG=mem::zeroed();
-        while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0 {TranslateMessage(&msg);DispatchMessageW(&msg);}
+        while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0 {
+            if msg.hwnd==alpha.0&&msg.message==WM_TIMER&&msg.wParam==SAMPLE_TIMER {
+                KillTimer(alpha.0,SAMPLE_TIMER);
+                let left=x+width/5;
+                let count=width*3/5;
+                let reference=fixture_row(reference.0,left,y+height+5,count);
+                let layered=fixture_row(alpha.0,left,y+height+10+height/2,count);
+                let acrylic=fixture_row(acrylic.0,left,y+height/2,count);
+                stat["pixelProbe"]=serde_json::json!({
+                    "reference":reference,"alpha":layered,"acrylic":acrylic,
+                    "format":"[luma spread, strongest adjacent edge]", "samples":count,
+                    "allRowsVisible":reference.is_some()&&layered.is_some()&&acrylic.is_some()
+                });
+                std::fs::write(dir.join("dock-glass-probe.json"),stat.to_string()).map_err(|e|e.to_string())?;
+            }else{
+                TranslateMessage(&msg);DispatchMessageW(&msg);
+            }
+        }
         KillTimer(alpha.0,1);
+        KillTimer(alpha.0,SAMPLE_TIMER);
+        std::fs::write(dir.join("dock-glass-probe.json"),stat.to_string()).map_err(|e|e.to_string())?;
         if !layered {return Err("Layered presentation failed".into());}
         Ok(())
     }
