@@ -767,7 +767,7 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
     GetWindowRect(button,&mut rect);
     let command = TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,rect.left,rect.bottom,0,owner,std::ptr::null()) as usize;
     DestroyMenu(menu);
-    if id==2998 {
+    if command==2998 {
         let hide=UI.with(|u|u.borrow().as_ref().is_some_and(|ui|!ui.taskbar_hidden));
         push(Action::DockTaskbar(hide));return;
     }
