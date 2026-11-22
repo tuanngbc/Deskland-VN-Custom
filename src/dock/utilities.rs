@@ -25,6 +25,18 @@ pub(super) struct Snapshot { network:Option<Link>, bluetooth:BluetoothState, bat
 
 #[derive(Clone,Copy)]
 enum JobKind { Read, Volume(u32), Mute }
+
+/// Fixture-only endpoint. Neither moving the fixture slider nor rapidly
+/// toggling its mute can write to a Windows audio device.
+static DEMO_VOLUME: Mutex<Audio> = Mutex::new(Audio { level: 46, muted: false });
+fn fixture_audio(value:&mut Audio, kind:JobKind)->Audio {
+    match kind {
+        JobKind::Read=>{},
+        JobKind::Volume(value_percent)=>value.level=value_percent.min(100),
+        JobKind::Mute=>value.muted=!value.muted,
+    }
+    Audio {level:value.level,muted:value.muted}
+}
 #[derive(Default)]
 struct State {
     pending:AtomicBool, result:Mutex<Option<Snapshot>>,
@@ -68,7 +80,13 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut std::ffi::c_vo
         let audio=audio(job.kind);
         if matches!(job.kind,JobKind::Read){
             let mut local=mem::zeroed();GetLocalTime(&mut local);
-            let snapshot=Snapshot{network:network(),bluetooth:bluetooth(),battery:battery(),audio,local};
+            let mut bluetooth=bluetooth();
+            if crate::trial::demo_active() {
+                if let BluetoothState::Connected(names)=&mut bluetooth {
+                    for (i,name) in names.iter_mut().enumerate(){*name=format!("Fixture device {}",i+1);}
+                }
+            }
+            let snapshot=Snapshot{network:network(),bluetooth,battery:battery(),audio,local};
             if let Ok(mut result)=state.result.lock(){*result=Some(snapshot);}
         }else if let Ok(mut result)=state.audio_result.lock(){
             *result=Some(audio);
@@ -81,6 +99,8 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut std::ffi::c_vo
     }
 }
 unsafe fn audio(kind:JobKind)->Option<Audio>{
+    if crate::trial::demo_active(){return DEMO_VOLUME.lock().ok().map(|mut value|fixture_audio(&mut value,kind));}
+    if crate::trial::active() && !matches!(kind,JobKind::Read){return None;}
     let com=CoInitializeEx(None,COINIT_MULTITHREADED);
     if com.is_err(){return None;}
     let value=(||->windows::core::Result<Audio>{
@@ -593,6 +613,16 @@ unsafe extern "system" fn calendar_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LR
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fixture_endpoint_writes_are_observable_and_mute_preserves_level() {
+        let mut sample=Audio{level:46,muted:false};
+        assert_eq!(fixture_audio(&mut sample,JobKind::Read).level,46);
+        assert_eq!(fixture_audio(&mut sample,JobKind::Volume(73)).level,73);
+        let muted=fixture_audio(&mut sample,JobKind::Mute);
+        assert!(muted.muted);
+        assert_eq!(muted.level,73);
+        assert!(!fixture_audio(&mut sample,JobKind::Mute).muted);
+    }
     #[test]
     fn network_does_not_invent_a_signal_when_os_has_no_data(){
         assert!(!network_label(Some(Link::WiFi(None))).contains('%'));

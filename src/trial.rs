@@ -4,11 +4,25 @@ use std::{path::{Path, PathBuf}, sync::OnceLock};
 
 static DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
 static BENCHMARK: OnceLock<bool> = OnceLock::new();
+static DEMO_PIDS: OnceLock<Vec<u32>> = OnceLock::new();
 const MARKER: &str = ".tuanpc-desk-trial";
 const MARKER_CONTENT: &str = "tuanpc-desk isolated native smoke profile v1\n";
 
 pub fn active() -> bool { DIRECTORY.get().is_some() }
 pub fn data_dir() -> Option<&'static Path> { DIRECTORY.get().map(PathBuf::as_path) }
+
+pub fn configure_demo(raw: &str) -> Result<(), String> {
+    if !active(){return Err("Fixture demo requires an isolated profile".into());}
+    let pids=raw.split(',').map(str::parse::<u32>).collect::<Result<Vec<_>,_>>()
+        .map_err(|_|"Fixture demo expects comma-separated process IDs")?;
+    if pids.is_empty() || pids.len()>8 || pids.contains(&0) || pids.contains(&std::process::id()) {
+        return Err("Invalid fixture PIDs".into());
+    }
+    DEMO_PIDS.set(pids).map_err(|_|"Fixture demo already configured".into())
+}
+
+pub fn demo_active() -> bool { DEMO_PIDS.get().is_some() }
+pub fn demo_allows(pid: u32) -> bool { DEMO_PIDS.get().is_none_or(|pids|pids.contains(&pid)) }
 
 pub fn benchmark_active() -> bool {
     let Some(dir) = data_dir() else { return false; };

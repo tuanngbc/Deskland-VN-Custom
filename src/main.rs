@@ -2099,6 +2099,10 @@ fn main() {
         eprintln!("Trial initialization refused: {error}");
         std::process::exit(2);
     }
+    if args.iter().any(|a|a=="--trial-fixture-pids") {
+        let Some(raw)=arg_value(&args,"--trial-fixture-pids") else {std::process::exit(2);};
+        if trial::configure_demo(&raw).is_err(){std::process::exit(2);}
+    }
     if args.iter().any(|a|a=="--trial-settings-fault") {
         if !trial::active() { std::process::exit(2); }
         let fault=match arg_value(&args,"--trial-settings-fault").as_deref() {
@@ -2237,7 +2241,7 @@ fn main() {
     }
 
     let log_name = if saver { "tuanpc-desk-saver.log" } else { "tuanpc-desk.log" };
-    let log_dir = if is_scr { Some(lock::data_dir()) } else { std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) };
+    let log_dir = if is_scr || trial::active() { Some(lock::data_dir()) } else { std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) };
     let log_path = log_dir.map(|d| d.join(log_name)).unwrap_or_else(|| log_name.into());
     *LOG.lock().unwrap() = File::create(&log_path).ok();
     std::panic::set_hook(Box::new(|info| log!("PANIC: {info}")));
