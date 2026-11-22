@@ -809,6 +809,7 @@ fn web_init(app: &App) -> serde_json::Value {
         "dockDisplays": dock::display_json(),
         "dockRunning": app.dock_runtime.as_ref().is_some_and(|r|!r.finished()),
         "dockError": app.dock_error,
+        "dockTaskbarHidden": app.dock_taskbar_hidden,
         "miniToolsHotkeys": TOOL_HOTKEYS.with(|c|c.get()),
         "autostartWarn": false,
         "interactions": app.interactions_enabled,
@@ -983,6 +984,7 @@ struct App {
     system_monitor: Option<system_monitor::Monitor>,
     dock_runtime: Option<dock::Runtime>,
     dock_error: Option<String>,
+    dock_taskbar_hidden:bool,
     // One cached CPU buffer shared by all outputs, never scaled while GPU-mapped.
     staging: RefCell<Vec<u8>>,
     benchmark_gdi: bool,
@@ -996,7 +998,7 @@ struct App {
 impl App {
     fn configure_dock(&mut self) {
         self.dock_error=None;
-        if self.saver || self.headless || !self.cfg.dock.any_enabled() {self.dock_runtime=None;}
+        if self.saver || self.headless || !self.cfg.dock.any_enabled() {self.dock_runtime=None;self.dock_taskbar_hidden=false;}
         else if let Some(runtime)=self.dock_runtime.as_ref() {runtime.configure(self.cfg.dock.clone());}
         else {match dock::Runtime::new(self.cfg.dock.clone(),self.owner as usize) {
             Ok(runtime)=>self.dock_runtime=Some(runtime),
@@ -1007,7 +1009,7 @@ impl App {
     fn post_dock_state(&self) {
         if !web::is_open() { return; }
         web::post(&serde_json::json!({"t":"dockState","dock":self.cfg.dock.json(),"dockDisplays":dock::display_json(),"wallpaperEnabled":self.cfg.wallpaper_enabled,
-            "dockRunning":self.dock_runtime.as_ref().is_some_and(|r|!r.finished()),"dockError":self.dock_error}).to_string());
+            "dockRunning":self.dock_runtime.as_ref().is_some_and(|r|!r.finished()),"dockError":self.dock_error,"dockTaskbarHidden":self.dock_taskbar_hidden}).to_string());
     }
     fn set_wallpaper_enabled(&mut self,on:bool)->Result<(),String> {
         if self.cfg.wallpaper_enabled==on{return Ok(());}
@@ -2095,6 +2097,7 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if dock::taskbar_watchdog(&args) {return;}
     if let Err(error) = trial::initialize(&args) {
         eprintln!("Trial initialization refused: {error}");
         std::process::exit(2);
@@ -2362,6 +2365,7 @@ fn main() {
         system_monitor: None,
         dock_runtime:None,
         dock_error:None,
+        dock_taskbar_hidden:false,
         staging:RefCell::new(Vec::new()),
         benchmark_gdi:headless && args.iter().any(|a|a=="--benchmark-gdi"),
         benchmark_direct_readback:headless && args.iter().any(|a|a=="--benchmark-direct-readback"),
@@ -2577,6 +2581,10 @@ fn main() {
                     SystemMonitor=>CMD_SYSTEM_MONITOR,Wallpaper=>CMD_WALLPAPER,Stage=>CMD_STAGE,Launcher=>CMD_LAUNCHER,
                 };
                 PENDING_CMD.with(|c|c.set(command));
+            }
+            dock::Event::Taskbar{hidden,message}=>{
+                app.dock_taskbar_hidden=hidden;
+                web::post(&serde_json::json!({"t":"dockTaskbarState","dockTaskbarHidden":hidden,"message":message}).to_string());
             }
             dock::Event::Error(error)=>{log!("Dock & Stage: {error}");app.dock_error=Some(error);app.post_dock_state();}
         }}
@@ -2984,6 +2992,13 @@ fn main() {
                         if let Some(v)=m.get(key){value[key]=v.clone();}
                     }
                     app.cfg.dock=dock::Options::from_json(&value);app.configure_dock();web_changed=true;
+                }
+                "dockTaskbar" => {
+                    if let Some(hidden)=m["hidden"].as_bool(){
+                        if let Some(runtime)=app.dock_runtime.as_ref(){runtime.set_taskbar_hidden(hidden);}
+                        else{web::post(&serde_json::json!({"t":"dockTaskbarState","dockTaskbarHidden":false,
+                            "message":"Bật Dock để dùng chế độ ẩn thanh tác vụ."}).to_string());}
+                    }
                 }
                 "dockWindowPolicy" => {
                     let id=s_("display");

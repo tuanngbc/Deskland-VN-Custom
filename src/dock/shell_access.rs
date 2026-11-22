@@ -1,5 +1,6 @@
-use std::{mem, sync::atomic::{AtomicBool,Ordering}, thread, time::Duration};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
+use crate::desktop::wide;
+use std::{mem,ptr, sync::atomic::{AtomicBool,Ordering}, thread, time::Duration};
+use windows_sys::Win32::UI::{Input::KeyboardAndMouse::*,WindowsAndMessaging::{FindWindowW,GetWindowThreadProcessId,IsWindowVisible}};
 use windows::Win32::{
     System::Com::{CoCreateInstance,CoInitializeEx,CoUninitialize,CLSCTX_INPROC_SERVER,COINIT_MULTITHREADED},
     UI::Accessibility::{IUIAutomation,IUIAutomationInvokePattern,CUIAutomation,UIA_InvokePatternId},
@@ -64,9 +65,14 @@ unsafe fn open_tray(){
                     // Win+B focuses the system area. Invoke only the real
                     // overflow control, because on some PCs it is disabled or
                     // absent and Enter would trigger a different tray app.
+                    let taskbar=FindWindowW(wide("Shell_TrayWnd").as_ptr(),ptr::null());
+                    let mut pid=0;
+                    if !taskbar.is_null()&&IsWindowVisible(taskbar)!=0{GetWindowThreadProcessId(taskbar,&mut pid);}
                     for _ in 0..5 {
+                        if pid==0{break;}
                         thread::sleep(Duration::from_millis(40));
                         let Ok(element)=automation.GetFocusedElement()else{continue;};
+                        if element.CurrentProcessId().ok()!=Some(pid as i32){continue;}
                         let class=element.CurrentClassName().map(|s|s.to_string()).unwrap_or_default();
                         let id=element.CurrentAutomationId().map(|s|s.to_string()).unwrap_or_default();
                         let name=element.CurrentName().map(|s|s.to_string()).unwrap_or_default();

@@ -192,8 +192,9 @@
   </section>
   <section class="setting-card">
     <h3>Thanh tác vụ Windows</h3>
-    <p class="dock-section-copy" id="taskbarTakeoverStatus">Chưa mở tính năng này: cần kiểm tra khôi phục thanh tác vụ khi Deskland bị dừng đột ngột.</p>
-    <label class="setting-row switch-row"><b>Ẩn thanh tác vụ Windows</b><input type="checkbox" role="switch" disabled aria-describedby="taskbarTakeoverStatus"><i class="switch" aria-hidden="true"></i></label>
+    <p class="dock-section-copy">Áp dụng cho phiên này. Nhấn Ctrl+Alt+Shift+F12 để hiện lại thanh tác vụ. Nút khay trên Dock cũng sẽ hiện lại thanh tác vụ để dùng biểu tượng gốc.</p>
+    <p class="dock-section-copy" id="taskbarTakeoverStatus" role="status" aria-live="polite"></p>
+    <label class="setting-row switch-row"><b>Ẩn thanh tác vụ Windows</b><input id="dockTaskbarHidden" type="checkbox" role="switch" aria-describedby="taskbarTakeoverStatus"><i class="switch" aria-hidden="true"></i></label>
   </section>
   <section class="setting-card dock-placement">
     <h3>Stage Manager</h3><p class="dock-section-copy">Chọn cách các thẻ cửa sổ và nhóm xuất hiện trên từng màn hình.</p>
@@ -1064,6 +1065,12 @@ function renderDockPlacement(){
       '</div><b>'+esc(displayLabel(d))+'</b><small>'+esc([app?'Dock':'',stage?'Stage Manager':''].filter(Boolean).join(' · ')||dockText('dockDisplayOff'))+'</small></div>';
   }).join(''):'<p>'+esc(dockText('dockDisplayNone'))+'</p>';
 }
+function syncDockTaskbar(m){
+  if(typeof m.dockTaskbarHidden==='boolean')$('dockTaskbarHidden').checked=m.dockTaskbarHidden;
+  $('dockTaskbarHidden').disabled=!dockOptions.enabled;
+  if(typeof m.message==='string')$('taskbarTakeoverStatus').textContent=m.message;
+}
+$('dockTaskbarHidden').addEventListener('change',e=>send({t:'dockTaskbar',hidden:e.target.checked}));
 function syncDockSettings(m) {
   dockOptions=Object.assign({},dockOptions,m.dock||{});
   if(Array.isArray(m.dockDisplays))dockDisplays=m.dockDisplays;
@@ -1071,6 +1078,7 @@ function syncDockSettings(m) {
   if('dockRunning' in m)dockRunning=m.dockRunning;
   if(typeof m.wallpaperEnabled==='boolean')$('dockWallpaperEnabled').checked=m.wallpaperEnabled;
   $('dockEnabled').checked=!!dockOptions.enabled;
+  syncDockTaskbar(m);
   $('dockStageEnabled').checked=!!dockOptions.stageEnabled;
   $('dockAllWindows').checked=!!dockOptions.allWindows;
   $('dockStageSide').value=dockOptions.stageSide==='right'?'right':'left';
@@ -1368,6 +1376,8 @@ function onHost(m) {
     syncSystemMonitor(m);
   } else if (m.t === 'dockState') {
     syncDockSettings(m);
+  } else if (m.t === 'dockTaskbarState') {
+    syncDockTaskbar(m);
   } else if (m.t === 'settingsSaveError') {
     $('dockRuntimeStatus').textContent=m.message;
     $('dockRuntimeStatus').classList.add('error-text');

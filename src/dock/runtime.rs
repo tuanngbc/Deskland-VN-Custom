@@ -7,10 +7,11 @@ pub(super) enum Command {
     Suspend(bool),
     Stop,
     Focus,
+    Taskbar(bool),
     #[cfg(test)] Inspect { reply:Sender<Vec<usize>>, paint:bool },
 }
 #[derive(Debug)]
-pub enum Event { Edit(super::Edit), Error(String), Utility(super::HostAction) }
+pub enum Event { Edit(super::Edit), Error(String), Utility(super::HostAction), Taskbar{hidden:bool,message:String} }
 
 pub struct Runtime {
     control: usize,
@@ -36,6 +37,7 @@ impl Runtime {
         }
     }
     pub fn configure(&self,options:Options) {self.send(Command::Configure(options));}
+    pub fn set_taskbar_hidden(&self,hidden:bool){self.send(Command::Taskbar(hidden));}
     pub fn focus(&self){self.send(Command::Focus);}
     pub fn suspend(&self,on:bool) {self.send(Command::Suspend(on));}
     pub fn take_events(&self)->Vec<Event> {self.events.try_iter().collect()}

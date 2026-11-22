@@ -32,6 +32,8 @@ mod control_center;
 mod panel_chrome;
 mod appbar;
 mod shell_access;
+mod taskbar_guard;
+pub(crate) use taskbar_guard::watchdog as taskbar_watchdog;
 pub use utilities::{HostAction,Profile as UtilityProfile,Widget as UtilityWidget};
 pub use control_center::MetricOptions;
 pub use glass_probe::probe as glass_probe;
@@ -53,6 +55,8 @@ const WORKSPACE_TIMER:usize=6;
 const STAGE_MOTION_TIMER:usize=7;
 const STATUS_TIP_TIMER:usize=8;
 const FEEDBACK_TIMER:usize=9;
+const TASKBAR_GUARD_TIMER:usize=12;
+const TASKBAR_TRAY_TIMER:usize=13;
 const WM_DOCK_MOUSELEAVE:u32=0x02A3;
 // winuser.h macro: HSHELL_REDRAW | HSHELL_HIGHBIT.
 const HSHELL_FLASH:usize=6 | 0x8000;
@@ -81,6 +85,7 @@ const MENU_SNAP_RIGHT:usize=518;
 const MENU_EXPAND:usize=519;
 const MENU_ADD_APP:usize=520;
 const MENU_MORE_APPS:usize=521;
+const MENU_TASKBAR:usize=522;
 const MENU_WINDOW_FIRST:usize=2000;
 const MENU_MOVE_FIRST:usize=2100;
 const STAGE_RAIL_CLASS:&str="TuanpcDeskStageReveal";
@@ -1396,6 +1401,60 @@ unsafe fn dock_context(owner:HWND,bar:usize,index:usize,advanced:bool){
     if let Some(path)=path.filter(|_|!advanced){app_menu(owner,&path,false);}
     else{native_menu(owner,bar,index);}
 }
+thread_local!{
+    static TASKBAR_WATCH:RefCell<Option<taskbar_guard::Watch>>=const{RefCell::new(None)};
+    static TASKBAR_HIDDEN:Cell<bool>=const{Cell::new(false)};
+}
+fn taskbar_active()->bool{TASKBAR_WATCH.with(|w|w.borrow().is_some())}
+
+unsafe fn show_taskbar(message:&str){
+    let old=TASKBAR_WATCH.with(|w|w.borrow_mut().take());
+    drop(old);
+    KillTimer(CONTROL.with(Cell::get),TASKBAR_GUARD_TIMER);
+    TASKBAR_HIDDEN.with(|h|h.set(false));
+    emit(Event::Taskbar{hidden:false,message:message.into()});
+}
+
+unsafe fn set_taskbar_hidden(hidden:bool){
+    if !hidden {show_taskbar("Đã trả thanh tác vụ cho Windows.");return;}
+    if taskbar_active(){return;}
+    if crate::trial::demo_active()||crate::trial::benchmark_active()
+        || !STATE.with(|s|{let s=s.borrow();!s.suspended&&s.bars.iter().any(|bar|!bar.hidden&&!bar.collapsed)}) {
+        emit(Event::Taskbar{hidden:false,message:"Cần bật và hiển thị Dock trước khi ẩn thanh tác vụ.".into()});
+        return;
+    }
+    match taskbar_guard::Watch::start(){
+        Ok(watch)=>{
+            if SetTimer(CONTROL.with(Cell::get),TASKBAR_GUARD_TIMER,220,None)==0 {
+                drop(watch);
+                emit(Event::Taskbar{hidden:false,message:"Không giám sát được khôi phục; thanh tác vụ được giữ lại.".into()});
+                return;
+            }
+            TASKBAR_WATCH.with(|slot|slot.replace(Some(watch)));
+            emit(Event::Taskbar{hidden:false,message:"Đang kiểm tra đường khôi phục…".into()});
+        }
+        Err(message)=>emit(Event::Taskbar{hidden:false,message}),
+    }
+}
+unsafe fn poll_taskbar(hwnd:HWND){
+    let status=TASKBAR_WATCH.with(|w|w.borrow_mut().as_mut().map(taskbar_guard::Watch::poll));
+    match status{
+        Some(Ok(true)) if !TASKBAR_HIDDEN.with(|h|h.replace(true))=>{
+            SetTimer(hwnd,TASKBAR_GUARD_TIMER,1400,None);
+            emit(Event::Taskbar{hidden:true,message:"Đã ẩn cho phiên này. Ctrl+Alt+Shift+F12 để hiện lại.".into()});
+        }
+        Some(Err(()))=>show_taskbar("Windows đã khôi phục thanh tác vụ hoặc không thể ẩn nó an toàn."),
+        None=>{KillTimer(hwnd,TASKBAR_GUARD_TIMER);}
+        _=>{}
+    }
+}
+unsafe fn activate_shell(target:shell_access::Target,context:bool){
+    if target==shell_access::Target::Tray&&taskbar_active(){
+        show_taskbar("Đã hiện lại thanh tác vụ để mở khay biểu tượng gốc.");
+        if SetTimer(CONTROL.with(Cell::get),TASKBAR_TRAY_TIMER,140,None)!=0{return;}
+    }
+    shell_access::activate(target,context);
+}
 unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     let menu=CreatePopupMenu();if menu.is_null(){return;}
     let prefs=STATE.with(|s|s.borrow().prefs.clone());
@@ -1444,6 +1503,7 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
         AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
     }
     AppendMenuW(menu,MF_STRING,MENU_ADD_APP,wide("Thêm ứng dụng…").as_ptr());
+    if selected.is_none(){AppendMenuW(menu,MF_STRING,MENU_TASKBAR,wide(if taskbar_active(){"Hiện thanh tác vụ Windows"}else{"Ẩn thanh tác vụ Windows cho phiên này"}).as_ptr());}
     let extra=STATE.with(|s|{
         let state=s.borrow();
         state.bars.get(bar_index).is_some_and(|b|available_items(&state.windows,b.bounds,&prefs).len()>MAX_ITEMS)
@@ -1478,6 +1538,7 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     let cmd=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,hwnd,ptr::null()) as usize;
     DestroyMenu(menu);
     match cmd {
+        MENU_TASKBAR=>set_taskbar_hidden(!taskbar_active()),
         MENU_ADD_APP=>pin_from_file(hwnd),
         MENU_MORE_APPS=>more_apps(hwnd),
         MENU_WINDOW_FIRST=>{
@@ -1800,6 +1861,8 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_TIMER if w==STATUS_TIP_TIMER=>{KillTimer(hwnd,STATUS_TIP_TIMER);show_status_tip(hwnd);0},
+        WM_TIMER if w==TASKBAR_GUARD_TIMER=>{poll_taskbar(hwnd);0},
+        WM_TIMER if w==TASKBAR_TRAY_TIMER=>{KillTimer(hwnd,TASKBAR_TRAY_TIMER);shell_access::activate(shell_access::Target::Tray,false);0},
         WM_TIMER if w==FEEDBACK_TIMER=>{
             KillTimer(hwnd,FEEDBACK_TIMER);
             STATE.with(|s|{if let Some(bar)=s.borrow_mut().bars.iter_mut().find(|b|b.hwnd==hwnd){bar.feedback=None;}});
@@ -1886,7 +1949,10 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER if w==WORKSPACE_TIMER=>{update_state(|state|{state.workspaces.advance();});0},
         WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}else{refresh_dock_clock();}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
         WM_TIMECHANGE=>{refresh_dock_clock();0},
-        WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_DPICHANGED=>{DISPLAY_DIRTY.with(|d|d.set(true));queue_refresh();0},
+        WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_DPICHANGED=>{
+            if msg==WM_DISPLAYCHANGE&&taskbar_active(){show_taskbar("Đã hiện lại thanh tác vụ khi thay đổi màn hình.");}
+            DISPLAY_DIRTY.with(|d|d.set(true));queue_refresh();0
+        },
         WM_MOUSEMOVE=>{
             let x=l as i16 as i32;
             let y=(l>>16) as i16 as i32;
@@ -2071,7 +2137,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 Some((None,false,false,None,None,0))
             });
             if let Some((item,search,utilities,widget,shell,previous))=action{
-                if let Some(target)=shell{shell_access::activate(target,false);}
+                if let Some(target)=shell{activate_shell(target,false);}
                 if let Some(item)=item{open_dock_item(hwnd,&item);}
                 if search {open_launcher();}
                 if utilities||widget.is_some(){request_utilities(hwnd,widget);}
@@ -2130,7 +2196,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                     Some(DockTarget::Launcher)=>open_launcher(),
                     Some(DockTarget::Overflow)=>request_utilities(hwnd,None),
                     Some(DockTarget::Utility(widget))=>request_utilities(hwnd,Some(widget)),
-                    Some(DockTarget::Shell(target))=>shell_access::activate(target,false),
+                    Some(DockTarget::Shell(target))=>activate_shell(target,false),
                     None=>{},
                 }
             }
@@ -2143,7 +2209,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             let x=(l as u32&0xffff) as i16 as i32;
             let y=(l>>16) as i16 as i32;
             let system=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd).and_then(|b|b.shell_target(x as f32,y as f32)));
-            if system==Some(shell_access::Target::Start){shell_access::activate(shell_access::Target::Start,true);return 0;}
+            if system==Some(shell_access::Target::Start){activate_shell(shell_access::Target::Start,true);return 0;}
             if system.is_some(){return 0;}
             let on_status=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd&&!b.collapsed)
                 .and_then(|b|b.layout.as_ref())
@@ -2201,7 +2267,9 @@ unsafe fn drain_commands() {
     let commands:Vec<_>=COMMANDS.with(|c|c.borrow().as_ref().map(|rx|rx.try_iter().collect()).unwrap_or_default());
     for command in commands {
         match command {
-            Command::Configure(options)=>update_state(|state|{
+            Command::Configure(options)=>{
+                if !options.enabled&&taskbar_active(){show_taskbar("Đã hiện lại thanh tác vụ khi tắt Dock.");}
+                update_state(|state|{
                 close_status_tip(ptr::null_mut());
                 if state.prefs.appearance!=options.appearance||state.prefs.utility_profiles!=options.utility_profiles{utilities::close_panels();}
                 for b in &mut state.bars{KillTimer(b.hwnd,STATUS_TIP_TIMER);b.status_hover=None;b.metric_repaint=None;}
@@ -2213,8 +2281,12 @@ unsafe fn drain_commands() {
                 } }
                 state.prefs=options;refresh(state,false);
                 if repaint{for b in &state.bars{InvalidateRect(b.hwnd,ptr::null(),0);}}
-            }),
-            Command::Suspend(on)=>update_state(|state|{if state.suspended!=on{state.suspended=on;refresh(state,!on);}}),
+            });},
+            Command::Suspend(on)=>{
+                if on&&taskbar_active(){show_taskbar("Đã hiện lại thanh tác vụ khi khóa màn hình.");}
+                update_state(|state|{if state.suspended!=on{state.suspended=on;refresh(state,!on);}});
+            },
+            Command::Taskbar(hidden)=>set_taskbar_hidden(hidden),
             Command::Stop=>{control_center::inline_config(CONTROL.with(Cell::get),None);EndMenu();PostQuitMessage(0);},
             Command::Focus=>focus_dock(),
             #[cfg(test)] Command::Inspect{reply,paint}=>{
@@ -2298,6 +2370,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0{
             if !utilities::route_panel_keyboard(&msg){TranslateMessage(&msg);DispatchMessageW(&msg);}
         }
+        if taskbar_active(){show_taskbar("Đã hiện lại thanh tác vụ khi thoát Deskland.");}
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
         update_state(|s|{s.appbars.clear();s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){destroy_stage(&mut b);}});
         SURFACES.with(|s|s.borrow_mut().clear());STAGE_SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());

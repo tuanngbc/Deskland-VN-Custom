@@ -105,6 +105,19 @@ test('utility order, visibility and reset are isolated to the selected monitor',
   $('utilityDisplay').listeners.change({target:{value:'main'}});
   assert.equal($('utilityEnabled').checked,false);
 });
+test('taskbar hide is an explicit session command separate from saved Dock settings',()=>{
+  context.syncDockSettings({dock:{enabled:true},dockTaskbarHidden:false});
+  const control=$('dockTaskbarHidden');
+  assert.equal(control.checked,false);
+  assert.equal(control.disabled,false);
+  control.listeners.change({target:{checked:true}});
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'dockTaskbar',hidden:true});
+  context.syncDockTaskbar({dockTaskbarHidden:false,message:'Restored'});
+  assert.equal(control.checked,false);
+  assert.equal($('taskbarTakeoverStatus').textContent,'Restored');
+  context.syncDockSettings({dock:{enabled:false},dockTaskbarHidden:false});
+  assert.equal(control.disabled,true);
+});
 test('two rows and metrics settings preserve per-display options',()=>{
   const main={id:'main',name:'Main',w:2560,h:1080,dpi:96,primary:true};
   const side={id:'side',name:'Side',w:1080,h:1920,dpi:120,primary:false};

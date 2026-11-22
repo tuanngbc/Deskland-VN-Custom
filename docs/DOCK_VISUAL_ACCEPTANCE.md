@@ -153,3 +153,11 @@ The verified Windows x64 artifact ran with an isolated profile on Windows 11. Co
 - **Rollback PASS:** the trial exited and the previous isolated UAT was restored. The rollback check found no changes to taskbar state, production executable bytes, monitored Registry values or the main profile.
 
 The owner UAT shortcuts use the same verified artifact with a separate copy of the existing UAT settings. Visual acceptance is still pending.
+
+## Follow-up — Windows shell controls and menu typography
+
+The app context menu now lists windows first in one column, then open, pin and window actions. The app file picker remains on the Dock background menu. Start is the first control; left click invokes the Windows Start menu and right click invokes its power user menu. The date and time are at the end, next to a native notification-area launcher. The date/time button opens the Windows notification and calendar flyout. A saved legacy calendar utility is dropped from the utility profile without changing the other entries.
+
+The tray control tries to invoke Explorer's real overflow button after focusing the notification area. If the button cannot be identified or invoked on the installed Windows build, the Windows tray retains focus for keyboard operation. Deskland does not copy individual icons or implement their context menus. This distinction and the behavior on each display still need a manual UAT check.
+
+Taskbar visibility is opt-in per session. An independent copy of the same executable records the exact previously visible Explorer windows, watches the app and supports Ctrl+Alt+Shift+F12. Exiting, locking, turning off Dock, changing the display configuration or invoking the native tray clears the hide request. The code does not change Windows auto-hide, taskbar policy, the work area or Startup. Before acceptance, use the isolated UAT to confirm normal exit, emergency recovery, terminating only the UAT process, and Explorer restarts on both displays. No shell replacement gate has been marked PASS.
