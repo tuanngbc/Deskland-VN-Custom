@@ -1,8 +1,8 @@
 //! One bounded, on-demand provider for all Dock displays. No probes while
-//! idle, no WLAN or Bluetooth scans, and no Shell/COM calls on the UI thread.
+//! idle, no active WLAN or Bluetooth scans, and no Shell/COM queries on the UI thread.
 use super::{WM_UTILITY_READY,open,
     control_center::{self,View,Card,Command,MetricOptions},panel_chrome as chrome,
-    surface::Palette};
+    surface::Palette,wifi};
 use crate::desktop::wide;
 use serde_json::{json,Value};
 use std::{cell::Cell,mem,ptr,sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}}};
@@ -22,21 +22,22 @@ use windows_sys::Win32::{
 
 #[derive(Clone, Copy, Debug)]
 enum Link { None, Wired, WiFi(Option<u8>), Both(Option<u8>) }
-enum BluetoothState { Unknown, Adapter, Connected(Vec<String>) }
+struct ClassicDevice { name:String, connected:bool, paired:bool }
+enum BluetoothState { Unknown, Adapter(Vec<ClassicDevice>) }
 #[derive(Clone,Copy)]
 enum BatteryState { Unknown, Absent, Present{level:Option<u8>,ac:Option<bool>,charging:bool} }
 pub(super) struct Audio { level:u32, muted:bool }
-pub(super) struct Snapshot { network:Option<Link>, bluetooth:BluetoothState, battery:BatteryState, audio:Option<Audio>, pub(super) local:SYSTEMTIME }
+pub(super) struct Snapshot { network:Option<Link>, wlan:Option<wifi::View>, bluetooth:BluetoothState, battery:BatteryState, audio:Option<Audio>, pub(super) local:SYSTEMTIME }
 
 #[derive(Clone,Copy)]
-enum JobKind { Read, Volume(u32), Mute }
+enum JobKind { Read, AudioRead, Volume(u32), Mute }
 
 /// Fixture-only endpoint. Neither moving the fixture slider nor rapidly
 /// toggling its mute can write to a Windows audio device.
 static DEMO_VOLUME: Mutex<Audio> = Mutex::new(Audio { level: 46, muted: false });
 fn fixture_audio(value:&mut Audio, kind:JobKind)->Audio {
     match kind {
-        JobKind::Read=>{},
+        JobKind::Read|JobKind::AudioRead=>{},
         JobKind::Volume(value_percent)=>value.level=value_percent.min(100),
         JobKind::Mute=>value.muted=!value.muted,
     }
@@ -45,22 +46,22 @@ fn fixture_audio(value:&mut Audio, kind:JobKind)->Audio {
 #[derive(Default)]
 struct State {
     pending:AtomicBool, result:Mutex<Option<Snapshot>>,
-    audio_result:Mutex<Option<Option<Audio>>>, closed:AtomicBool,
+    audio_result:Mutex<Option<(usize,Option<Audio>)>>, closed:AtomicBool,
 }
 static WORK_ACTIVE:AtomicBool=AtomicBool::new(false);
 struct Permit;
 impl Drop for Permit{fn drop(&mut self){WORK_ACTIVE.store(false,Ordering::Release);}}
-struct Job { shared:Arc<State>, owner:usize, kind:JobKind, permit:Permit }
+struct Job { shared:Arc<State>, owner:usize, panel:usize, kind:JobKind, network:bool, change:Option<wifi::Change>, permit:Permit }
 pub(super) struct Provider { state:Arc<State> }
 impl Provider {
     pub fn new()->Self{Self{state:Arc::default()}}
-    fn submit(&self,owner:HWND,kind:JobKind)->bool {
+    fn submit(&self,owner:HWND,panel:HWND,kind:JobKind,network:bool,change:Option<wifi::Change>)->bool {
         if owner.is_null()||self.state.pending.swap(true,Ordering::AcqRel){return false;}
         if WORK_ACTIVE.swap(true,Ordering::AcqRel){
             self.state.pending.store(false,Ordering::Release);
             return false;
         }
-        let raw=Box::into_raw(Box::new(Job{shared:self.state.clone(),owner:owner as usize,kind,permit:Permit}));
+        let raw=Box::into_raw(Box::new(Job{shared:self.state.clone(),owner:owner as usize,panel:panel as usize,kind,network,change,permit:Permit}));
         if unsafe{TrySubmitThreadpoolCallback(Some(worker),raw.cast(),ptr::null())}==0 {
             unsafe{drop(Box::from_raw(raw));}
             self.state.pending.store(false,Ordering::Release);
@@ -68,12 +69,15 @@ impl Provider {
         }
         true
     }
-    pub fn read(&self,owner:HWND)->bool{self.submit(owner,JobKind::Read)}
+    pub fn read(&self,owner:HWND,network:bool,change:Option<wifi::Change>)->bool{
+        self.submit(owner,ptr::null_mut(),JobKind::Read,network,change)
+    }
     pub fn take(&self)->Option<Snapshot>{self.state.result.lock().ok()?.take()}
-    pub fn take_audio_result(&self)->Option<Option<Audio>>{self.state.audio_result.lock().ok()?.take()}
-    pub fn apply(&self,owner:HWND,action:Action)->bool{
-        let kind=match action{Action::SetVolume(p)=>JobKind::Volume(p),Action::Mute=>JobKind::Mute,_=>return false};
-        self.submit(owner,kind)
+    pub fn take_audio_result(&self)->Option<(usize,Option<Audio>)>{self.state.audio_result.lock().ok()?.take()}
+    pub fn apply(&self,owner:HWND,panel:HWND,action:Option<Action>)->bool{
+        let kind=match action{None=>JobKind::AudioRead,Some(Action::SetVolume(p))=>JobKind::Volume(p),
+            Some(Action::Mute)=>JobKind::Mute,_=>return false};
+        self.submit(owner,panel,kind,false,None)
     }
 }
 impl Drop for Provider {fn drop(&mut self){self.state.closed.store(true,Ordering::Release);}}
@@ -87,14 +91,15 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut std::ffi::c_vo
             let mut local=mem::zeroed();GetLocalTime(&mut local);
             let mut bluetooth=bluetooth();
             if crate::trial::demo_active() {
-                if let BluetoothState::Connected(names)=&mut bluetooth {
-                    for (i,name) in names.iter_mut().enumerate(){*name=format!("Fixture device {}",i+1);}
+                if let BluetoothState::Adapter(devices)=&mut bluetooth {
+                    for (i,device) in devices.iter_mut().enumerate(){device.name=format!("Fixture device {}",i+1);}
                 }
             }
-            let snapshot=Snapshot{network:network(),bluetooth,battery:battery(),audio,local};
+            let wlan=job.network.then(||wifi::read(job.change));
+            let snapshot=Snapshot{network:network(),wlan,bluetooth,battery:battery(),audio,local};
             if let Ok(mut result)=state.result.lock(){*result=Some(snapshot);}
         }else if let Ok(mut result)=state.audio_result.lock(){
-            *result=Some(audio);
+            *result=Some((job.panel,audio));
         }
     }
     drop(job.permit);
@@ -105,7 +110,7 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut std::ffi::c_vo
 }
 unsafe fn audio(kind:JobKind)->Option<Audio>{
     if crate::trial::demo_active(){return DEMO_VOLUME.lock().ok().map(|mut value|fixture_audio(&mut value,kind));}
-    if crate::trial::active() && !matches!(kind,JobKind::Read){return None;}
+    if audio_read_only() && matches!(kind,JobKind::Volume(_)|JobKind::Mute){return None;}
     let com=CoInitializeEx(None,COINIT_MULTITHREADED);
     if com.is_err(){return None;}
     let value=(||->windows::core::Result<Audio>{
@@ -116,7 +121,7 @@ unsafe fn audio(kind:JobKind)->Option<Audio>{
         match kind {
             JobKind::Volume(percent)=>volume.SetMasterVolumeLevelScalar(percent.min(100) as f32/100.0,ptr::null())?,
             JobKind::Mute=>volume.SetMute(!muted,ptr::null())?,
-            JobKind::Read=>{}
+            JobKind::Read|JobKind::AudioRead=>{}
         }
         let level=(volume.GetMasterVolumeLevelScalar()?.clamp(0.0,1.0)*100.0).round() as u32;
         Ok(Audio{level,muted:volume.GetMute()?.as_bool()})
@@ -166,32 +171,32 @@ unsafe fn bluetooth()->BluetoothState{
     let params=BLUETOOTH_FIND_RADIO_PARAMS{dwSize:mem::size_of::<BLUETOOTH_FIND_RADIO_PARAMS>() as u32};
     let find=BluetoothFindFirstRadio(&params,&mut radio);
     if find.is_null(){return BluetoothState::Unknown;}
-    let mut names=Vec::new();
+    let mut devices:Vec<ClassicDevice>=Vec::new();
     for index in 0..16 {
         if radio.is_null(){break;}
         let mut params:BLUETOOTH_DEVICE_SEARCH_PARAMS=mem::zeroed();
         params.dwSize=mem::size_of::<BLUETOOTH_DEVICE_SEARCH_PARAMS>() as u32;
-        params.fReturnConnected=1;params.hRadio=radio;
+        params.fReturnConnected=1;params.fReturnAuthenticated=1;params.fReturnRemembered=1;params.hRadio=radio;
         let mut info:BLUETOOTH_DEVICE_INFO=mem::zeroed();
         info.dwSize=mem::size_of::<BLUETOOTH_DEVICE_INFO>() as u32;
         let device=BluetoothFindFirstDevice(&params,&mut info);
         if !device.is_null(){
             for _ in 0..48{
-                if info.fConnected!=0{
-                    let length=info.szName.iter().position(|&c|c==0).unwrap_or(info.szName.len());
-                    let name=String::from_utf16_lossy(&info.szName[..length]).trim().to_owned();
-                    if name.is_empty(){names.push("Thiết bị chưa có tên".into());}
-                    else if !names.contains(&name){names.push(name);}
-                }
-                if names.len()>=8||BluetoothFindNextDevice(device,&mut info)==0{break;}
+                let length=info.szName.iter().position(|&c|c==0).unwrap_or(info.szName.len());
+                let name=String::from_utf16_lossy(&info.szName[..length]).chars().filter(|c|!c.is_control()).take(64).collect::<String>();
+                let name=if name.trim().is_empty(){"Thiết bị chưa có tên".into()}else{name};
+                devices.push(ClassicDevice{name,connected:info.fConnected!=0,paired:info.fAuthenticated!=0});
+                if BluetoothFindNextDevice(device,&mut info)==0{break;}
             }
             BluetoothFindDeviceClose(device);
         }
         CloseHandle(radio);
-        if names.len()>=8||index==15||BluetoothFindNextRadio(find,&mut radio)==0{break;}
+        if index==15||BluetoothFindNextRadio(find,&mut radio)==0{break;}
     }
     BluetoothFindRadioClose(find);
-    if names.is_empty(){BluetoothState::Adapter}else{BluetoothState::Connected(names)}
+    devices.sort_by_key(|device|(!device.connected,!device.paired));
+    devices.truncate(12);
+    BluetoothState::Adapter(devices)
 }
 unsafe fn battery()->BatteryState{
     let mut s:SYSTEM_POWER_STATUS=mem::zeroed();
@@ -323,8 +328,11 @@ fn network_label(state:Option<Link>)->String{
 fn device_label(state:&BluetoothState)->String{
     match state{
         BluetoothState::Unknown=>"Windows chưa cung cấp trạng thái".into(),
-        BluetoothState::Adapter=>"Có bộ điều hợp Bluetooth".into(),
-        BluetoothState::Connected(names)=>format!("{} thiết bị Classic đã kết nối",names.len()),
+        BluetoothState::Adapter(devices)=>{
+            let connected=devices.iter().filter(|d|d.connected).count();
+            if connected==0{"Không thấy thiết bị Classic đang kết nối".into()}
+            else{format!("{connected} thiết bị Classic đang kết nối")}
+        },
     }
 }
 fn utility_hint(widget:Widget,snapshot:&Snapshot)->String{
@@ -356,12 +364,33 @@ pub(super) unsafe fn show_view(owner:HWND,point:POINT,snapshot:&Snapshot,profile
     let make=|title:String,hint:String,icon:Option<Widget>,action|Card{title,hint,icon,action};
     let (title,hint,cards)=if let Some(widget)=widget{
         let mut cards=Vec::new();
-        let label=utility_hint(widget,snapshot);
-        if widget==Widget::Bluetooth&&profile.details{
-            if let BluetoothState::Connected(names)=&snapshot.bluetooth{
-                cards.extend(names.iter().take(8).map(|n|make(n.chars().filter(|c|!c.is_control()).take(64).collect(),
-                    "Đã kết nối".into(),Some(Widget::Bluetooth),None)));
+        let mut label=utility_hint(widget,snapshot);
+        if widget==Widget::Bluetooth{
+            if let BluetoothState::Adapter(devices)=&snapshot.bluetooth{
+                cards.extend(devices.iter().map(|d|make(d.name.clone(),
+                    if d.connected{"Đang kết nối"}else if d.paired{"Đã ghép đôi"}else{"Đã lưu"}.into(),Some(Widget::Bluetooth),None)));
             }
+        }
+        if let Some(wlan)=snapshot.wlan.as_ref().filter(|_|widget==Widget::Network){
+            label=match (wlan.outcome,wlan.status,wlan.no_adapter,wlan.networks.is_empty()){
+                (Some(Ok(())),_,_,_)=>"Đã gửi yêu cầu. Làm mới để xem kết quả.".into(),
+                (Some(Err(code)),_,_,_)=>format!("Windows chưa thực hiện yêu cầu ({code})."),
+                (_,Some(ERROR_ACCESS_DENIED),_,_)=>"Windows chưa cấp quyền đọc danh sách Wi‑Fi.".into(),
+                (_,Some(code),_,_)=>format!("Không đọc được danh sách Wi‑Fi ({code})."),
+                (_,_,true,_)=>"Không tìm thấy bộ điều hợp Wi‑Fi.".into(),
+                (_,_,_,true)=>"Windows chưa trả về mạng khả dụng.".into(),
+                _=>label,
+            };
+            for n in &wlan.networks{
+                let action=n.change.clone().map(Command::Wifi).or_else(||{
+                    (!n.connected&&!crate::trial::active()).then_some(Command::Run(Action::Network))
+                });
+                let state=if n.connected{
+                    if n.change.is_some(){"Đã kết nối · Ngắt"}else{"Đã kết nối"}
+                }else if n.change.is_some(){"Kết nối"}else if action.is_some(){"Mở Windows"}else if n.protected{"Có mật khẩu"}else{"Mạng mở"};
+                cards.push(make(n.name.clone(),format!("{}% · {state}",n.signal),Some(Widget::Network),action));
+            }
+            cards.insert(0,make("Làm mới danh sách".into(),String::new(),Some(Widget::Network),Some(Command::Widget(Widget::Network))));
         }
         let delegated=match widget{
             Widget::Network=>Some(Action::Network),Widget::Bluetooth=>Some(Action::Bluetooth),
@@ -376,7 +405,12 @@ pub(super) unsafe fn show_view(owner:HWND,point:POINT,snapshot:&Snapshot,profile
             }
         }
         if let Some(action)=delegated {
-            cards.push(make("Mở trong Windows".into(),"Windows quản lý thiết bị và kết nối".into(),Some(Widget::Settings),Some(Command::Run(action))));
+            let hint=match action{
+                Action::Network=>"Kết nối mạng mới và nhập mật khẩu",
+                Action::Bluetooth=>"Ghép đôi và quản lý thiết bị",
+                _=>"Mở cài đặt hệ thống",
+            };
+            cards.push(make("Mở trong Windows".into(),hint.into(),Some(Widget::Settings),Some(Command::Run(action))));
         }
         (widget.title().to_owned(),label,cards)
     }else{
@@ -397,7 +431,7 @@ pub(super) unsafe fn show_metrics(owner:HWND,anchor:chrome::Anchor,cfg:MetricOpt
 pub(super) unsafe fn delegated(action:Action){
     use Action::*;
     match action{
-        Network=>open("ms-settings:network-status"), Bluetooth=>open("ms-settings:bluetooth"),
+        Network=>open("ms-settings:network-wifi"), Bluetooth=>open("ms-settings:bluetooth"),
         Sound=>open("ms-settings:sound"),Battery=>open("ms-settings:powersleep"), Explorer=>open("explorer.exe"),
         Notifications=>shell_key(b'N' as u16),QuickSettings=>shell_key(b'A' as u16),
         Desktop=>shell_key(b'D' as u16),Windows=>shell_key(VK_TAB),
@@ -425,6 +459,8 @@ const TRACK:usize=4601;
 const MUTE:usize=4602;
 const OUTPUT:usize=4603;
 const LABEL:usize=4604;
+const AUDIO_TIMER:usize=1;
+fn audio_read_only()->bool{crate::trial::active()&&!crate::trial::demo_active()}
 thread_local! {
     static AUDIO_WINDOW:Cell<HWND>=const{Cell::new(ptr::null_mut())};
     static CALENDAR_WINDOW:Cell<HWND>=const{Cell::new(ptr::null_mut())};
@@ -567,7 +603,15 @@ pub(super) unsafe fn audio_panel(owner:HWND,point:POINT,level:u32,muted:bool){
     control("BUTTON","Thiết bị đầu ra…",OUTPUT,WS_TABSTOP|BS_OWNERDRAW as u32,132,114,178,36);
     TRACK_LAST.with(|s|s.set(level));AUDIO_PENDING.with(|s|s.set(false));TRACK_DRAGGING.with(|s|s.set(false));
     WANTED_LEVEL.with(|s|s.set(None));AUDIO_WINDOW.with(|s|s.set(hwnd));
-    ShowWindow(hwnd,SW_SHOW);SetForegroundWindow(hwnd);SetFocus(slider);
+    let mute=GetDlgItem(hwnd,MUTE as i32);
+    if audio_read_only(){
+        EnableWindow(slider,0);
+        EnableWindow(mute,0);
+    }
+    SetTimer(hwnd,AUDIO_TIMER,900,None);
+    ShowWindow(hwnd,SW_SHOW);
+    SetForegroundWindow(hwnd);
+    SetFocus(if audio_read_only(){GetDlgItem(hwnd,OUTPUT as i32)}else{slider});
 }
 
 pub(super) unsafe fn close_panels_for(owner:HWND){
@@ -588,30 +632,30 @@ pub(super) unsafe fn route_panel_keyboard(message:&MSG)->bool{
     IsDialogMessageW(panel,message)!=0
 }
 
-unsafe fn submit_audio(hwnd:HWND,action:Action)->bool{
-    if AUDIO_PENDING.with(Cell::get)||!super::apply_audio(action){return false;}
+unsafe fn submit_audio(hwnd:HWND,action:Option<Action>)->bool{
+    if AUDIO_PENDING.with(Cell::get)||(action.is_some()&&audio_read_only())||!super::apply_audio(hwnd,action){return false;}
     AUDIO_PENDING.with(|s|s.set(true));
-    EnableWindow(GetDlgItem(hwnd,MUTE as i32),0);
+    if action.is_some(){EnableWindow(GetDlgItem(hwnd,MUTE as i32),0);}
     true
 }
 unsafe fn flush_volume(hwnd:HWND){
     if AUDIO_PENDING.with(Cell::get){return;}
     if let Some(value)=WANTED_LEVEL.with(Cell::get){
-        if value==TRACK_LAST.with(Cell::get)||submit_audio(hwnd,Action::SetVolume(value)){
+        if value==TRACK_LAST.with(Cell::get)||submit_audio(hwnd,Some(Action::SetVolume(value))){
             WANTED_LEVEL.with(|s|s.set(None));
         }
     }
 }
-pub(super) unsafe fn reflect_audio(result:Option<Audio>){
-    let hwnd=AUDIO_WINDOW.with(Cell::get);
-    if hwnd.is_null()||!AUDIO_PENDING.with(|s|s.replace(false)){return;}
-    EnableWindow(GetDlgItem(hwnd,MUTE as i32),1);
+pub(super) unsafe fn reflect_audio(hwnd:HWND,result:Option<Audio>){
+    if hwnd.is_null()||AUDIO_WINDOW.with(Cell::get)!=hwnd||!AUDIO_PENDING.with(|s|s.replace(false)){return;}
+    if !audio_read_only(){EnableWindow(GetDlgItem(hwnd,MUTE as i32),1);}
     let label=GetDlgItem(hwnd,LABEL as i32);
     if let Some(audio)=result{
         TRACK_LAST.with(|s|s.set(audio.level));
         SetWindowTextW(GetDlgItem(hwnd,MUTE as i32),wide(if audio.muted{"Bật tiếng"}else{"Tắt tiếng"}).as_ptr());
         if !TRACK_DRAGGING.with(Cell::get)&&WANTED_LEVEL.with(Cell::get).is_none(){
-            SendMessageW(GetDlgItem(hwnd,TRACK as i32),TBM_SETPOS,1,audio.level as isize);
+            let slider=GetDlgItem(hwnd,TRACK as i32);
+            if SendMessageW(slider,TBM_GETPOS,0,0)!=audio.level as isize{SendMessageW(slider,TBM_SETPOS,1,audio.level as isize);}
             SetWindowTextW(label,wide(&format!("{}%",audio.level)).as_ptr());
         }
     }else{
@@ -626,7 +670,13 @@ pub(super) unsafe fn reflect_audio(result:Option<Audio>){
 unsafe extern "system" fn audio_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     match msg {
         WM_ERASEBKGND=>1,
-        WM_PAINT=>{paint_shell(hwnd,AUDIO_DARK.with(Cell::get),"Âm lượng","Thiết bị đầu ra mặc định");0},
+        WM_PAINT=>{paint_shell(hwnd,AUDIO_DARK.with(Cell::get),"Âm lượng",
+            if audio_read_only(){"Chỉ xem trong bản thử"}else{"Thiết bị đầu ra mặc định"});0},
+        WM_TIMER if w==AUDIO_TIMER=>{
+            if !TRACK_DRAGGING.with(Cell::get)&&WANTED_LEVEL.with(Cell::get).is_none(){submit_audio(hwnd,None);}
+            else{flush_volume(hwnd);}
+            0
+        },
         WM_CTLCOLORSTATIC|WM_CTLCOLORBTN=>chrome::child_color(w as HDC,AUDIO_DARK.with(Cell::get)),
         WM_DRAWITEM if l!=0=>{paint_button(&*(l as *const DRAWITEMSTRUCT),AUDIO_DARK.with(Cell::get));1},
         WM_NOTIFY if l!=0=>{
@@ -649,7 +699,7 @@ unsafe extern "system" fn audio_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
         WM_COMMAND=>match w&0xffff{
             n if n==IDCANCEL as usize=>{DestroyWindow(hwnd);0},
             MUTE=>{
-                submit_audio(hwnd,Action::Mute);
+                submit_audio(hwnd,Some(Action::Mute));
                 0
             }
             OUTPUT=>{open("ms-settings:sound");DestroyWindow(hwnd);0},
@@ -657,6 +707,7 @@ unsafe extern "system" fn audio_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
         }
         WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{PostMessageW(hwnd,WM_CLOSE,0,0);0},
         WM_NCDESTROY=>{
+            KillTimer(hwnd,AUDIO_TIMER);
             super::panel_closed(GetWindow(hwnd,GW_OWNER));
             if AUDIO_WINDOW.with(Cell::get)==hwnd{AUDIO_WINDOW.with(|s|s.set(ptr::null_mut()));}
             DefWindowProcW(hwnd,msg,w,l)
@@ -767,7 +818,7 @@ mod tests {
                 ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),ptr::null());
             assert!(!hwnd.is_null());
             let provider=Provider::new();
-            assert!(provider.read(hwnd));
+            assert!(provider.read(hwnd,true,None));
             let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);
             let snapshot=loop{
                 if let Some(s)=provider.take(){break Some(s);}
@@ -777,6 +828,7 @@ mod tests {
             DestroyWindow(hwnd);
             let report=snapshot.expect("read-only probe must complete in a bounded time");
             assert!((1..=12).contains(&report.local.wMonth));
+            assert!(report.wlan.is_some());
             if let Some(audio)=report.audio{assert!(audio.level<=100);}
             if let BatteryState::Present{level:Some(level),..}=report.battery{assert!(level<=100);}
         }

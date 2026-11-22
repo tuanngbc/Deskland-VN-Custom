@@ -14,8 +14,8 @@ pub(super) const CLASS:&str="TuanpcDeskControlCenter";
 const METRIC_UPDATE:u32=WM_APP+99;
 const METRIC_TIMER:usize=1;
 const SINGLE_LINE:u32=DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS;
-#[derive(Clone,Copy)]
-pub(super) enum Command{Widget(UtilityWidget),Run(Action),Window{hwnd:usize,pid:u32,tid:u32}}
+#[derive(Clone)]
+pub(super) enum Command{Widget(UtilityWidget),Run(Action),Wifi(super::wifi::Change),Window{hwnd:usize,pid:u32,tid:u32}}
 #[derive(Clone)]
 pub(super) struct Card{pub icon:Option<UtilityWidget>,pub title:String,pub hint:String,pub action:Option<Command>}
 pub(super) struct View{pub title:String,pub hint:String,pub cards:Vec<Card>,pub metrics:Option<MetricOptions>}
@@ -169,8 +169,8 @@ pub(super) fn inline_readings(cfg:MetricOptions)->Vec<InlineReading>{
 impl Panel{
     fn rect(&self,i:usize)->RECT{
         let pad=chrome::scale(self.dpi,14);
-        let gap=chrome::scale(self.dpi,7);
-        let top=chrome::scale(self.dpi,66)+(i/self.cols) as i32*(self.row_height+gap);
+        let gap=chrome::scale(self.dpi,8);
+        let top=chrome::scale(self.dpi,67)+(i/self.cols) as i32*(self.row_height+gap);
         let w=((self.layer.size.0-2*pad-gap*(self.cols as i32-1))/self.cols as i32).max(1);
         let left=pad+(i%self.cols) as i32*(w+gap);
         RECT{left,top,right:left+w,bottom:top+self.row_height}
@@ -199,30 +199,35 @@ impl Panel{
         super::fill(g,RECT{left:0,top:0,right:w,bottom:h},chrome::color(p.panel));
         chrome::box_fill(g,RECT{left:0,top:0,right:w,bottom:h},px(32),p.panel,Some(p.edge));
         let old=SelectObject(g,self.fonts[0]);
-        chrome::text(g,RECT{left:px(18),top:px(9),right:w-px(14),bottom:px(37)},&self.view.title,p.ink,SINGLE_LINE);
+        chrome::text(g,RECT{left:px(18),top:px(13),right:w-px(14),bottom:px(41)},&self.view.title,p.ink,SINGLE_LINE);
         SelectObject(g,self.fonts[2]);
-        chrome::text(g,RECT{left:px(18),top:px(38),right:w-px(14),bottom:px(57)},&self.view.hint,p.muted,SINGLE_LINE);
+        chrome::text(g,RECT{left:px(18),top:px(41),right:w-px(14),bottom:px(59)},&self.view.hint,p.muted,SINGLE_LINE);
         let cards=self.cards();
         let mut glyphs=Vec::with_capacity(cards.len());
         for (i,c) in cards.iter().enumerate(){
             let r=self.rect(i);
             let focused=self.index==Some(i);
             let is_metric=self.metrics.is_some();
-            let fill=if self.anchor.dark{[65,58,53]}else{[249,245,242]};
-            chrome::box_fill(g,r,px(17),fill,Some(if focused{p.accent}else{p.edge}));
-            let inner=r.left+px(if c.icon.is_some(){37}else{11});
-            let text_bounds=RECT{left:inner,top:r.top+px(if c.hint.is_empty(){2}else{3}),right:r.right-px(6),
-                bottom:if c.hint.is_empty(){r.bottom-px(2)}else{r.top+px(22)}};
+            let fill=match (self.anchor.dark,focused){
+                (true,true)=>[82,72,63],(true,false)=>[70,62,56],
+                (false,true)=>[255,239,226],(false,false)=>[255,253,251],
+            };
+            chrome::box_fill(g,r,px(24),fill,focused.then_some(p.accent));
+            let inner=r.left+px(if c.icon.is_some(){47}else{12});
+            let first=px(if is_metric{6}else{7});
+            let text_bounds=RECT{left:inner,top:r.top+first,right:r.right-px(9),
+                bottom:if c.hint.is_empty(){r.bottom-first}else{r.top+px(25)}};
             SelectObject(g,self.fonts[if is_metric{2}else{1}]);
             chrome::text(g,text_bounds,&c.title,if is_metric{p.muted}else{p.ink},SINGLE_LINE);
             if !c.hint.is_empty(){
                 SelectObject(g,self.fonts[if is_metric{3}else{2}]);
-                chrome::text(g,RECT{top:r.top+px(if is_metric{22}else{20}),bottom:r.bottom-px(3),..text_bounds},&c.hint,
+                chrome::text(g,RECT{top:r.top+px(25),bottom:r.bottom-px(5),..text_bounds},&c.hint,
                     if is_metric{p.ink}else{p.muted},SINGLE_LINE);
             }
             if let Some(icon)=c.icon{
-                let size=px(25) as f32;
-                glyphs.push((icon,Rect{x:(r.left+px(7)) as f32,y:(r.top+(r.bottom-r.top-px(25))/2) as f32,w:size,h:size}));
+                let size=px(32) as f32;
+                let badge=Rect{x:(r.left+px(8)) as f32,y:(r.top+(r.bottom-r.top-px(32))/2) as f32,w:size,h:size};
+                glyphs.push((icon,badge));
             }
         }
         if cards.is_empty(){
@@ -237,7 +242,14 @@ impl Panel{
         }
         if !old.is_null(){SelectObject(g,old);}
         GdiFlush();
-        for (icon,slot) in glyphs{surface::status_on(self.layer.pixels(),w,h,slot,self.dpi as f32/96.0,p.accent,Some(icon));}
+        let scale=self.dpi as f32/96.0;
+        for (icon,badge) in glyphs{
+            let data=self.layer.pixels();
+            surface::rounded(data,w,h,badge,badge.w*0.5,p.accent,if self.anchor.dark{46}else{30});
+            let inset=3.0*scale;
+            let slot=Rect{x:badge.x+inset,y:badge.y+inset,w:badge.w-2.0*inset,h:badge.h-2.0*inset};
+            surface::status_on(data,w,h,slot,scale,p.accent,Some(icon));
+        }
         self.layer.blit(dc);
     }
 }
@@ -256,12 +268,12 @@ pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){
     let double=view.metrics.map_or(view.cards.len()>3,|o|o.compact);
     let cols=if double&&work.right-work.left>=px(365){2}else{1};
     let width=px(if cols==2{392}else{306}).min(work.right-work.left);
-    let row_height=px(if view.metrics.is_some(){54}else{43});
+    let row_height=px(if view.metrics.is_some(){56}else{52});
     let budget=(work.bottom-work.top-px(132)).max(row_height);
-    let rows=(budget/(row_height+px(7))).clamp(1,9) as usize;
+    let rows=(budget/(row_height+px(8))).clamp(1,9) as usize;
     let per_page=cols*rows;
     let expected=view.metrics.map_or(view.cards.len(),|m|m.mask.count_ones() as usize);
-    let height=(px(89)+expected.clamp(1,per_page).div_ceil(cols) as i32*(row_height+px(7))
+    let height=(px(84)+expected.clamp(1,per_page).div_ceil(cols) as i32*(row_height+px(8))
         +if expected>per_page{px(30)}else{0}).min(work.bottom-work.top).max(1);
     let Some(layer)=Layer::new(width,height)else{return;};
     let class=wide(CLASS);
@@ -333,7 +345,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                     WM_LBUTTONDOWN=>{p.pressed=p.hit(x,y);}
                     WM_LBUTTONUP=>{
                         let from=p.pressed.take();
-                        if let Some(i)=p.hit(x,y).filter(|i|Some(*i)==from){action=p.cards()[i].action;}
+                        if let Some(i)=p.hit(x,y).filter(|i|Some(*i)==from){action=p.cards()[i].action.clone();}
                         else if p.pages()>1&&y>=p.layer.size.1-chrome::scale(p.dpi,33){
                             p.page_delta(if x>=p.layer.size.0/2{1}else{-1});
                         }
@@ -345,7 +357,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                         if n>0{
                             let i=p.index.unwrap_or(0);
                             match key{
-                                VK_RETURN|VK_SPACE=>action=p.cards().get(i).and_then(|c|c.action),
+                                VK_RETURN|VK_SPACE=>action=p.cards().get(i).and_then(|c|c.action.clone()),
                                 VK_HOME=>p.index=Some(0),VK_END=>p.index=Some(n-1),
                                 VK_UP|VK_DOWN|VK_LEFT|VK_RIGHT|VK_TAB=>{
                                     let step=match key{VK_UP=>-(p.cols as isize),VK_DOWN=>p.cols as isize,

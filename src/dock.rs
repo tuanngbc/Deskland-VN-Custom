@@ -27,6 +27,7 @@ mod workspaces;
 mod perf;
 mod stage_surface;
 mod utilities;
+mod wifi;
 mod control_center;
 mod panel_chrome;
 mod appbar;
@@ -1077,6 +1078,9 @@ unsafe fn paint(hwnd:HWND){
     EndPaint(hwnd,&ps);
 }
 unsafe fn request_utilities(hwnd:HWND,widget:Option<UtilityWidget>){
+    request_utilities_with_change(hwnd,widget,None);
+}
+unsafe fn request_utilities_with_change(hwnd:HWND,widget:Option<UtilityWidget>,change:Option<wifi::Change>){
     if utility_profile(hwnd).is_none_or(|p|!p.enabled || widget.is_some_and(|w|p.hidden.contains(&w))){return;}
     if let Some(action)=widget.filter(|w|*w!=UtilityWidget::QuickSettings).and_then(UtilityWidget::simple){
         match action {utilities::Action::Host(action)=>emit(Event::Utility(action)),_=>utilities::delegated(action)}
@@ -1107,7 +1111,7 @@ unsafe fn request_utilities(hwnd:HWND,widget:Option<UtilityWidget>){
         return;
     }
     let control=CONTROL.with(Cell::get);
-    let submitted=UTILITIES.with(|u|u.borrow_mut().get_or_insert_with(utilities::Provider::new).read(control));
+    let submitted=UTILITIES.with(|u|u.borrow_mut().get_or_insert_with(utilities::Provider::new).read(control,widget==Some(UtilityWidget::Network),change));
     if submitted{UTILITY_ANCHOR.with(|a|a.set(Some((hwnd as usize,point,widget))));}
 }
 fn utility_profile(hwnd:HWND)->Option<UtilityProfile>{
@@ -1118,12 +1122,12 @@ fn utility_profile(hwnd:HWND)->Option<UtilityProfile>{
         Some(state.prefs.utility_profiles.get(&output.id).cloned().unwrap_or_default())
     })
 }
-fn apply_audio(action:utilities::Action)->bool{
-    UTILITIES.with(|u|u.borrow().as_ref().is_some_and(|p|p.apply(CONTROL.with(Cell::get),action)))
+fn apply_audio(panel:HWND,action:Option<utilities::Action>)->bool{
+    UTILITIES.with(|u|u.borrow().as_ref().is_some_and(|p|p.apply(CONTROL.with(Cell::get),panel,action)))
 }
 unsafe fn show_utilities(){
     let result=UTILITIES.with(|u|u.borrow().as_ref().and_then(utilities::Provider::take_audio_result));
-    if let Some(result)=result{utilities::reflect_audio(result);}
+    if let Some((panel,result))=result{utilities::reflect_audio(panel as HWND,result);}
     let Some(snapshot)=UTILITIES.with(|u|u.borrow().as_ref().and_then(utilities::Provider::take)) else{return;};
     let target=UTILITY_ANCHOR.with(|a|a.take());
     let Some((bar,point,widget))=target else{return;};
@@ -1144,6 +1148,7 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
     use control_center::Command;
     match command{
         Command::Widget(widget)=>request_utilities(owner,Some(widget)),
+        Command::Wifi(change)=>request_utilities_with_change(owner,Some(UtilityWidget::Network),Some(change)),
         Command::Run(utilities::Action::Host(action))=>emit(Event::Utility(action)),
         Command::Run(action)=>utilities::delegated(action),
         Command::Window{hwnd,pid,tid}=>{
