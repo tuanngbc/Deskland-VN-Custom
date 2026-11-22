@@ -129,7 +129,15 @@ impl Workspaces{
             g.members.retain(|m|m.key.live());
             !g.members.is_empty()
         });
-        self.active.retain(|screen,id|self.groups.iter().any(|g|g.id==*id&&g.screen==*screen));
+        let inactive=self.active.iter().filter(|(screen,id)|!self.groups.iter().any(|g|g.id==**id&&g.screen==screen.as_str()))
+            .map(|(screen,_)|screen.clone()).collect::<Vec<_>>();
+        for screen in inactive {self.reveal_display(&screen);}
+    }
+    unsafe fn reveal_display(&mut self,screen:&str){
+        self.active.remove(screen);
+        for group in self.groups.iter_mut().filter(|g|g.screen==screen){
+            for member in &mut group.members{member.reveal();}
+        }
     }
     pub fn pending(&self) -> bool {
         self.groups.iter().flat_map(|group| &group.members).chain(&self.detaching).any(Member::pending)
@@ -218,12 +226,14 @@ impl Workspaces{
     }
     pub unsafe fn dissolve(&mut self,id:u64){
         if let Some(i)=self.groups.iter().position(|g|g.id==id){
-            for mut member in self.groups.remove(i).members {
+            let group=self.groups.remove(i);
+            let group_screen=group.screen;
+            for mut member in group.members {
                 member.reveal();
                 if member.hidden.is_some(){self.detaching.push(member);}
             }
+            if self.active(&group_screen)==Some(id){self.reveal_display(&group_screen);}
         }
-        self.active.retain(|_,active|*active!=id);
     }
     pub unsafe fn switch(&mut self,screen:&str,id:u64)->Option<HWND>{
         if !self.groups.iter().any(|g|g.screen==screen&&g.id==id){return None;}
@@ -431,14 +441,37 @@ mod tests {
             assert!(super::super::same_rect(placement(normal).unwrap().rcNormalPosition,original));
             assert_eq!(IsIconic(other_display),0);
 
+            // Detaching an inactive member returns only its own placement.
+            let a=model.create("primary",normal).unwrap();
+            model.add("primary",maximized);
+            let b=model.create("primary",second_group).unwrap();
+            until(|| {model.advance(); IsIconic(normal)!=0 && IsIconic(maximized)!=0});
+            assert!(model.remove_from(a,maximized));
+            until(|| {model.advance(); IsZoomed(maximized)!=0});
+            assert_ne!(IsIconic(normal),0);
+
+            // Removing the active group must not leave its neighbors hidden.
+            model.dissolve(b);
+            until(|| !model.advance() && IsIconic(normal)==0);
+            assert_eq!(model.active("primary"),None);
+            assert_eq!(model.members(a),vec![normal]);
+
+            let b=model.create("primary",second_group).unwrap();
+            until(|| {model.advance(); IsIconic(normal)!=0});
+            assert_ne!(PostMessageW(second_group,WM_CLOSE,0,0),0);
+            until(|| {model.prune(); !model.advance() && IsWindow(second_group)==0 && IsIconic(normal)==0});
+            assert_eq!(model.active("primary"),None);
+            assert!(model.members(b).is_empty());
+            assert!(super::super::same_rect(placement(normal).unwrap().rcNormalPosition,original));
+            model.dissolve(a);
+
             // Keep the separate Exit recovery check with fresh groups.
             model.create("primary",normal).unwrap();
-            model.add("primary",maximized);
-            model.create("primary",second_group).unwrap();
-            until(|| { model.advance(); IsIconic(normal) != 0 && IsIconic(maximized) != 0 });
+            model.create("primary",maximized).unwrap();
+            until(|| { model.advance(); IsIconic(normal) != 0 });
             drop(model);
             until(|| IsIconic(normal) == 0 && IsZoomed(maximized) != 0);
-            assert_eq!(IsIconic(second_group), 0);
+            assert_eq!(IsIconic(other_display), 0);
             assert_ne!(IsIconic(already_minimized), 0);
         }
     }

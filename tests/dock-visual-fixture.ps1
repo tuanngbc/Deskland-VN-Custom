@@ -13,6 +13,18 @@ using System.Runtime.InteropServices;
 public static class DesklandVisualFixture {
     [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr context);
     [DllImport("user32.dll")] public static extern bool SetWindowDisplayAffinity(IntPtr window, uint affinity);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+    [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr window, uint command);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
+    [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr window);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
+    [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
+    [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr window, int attr, out Rect rect, int size);
+    public static int[] Frame(IntPtr window) {
+        Rect r;
+        return DwmGetWindowAttribute(window, 9, out r, 16) == 0
+            ? new [] { r.Left, r.Top, r.Right, r.Bottom } : null;
+    }
 }
 '@
 [void][DesklandVisualFixture]::SetProcessDpiAwarenessContext([IntPtr](-4))
@@ -27,7 +39,9 @@ try {
     foreach ($name in 'Slate','Lagoon','Coral','Protected','Pre-minimized') {
         $i = $forms.Count
         $form = [Windows.Forms.Form]::new()
-        $form.Text = "Deskland Fixture $side $name"
+        $form.Text = if ($name -in 'Slate','Lagoon','Coral') {
+            "Deskland Fixture $side - Shared stage workspace - $name"
+        } else { "Deskland Fixture $side $name" }
         $form.StartPosition = 'Manual'
         $normal[$name] = [Drawing.Rectangle]::new($screen.WorkingArea.X + 240 + ($i % 3) * 66, $screen.WorkingArea.Y + 145 + $i * 82, 520, 265)
         $form.Bounds = $normal[$name]
@@ -71,7 +85,24 @@ try {
             $form = $forms[$name]
             if ($form.IsDisposed) { continue }
             $r = $form.Bounds
-            [pscustomobject]@{Name=$name;Title=$form.Text;Handle=$form.Handle.ToInt64();State=$form.WindowState.ToString();Rect=@($r.Left,$r.Top,$r.Right,$r.Bottom)}
+            $hwnd = $form.Handle
+            [uint32]$ownerPid = 0
+            $tid = [DesklandVisualFixture]::GetWindowThreadProcessId($hwnd,[ref]$ownerPid)
+            $iconic = [DesklandVisualFixture]::IsIconic($hwnd)
+            $zoomed = [DesklandVisualFixture]::IsZoomed($hwnd)
+            $visible = [DesklandVisualFixture]::IsWindowVisible($hwnd)
+            $workArea = [Windows.Forms.Screen]::FromHandle($hwnd).WorkingArea
+            $frame = if ($visible -and !$iconic) { [DesklandVisualFixture]::Frame($hwnd) }
+            [pscustomobject]@{
+                Name=$name;Title=$form.Text;Handle=$hwnd.ToInt64();State=$form.WindowState.ToString()
+                Rect=@($r.Left,$r.Top,$r.Right,$r.Bottom);Visible=$visible;Iconic=$iconic;Zoomed=$zoomed
+                Pid=$ownerPid;Tid=$tid;OwnerHwnd=[DesklandVisualFixture]::GetWindow($hwnd,4).ToInt64()
+                DwmFrame=$frame;Work=@($workArea.Left,$workArea.Top,$workArea.Right,$workArea.Bottom)
+                FrameWithinWork=if (@($frame).Count -eq 4) {
+                    $frame[0] -ge $workArea.Left -and $frame[1] -ge $workArea.Top -and
+                    $frame[2] -le $workArea.Right -and $frame[3] -le $workArea.Bottom
+                }
+            }
         })
         $r = $screen.Bounds; $work = $screen.WorkingArea
         [pscustomobject]@{Pid=$PID;Primary=[bool]$Primary;Protected=$protected;Monitor=@($r.Left,$r.Top,$r.Right,$r.Bottom);Work=@($work.Left,$work.Top,$work.Right,$work.Bottom);Windows=$rows} |

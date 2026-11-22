@@ -49,6 +49,7 @@ const STAGE_MOTION_TIMER:usize=7;
 const STATUS_TIP_TIMER:usize=8;
 const FEEDBACK_TIMER:usize=9;
 const WM_DOCK_MOUSELEAVE:u32=0x02A3;
+const MOUSE_LEFT_DOWN:WPARAM=0x0001; // MK_LBUTTON in WM_MOUSEMOVE
 const ITEM_WIDTH:i32=66;
 const HEIGHT:i32=70;
 const MAX_ITEMS:usize=10;
@@ -95,10 +96,16 @@ struct Bar {
 #[derive(Clone,Debug,PartialEq,Eq)]
 enum DockTarget { App(String), Launcher, Overflow, Utility(UtilityWidget) }
 #[derive(Clone)]
-struct Press { target:DockTarget, x:i32, y:i32 }
+struct Press { target:DockTarget, x:i32, y:i32, dragged:bool }
 impl Press {
+    fn new(target:DockTarget,x:i32,y:i32)->Self {
+        Self{target,x,y,dragged:false}
+    }
     fn moved(&self,x:f32,y:f32,scale:f32)->bool {
-        (x-self.x as f32).abs()+(y-self.y as f32).abs()>9.0*scale
+        self.dragged||(x-self.x as f32).abs()+(y-self.y as f32).abs()>9.0*scale
+    }
+    fn track(&mut self,x:f32,y:f32,scale:f32){
+        self.dragged=self.moved(x,y,scale);
     }
     fn click(&self,released:Option<DockTarget>,x:f32,y:f32,scale:f32)->Option<DockTarget>{
         released.filter(|target|*target==self.target && !self.moved(x,y,scale))
@@ -131,10 +138,17 @@ impl Motion {
 impl Bar {
     fn target(&self,x:f32,y:f32)->Option<DockTarget>{
         let layout=self.layout.as_ref()?;
+        if self.hidden||self.collapsed{return None;}
         if let Some(item)=layout.hit(x,y).and_then(|i|self.items.get(i)){return Some(DockTarget::App(item.path.clone()));}
         if layout.is_launch_button(x,y){return Some(DockTarget::Launcher);}
         if layout.is_utility_button(x,y){return Some(DockTarget::Overflow);}
         layout.inline_at(x,y).map(DockTarget::Utility)
+    }
+    fn fallback_target(&self,x:i32,y:i32,width:i32,utilities:bool)->Option<DockTarget>{
+        if self.hidden|| !(9..60).contains(&y)||x<0||x>=width{return None;}
+        if utilities&&x>=width-52{return Some(DockTarget::Overflow);}
+        let slot=x.checked_sub(12).filter(|x|*x>=0)?/ITEM_WIDTH;
+        self.items.get(slot as usize).map(|item|DockTarget::App(item.path.clone()))
     }
     fn drop_at(&self,x:f32,y:f32)->Option<usize>{
         let press=self.pressed.as_ref()?;
@@ -142,7 +156,9 @@ impl Bar {
         let layout=self.layout.as_ref()?;
         let pins=self.items.iter().take_while(|item|item.pinned).count();
         let from=self.items[..pins].iter().position(|item|item.path==*path)?;
-        if !press.moved(x,y,layout.scale){return None;}
+        if !press.moved(x,y,layout.scale)||self.hidden||self.collapsed
+            ||layout.is_launch_button(x,y)||layout.is_utility_button(x,y)||layout.inline_at(x,y).is_some()
+            ||layout.hit(x,y).is_some_and(|i|i>=pins){return None;}
         layout.pin_boundary(x,y,pins).filter(|&i|i!=from&&i!=from+1)
     }
     fn drop_target(&self)->Option<usize>{
@@ -730,7 +746,8 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         if style.stack_groups {
             layout.stack=(0..items.len()).filter(|&i|items[i].count>1).fold(0u8,|bits,i|bits|(1<<i));
         }
-        if stage.items!=items {
+        if stage.items!=items || stage.groups!=groups {
+            KillTimer(stage.hwnd,STATUS_TIP_TIMER);close_status_tip(stage.hwnd);
             stage.hover=None;stage.emphasis=StageEmphasis::default();
             if stage.slide.is_none(){KillTimer(stage.hwnd,STAGE_MOTION_TIMER);}
             stage.keyboard=stage.keyboard.and_then(|index|{
@@ -774,7 +791,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         if hide {
             if stage.emphasis.start.is_some()||stage.slide.is_some(){KillTimer(stage.hwnd,STAGE_MOTION_TIMER);}
             stage.slide=None;stage.offset=0;
-            stage.hover=None;stage.emphasis=StageEmphasis::default();stage.keyboard=None;stage.pressed=None;changed|=stage.previews.clear();
+            stage.hover=None;stage.emphasis=StageEmphasis::default();stage.keyboard=None;stage.pressed=None;KillTimer(stage.hwnd,STATUS_TIP_TIMER);close_status_tip(stage.hwnd);changed|=stage.previews.clear();
         }
         else if layout.width>0&&layout.height>0{
             let host=if stage.preview_hwnd.is_null(){stage.hwnd}else{stage.preview_hwnd};
@@ -875,14 +892,25 @@ fn close_status_tip(owner:HWND){
 }
 unsafe fn show_status_tip(owner:HWND){
     use windows_sys::Win32::UI::Controls::*;
-    let item=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==owner&&!b.hidden&&!b.collapsed).and_then(|b|b.status_hover));
-    let Some(item)=item else{return;};
+    let label=STATE.with(|s|{
+        let state=s.borrow();
+        if let Some(stage)=state.stages.iter().find(|p|p.hwnd==owner&&!p.hidden&&!p.collapsed){
+            let index=stage.hover?;
+            let item=stage.items.get(index)?;
+            return Some(if stage.groups.get(index).is_some_and(Option::is_some){
+                format!("{} · {} cửa sổ",item.title,item.count)
+            }else{item.title.chars().take(512).collect()});
+        }
+        let item=state.bars.iter().find(|b|b.hwnd==owner&&!b.hidden&&!b.collapsed)?.status_hover?;
+        Some(item.map_or("Bảng tiện ích",UtilityWidget::title).to_owned())
+    });
+    let Some(label)=label.filter(|label|!label.is_empty())else{return;};
     close_status_tip(ptr::null_mut());
     let mut tip=StatusTip{
         owner,window:CreateWindowExW(WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW|WS_EX_TOPMOST,
             wide("tooltips_class32").as_ptr(),ptr::null(),WS_POPUP|TTS_NOPREFIX|TTS_ALWAYSTIP,
             CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,owner,ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null()),
-        _label:wide(item.map_or("Bảng tiện ích",UtilityWidget::title))
+        _label:wide(&label)
     };
     if tip.window.is_null(){return;}
     let mut tool:TTTOOLINFOW=mem::zeroed();
@@ -891,6 +919,8 @@ unsafe fn show_status_tip(owner:HWND){
     if SendMessageW(tip.window,TTM_ADDTOOLW,0,(&tool as *const TTTOOLINFOW) as isize)==0{return;}
     let mut pt=POINT{x:0,y:0};GetCursorPos(&mut pt);
     let coords=(((pt.y+18) as u16 as u32)<<16)|((pt.x+14) as u16 as u32);
+    let dpi=windows_sys::Win32::UI::HiDpi::GetDpiForWindow(owner).clamp(72,288);
+    SendMessageW(tip.window,TTM_SETMAXTIPWIDTH,0,(360*dpi/96) as isize);
     SendMessageW(tip.window,TTM_TRACKPOSITION,0,coords as isize);
     SendMessageW(tip.window,TTM_TRACKACTIVATE,1,(&tool as *const TTTOOLINFOW) as isize);
     STATUS_TIP.with(|value|value.replace(Some(tip)));
@@ -928,7 +958,7 @@ unsafe fn paint(hwnd:HWND){
         }
         // A driver or remote session can reject per-pixel presentation. Keep
         // app switching available using the previous native paint path.
-        STATE.with(|s|{if let Some(bar)=s.borrow_mut().bars.iter_mut().find(|b|b.hwnd==hwnd){bar.layout=None;bar.collapsed=false;}});
+        STATE.with(|s|{if let Some(bar)=s.borrow_mut().bars.iter_mut().find(|b|b.hwnd==hwnd){bar.layout=None;bar.collapsed=false;bar.pressed=None;}});
         SetWindowLongPtrW(hwnd,GWL_EXSTYLE,GetWindowLongPtrW(hwnd,GWL_EXSTYLE)& !(WS_EX_LAYERED as isize));
         KillTimer(hwnd,MOTION_TIMER);
         queue_refresh();
@@ -1263,11 +1293,14 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
         let local=stage_window_is_local(item.hwnd,stage.bounds);
         let group=stage.groups.get(i).copied().flatten();
         let members=group.map(|id|state.workspaces.members(id)).unwrap_or_default().into_iter()
-            .filter_map(|hwnd|state.windows.iter().find(|w|w.hwnd==hwnd).map(|w|(hwnd,w.title.clone())))
+            .filter_map(|hwnd|{
+                let owner=window_owner(hwnd)?;
+                state.windows.iter().find(|w|w.hwnd==hwnd).map(|w|(hwnd,owner,w.title.clone()))
+            })
             .collect::<Vec<_>>();
-        Some((item.hwnd,group,stage.display.clone(),stage.selected,local,state.workspaces.can_create(&stage.display),members))
+        Some((item.hwnd,window_owner(item.hwnd)?,group,stage.display.clone(),stage.selected,local,state.workspaces.can_create(&stage.display),members))
     });
-    let Some((item,group,display,current,local,can_create,members))=card else{return;};
+    let Some((item,owner,group,display,current,local,can_create,members))=card else{return;};
     let menu=CreatePopupMenu();
     if menu.is_null(){return;}
     const DETACH_FIRST:usize=100;
@@ -1279,7 +1312,7 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
     if !members.is_empty(){
         let submenu=CreatePopupMenu();
         if !submenu.is_null(){
-            for (index,(_,title)) in members.iter().enumerate(){
+            for (index,(_,_,title)) in members.iter().enumerate(){
                 let label=title.replace('&',"&&").chars().take(90).collect::<String>();
                 AppendMenuW(submenu,MF_STRING,DETACH_FIRST+index,wide(&label).as_ptr());
             }
@@ -1314,8 +1347,13 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
         // The menu can run a nested loop. Revalidate the original source and
         // display against the current enumeration before changing a workspace.
         let Some(stage)=state.stages.iter().find(|stage|stage.hwnd==hwnd&&stage.display==display)else{return;};
-        let Some(i)=stage.items.iter().position(|entry|entry.hwnd==item)else{return;};
-        if stage.groups[i]!=group{return;}
+        let current_card=if let Some(id)=group {
+            stage.groups.contains(&Some(id))
+        }else{
+            window_owner(item)==Some(owner)&&stage.items.iter().enumerate()
+                .any(|(i,entry)|entry.hwnd==item&&stage.groups[i].is_none())
+        };
+        if !current_card{return;}
         let present=state.windows.iter().any(|w|w.hwnd==item);
         let still_local=present && stage_window_is_local(item,stage.bounds);
         match result{
@@ -1323,8 +1361,8 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
             2 if still_local&&group.is_none()&&current==stage.selected=>state.workspaces.add(&display,item),
             4=>{if let Some(id)=group{state.workspaces.dissolve(id);}},
             id if id>=DETACH_FIRST=>{
-                if let Some((group,(target,_)))=group.zip(members.get(id-DETACH_FIRST)){
-                    state.workspaces.remove_from(group,*target);
+                if let Some((group,(target,owner,_)))=group.zip(members.get(id-DETACH_FIRST)){
+                    if window_owner(*target)==Some(*owner){state.workspaces.remove_from(group,*target);}
                 }
             }
             _=>{}
@@ -1419,13 +1457,16 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let animate=!state.prefs.appearance.reduced_motion;
                 if let Some(b)=state.bars.iter_mut().find(|b|b.hwnd==hwnd){
                     b.hovered=-1;b.status_hover=None;b.motion.target=None;b.pointer=None;
-                    if GetCapture()!=hwnd{b.pressed=None;}
+                    // Outside the visible surface is never a valid drop.
+                    // Cancel here even if Win32 won't deliver the release.
+                    b.pressed=None;
                     if !animate{b.motion=Motion::default();}
                     let start=animate&&b.layout.is_some()&&!b.motion.scheduled&&b.motion.zoom.value>0.001;
                     b.motion.scheduled|=start;
                     (true,start,b.auto_hide&&b.layout.is_some()&&b.keyboard.is_none()&&b.pressed.is_none())
                 }else{(false,false,false)}
             });
+            if GetCapture()==hwnd{ReleaseCapture();}
             if tracked.1{SetTimer(hwnd,MOTION_TIMER,16,None);}
             if tracked.2{SetTimer(hwnd,HIDE_TIMER,650,None);}
             if tracked.0{InvalidateRect(hwnd,ptr::null(),0);}
@@ -1531,10 +1572,14 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let hit=p.layout.and_then(|layout|layout.hit(x,y));
                 let old=std::mem::replace(&mut p.hover,hit);
                 let changed=old!=hit;
-                Some((changed,changed&&p.emphasis.change(hit,reduced)))
+                Some((changed,changed&&p.emphasis.change(hit,reduced),hit.is_some()))
             });
-            if let Some((changed,animate))=stage{
+            if let Some((changed,animate,over_card))=stage{
                 KillTimer(hwnd,HIDE_TIMER);
+                if changed{
+                    KillTimer(hwnd,STATUS_TIP_TIMER);close_status_tip(hwnd);
+                    if over_card{SetTimer(hwnd,STATUS_TIP_TIMER,650,None);}
+                }
                 if animate{SetTimer(hwnd,STAGE_MOTION_TIMER,16,None);}
                 let mut event=TRACKMOUSEEVENT{cbSize:mem::size_of::<TRACKMOUSEEVENT>() as u32,dwFlags:TME_LEAVE,hwndTrack:hwnd,dwHoverTime:0};
                 TrackMouseEvent(&mut event);
@@ -1548,6 +1593,12 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let Some(b)=state.bars.iter_mut().find(|b|b.hwnd==hwnd) else{return (false,false,false)};
                 let prev=b.hovered;
                 let prev_drop=b.drop_target();
+                // Capture on a non-activating window can miss an off-window
+                // release. The next hover must not revive an old press.
+                if w&MOUSE_LEFT_DOWN==0{b.pressed=None;}
+                if let Some(press)=b.pressed.as_mut(){
+                    press.track(x as f32,y as f32,b.layout.as_ref().map_or(1.0,|l|l.scale));
+                }
                 b.pointer=Some((x as f32,y as f32));
                 let reveal=b.collapsed;
                 let start_reveal=b.collapse(false,reduced);
@@ -1589,17 +1640,20 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_LBUTTONDOWN=>{
             KillTimer(hwnd,STATUS_TIP_TIMER);close_status_tip(hwnd);
             let (x,y)=(l as i16 as i32,(l>>16) as i16 as i32);
+            let mut area:RECT=mem::zeroed();GetClientRect(hwnd,&mut area);
+            let utility=utility_profile(hwnd).is_some_and(|p|p.enabled);
             let capture=STATE.with(|s|{
                 let mut state=s.borrow_mut();
                 if let Some(stage)=state.stages.iter_mut().find(|p|p.hwnd==hwnd){
                     stage.pressed=stage.target(x,y);
                     return false;
                 }
-                let Some(bar)=state.bars.iter_mut().find(|b|b.hwnd==hwnd&&!b.collapsed)else{return false;};
-                let target=bar.target(x as f32,y as f32);
+                let Some(bar)=state.bars.iter_mut().find(|b|b.hwnd==hwnd&&!b.hidden&&!b.collapsed)else{return false;};
+                let target=if bar.layout.is_some(){bar.target(x as f32,y as f32)}
+                    else{bar.fallback_target(x,y,area.right,utility)};
                 let capture=target.as_ref().is_some_and(|target|matches!(target,DockTarget::App(path)
                     if bar.items.iter().any(|item|item.pinned&&item.path==*path)));
-                bar.pressed=target.map(|target|Press{target,x,y});
+                bar.pressed=target.map(|target|Press::new(target,x,y));
                 capture
             });
             if capture{SetCapture(hwnd);}
@@ -1716,50 +1770,40 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 }
                 return 0;
             }
-            let x=(l as u32&0xffff) as i16 as i32;
-            let rendered=STATE.with(|s|{
+            let mut area:RECT=mem::zeroed();GetClientRect(hwnd,&mut area);
+            let utility=utility_profile(hwnd).is_some_and(|p|p.enabled);
+            let action=STATE.with(|s|{
                 let mut state=s.borrow_mut();let bar=state.bars.iter_mut().find(|b|b.hwnd==hwnd)?;
-                let layout=bar.layout.as_ref()?;
-                let target=bar.target(x as f32,y as f32);
-                let drop=bar.drop_at(x as f32,y as f32).and_then(|index|{
+                let scale=bar.layout.as_ref().map_or(1.0,|layout|layout.scale);
+                let target=if bar.layout.is_some(){bar.target(px as f32,y as f32)}
+                    else{bar.fallback_target(px,y,area.right,utility)};
+                let drop=bar.drop_at(px as f32,y as f32).and_then(|index|{
                     let pinned=bar.items.iter().take_while(|item|item.pinned).count();
                     let after=index==pinned;
                     Some((bar.items.get(index-usize::from(after))?.path.clone(),after))
                 });
-                let click=bar.pressed.as_ref().and_then(|press|press.click(target,x as f32,y as f32,layout.scale));
-                let item=click.as_ref().and_then(|target|match target{
-                    DockTarget::App(path)=>bar.items.iter().find(|item|item.path==*path).cloned(), _=>None,
-                });
-                Some((click,item,bar.pressed.take(),bar.collapsed,drop,layout.scale))
+                let press=bar.pressed.take()?;
+                let click=press.click(target,px as f32,y as f32,scale);
+                let item=match &click{
+                    Some(DockTarget::App(path))=>bar.items.iter().find(|item|item.path==*path).cloned(),
+                    _=>None,
+                };
+                Some((press,click,item,drop,bar.auto_hide&&bar.keyboard.is_none()))
             });
-            if let Some((click,item,pressed,collapsed,drop,scale))=rendered{
-                if GetCapture()==hwnd{ReleaseCapture();}
-                if pressed.is_some(){InvalidateRect(hwnd,ptr::null(),0);}
-                if collapsed{return 0;}
-                if let Some(press)=pressed {
-                    if press.moved(x as f32,y as f32,scale) {
-                        if let (DockTarget::App(path),Some((anchor,after)))=(press.target,drop){emit(Event::Edit(Edit::MovePin{path,anchor,after}));}
-                        let hide=STATE.with(|s|s.borrow().bars.iter().any(|b|b.hwnd==hwnd&&b.auto_hide&&b.keyboard.is_none()&&
-                            b.layout.as_ref().is_some_and(|l|x<0||y<0||x>=l.window.right-l.window.left||y>=l.window.bottom-l.window.top)));
-                        if hide{SetTimer(hwnd,HIDE_TIMER,650,None);}
-                    }else{
-                        match click {
-                            Some(DockTarget::App(_))=>{if let Some(item)=item{activate(hwnd,&item);}},
-                            Some(DockTarget::Launcher)=>open_launcher(),
-                            Some(DockTarget::Overflow)=>request_utilities(hwnd,None),
-                            Some(DockTarget::Utility(widget))=>request_utilities(hwnd,Some(widget)),
-                            None=>{},
-                        }
-                    }
+            if GetCapture()==hwnd{ReleaseCapture();}
+            if let Some((press,click,item,drop,auto))=action{
+                InvalidateRect(hwnd,ptr::null(),0);
+                if let (DockTarget::App(path),Some((anchor,after)))=(press.target,drop){
+                    emit(Event::Edit(Edit::MovePin{path,anchor,after}));
                 }
-                return 0;
-            }
-            let selected=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd).and_then(|b|b.items.get(((x-12).max(0)/ITEM_WIDTH) as usize)).cloned());
-            let max=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd).map(|b|b.items.len()).unwrap_or(0));
-            if x>=12 && (x-12)/ITEM_WIDTH <max as i32 {if let Some(item)=selected{activate(hwnd,&item);}}
-            else {
-                let mut area:RECT=mem::zeroed();GetClientRect(hwnd,&mut area);
-                if x>=area.right-52{request_utilities(hwnd,None);}
+                if auto&&(px<0||y<0||px>=area.right||y>=area.bottom){SetTimer(hwnd,HIDE_TIMER,650,None);}
+                match click{
+                    Some(DockTarget::App(_))=>{if let Some(item)=item{activate(hwnd,&item);}},
+                    Some(DockTarget::Launcher)=>open_launcher(),
+                    Some(DockTarget::Overflow)=>request_utilities(hwnd,None),
+                    Some(DockTarget::Utility(widget))=>request_utilities(hwnd,Some(widget)),
+                    None=>{},
+                }
             }
             0
         }
@@ -1932,12 +1976,15 @@ mod tests{
     fn rect(a:[i32;4])->RECT{RECT{left:a[0],top:a[1],right:a[2],bottom:a[3]}}
     #[test] fn pointer_release_cannot_activate_a_control_that_shifted_under_it(){
         let pin=DockTarget::App("a.exe".into());
-        let down=Press{target:pin.clone(),x:100,y:12};
+        let mut down=Press::new(pin.clone(),100,12);
         assert_eq!(down.click(Some(DockTarget::App("b.exe".into())),100.0,12.0,1.5),None);
         assert_eq!(down.click(Some(DockTarget::Overflow),100.0,12.0,1.5),None);
         assert_eq!(down.click(Some(pin.clone()),110.0,12.0,1.5),Some(pin.clone()));
-        assert_eq!(down.click(Some(pin),114.0,12.0,1.5),None);
-        let down=Press{target:DockTarget::Utility(UtilityWidget::Sound),x:20,y:20};
+        assert_eq!(down.click(Some(pin.clone()),114.0,12.0,1.5),None);
+        down.track(114.0,12.0,1.5);
+        down.track(100.0,12.0,1.5);
+        assert_eq!(down.click(Some(pin),100.0,12.0,1.5),None,"returning to the icon does not turn a drag into a click");
+        let down=Press::new(DockTarget::Utility(UtilityWidget::Sound),20,20);
         assert_eq!(down.click(Some(DockTarget::Utility(UtilityWidget::Sound)),21.0,20.0,1.0),Some(down.target));
     }
     #[test] fn desktop_foreground_never_hides_independent_stage_or_dock(){
