@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
-use webview2_com::{CoTaskMemPWSTR, CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler, WebMessageReceivedEventHandler};
+use webview2_com::{CallDevToolsProtocolMethodCompletedHandler, CoTaskMemPWSTR, CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler, ProcessFailedEventHandler, WebMessageReceivedEventHandler};
 use windows::core::{Interface, HSTRING, PCWSTR, PWSTR};
 use windows_sys::Win32::Foundation as F;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -21,6 +21,7 @@ const CLASS: &str = "TuanpcDeskWebSettings";
 pub static DEBUG_PORT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 struct Web {
+    ticket: u64,
     hwnd: F::HWND,
     controller: ICoreWebView2Controller,
     webview: ICoreWebView2,
@@ -29,6 +30,9 @@ struct Web {
 struct Opening { ticket: u64, hwnd: F::HWND, started: Instant, error: Option<String> }
 const OPEN_TIMEOUT: Duration = Duration::from_secs(8);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TrialFault { Controller, NoReady, Renderer }
+
 thread_local! {
     static WEB: RefCell<Option<Web>> = const { RefCell::new(None) };
     static INBOX: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
@@ -36,6 +40,14 @@ thread_local! {
     static APPEARANCE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
     static OPENING: RefCell<Option<Opening>> = const { RefCell::new(None) };
     static TICKET: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static RUNTIME_ERROR: RefCell<Option<(u64, String)>> = const { RefCell::new(None) };
+    static TRIAL_FAULT: std::cell::Cell<Option<TrialFault>> = const { std::cell::Cell::new(None) };
+    static TRIAL_CRASH: std::cell::Cell<Option<(u64, Option<Instant>)>> = const { std::cell::Cell::new(None) };
+}
+
+pub fn set_trial_fault(fault: TrialFault) {
+    assert!(crate::trial::active());
+    TRIAL_FAULT.with(|f| f.set(Some(fault)));
 }
 
 pub fn set_appearance(value: &str) {
@@ -69,14 +81,11 @@ pub fn take_inbox() -> Vec<String> {
 }
 
 pub fn post(json: &str) {
-    WEB.with(|w| {
-        if let Ok(w) = w.try_borrow() {
-            if let Some(w) = w.as_ref() {
-                let s = HSTRING::from(json);
-                let _ = unsafe { w.webview.PostWebMessageAsString(PCWSTR(s.as_ptr())) };
-            }
-        }
-    });
+    let view=WEB.with(|w|w.borrow().as_ref().map(|w|w.webview.clone()));
+    if let Some(view)=view {
+        let s=HSTRING::from(json);
+        let _=unsafe{view.PostWebMessageAsString(PCWSTR(s.as_ptr()))};
+    }
 }
 
 fn light_theme() -> bool {
@@ -112,16 +121,13 @@ fn theme_title_bar(hwnd: F::HWND) {
 }
 
 fn resize(hwnd: F::HWND) {
-    WEB.with(|w| {
-        if let Ok(w) = w.try_borrow() {
-            if let Some(w) = w.as_ref() {
-                let mut r: F::RECT = unsafe { std::mem::zeroed() };
-                unsafe { GetClientRect(hwnd, &mut r) };
-                let rr = windows::Win32::Foundation::RECT { left: 0, top: 0, right: r.right, bottom: r.bottom };
-                let _ = unsafe { w.controller.SetBounds(rr) };
-            }
-        }
-    });
+    let controller=WEB.with(|w|w.borrow().as_ref().filter(|w|w.hwnd==hwnd).map(|w|w.controller.clone()));
+    if let Some(controller)=controller {
+        let mut r: F::RECT = unsafe { std::mem::zeroed() };
+        unsafe { GetClientRect(hwnd, &mut r) };
+        let rr = windows::Win32::Foundation::RECT { left: 0, top: 0, right: r.right, bottom: r.bottom };
+        let _ = unsafe { controller.SetBounds(rr) };
+    }
 }
 
 unsafe extern "system" fn proc_(h: F::HWND, m: u32, wp: F::WPARAM, lp: F::LPARAM) -> F::LRESULT {
@@ -146,15 +152,26 @@ unsafe extern "system" fn proc_(h: F::HWND, m: u32, wp: F::WPARAM, lp: F::LPARAM
             DefWindowProcW(h,m,wp,lp)
         }
         WM_CLOSE => {
-            INBOX.with(|i| i.borrow_mut().push(r#"{"t":"shortcutCapture","active":false}"#.into()));
             DestroyWindow(h);
             0
         }
         WM_DESTROY => {
-            if let Some(w) = WEB.with(|x| x.try_borrow_mut().ok().and_then(|mut g| {
-                if g.as_ref().is_some_and(|w| w.hwnd == h) {g.take()} else {None}
-            })) {
-                // Close() dừng WebView2 -> các tiến trình msedgewebview2 của cửa sổ này thoát
+            // Invalidate this request before calling COM: Close may dispatch a
+            // final callback. Never close anything belonging to a newer host.
+            let pending = OPENING.with(|p| {
+                let mut p = p.borrow_mut();
+                if p.as_ref().is_some_and(|p| p.hwnd == h) { p.take() } else { None }
+            });
+            let web = WEB.with(|w| {
+                let mut w = w.borrow_mut();
+                if w.as_ref().is_some_and(|w| w.hwnd == h) { w.take() } else { None }
+            });
+            if pending.is_some() || web.is_some() {
+                INBOX.with(|i| i.borrow_mut().clear());
+                RUNTIME_ERROR.with(|e| e.borrow_mut().take());
+                TRIAL_CRASH.with(|f|f.set(None));
+            }
+            if let Some(w) = web {
                 let _ = w.controller.Close();
             }
             crate::log!("Đóng cửa sổ cài đặt (WebView2 đã dừng)");
@@ -181,48 +198,54 @@ pub fn open(proto: &Path) -> Result<(), String> {
                 .ok().map_err(|e| e.to_string())?;
             COM_READY.with(|c| c.set(true));
         }
-        let cls = wide(CLASS);
-        let mut wc: WNDCLASSEXW = std::mem::zeroed();
-        wc.cbSize = std::mem::size_of::<WNDCLASSEXW>() as u32;
-        wc.lpfnWndProc = Some(proc_);
-        wc.hInstance = GetModuleHandleW(std::ptr::null());
-        wc.hCursor = LoadCursorW(std::ptr::null_mut(), IDC_ARROW);
-        wc.hIcon = crate::app_icon(GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON));
-        wc.hIconSm = crate::app_icon(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
-        wc.lpszClassName = cls.as_ptr();
-        RegisterClassExW(&wc);
-
-        let s = windows_sys::Win32::UI::HiDpi::GetDpiForSystem().max(96) as f32 / 96.0;
-        // Cửa sổ rộng hơn để lưới theme, preview và nhóm điều khiển không bị
-        // ép chật; vẫn tự co theo màn hình nhỏ.
-        let (w, h) = ((1360.0 * s) as i32, (860.0 * s) as i32);
-        let (sw, sh) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
-        let hwnd = CreateWindowExW(
-            0,
-            cls.as_ptr(),
-            wide("tuanpc-desk").as_ptr(),
-            WS_OVERLAPPEDWINDOW,
-            ((sw - w) / 2).max(0),
-            ((sh - h) / 2).max(0),
-            w.min(sw),
-            h.min(sh),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            GetModuleHandleW(std::ptr::null()),
-            std::ptr::null(),
-        );
-        if hwnd.is_null() {
-            return Err(format!("CreateWindowEx lỗi {}", F::GetLastError()));
-        }
-        theme_title_bar(hwnd);
+        let hwnd = create_host()?;
         let ticket=TICKET.with(|n|{let next=n.get().wrapping_add(1);n.set(next);next});
         OPENING.with(|p| p.replace(Some(Opening{ticket,hwnd,started:Instant::now(),error:None})));
-        if let Err(error) = start(ticket, proto.to_owned()) {
+        let fault = TRIAL_FAULT.with(|f| f.take());
+        if let Err(error) = start(ticket, proto.to_owned(), fault) {
             close();
             return Err(error);
         }
         Ok(())
     }
+}
+
+unsafe fn create_host() -> Result<F::HWND,String> {
+    let cls = wide(CLASS);
+    let mut wc: WNDCLASSEXW = std::mem::zeroed();
+    wc.cbSize = std::mem::size_of::<WNDCLASSEXW>() as u32;
+    wc.lpfnWndProc = Some(proc_);
+    wc.hInstance = GetModuleHandleW(std::ptr::null());
+    wc.hCursor = LoadCursorW(std::ptr::null_mut(), IDC_ARROW);
+    wc.hIcon = crate::app_icon(GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON));
+    wc.hIconSm = crate::app_icon(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
+    wc.lpszClassName = cls.as_ptr();
+    RegisterClassExW(&wc);
+
+    let s = windows_sys::Win32::UI::HiDpi::GetDpiForSystem().max(96) as f32 / 96.0;
+    // Cửa sổ rộng hơn để lưới theme, preview và nhóm điều khiển không bị
+    // ép chật; vẫn tự co theo màn hình nhỏ.
+    let (w, h) = ((1360.0 * s) as i32, (860.0 * s) as i32);
+    let (sw, sh) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+    let hwnd = CreateWindowExW(
+        0,
+        cls.as_ptr(),
+        wide("tuanpc-desk").as_ptr(),
+        WS_OVERLAPPEDWINDOW,
+        ((sw - w) / 2).max(0),
+        ((sh - h) / 2).max(0),
+        w.min(sw),
+        h.min(sh),
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        GetModuleHandleW(std::ptr::null()),
+        std::ptr::null(),
+    );
+    if hwnd.is_null() {
+        return Err(format!("CreateWindowEx lỗi {}", F::GetLastError()));
+    }
+    theme_title_bar(hwnd);
+    Ok(hwnd)
 }
 
 fn opening_window(ticket: u64) -> Option<F::HWND> {
@@ -233,33 +256,84 @@ fn failed(ticket: u64, error: impl ToString) {
         if let Some(p)=p.borrow_mut().as_mut().filter(|p|p.ticket==ticket){p.error=Some(error.to_string());}
     });
 }
+
+fn installed(ticket: u64) -> bool {
+    WEB.with(|w| w.try_borrow().is_ok_and(|w| w.as_ref().is_some_and(|w| w.ticket == ticket)))
+}
+
+fn process_failed(ticket: u64, kind: COREWEBVIEW2_PROCESS_FAILED_KIND) {
+    if kind != COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED
+        && kind != COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED
+        && kind != COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE {
+        return;
+    }
+    if opening_window(ticket).is_none() && !installed(ticket) { return; }
+    // No destruction from inside a WebView2 event callback. The owner consumes
+    // this after dispatch, dropping any commands queued by the failed view.
+    RUNTIME_ERROR.with(|e| e.replace(Some((ticket, format!("Tiến trình WebView2 gặp lỗi ({})", kind.0)))));
+}
+
+fn queue_page_message(ticket: u64, message: String) {
+    if (opening_window(ticket).is_some() || installed(ticket))
+        && !RUNTIME_ERROR.with(|e| e.borrow().as_ref().is_some_and(|(t,_)| *t==ticket)) {
+        INBOX.with(|i| i.borrow_mut().push(message));
+    }
+}
 pub fn take_open_error() -> Option<String> {
-    let error=OPENING.with(|p| {
+    let runtime = RUNTIME_ERROR.with(|e| e.borrow_mut().take())
+        .filter(|(ticket,_)| opening_window(*ticket).is_some() || installed(*ticket))
+        .map(|(_,message)| message);
+    let error=runtime.or_else(|| OPENING.with(|p| {
         let p=p.borrow();
         let p=p.as_ref()?;
         p.error.clone().or_else(||(p.started.elapsed()>=OPEN_TIMEOUT).then(||"WebView2 không gửi tín hiệu sẵn sàng trong 8 giây".to_owned()))
-    });
+    }));
     if error.is_some(){close();}
     error
 }
 pub fn ready() -> Result<(),String> {
-    if let Some(p)=OPENING.with(|p|p.borrow_mut().take()){
-        if !unsafe{crate::desktop::show_settings_window(p.hwnd)}{
+    if let Some((ticket,hwnd,started))=OPENING.with(|p|p.borrow().as_ref().map(|p|(p.ticket,p.hwnd,p.started))){
+        if !installed(ticket) {return Ok(());}
+        if !unsafe{crate::desktop::show_settings_window(hwnd)}{
             close();
             return Err("WebView2 đã sẵn sàng nhưng không hiện được cửa sổ".into());
         }
-        crate::log!("Mở cửa sổ cài đặt WebView2 sau {:.0} ms",p.started.elapsed().as_secs_f64()*1000.0);
+        OPENING.with(|p| p.borrow_mut().take());
+        TRIAL_CRASH.with(|f|if f.get()==Some((ticket,None)) {f.set(Some((ticket,Some(Instant::now()+Duration::from_secs(3)))));});
+        crate::log!("Mở cửa sổ cài đặt WebView2 sau {:.0} ms",started.elapsed().as_secs_f64()*1000.0);
     }
     Ok(())
 }
 pub fn close() {
-    let pending=OPENING.with(|p|p.borrow_mut().take()).map(|p|p.hwnd);
+    let pending=OPENING.with(|p|p.borrow().as_ref().map(|p|p.hwnd));
     let hwnd=pending.or_else(||WEB.with(|w|w.borrow().as_ref().map(|w|w.hwnd)));
     if let Some(hwnd)=hwnd{unsafe{DestroyWindow(hwnd);}}
+    OPENING.with(|p|p.borrow_mut().take());
+    RUNTIME_ERROR.with(|e|e.borrow_mut().take());
     INBOX.with(|i|i.borrow_mut().clear());
 }
 
-fn start(ticket: u64, proto: PathBuf) -> Result<(), String> {
+pub fn poll_trial_fault() {
+    let due=TRIAL_CRASH.with(|f|{
+        match f.get(){
+            Some((ticket,Some(at))) if Instant::now()>=at=>{f.set(None);Some(ticket)}
+            _=>None,
+        }
+    });
+    let Some(ticket)=due else{return;};
+    let view=WEB.with(|w|w.borrow().as_ref().filter(|w|w.ticket==ticket).map(|w|w.webview.clone()));
+    if let Some(view)=view {
+        let method=HSTRING::from("Page.crash");
+        let args=HSTRING::from("{}");
+        let handler=CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_,_|Ok(())));
+        match unsafe{view.CallDevToolsProtocolMethod(PCWSTR(method.as_ptr()),PCWSTR(args.as_ptr()),&handler)} {
+            Ok(())=>crate::log!("Trial Settings: requested crash for isolated renderer"),
+            Err(error)=>crate::log!("Trial Settings: renderer crash request failed: {error}"),
+        }
+    }
+}
+
+fn start(ticket: u64, proto: PathBuf, fault: Option<TrialFault>) -> Result<(), String> {
     let data = HSTRING::from(crate::lock::data_dir().join("WebView2").to_string_lossy().as_ref());
     let opts = webview2_com::CoreWebView2EnvironmentOptions::default();
     if DEBUG_PORT.load(std::sync::atomic::Ordering::Relaxed) {
@@ -275,10 +349,19 @@ fn start(ticket: u64, proto: PathBuf) -> Result<(), String> {
                 if let Some(controller)=controller{let _=unsafe{controller.Close()};}
                 return Ok(());
             };
-            if let Err(err)=err{failed(ticket,err);return Ok(());}
+            if fault == Some(TrialFault::Controller) {
+                if let Some(controller)=controller {let _=unsafe{controller.Close()};}
+                failed(ticket,"trial: controller initialization failed");
+                return Ok(());
+            }
+            if let Err(err)=err{
+                if let Some(controller)=controller {let _=unsafe{controller.Close()};}
+                failed(ticket,err);return Ok(());
+            }
             let Some(controller)=controller else{failed(ticket,"WebView2 không trả về controller");return Ok(());};
-            match attach(hwnd,&proto,&controller) {
-                Ok(web)=>{WEB.with(|w|w.replace(Some(web)));resize(hwnd);}
+            match attach(ticket,hwnd,&proto,&controller,fault) {
+                Ok(web) if opening_window(ticket)==Some(hwnd)=>{WEB.with(|w|w.replace(Some(web)));resize(hwnd);}
+                Ok(_)=>{let _=unsafe{controller.Close()};}
                 Err(error)=>{let _=unsafe{controller.Close()};failed(ticket,error);}
             }
             Ok(())
@@ -292,7 +375,7 @@ fn start(ticket: u64, proto: PathBuf) -> Result<(), String> {
         .map_err(|e|format!("Không khởi tạo được WebView2: {e}"))
 }
 
-fn attach(hwnd:F::HWND, proto:&Path, controller:&ICoreWebView2Controller)->Result<Web,String>{
+fn attach(ticket:u64, hwnd:F::HWND, proto:&Path, controller:&ICoreWebView2Controller, fault:Option<TrialFault>)->Result<Web,String>{
     unsafe {
         if let Ok(c2) = controller.cast::<ICoreWebView2Controller2>() {
             let bg = if light_theme() { COREWEBVIEW2_COLOR { A: 255, R: 255, G: 255, B: 255 } } else { COREWEBVIEW2_COLOR { A: 255, R: 23, G: 23, B: 23 } };
@@ -315,12 +398,12 @@ fn attach(hwnd:F::HWND, proto:&Path, controller:&ICoreWebView2Controller)->Resul
         let mut token = 0i64;
         webview
             .add_WebMessageReceived(
-                &WebMessageReceivedEventHandler::create(Box::new(|_wv, args| {
+                &WebMessageReceivedEventHandler::create(Box::new(move |_wv, args| {
                     if let Some(args) = args {
                         let mut p = PWSTR(std::ptr::null_mut());
                         if args.TryGetWebMessageAsString(&mut p).is_ok() {
                             let s = CoTaskMemPWSTR::from(p).to_string();
-                            INBOX.with(|i| i.borrow_mut().push(s));
+                            if fault != Some(TrialFault::NoReady) { queue_page_message(ticket, s); }
                         }
                     }
                     Ok(())
@@ -328,9 +411,21 @@ fn attach(hwnd:F::HWND, proto:&Path, controller:&ICoreWebView2Controller)->Resul
                 &mut token,
             )
             .map_err(|e| e.to_string())?;
+        webview.add_ProcessFailed(&ProcessFailedEventHandler::create(Box::new(move |_, args| {
+            if let Some(args)=args {
+                let mut kind=COREWEBVIEW2_PROCESS_FAILED_KIND(0);
+                if args.ProcessFailedKind(&mut kind).is_ok(){ process_failed(ticket,kind); }
+            }
+            Ok(())
+        })),&mut token).map_err(|e|e.to_string())?;
         let url = HSTRING::from(format!("https://app.local/settings.html?v={}", env!("CARGO_PKG_VERSION")));
         webview.Navigate(PCWSTR(url.as_ptr())).map_err(|e| e.to_string())?;
-        Ok(Web { hwnd, controller:controller.clone(), webview })
+        if fault == Some(TrialFault::Renderer) {
+            // Use only the dedicated trial profile and the Settings renderer.
+            // Schedule after the page is visible, from the owner loop below.
+            TRIAL_CRASH.with(|p|p.set(Some((ticket,None))));
+        }
+        Ok(Web { ticket, hwnd, controller:controller.clone(), webview })
     }
 }
 
@@ -339,16 +434,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stale_completion_cannot_fail_a_new_open_and_timeout_releases_the_ticket(){
-        let ticket=7;
-        OPENING.with(|p|p.replace(Some(Opening{
-            ticket,hwnd:std::ptr::null_mut(),started:Instant::now(),error:None,
-        })));
-        assert!(opening_window(ticket-1).is_none());
-        failed(ticket-1,"stale completion");
+    fn native_close_reopen_rejects_stale_callbacks_and_timeout_destroys_hidden_host(){
+        let first=unsafe{create_host()}.expect("first Settings HWND");
+        OPENING.with(|p|p.replace(Some(Opening{ticket:7,hwnd:first,started:Instant::now(),error:None})));
+        queue_page_message(7,"first request queued".into());
+        // A second request while creating must coalesce, even with no runtime.
+        open(std::path::Path::new("unused")).unwrap();
+        assert_eq!(opening_window(7),Some(first));
+        assert_eq!(unsafe{IsWindowVisible(first)},0);
+        unsafe{SendMessageW(first,WM_CLOSE,0,0);}
+        assert_eq!(unsafe{IsWindow(first)},0);
+        assert!(opening_window(7).is_none());
+        assert!(take_inbox().is_empty());
+
+        let second=unsafe{create_host()}.expect("second Settings HWND");
+        OPENING.with(|p|p.replace(Some(Opening{ticket:8,hwnd:second,started:Instant::now(),error:None})));
+        failed(7,"stale completion");
+        queue_page_message(7,"late message from canceled request".into());
+        process_failed(7,COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED);
+        assert!(take_inbox().is_empty());
         assert!(take_open_error().is_none());
+        assert_eq!(opening_window(8),Some(second));
         OPENING.with(|p|p.borrow_mut().as_mut().unwrap().started=Instant::now()-OPEN_TIMEOUT);
         assert!(take_open_error().is_some());
-        assert!(opening_window(ticket).is_none());
+        assert_eq!(unsafe{IsWindow(second)},0);
+        assert!(opening_window(8).is_none());
+    }
+
+    #[test]
+    fn terminal_failure_clears_host_and_rejects_page_messages_but_gpu_exit_does_not(){
+        let hwnd=unsafe{create_host()}.expect("Settings HWND");
+        OPENING.with(|p|p.replace(Some(Opening{ticket:5,hwnd,started:Instant::now(),error:None})));
+        process_failed(5,COREWEBVIEW2_PROCESS_FAILED_KIND_GPU_PROCESS_EXITED);
+        assert!(take_open_error().is_none());
+        queue_page_message(5,"ready".into());
+        process_failed(5,COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED);
+        assert!(take_open_error().is_some());
+        assert!(take_inbox().is_empty());
+        assert_eq!(unsafe{IsWindow(hwnd)},0);
     }
 }

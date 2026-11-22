@@ -2099,6 +2099,16 @@ fn main() {
         eprintln!("Trial initialization refused: {error}");
         std::process::exit(2);
     }
+    if args.iter().any(|a|a=="--trial-settings-fault") {
+        if !trial::active() { std::process::exit(2); }
+        let fault=match arg_value(&args,"--trial-settings-fault").as_deref() {
+            Some("controller")=>web::TrialFault::Controller,
+            Some("no-ready")=>web::TrialFault::NoReady,
+            Some("renderer")=>web::TrialFault::Renderer,
+            _=>std::process::exit(2),
+        };
+        web::set_trial_fault(fault);
+    }
     if args.iter().any(|a| a == "--trial-isolation-check") {
         if let Err(error) = trial::verify_guards() {
             eprintln!("Trial isolation check failed: {error}");
@@ -2673,6 +2683,11 @@ fn main() {
                 settings::open(&app.settings_state());
             }
         }
+        if trial::active() { web::poll_trial_fault(); }
+        if let Some(error)=web::take_open_error() {
+            log!("Không mở được hoặc mất kết nối cài đặt WebView2 ({error}) -> dùng cửa sổ Win32");
+            settings::open(&app.settings_state());
+        }
         // Thông điệp từ trang cài đặt WebView2
         if shortcut_capture_started.is_some_and(|started| started.elapsed() > Duration::from_secs(120) || !web::is_open()) {
             SHORTCUT_RECORDING.with(|c| c.set(false));
@@ -3177,10 +3192,6 @@ fn main() {
                 }
                 _ => {}
             }
-        }
-        if let Some(error)=web::take_open_error() {
-            log!("Không mở được cài đặt WebView2 ({error}) -> dùng cửa sổ Win32");
-            settings::open(&app.settings_state());
         }
         if changed && cmd != CMD_EXIT {
             save_config(&app.cfg);
