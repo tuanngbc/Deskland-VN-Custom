@@ -1937,8 +1937,8 @@ mod tests{
         assert_eq!(down.click(Some(DockTarget::Overflow),100.0,12.0,1.5),None);
         assert_eq!(down.click(Some(pin.clone()),110.0,12.0,1.5),Some(pin.clone()));
         assert_eq!(down.click(Some(pin),114.0,12.0,1.5),None);
-        let down=Press{target:DockTarget::Utility(UtilityWidget::Audio),x:20,y:20};
-        assert_eq!(down.click(Some(DockTarget::Utility(UtilityWidget::Audio)),21.0,20.0,1.0),Some(down.target));
+        let down=Press{target:DockTarget::Utility(UtilityWidget::Sound),x:20,y:20};
+        assert_eq!(down.click(Some(DockTarget::Utility(UtilityWidget::Sound)),21.0,20.0,1.0),Some(down.target));
     }
     #[test] fn desktop_foreground_never_hides_independent_stage_or_dock(){
         let screen=rect([-1920,-120,0,1080]);let desktop=rect([-1920,-120,2560,1440]);
