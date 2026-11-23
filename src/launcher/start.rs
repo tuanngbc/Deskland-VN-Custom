@@ -85,7 +85,7 @@ fn entry_group(model:&Model,all:&[Entry])->(Vec<Entry>,bool){
     }
     match model.area {
         Area::Apps=>(model.all.clone(),false),
-        Area::Home=>(model.pins.iter().filter_map(|p|all.iter().find(|a|same_path(&a.path,Path::new(p))).cloned().collect(),true),
+        Area::Home=>(model.pins.iter().filter_map(|p|all.iter().find(|a|same_path(&a.path,Path::new(p))).cloned()).collect(),true),
     }
 }
 fn tiles(model:&Model)->Vec<Tile>{
@@ -527,7 +527,7 @@ pub(crate) fn toggle(owner:HWND,anchor:DockAnchor){
         DwmSetWindowAttribute(hwnd,34,(&border as *const u32).cast(),4);
         DwmSetWindowAttribute(hwnd,20,(&mode as *const i32).cast(),4);
         SetWindowPos(hwnd,HWND_TOP,x,y,width,height,SWP_NOACTIVATE);
-        ShowWindow(hwnd,SW_SHOWNORMAL);
+        SetWindowPos(hwnd,ptr::null_mut(),0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_SHOWWINDOW);
         SetForegroundWindow(hwnd);SetFocus(edit);repaint(hwnd);
         crate::log!("DOCK_START opened separate panel at ({x},{y}) scale={s:.2}");
     }

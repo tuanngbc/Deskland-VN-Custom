@@ -1280,6 +1280,14 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::Widget(widget)=>request_utilities(owner,Some(widget)),
         Command::App{path,operation}=>perform_app_action(owner,&path,operation),
         Command::AddApp=>pin_from_file(owner),
+        Command::WindowsTray=>{
+            if taskbar_active(){
+                show_taskbar("Đã về chế độ tương thích. Mở lại ^ và chọn Khay ứng dụng Windows.");
+            }else{
+                let anchor=shell_anchor(owner,shell_access::Target::Tray);
+                shell_access::activate(shell_access::Target::Tray,false,anchor,owner,CONTROL.with(Cell::get));
+            }
+        },
         Command::Wifi(change)=>request_utilities_with_change(owner,Some(UtilityWidget::Network),Some(change)),
         Command::Run(utilities::Action::Host(action))=>emit(Event::Utility(action)),
         Command::Run(action)=>if !taskbar_hidden()||utilities::local_action(action){utilities::delegated(action)},

@@ -9,7 +9,7 @@ use std::{
 };
 use windows_sys::Win32::{
     Foundation::*,
-    Graphics::Gdi::{GetMonitorInfoW,MonitorFromWindow,MONITORINFO,MONITOR_DEFAULTTONULL},
+    Graphics::Gdi::{GetMonitorInfoW,MonitorFromWindow,MONITORINFO,MONITOR_DEFAULTTONEAREST},
     System::Threading::{CreateEventW,OpenEventW,OpenProcess,QueryFullProcessImageNameW,SetEvent,WaitForSingleObject,PROCESS_QUERY_LIMITED_INFORMATION},
     UI::{Input::KeyboardAndMouse::{RegisterHotKey,UnregisterHotKey,MOD_ALT,MOD_CONTROL,MOD_NOREPEAT,MOD_SHIFT,VK_F12},
         Shell::{SHAppBarMessage,APPBARDATA,ABM_GETSTATE,ABS_AUTOHIDE},WindowsAndMessaging::*},
@@ -72,10 +72,37 @@ struct Snapshot {id:WindowId,visible:bool}
 unsafe fn snapshot()->Option<Vec<Snapshot>>{
     taskbars().map(|ids|ids.into_iter().map(|id|Snapshot{id,visible:IsWindowVisible(id.hwnd())!=0}).collect())
 }
-unsafe fn observation(snapshot:Option<&[Snapshot]>)->serde_json::Value{
+unsafe fn appbar_state()->u32{
     let mut bar:APPBARDATA=mem::zeroed();
     bar.cbSize=mem::size_of::<APPBARDATA>() as u32;
-    let state=SHAppBarMessage(ABM_GETSTATE,&mut bar) as u32;
+    SHAppBarMessage(ABM_GETSTATE,&mut bar) as u32
+}
+unsafe fn geometry(id:WindowId)->(Option<RECT>,Option<RECT>){
+    let mut rect:RECT=mem::zeroed();
+    let bounds=(GetWindowRect(id.hwnd(),&mut rect)!=0).then_some(rect);
+    let monitor=MonitorFromWindow(id.hwnd(),MONITOR_DEFAULTTONEAREST);
+    let mut info:MONITORINFO=mem::zeroed();info.cbSize=mem::size_of::<MONITORINFO>() as u32;
+    let output=(GetMonitorInfoW(monitor,&mut info)!=0).then_some(info.rcMonitor);
+    (bounds,output)
+}
+fn parked_at_bottom(bar:RECT,display:RECT)->bool{
+    let span=bar.right.min(display.right)-bar.left.max(display.left);
+    span>=(display.right-display.left)/2&&span>0&&bar.bottom-bar.top>=16
+        &&(display.bottom-3..=display.bottom+3).contains(&bar.top)&&bar.bottom>display.bottom
+}
+unsafe fn visual_snapshot(raw:&[Snapshot],auto_hide:bool)->Vec<Snapshot>{
+    raw.iter().map(|row|{
+        let mut row=*row;
+        if row.visible&&auto_hide{
+            if let (Some(bar),Some(display))=geometry(row.id){
+                if parked_at_bottom(bar,display){row.visible=false;}
+            }
+        }
+        row
+    }).collect()
+}
+unsafe fn observation(snapshot:Option<&[Snapshot]>)->serde_json::Value{
+    let state=appbar_state();
     let mut cursor:POINT=mem::zeroed();
     let point=(GetCursorPos(&mut cursor)!=0).then(||[cursor.x,cursor.y]);
     let foreground=WindowId::read(GetForegroundWindow());
@@ -84,12 +111,11 @@ unsafe fn observation(snapshot:Option<&[Snapshot]>)->serde_json::Value{
         (len>0).then(||String::from_utf16_lossy(&buf[..len as usize]))
     });
     let windows=snapshot.map(|rows|rows.iter().map(|row|{
-        let mut rect:RECT=mem::zeroed();
-        let bounds=(GetWindowRect(row.id.hwnd(),&mut rect)!=0).then(||[rect.left,rect.top,rect.right,rect.bottom]);
-        let monitor=MonitorFromWindow(row.id.hwnd(),MONITOR_DEFAULTTONULL);
-        let mut info:MONITORINFO=mem::zeroed();info.cbSize=mem::size_of::<MONITORINFO>() as u32;
-        let output=(GetMonitorInfoW(monitor,&mut info)!=0).then(||[info.rcMonitor.left,info.rcMonitor.top,info.rcMonitor.right,info.rcMonitor.bottom]);
-        serde_json::json!({"hwnd":row.id.handle,"pid":row.id.pid,"tid":row.id.thread,"visible":row.visible,"rect":bounds,"display":output})
+        let (bar,output)=geometry(row.id);
+        let array=|r:RECT|[r.left,r.top,r.right,r.bottom];
+        let parked=state&ABS_AUTOHIDE!=0&&bar.zip(output).is_some_and(|(b,o)|parked_at_bottom(b,o));
+        serde_json::json!({"hwnd":row.id.handle,"pid":row.id.pid,"tid":row.id.thread,"visible":row.visible,
+            "parkedAtEdge":parked,"rect":bar.map(array),"display":output.map(array)})
     }).collect::<Vec<_>>());
     serde_json::json!({"autoHide":state&ABS_AUTOHIDE!=0,"rawAppBarState":state,"cursor":point,
         "foregroundPid":foreground.map(|id|id.pid),"foregroundClass":foreground_class,"taskbars":windows})
@@ -236,6 +262,7 @@ fn health(expected:&[Snapshot],current:Option<&[Snapshot]>)->Option<Exit>{
 unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle,expected:&[Snapshot],proof:Option<&std::path::Path>,started:Instant)->Exit{
     let Some(starting)=snapshot()else{return Exit::ExplorerChanged;};
     if starting!=expected{return Exit::ExplorerChanged;}
+    let auto_hide=appbar_state()&ABS_AUTOHIDE!=0;
     trace(proof,"before-hide",started,Some(&starting));
     let hidden=starting.iter().filter(|item|item.visible).map(|item|item.id).collect::<Vec<_>>();
     if hidden.is_empty()||parent.fired()||stop.fired(){return Exit::Requested;}
@@ -268,9 +295,30 @@ unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle
     if proof.is_some(){let current=snapshot();trace(proof,"hidden-confirmed",started,current.as_deref());}
     if SetEvent(ready.0)==0{return Exit::LinkLost;}
     let signals=[parent.0,stop.0,pulse.0];
-    wait_for_restore(&signals,1000,Duration::from_secs(6),||{
+    let mut edge_observed=None;
+    let interval=if proof.is_some(){250}else if auto_hide{750}else{1000};
+    wait_for_restore(&signals,interval,Duration::from_secs(6),||{
         let current=snapshot();
-        let status=health(expected,current.as_deref());
+        let visual=if auto_hide{current.as_ref().map(|rows|visual_snapshot(rows,true))}else{current.clone()};
+        let status=health(expected,visual.as_deref());
+        match status{
+            Some(Exit::ShellRevealed) if auto_hide=>{
+                let mut pos:POINT=mem::zeroed();
+                let near_edge=GetCursorPos(&mut pos)!=0&&visual.as_ref().is_some_and(|rows|rows.iter().filter(|r|r.visible).all(|row|{
+                    let (_,display)=geometry(row.id);
+                    display.is_some_and(|r|pos.x>=r.left&&pos.x<r.right&&pos.y>=r.bottom-8&&pos.y<r.bottom)
+                }));
+                if near_edge||edge_observed.is_some(){
+                    if edge_observed.is_none(){trace(proof,"edge-reveal-observed",started,current.as_deref());}
+                    let first=edge_observed.get_or_insert_with(Instant::now);
+                    if first.elapsed()<Duration::from_millis(1050){return None;}
+                }
+            },
+            None=>{
+                if edge_observed.take().is_some(){trace(proof,"edge-reveal-ended",started,current.as_deref());}
+            },
+            _=>{}
+        }
         if let Some(reason)=status{trace(proof,&format!("before-restore:{reason:?}"),started,current.as_deref());}
         status
     })
@@ -302,6 +350,15 @@ unsafe fn wait_for_restore(signals:&[HANDLE;3],interval:u32,lease:Duration,mut h
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn auto_hide_sliver_is_not_the_full_taskbar_even_on_a_negative_coordinate_monitor(){
+        let bounds=|r:[i32;4]|RECT{left:r[0],top:r[1],right:r[2],bottom:r[3]};
+        let portrait=bounds([-1080,-731,0,1189]);
+        assert!(parked_at_bottom(bounds([-1080,1187,0,1235]),portrait));
+        assert!(!parked_at_bottom(bounds([-1080,1141,0,1189]),portrait));
+        assert!(!parked_at_bottom(bounds([0,1078,2560,1126]),portrait));
+        assert!(!parked_at_bottom(bounds([-1080,1187,-1000,1235]),portrait));
+    }
     #[test]
     fn distinguishes_explicit_restore_parent_exit_and_missing_dock_heartbeat() {
         unsafe{
