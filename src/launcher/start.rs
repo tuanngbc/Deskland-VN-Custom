@@ -1,14 +1,16 @@
 //! Dock Start has a separate window, layout and launch history. Only the
 //! app catalog, Shell launching and icon extraction are shared with Spotlight.
 use super::*;
-use std::{collections::{HashMap,HashSet},ptr,sync::mpsc::{self,Receiver,Sender},time::{Duration,Instant}};
+use std::{collections::{HashMap,HashSet},ptr,rc::Rc,sync::mpsc::{self,Receiver,Sender},time::{Duration,Instant}};
 
 const CLASS:&str="TuanpcDeskStartPanel";
-const WIDTH:i32=608;
-const HEIGHT:i32=530;
-const COLS:usize=6;
-const GRID_PAGE:usize=18;
-const LIST_PAGE:usize=16;
+const WIDTH:i32=490;
+const MAX_HEIGHT:i32=530;
+const COLS:usize=5;
+const GRID_PAGE:usize=15;
+const LIST_PAGE:usize=14;
+const INSET:i32=20;
+const CONTENT_Y:i32=148;
 const EDIT_ID:usize=101;
 const APPLY:u32=WM_APP+115;
 const POLL:usize=1;
@@ -21,9 +23,9 @@ enum Hit { Home, Apps, Settings, Power, Page(i32), Explorer, Windows, TaskManage
 #[derive(Clone)]
 struct Tile { rect:RECT, hit:Hit, text:String, entry:Option<Entry>, compact:bool }
 struct Model {
-    hwnd:HWND, edit:HWND, owner:HWND, anchor:DockAnchor, scale:f32, dark:bool, area:Area,
+    hwnd:HWND, edit:HWND, owner:HWND, anchor:DockAnchor, work:RECT, scale:f32, dark:bool, area:Area,
     all:Vec<Entry>, pins:Vec<String>, recent:History, query:String, page:usize, selected:usize,
-    pressed:Option<(Hit,i32,i32)>, error:String, glass:Vec<u8>, edit_font:HFONT,
+    pressed:Option<(Hit,i32,i32)>, hover:Option<Hit>, keyboard:bool, view:StartView, error:String, glass:Rc<[u8]>, edit_font:HFONT,
     icons:HashMap<(PathBuf,i32),Option<IconPixels>>, loading:HashSet<(PathBuf,i32)>,
     icon_tx:Sender<(PathBuf,i32)>,icon_rx:Receiver<((PathBuf,i32),Option<IconPixels>)>,
     catalog:Option<Receiver<Vec<Entry>>>, indexed_at:Option<Instant>,
@@ -89,55 +91,102 @@ fn entry_group(model:&Model,all:&[Entry])->(Vec<Entry>,bool){
         Area::Home=>(model.pins.iter().filter_map(|p|all.iter().find(|a|same_path(&a.path,Path::new(p))).cloned()).collect(),true),
     }
 }
-fn tiles(model:&Model)->Vec<Tile>{
-    let mut tiles=Vec::new();
-    let s=model.scale;
-    let mut put=|hit,text:&str,r:(i32,i32,i32,i32),entry,compact|{
-        tiles.push(Tile{hit,text:text.into(),rect:rr(r.0,r.1,r.2,r.3,s),entry,compact});
-    };
-    put(Hit::Settings,"Cài đặt",(421,18,86,34),None,true);
-    put(Hit::Power,"Nguồn",(513,18,73,34),None,true);
-    put(Hit::Home,"Đã ghim",(22,106,90,33),None,true);
-    put(Hit::Apps,"Tất cả ứng dụng",(118,106,133,33),None,true);
+#[derive(Clone,Copy)]
+struct Flow{height:i32,heading_y:i32,recent_y:Option<i32>,footer_y:i32}
+struct StartView{tiles:Vec<Tile>,page:usize,pages:usize,count:usize,recent_empty:bool,flow:Flow}
+fn flow(grid:bool,visible:usize,recent_count:usize,error:bool)->Flow{
+    let row_count=visible.div_ceil(if grid{COLS}else{2});
+    let mut end=CONTENT_Y+if visible==0{38}else{row_count as i32*if grid{69}else{36}};
+    let recent_y=grid.then_some(end+9);
+    if let Some(y)=recent_y{end=y+26+if recent_count==0{27}else{recent_count.div_ceil(2) as i32*33};}
+    if error{end+=24;}
+    let footer_y=end+8;
+    Flow{height:footer_y+42,heading_y:115,recent_y,footer_y}
+}
+fn content(model:&Model)->(Vec<Entry>,bool,Vec<Entry>,usize,usize,Flow){
     let all=entries_for(model);
     let (entries,grid)=entry_group(model,&all);
     let limit=if grid{GRID_PAGE}else{LIST_PAGE};
     let pages=entries.len().div_ceil(limit).max(1);
     let page=model.page.min(pages-1);
+    let recent=if grid{filter(&all,"",&model.recent).into_iter().take(4).map(|i|all[i].clone()).collect()}else{Vec::new()};
+    let layout=flow(grid,entries.len().saturating_sub(page*limit).min(limit),recent.len(),!model.error.is_empty());
+    (entries,grid,recent,page,pages,layout)
+}
+fn build_view(model:&Model)->StartView{
+    let mut tiles=Vec::new();
+    let s=model.scale;
+    let mut put=|hit,text:&str,r:(i32,i32,i32,i32),entry,compact|{
+        tiles.push(Tile{hit,text:text.into(),rect:rr(r.0,r.1,r.2,r.3,s),entry,compact});
+    };
+    put(Hit::Settings,"Cài đặt",(338,16,69,30),None,true);
+    put(Hit::Power,"Nguồn",(412,16,58,30),None,true);
+    put(Hit::Home,"Trang chính",(20,82,91,27),None,true);
+    put(Hit::Apps,"Tất cả ứng dụng",(116,82,115,27),None,true);
+    let (entries,grid,recent,page,pages,flow)=content(model);
+    let count=entries.len();let recent_empty=recent.is_empty();
+    let limit=if grid{GRID_PAGE}else{LIST_PAGE};
     if pages>1{
-        if page>0{put(Hit::Page(-1),"‹",(475,106,35,33),None,true);}
-        if page+1<pages{put(Hit::Page(1),"›",(551,106,35,33),None,true);}
+        if page>0{put(Hit::Page(-1),"‹",(351,114,29,27),None,true);}
+        if page+1<pages{put(Hit::Page(1),"›",(441,114,29,27),None,true);}
     }
     let start=page*limit;
     for (i,entry) in entries.iter().skip(start).take(limit).enumerate(){
-        let r=if grid{(22+(i%COLS) as i32*94,155+(i/COLS) as i32*76,88,68)}
-            else{(22+(i%2) as i32*285,151+(i/2) as i32*39,279,35)};
+        let r=if grid{(INSET+(i%COLS) as i32*91,CONTENT_Y+(i/COLS) as i32*69,86,66)}
+            else{(INSET+(i%2) as i32*228,CONTENT_Y+(i/2) as i32*36,222,33)};
         put(Hit::Entry(i),&entry.name,r,Some(entry.clone()),!grid);
     }
-    if grid{
-        let recent=filter(&all,"",&model.recent);
-        for (i,&index) in recent.iter().take(4).enumerate(){
-            let entry=&all[index];
-            put(Hit::Entry(GRID_PAGE+i),&entry.name,(22+(i%2) as i32*285,413+(i/2) as i32*34,279,31),Some(entry.clone()),true);
+    if let Some(y)=flow.recent_y{
+        for (i,entry) in recent.into_iter().enumerate(){
+            let title=entry.name.clone();
+            put(Hit::Entry(GRID_PAGE+i),&title,(INSET+(i%2) as i32*228,y+26+(i/2) as i32*33,222,30),Some(entry),true);
         }
     }
-    put(Hit::Explorer,"File Explorer",(22,492,112,27),None,true);
-    put(Hit::Windows,"Cài đặt Windows",(141,492,138,27),None,true);
-    put(Hit::TaskManager,"Task Manager",(286,492,118,27),None,true);
-    tiles
+    put(Hit::Explorer,"File Explorer",(INSET,flow.footer_y+7,91,24),None,true);
+    put(Hit::Windows,"Cài đặt Windows",(117,flow.footer_y+7,117,24),None,true);
+    put(Hit::TaskManager,"Task Manager",(240,flow.footer_y+7,98,24),None,true);
+    StartView{tiles,page,pages,count,recent_empty,flow}
 }
 
 fn selected(model:&Model)->Option<Tile>{
-    tiles(model).into_iter().filter(|t|matches!(t.hit,Hit::Entry(_))).nth(model.selected)
+    model.view.tiles.iter().filter(|t|matches!(t.hit,Hit::Entry(_))).nth(model.selected).cloned()
 }
 fn repaint(hwnd:HWND){unsafe{InvalidateRect(hwnd,ptr::null(),0);}}
+unsafe fn relayout(hwnd:HWND){
+    let geometry=START.with(|s|{
+        let mut b=s.borrow_mut();let m=b.as_mut()?;
+        m.view=build_view(m);
+        let height=px(m.view.flow.height,m.scale);
+        let width=px(WIDTH,m.scale);
+        let (x,y)=m.anchor.position(m.work,width,height,px(10,m.scale));
+        Some((x,y,width,height))
+    });
+    let Some((x,y,width,height))=geometry else{return;};
+    let mut previous:RECT=std::mem::zeroed();
+    GetWindowRect(hwnd,&mut previous);
+    if [previous.left,previous.top,previous.right,previous.bottom]!=[x,y,x+width,y+height]{
+        SetWindowPos(hwnd,ptr::null_mut(),x,y,width,height,SWP_NOACTIVATE|SWP_NOZORDER);
+    }
+    repaint(hwnd);
+}
 pub(super) fn pins_changed(){
     let pins=DOCK_PINS.with(|p|p.borrow().clone());
     let hwnd=START.with(|s|{let mut g=s.borrow_mut();let m=g.as_mut()?;m.pins=pins;Some(m.hwnd)});
-    if let Some(hwnd)=hwnd{repaint(hwnd);}
+    if let Some(hwnd)=hwnd{unsafe{relayout(hwnd);}}
 }
 unsafe fn fill(dc:HDC,r:&RECT,color:u32){
     let brush=CreateSolidBrush(color);FillRect(dc,r,brush);DeleteObject(brush);
+}
+unsafe fn pill(dc:HDC,r:RECT,radius:i32,color:u32){
+    let brush=CreateSolidBrush(color);if brush.is_null(){return;}
+    let old_brush=SelectObject(dc,brush);let old_pen=SelectObject(dc,GetStockObject(NULL_PEN));
+    RoundRect(dc,r.left,r.top,r.right,r.bottom,radius,radius);
+    SelectObject(dc,old_pen);SelectObject(dc,old_brush);DeleteObject(brush);
+}
+unsafe fn center_label(dc:HDC,text:&str,mut rect:RECT,font:HFONT,color:u32){
+    let old=SelectObject(dc,font);SetTextColor(dc,color);SetBkMode(dc,TRANSPARENT as i32);
+    DrawTextW(dc,wide(text).as_ptr(),-1,&mut rect,DT_SINGLELINE|DT_CENTER|DT_VCENTER|DT_END_ELLIPSIS|DT_NOPREFIX);
+    SelectObject(dc,old);
 }
 unsafe fn icon(dc:HDC,icon:&IconPixels,x:i32,y:i32){
     let mut info:BITMAPINFO=std::mem::zeroed();
@@ -163,12 +212,12 @@ unsafe fn paint_start(hwnd:HWND){
     // Do not hold a RefCell borrow across window/control calls.
     let view=START.with(|cell|{
         let mut b=cell.borrow_mut();let m=b.as_mut()?;
-        let tiles=tiles(m);
+        let tiles=m.view.tiles.clone();
         let selected=tiles.iter().filter(|t|matches!(t.hit,Hit::Entry(_))).nth(m.selected).map(|t|t.hit.clone());
         let mut icons=Vec::<TileIcon>::new();
         for tile in &tiles{
             let entry=tile.entry.as_ref();
-            let key=entry.map(|e|(e.path.clone(),px(if tile.compact{22}else{35},m.scale).max(16)));
+            let key=entry.map(|e|(e.path.clone(),px(if tile.compact{22}else{42},m.scale).max(16)));
             let pixels=key.as_ref().and_then(|key|m.icons.get(key)).cloned().flatten();
             if let Some(key)=key{
                 if key.0!=Path::new(SETTINGS)&&!m.icons.contains_key(&key)&&m.loading.len()<24&&m.loading.insert(key.clone()){
@@ -177,62 +226,80 @@ unsafe fn paint_start(hwnd:HWND){
             }
             icons.push(pixels);
         }
-        let all=entries_for(m);
-        let (items,grid)=entry_group(m,&all);
-        let pages=items.len().div_ceil(if grid{GRID_PAGE}else{LIST_PAGE}).max(1);
-        Some((m.scale,m.dark,m.glass.clone(),tiles,icons,selected,m.area,m.query.is_empty(),
-            m.recent.paths.is_empty(),m.error.clone(),m.page.min(pages-1),pages,items.len(),m.catalog.is_some()||!m.loading.is_empty()))
+        let StartView{page,pages,count,recent_empty,flow,..}=m.view;
+        let selected=selected.filter(|_|m.keyboard||!m.query.is_empty());
+        Some((m.scale,m.dark,m.glass.clone(),tiles,icons,selected,m.hover.clone(),m.area,m.query.is_empty(),
+            recent_empty,m.error.clone(),page,pages,count,m.catalog.is_some()||!m.loading.is_empty(),flow,m.anchor,m.work))
     });
-    if let Some((s,dark,glass,tiles,icons,selected,area,empty_query,empty_recent,error,page,pages,count,pending))=view{
-        let width=px(WIDTH,s);let height=px(HEIGHT,s);
+    if let Some((s,dark,glass,tiles,icons,selected,hover,area,empty_query,empty_recent,error,page,pages,count,pending,flow,anchor,work))=view{
+        let width=px(WIDTH,s);let height=px(flow.height,s);
         let dc=CreateCompatibleDC(target);let bm=CreateCompatibleBitmap(target,width,height);
         if !dc.is_null()&&!bm.is_null(){
             let old=SelectObject(dc,bm);
-            let (bg,fg,sub,card,active) = if dark{(0x00231E1B,0x00F5F1EE,0x00B8B0A9,0x003C342C,0x00695142)}
-                else{(0x00F8F6F3,0x00262422,0x00645951,0x00F3EFEB,0x00EAD8C6)};
-            fill(dc,&rr(0,0,WIDTH,HEIGHT,s),bg);
+            let (bg,fg,sub,card,active,accent) = if dark{(0x00242120,0x00FAF8F6,0x00C2BCB8,0x003B3734,0x00514A3F,0x00FFCA86)}
+                else{(0x00F9F8F7,0x00292623,0x006C6560,0x00EDEAE7,0x00F1DFC9,0x008C4B16)};
+            fill(dc,&rr(0,0,WIDTH,flow.height,s),bg);
             if !glass.is_empty(){
+                let full_height=px(MAX_HEIGHT,s);
+                let (_,start)=anchor.position(work,width,full_height,px(10,s));
+                let (_,current)=anchor.position(work,width,height,px(10,s));
+                let crop=((current-start)/4).max(0);
+                let sample_height=(full_height/4).max(1);
                 let mut info:BITMAPINFO=std::mem::zeroed();
                 info.bmiHeader.biSize=std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-                info.bmiHeader.biWidth=(width/4).max(1);info.bmiHeader.biHeight=-(height/4).max(1);
+                info.bmiHeader.biWidth=(width/4).max(1);info.bmiHeader.biHeight=-sample_height;
                 info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;
                 SetStretchBltMode(dc,HALFTONE);
-                StretchDIBits(dc,0,0,width,height,0,0,info.bmiHeader.biWidth,-info.bmiHeader.biHeight,
+                StretchDIBits(dc,0,0,width,height,0,crop,info.bmiHeader.biWidth,(height/4).max(1).min(sample_height-crop),
                     glass.as_ptr().cast(),&info,DIB_RGB_COLORS,SRCCOPY);
             }
-            let body=font(px(14,s),400);let small=font(px(12,s),400);
-            let heading=font(px(21,s),600);let detail=font(px(15,s),600);
-            DrawIconEx(dc,px(22,s),px(21,s),crate::app_icon(30,30),px(30,s),px(30,s),0,ptr::null_mut(),DI_NORMAL);
+            let body=font(px(13,s),500);let small=font(px(12,s),400);
+            let heading=font(px(16,s),600);let detail=font(px(14,s),600);
+            pill(dc,rr(20,13,34,34,s),px(34,s),card);
             let user=std::env::var("USERNAME").unwrap_or_else(|_|"Deskland".into());
-            label(dc,&format!("Start · {user}"),rr(62,14,330,40,s),heading,fg);
-            if pages>1{label(dc,&format!("{} / {pages}",page+1),rr(514,106,38,33,s),small,sub);}
+            center_label(dc,&user.chars().next().unwrap_or('D').to_uppercase().to_string(),rr(20,13,34,34,s),heading,accent);
+            label(dc,&user,rr(64,11,263,24,s),heading,fg);
+            label(dc,"Ứng dụng",rr(64,33,260,15,s),small,sub);
+            pill(dc,rr(20,49,450,28,s),px(14,s),card);
+            center_label(dc,"⌕",rr(22,49,30,27,s),heading,sub);
+            fill(dc,&rr(20,112,450,1,s),card);
+            label(dc,if !empty_query{"Kết quả tìm kiếm"}else if area==Area::Home{"Ứng dụng đã ghim"}else{"Tất cả ứng dụng"},
+                rr(20,flow.heading_y,300,26,s),detail,fg);
+            if pages>1{center_label(dc,&format!("{} / {pages}",page+1),rr(382,114,56,27,s),small,sub);}
             for (tile,img) in tiles.iter().zip(icons.iter()){
                 let picked=selected.as_ref()==Some(&tile.hit)
                     || (empty_query&&matches!((&tile.hit,area),(Hit::Home,Area::Home)|(Hit::Apps,Area::Apps)));
-                fill(dc,&tile.rect,if picked{active}else{card});
+                let hovered=hover.as_ref()==Some(&tile.hit);
+                if picked||hovered||matches!(tile.hit,Hit::Power|Hit::Settings){
+                    pill(dc,tile.rect,px(if tile.compact{12}else{18},s),if picked{active}else{card});
+                }
                 let mut r=tile.rect;
                 r.left+=px(8,s);r.right-=px(5,s);
                 if let Some(entry)=&tile.entry{
-                    let size=px(if tile.compact{22}else{35},s);
+                    let size=px(if tile.compact{22}else{42},s);
                     let x=if tile.compact{r.left}else{(r.left+r.right-size)/2};
                     let y=if tile.compact{(r.top+r.bottom-size)/2}else{r.top+px(6,s)};
                     if let Some(img)=img{icon(dc,img,x+(size-img.width)/2,y+(size-img.height)/2);}
                     else if entry.path==Path::new(SETTINGS){DrawIconEx(dc,x,y,crate::app_icon(size,size),size,size,0,ptr::null_mut(),DI_NORMAL);}
                     else{label(dc,"◇",RECT{left:x,top:y,right:x+size,bottom:y+size},body,sub);}
-                    if tile.compact{r.left+=size+px(8,s);}else{r.top+=px(42,s);}
+                    if tile.compact{r.left+=size+px(8,s);}else{r=tile.rect;r.top+=px(48,s);}
                 }
-                label(dc,&tile.text,r,if tile.compact{body}else{small},fg);
+                if tile.entry.is_some()&&tile.compact{
+                    label(dc,&tile.text,r,body,fg);
+                }else{center_label(dc,&tile.text,if tile.entry.is_some(){r}else{tile.rect},small,if picked{accent}else{fg});}
             }
             if count==0{
                 let prompt=if !empty_query{"Không tìm thấy ứng dụng"}else if area==Area::Home{"Chưa có ứng dụng ghim. Mở Tất cả ứng dụng để ghim."}
                     else if pending{"Đang lấy danh sách ứng dụng…"}else{"Không có ứng dụng"};
-                label(dc,prompt,rr(22,153,566,36,s),body,sub);
+                label(dc,prompt,rr(20,CONTENT_Y,450,36,s),body,sub);
             }
-            if area==Area::Home&&empty_query{
-                label(dc,"Đã mở gần đây",rr(22,376,530,33,s),detail,fg);
-                if empty_recent{label(dc,"Ứng dụng mở từ Start sẽ xuất hiện ở đây.",rr(22,412,560,31,s),small,sub);}
+            if let Some(y)=flow.recent_y{
+                fill(dc,&rr(20,y-2,450,1,s),card);
+                label(dc,"Đã mở gần đây",rr(20,y,450,24,s),detail,fg);
+                if empty_recent{label(dc,"Ứng dụng mở từ Start sẽ xuất hiện ở đây.",rr(20,y+26,450,27,s),small,sub);}
             }
-            if !error.is_empty(){label(dc,&error,rr(22,463,564,24,s),small,fg);}
+            if !error.is_empty(){label(dc,&error,rr(20,flow.footer_y-25,450,24,s),small,fg);}
+            fill(dc,&rr(20,flow.footer_y,450,1,s),card);
             #[cfg(test)]
             if let Some(path)=std::env::var_os("TUANPC_DESK_START_EVIDENCE").map(PathBuf::from){
                 if CAPTURE.with(Cell::get)&&!path.exists(){let _=capture_render(dc,width,height,&path);}
@@ -249,7 +316,7 @@ unsafe fn paint_start(hwnd:HWND){
 
 unsafe fn hide(hwnd:HWND){KillTimer(hwnd,POLL);ShowWindow(hwnd,SW_HIDE);}
 fn hit_at(m:&Model,x:i32,y:i32)->Option<Tile>{
-    tiles(m).into_iter().find(|t|x>=t.rect.left&&x<t.rect.right&&y>=t.rect.top&&y<t.rect.bottom)
+    m.view.tiles.iter().find(|t|x>=t.rect.left&&x<t.rect.right&&y>=t.rect.top&&y<t.rect.bottom).cloned()
 }
 fn coords(l:LPARAM)->(i32,i32){(l as i16 as i32,(l>>16) as i16 as i32)}
 unsafe fn edit_value(edit:HWND)->String{
@@ -260,8 +327,8 @@ unsafe fn refresh_query(hwnd:HWND){
     let edit=START.with(|s|s.borrow().as_ref().map(|m|m.edit));
     if let Some(edit)=edit{
         let query=edit_value(edit);
-        START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){m.query=query;m.page=0;m.selected=0;m.error.clear();});
-        repaint(hwnd);
+        START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){m.query=query;m.page=0;m.selected=0;m.hover=None;m.error.clear();});
+        relayout(hwnd);
     }
 }
 unsafe fn launch(hwnd:HWND,entry:Entry){
@@ -273,7 +340,7 @@ unsafe fn launch(hwnd:HWND,entry:Entry){
         START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){remember(m,&entry.path);});
     }else{
         START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){m.error=format!("Không mở được {} (Windows {code})",entry.name);});
-        ShowWindow(hwnd,SW_SHOW);repaint(hwnd);
+        relayout(hwnd);ShowWindow(hwnd,SW_SHOW);
     }
 }
 unsafe fn action_menu(hwnd:HWND,point:POINT,actions:&[&str])->u32{
@@ -291,7 +358,7 @@ unsafe fn power(hwnd:HWND,r:RECT){
     if choice==0||choice as usize>actions.len(){return;}
     if cfg!(test)||crate::trial::protect_windows().is_err(){
         START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){m.error="Bản thử không thực hiện thao tác nguồn hoặc phiên Windows.".into();});
-        repaint(hwnd);return;
+        relayout(hwnd);return;
     }
     if choice>1{
         MENU.with(|flag|flag.set(true));
@@ -318,7 +385,7 @@ unsafe fn power(hwnd:HWND,r:RECT){
     };
     if !ok{
         START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){m.error="Windows từ chối thao tác nguồn.".into();});
-        ShowWindow(hwnd,SW_SHOW);repaint(hwnd);
+        relayout(hwnd);ShowWindow(hwnd,SW_SHOW);
     }
 }
 unsafe fn activate(hwnd:HWND,tile:Tile){
@@ -338,10 +405,10 @@ unsafe fn activate(hwnd:HWND,tile:Tile){
                     Hit::Page(delta)=>{m.page=m.page.saturating_add_signed(delta as isize);}
                     _=>{}
                 }
-                m.selected=0;Some(m.edit)
+                m.selected=0;m.hover=None;Some(m.edit)
             });
             if !matches!(tile.hit,Hit::Page(_)){if let Some(edit)=edit{SetWindowTextW(edit,wide("").as_ptr());}}
-            repaint(hwnd);
+            relayout(hwnd);
         }
     }
 }
@@ -349,10 +416,17 @@ unsafe fn entry_menu(hwnd:HWND,tile:Tile,mut at:POINT){
     let Some(entry)=tile.entry else{return;};
     let edit=pin_change(&entry);
     let text=if matches!(&edit,Some(crate::dock::Edit::Unpin(_))){"Bỏ ghim khỏi Dock và Start"}else{"Ghim vào Dock và Start"};
+    let location=entry.path.is_absolute()&&entry.path.file_name().is_some();
+    let actions=if location{vec!["Mở ứng dụng",text,"Mở vị trí tệp"]}else{vec!["Mở ứng dụng",text]};
     ClientToScreen(hwnd,&mut at);
-    match action_menu(hwnd,at,&["Mở ứng dụng",text]){
+    match action_menu(hwnd,at,&actions){
         1=>launch(hwnd,entry),
         2=>if let Some(edit)=edit{PIN_EDIT.with(|p|p.replace(Some(edit)));},
+        3 if location=>{
+            let args=format!("/select,\"{}\"",entry.path.display());
+            hide(hwnd);
+            ShellExecuteW(hwnd,wide("open").as_ptr(),wide("explorer.exe").as_ptr(),wide(&args).as_ptr(),ptr::null(),SW_SHOWNORMAL);
+        }
         _=>{}
     }
 }
@@ -372,8 +446,9 @@ unsafe extern "system" fn proc_start(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
         WM_CTLCOLOREDIT=>{
             let dark=START.with(|s|s.borrow().as_ref().is_some_and(|m|m.dark));
             SetTextColor(w as HDC,if dark{0x00FFFFFF}else{0x00262422});
-            SetBkColor(w as HDC,if dark{0x00000000}else{0x00FFFFFF});
-            GetStockObject(if dark{BLACK_BRUSH}else{WHITE_BRUSH}) as LRESULT
+            let color=if dark{0x003B3734}else{0x00EDEAE7};
+            SetBkColor(w as HDC,color);SetDCBrushColor(w as HDC,color);
+            GetStockObject(DC_BRUSH) as LRESULT
         }
         WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{if !MENU.with(Cell::get){hide(hwnd);}0}
         WM_CLOSE=>{hide(hwnd);0}
@@ -389,18 +464,19 @@ unsafe extern "system" fn proc_start(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
                     if let Some(tile)=tile{let rect=tile.rect;entry_menu(hwnd,tile,POINT{x:rect.left,y:rect.bottom});}
                 }
                 VK_TAB=>{
-                    let tile=START.with(|s|{let b=s.borrow();let m=b.as_ref()?;tiles(m).into_iter().find(|t|t.hit==(if m.area==Area::Home{Hit::Apps}else{Hit::Home}))});
+                    let tile=START.with(|s|{let b=s.borrow();let m=b.as_ref()?;m.view.tiles.iter().find(|t|t.hit==(if m.area==Area::Home{Hit::Apps}else{Hit::Home})).cloned()});
                     if let Some(tile)=tile{activate(hwnd,tile);}
                 }
                 VK_UP|VK_DOWN=>{
                     START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){
-                        let count=tiles(m).iter().filter(|t|t.entry.is_some()).count();
+                        let count=m.view.tiles.iter().filter(|t|t.entry.is_some()).count();
+                        m.keyboard=true;
                         m.selected=m.selected.saturating_add_signed(if w as u16==VK_UP{-1}else{1}).min(count.saturating_sub(1));
                     });repaint(hwnd);
                 }
                 VK_PRIOR|VK_NEXT=>{
                     let delta=if w as u16==VK_PRIOR{-1}else{1};
-                    let tile=START.with(|s|{let b=s.borrow();tiles(b.as_ref()?).into_iter().find(|t|t.hit==Hit::Page(delta))});
+                    let tile=START.with(|s|{let b=s.borrow();b.as_ref()?.view.tiles.iter().find(|t|t.hit==Hit::Page(delta)).cloned()});
                     if let Some(tile)=tile{activate(hwnd,tile);}
                 }
                 _=>{}
@@ -408,6 +484,28 @@ unsafe extern "system" fn proc_start(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
         }
         WM_MOUSEWHEEL=>{
             PostMessageW(hwnd,APPLY,if (w>>16) as i16>0{VK_PRIOR as usize}else{VK_NEXT as usize},0);0
+        }
+        WM_MOUSEMOVE=>{
+            let (x,y)=coords(l);
+            let changed=START.with(|s|{
+                let mut s=s.borrow_mut();let Some(m)=s.as_mut()else{return false;};
+                let hover=hit_at(m,x,y).map(|tile|tile.hit);
+                if m.hover==hover{return false;}
+                m.hover=hover;true
+            });
+            if changed{
+                let mut track=windows_sys::Win32::UI::Input::KeyboardAndMouse::TRACKMOUSEEVENT{
+                    cbSize:std::mem::size_of::<windows_sys::Win32::UI::Input::KeyboardAndMouse::TRACKMOUSEEVENT>() as u32,
+                    dwFlags:windows_sys::Win32::UI::Input::KeyboardAndMouse::TME_LEAVE,hwndTrack:hwnd,dwHoverTime:0
+                };
+                windows_sys::Win32::UI::Input::KeyboardAndMouse::TrackMouseEvent(&mut track);
+                repaint(hwnd);
+            }
+            0
+        }
+        0x02A3=>{
+            START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){m.hover=None;});
+            repaint(hwnd);0
         }
         WM_RBUTTONUP=>{
             let (x,y)=coords(l);
@@ -433,7 +531,7 @@ unsafe extern "system" fn proc_start(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
                 if press==tile.hit&&!far{return Some(tile);}
                 if far&&m.area==Area::Home&&m.query.is_empty()
                     && matches!(press,Hit::Entry(i) if i<GRID_PAGE)&&matches!(tile.hit,Hit::Entry(i) if i<GRID_PAGE){
-                    let src=tiles(m).into_iter().find(|t|t.hit==press)?.entry?;
+                    let src=m.view.tiles.iter().find(|t|t.hit==press)?.entry.clone()?;
                     let dst=tile.entry.take()?;
                     if !same_path(&src.path,&dst.path){
                         PIN_EDIT.with(|p|p.replace(Some(crate::dock::Edit::MovePin{
@@ -448,8 +546,8 @@ unsafe extern "system" fn proc_start(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
             if let Some(tile)=click{activate(hwnd,tile);}0
         }
         WM_TIMER if w==POLL=>{
-            let (changed,busy)=START.with(|s|{
-                let mut b=s.borrow_mut();let Some(m)=b.as_mut()else{return(false,false);};
+            let (changed,busy,new_catalog)=START.with(|s|{
+                let mut b=s.borrow_mut();let Some(m)=b.as_mut()else{return(false,false,false);};
                 let mut changed=false;
                 if let Some(catalog)=&m.catalog{
                     match catalog.try_recv(){
@@ -458,13 +556,14 @@ unsafe extern "system" fn proc_start(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
                         Err(mpsc::TryRecvError::Empty)=>{}
                     }
                 }
+                let new_catalog=changed;
                 while let Ok((key,icon))=m.icon_rx.try_recv(){
                     if m.icons.len()>=192{m.icons.clear();}
                     m.loading.remove(&key);m.icons.insert(key,icon);changed=true;
                 }
-                (changed,!m.loading.is_empty()||m.catalog.is_some())
+                (changed,!m.loading.is_empty()||m.catalog.is_some(),new_catalog)
             });
-            if changed{repaint(hwnd);}if !busy{KillTimer(hwnd,POLL);}0
+            if new_catalog{relayout(hwnd);}else if changed{repaint(hwnd);}if !busy{KillTimer(hwnd,POLL);}0
         }
         _=>DefWindowProcW(hwnd,msg,w,l),
     }
@@ -495,8 +594,10 @@ pub(crate) fn toggle(owner:HWND,anchor:DockAnchor){
             SendMessageW(edit,0x00c5,128,0); // EM_LIMITTEXT
             SendMessageW(edit,0x1501,1,wide("Tìm ứng dụng…").as_ptr() as LPARAM); // EM_SETCUEBANNER
             let (icon_tx,icon_rx)=icon_worker();
-            START.with(|s|s.replace(Some(Model{hwnd,edit,owner,anchor,scale:1.0,dark:false,area:Area::Home,all:Vec::new(),
-                pins:Vec::new(),recent:recent_load(),query:String::new(),page:0,selected:0,pressed:None,error:String::new(),glass:Vec::new(),
+            START.with(|s|s.replace(Some(Model{hwnd,edit,owner,anchor,work:std::mem::zeroed(),scale:1.0,dark:false,area:Area::Home,all:Vec::new(),
+                pins:Vec::new(),recent:recent_load(),query:String::new(),page:0,selected:0,pressed:None,hover:None,keyboard:false,
+                view:StartView{tiles:Vec::new(),page:0,pages:1,count:0,recent_empty:true,flow:flow(true,0,0,false)},
+                error:String::new(),glass:Rc::from([]),
                 edit_font:ptr::null_mut(),icons:HashMap::new(),loading:HashSet::new(),icon_tx,icon_rx,catalog:None,indexed_at:None})));
         }
         let Some((hwnd,edit))=START.with(|s|s.borrow().as_ref().map(|m|(m.hwnd,m.edit)))else{return;};
@@ -506,32 +607,32 @@ pub(crate) fn toggle(owner:HWND,anchor:DockAnchor){
         let work=info.rcWork;
         let _=SetWindowPos(hwnd,ptr::null_mut(),work.left,work.top,1,1,SWP_NOACTIVATE|SWP_NOZORDER);
         let s=(windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd).clamp(72,288) as f32/96.0)
-            .min((work.right-work.left) as f32/WIDTH as f32).min((work.bottom-work.top) as f32/HEIGHT as f32);
+            .min((work.right-work.left) as f32/WIDTH as f32).min((work.bottom-work.top) as f32/MAX_HEIGHT as f32);
         if s<=0.0{return;}
-        let (width,height)=(px(WIDTH,s),px(HEIGHT,s));
-        let (x,y)=anchor.position(work,width,height,px(12,s));
+        let (width,height)=(px(WIDTH,s),px(MAX_HEIGHT,s));
+        let (x,y)=anchor.position(work,width,height,px(10,s));
         let prefs=PREFS.with(|p|p.borrow().clone());
         let dark=prefs.theme=="dark";
         let glass=frost(&capture_glass(x,y,width,height),width,height,s,&prefs);
-        let font=font(px(18,s),400);
+        let font=font(px(14,s),400);
         let pins=DOCK_PINS.with(|p|p.borrow().clone());
         let old_font=START.with(|sref|{
             let mut b=sref.borrow_mut();let m=b.as_mut().unwrap();
-            m.scale=s;m.anchor=anchor;m.owner=owner;m.dark=dark;m.pins=pins;m.area=Area::Home;m.query.clear();
-            m.page=0;m.selected=0;m.pressed=None;m.error.clear();m.glass=glass;m.recent=recent_load();
+            m.scale=s;m.anchor=anchor;m.work=work;m.owner=owner;m.dark=dark;m.pins=pins;m.area=Area::Home;m.query.clear();
+            m.page=0;m.selected=0;m.pressed=None;m.hover=None;m.keyboard=false;m.error.clear();m.glass=glass.into();m.recent=recent_load();
             if m.catalog.is_none()&&m.indexed_at.is_none_or(|t|t.elapsed()>Duration::from_secs(180)){m.catalog=catalog_worker();}
             std::mem::replace(&mut m.edit_font,font)
         });
         SendMessageW(edit,WM_SETFONT,font as usize,1);
         if !old_font.is_null(){DeleteObject(old_font);}
         SetWindowTextW(edit,wide("").as_ptr());
-        MoveWindow(edit,px(22,s),px(64,s),px(564,s),px(31,s),0);
+        MoveWindow(edit,px(55,s),px(54,s),px(398,s),px(20,s),0);
         use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
         let round=2i32;let border=0xffff_fffeu32;let mode=i32::from(dark);
         DwmSetWindowAttribute(hwnd,33,(&round as *const i32).cast(),4);
         DwmSetWindowAttribute(hwnd,34,(&border as *const u32).cast(),4);
         DwmSetWindowAttribute(hwnd,20,(&mode as *const i32).cast(),4);
-        SetWindowPos(hwnd,HWND_TOP,x,y,width,height,SWP_NOACTIVATE);
+        relayout(hwnd);
         SetWindowPos(hwnd,ptr::null_mut(),0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_SHOWWINDOW);
         SetForegroundWindow(hwnd);SetFocus(edit);repaint(hwnd);
         crate::log!("DOCK_START opened separate panel at ({x},{y}) scale={s:.2}");
@@ -566,6 +667,21 @@ unsafe fn capture_render(dc:HDC,width:i32,height:i32,path:&Path)->Result<(),Stri
 mod tests {
     use super::*;
     #[test]
+    fn start_panel_height_tracks_content_and_keeps_the_footer_inside_its_envelope(){
+        let sparse=flow(true,2,0,false);
+        let filled=flow(true,GRID_PAGE,4,false);
+        assert!(sparse.height+100<filled.height);
+        assert!(flow(false,1,0,false).height<flow(false,LIST_PAGE,0,false).height);
+        for grid in [true,false]{
+            for visible in 0..=if grid{GRID_PAGE}else{LIST_PAGE}{
+                for recent in 0..=4{
+                    let f=flow(grid,visible,recent,true);
+                    assert!(f.footer_y+31<=f.height&&f.height<=MAX_HEIGHT);
+                }
+            }
+        }
+    }
+    #[test]
     #[ignore = "real isolated Start popup, edit control and Win32 keyboard dispatch"]
     fn native_panel_search_keyboard_and_anchor_are_independent_of_spotlight(){
         unsafe {
@@ -582,13 +698,15 @@ mod tests {
                 m.all=vec![Entry{name:"Paint".into(),path:"mspaint.exe".into(),kind:"Application",detail:String::new()}];
                 (m.hwnd,m.edit)
             });
+            relayout(host);
             if let Some(path)=std::env::var_os("TUANPC_DESK_START_EVIDENCE").map(PathBuf::from){
                 START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){
-                    m.glass.clear();m.pins=vec!["mspaint.exe".into(),"notepad.exe".into(),"deskland:settings".into()];
+                    m.glass=Rc::from([]);m.pins=vec!["mspaint.exe".into(),"notepad.exe".into(),"deskland:settings".into()];
                 });
-                CAPTURE.with(|c|c.set(true));repaint(host);UpdateWindow(host);CAPTURE.with(|c|c.set(false));
+                CAPTURE.with(|c|c.set(true));relayout(host);UpdateWindow(host);CAPTURE.with(|c|c.set(false));
                 assert!(path.is_file(),"native Start render evidence is required");
                 START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){m.pins=vec![r"C:\Test\Notepad.exe".into()];});
+                relayout(host);
             }
             assert_ne!(IsWindowVisible(host),0);
             assert!(handles().is_none(),"opening Start must not start Spotlight");
@@ -598,6 +716,8 @@ mod tests {
             START.with(|s|assert_eq!(selected(s.borrow().as_ref().unwrap()).unwrap().text,"Notepad"));
             SetWindowTextW(edit,wide("paint").as_ptr());
             START.with(|s|assert_eq!(selected(s.borrow().as_ref().unwrap()).unwrap().text,"Paint"));
+            let mut search:RECT=std::mem::zeroed();GetWindowRect(host,&mut search);
+            assert!(search.bottom-search.top < rc.bottom-rc.top);
             SendMessageW(host,APPLY,VK_RETURN as usize,0);
             assert_eq!(IsWindowVisible(host),0);
             START.with(|s|assert_eq!(s.borrow().as_ref().unwrap().recent.paths,vec![PathBuf::from("mspaint.exe")]));
