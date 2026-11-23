@@ -41,6 +41,16 @@ impl Drop for Apartment { fn drop(&mut self){unsafe{RoUninitialize();}} }
 struct CaptureDevice {
     device:ID3D11Device, context:ID3D11DeviceContext, winrt:IDirect3DDevice,
 }
+impl Drop for CaptureDevice{
+    fn drop(&mut self){
+        unsafe{
+            // Release deferred D3D11 references before dropping the immediate
+            // context and its DXGI device (also on cancellation).
+            self.context.ClearState();
+            self.context.Flush();
+        }
+    }
+}
 impl CaptureDevice {
     unsafe fn new()->Result<Self,String>{
         if !step("WGC support",GraphicsCaptureSession::IsSupported())?{
@@ -279,7 +289,7 @@ impl Worker{
                 }else if let Ok(req)=rx.recv(){req}else{break;};
                 let valid=||req.live.load(Ordering::Relaxed)&&stamp(req.source).as_ref()==Some(&req.stamp);
                 let result=(||{
-                    apartment.as_ref().map_err(Clone::clone)?;
+                    if let Err(reason)=&apartment{return Err(reason.clone());}
                     if !valid(){return Err("capture cancelled".into());}
                     if device.is_none(){device=Some(CaptureDevice::new()?);}
                     device.as_ref().unwrap().frame(req.source.hwnd as HWND,valid)
@@ -300,7 +310,7 @@ struct Raster{revisions:[u64;5],preview:Preview}
 #[derive(Default)]
 struct State{
     job:Option<Job>, worker:Option<Worker>, sources:HashMap<WindowIdentity,Source>, views:Vec<Raster>,
-    generation:u64, next_capture:Option<Instant>, foreground:usize,
+    generation:u64, next_capture:Option<Instant>, foreground:usize, visible:bool,
 }
 thread_local!{static CURRENT:RefCell<State>=RefCell::new(State::default());}
 
@@ -345,13 +355,19 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
         use windows_sys::Win32::UI::WindowsAndMessaging::{KillTimer,SetTimer};
         if !enabled{
             unsafe{KillTimer(controller,super::STAGE_CAPTURE_TIMER);}
-            state.foreground=0;
+            state.foreground=0;state.visible=false;state.next_capture=None;
             if let Some(j)=&state.job{j.live.store(false,Ordering::Relaxed);}
             state.sources.clear();
             let changed=!state.views.is_empty();
             state.views.clear();
             return changed;
         }
+        // Don't initialize Windows Graphics Capture during brief Stage
+        // reveals/reconfiguration. DWM supplies the first paint in the meantime.
+        if !targets.is_empty()&&!state.visible{
+            state.next_capture=Some(now+Duration::from_millis(350));
+        }
+        state.visible=!targets.is_empty();
         state.sources.retain(|&id,_|unsafe{retainable(id)});
         state.evict(now);
         if state.foreground!=foreground&&!targets.is_empty(){
@@ -381,7 +397,7 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
         }
         if state.job.is_none()&&!wanted.is_empty(){
             if let Some(delay)=state.next_capture.and_then(|t|t.checked_duration_since(now)){
-                unsafe{SetTimer(controller,super::STAGE_CAPTURE_TIMER,delay.as_millis().clamp(10,180) as u32,None);}
+                unsafe{SetTimer(controller,super::STAGE_CAPTURE_TIMER,delay.as_millis().clamp(10,350) as u32,None);}
             }
         }
         if state.job.is_none()&&state.next_capture.is_none_or(|time|now>=time){

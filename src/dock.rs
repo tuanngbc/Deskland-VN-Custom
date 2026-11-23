@@ -3054,10 +3054,10 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         if ATTENTION_MSG.with(|id|id.replace(0))!=0{DeregisterShellHookWindow(control);}
         ATTENTION.with(|queue|queue.borrow_mut().clear());
         internal_app::unlisten(control);
+        stage_snapshot::shutdown();
         CONTROL.with(|c|c.set(ptr::null_mut()));DestroyWindow(control);
         OWNER.with(|o|o.set(ptr::null_mut()));
         COMMANDS.with(|c|{c.take();});EVENTS.with(|e|{e.take();});STATE.with(|s|{s.take();});
-        stage_snapshot::shutdown();
         perf::finish();
         if com.is_ok(){CoUninitialize();}
     }
