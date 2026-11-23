@@ -380,10 +380,23 @@ impl Panel {
                 let active=look.active&(1<<i)!=0;
                 let edge=if active{palette.accent}else if look.dark{[102,92,82]}else{[224,215,208]};
                 let tint=palette.panel;
-                draw(data,w,h,b,|x,y|{
+                let fringe=Rect{x:b.x-1.0,y:b.y-1.0,w:b.w+2.0,h:b.h+2.0};
+                draw(data,w,h,fringe,|x,y|{
                     let d=distance(b,radius,x,y);
-                    let coverage=(0.5-d).clamp(0.0,1.0);
-                    let line=(if active{1.8+d}else{1.1+d}).clamp(0.0,1.0);
+                    let width=if active{1.8}else{1.1};
+                    if d>=0.8{return None;}
+                    let (coverage,line)=if d<=-width-0.8{(1.0,0.0)}else{
+                        let (mut body,mut stroke)=(0.0,0.0);
+                        for dy in [-0.375,-0.125,0.125,0.375]{
+                            for dx in [-0.375,-0.125,0.125,0.375]{
+                                let z=distance(b,radius,x+dx,y+dy);
+                                let outer=(0.5-z*4.0).clamp(0.0,1.0);
+                                let inner=(0.5-(z+width)*4.0).clamp(0.0,1.0);
+                                body+=outer;stroke+=outer-inner;
+                            }
+                        }
+                        (body/16.0,stroke/body.max(1.0))
+                    };
                     let shine=(1.0-((y-b.y)/b.h).clamp(0.0,1.0)).powi(4);
                     let rgb=std::array::from_fn(|i|{
                         let base=(tint[i] as f32+shine*if look.dark{29.0}else{13.0}).min(255.0);

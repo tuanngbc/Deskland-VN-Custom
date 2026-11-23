@@ -171,7 +171,7 @@ test('utility order, visibility and reset are isolated to the selected monitor',
   $('utilityDisplay').listeners.change({target:{value:'main'}});
   assert.equal($('utilityEnabled').checked,false);
 });
-test('taskbar selector reports verified state while sending the chosen startup mode',()=>{
+test('taskbar selector preserves user intent while separately reporting the verified state',()=>{
   context.syncDockSettings({dock:{enabled:true},dockTaskbarHidden:false});
   const control=$('dockShellMode');
   assert.equal(control.value,'windows');
@@ -179,7 +179,7 @@ test('taskbar selector reports verified state while sending the chosen startup m
   control.listeners.change({target:{value:"dock"}});
   assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'dockTaskbar',hidden:true});
   context.syncDockTaskbar({dockTaskbarEffective:'DOCK_HIDE_PENDING',dockTaskbarDesired:'dock',dockTaskbarActual:'VISIBLE',dockTaskbarPending:true});
-  assert.equal(control.value,'windows');assert.equal(control.disabled,true);
+  assert.equal(control.value,'dock');assert.equal(control.disabled,false);
   assert.match($('taskbarTakeoverStatus').textContent,/Yêu cầu:/);
   context.syncDockTaskbar({dockTaskbarEffective:'DOCK_HIDDEN_ACTIVE',dockTaskbarDesired:'dock',dockTaskbarActual:'HIDDEN'});
   assert.equal(control.value,'dock');assert.equal(control.disabled,false);
@@ -190,12 +190,18 @@ test('taskbar selector reports verified state while sending the chosen startup m
     assert.doesNotMatch($('taskbarTakeoverStatus').textContent,/Yêu cầu:/);
   }
   context.syncDockTaskbar({dockTaskbarEffective:'RESTORING',dockTaskbarActual:'VISIBLE'});
-  assert.equal(control.value,'windows');assert.equal(control.disabled,true);
+  assert.equal(control.value,'dock');assert.equal(control.disabled,false);
   context.syncDockSettings({dockTaskbarEffective:'RESTORED_BY_WINDOWS',dockTaskbarDesired:'dock',dockTaskbarActual:'VISIBLE',
     dockTaskbarActualLabel:'Đang hiện',dockTaskbarWindows:{visible:2,total:2,parked:0},dockTaskbarMessage:'Restored'});
   context.syncDockTaskbar({dockTaskbarHidden:true,dockTaskbarPending:true}); // stale legacy fields
-  assert.equal(control.value,'windows');assert.equal(control.disabled,false);
+  assert.equal(control.value,'dock');assert.equal(control.disabled,false);
   assert.match($('taskbarTakeoverStatus').textContent,/2\/2.*Restored/);
+  assert.equal($('dockTaskbarRetry').hidden,false);
+  $('dockTaskbarRetry').onclick();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'dockTaskbar',hidden:true});
+  context.syncDockTaskbar({dockTaskbarEffective:'RESTORED_BY_WATCHDOG',dockTaskbarDesired:'windows',dockTaskbarActual:'VISIBLE'});
+  assert.equal(control.value,'windows');
+  assert.equal($('dockTaskbarRetry').hidden,true);
   context.syncDockSettings({dock:{enabled:false},dockTaskbarHidden:false});
   assert.equal(control.disabled,true);
 });

@@ -1,4 +1,39 @@
 //! Observed taskbar state for this session; startup preference lives in Options.
+use std::time::{Duration,Instant};
+
+#[derive(Default)]
+pub(super) struct Recovery {
+    attempts:u8,
+    scheduled:Option<(Instant,Instant)>,
+    healthy_since:Option<Instant>,
+}
+#[derive(PartialEq,Eq,Debug)]
+pub(super) enum Retry { Idle, Wait, Start, Expired }
+impl Recovery{
+    pub fn schedule(&mut self,now:Instant)->bool{
+        self.healthy_since=None;
+        if self.attempts>=2{return false;}
+        let delay=Duration::from_millis(if self.attempts==0{1800}else{3500});
+        self.scheduled=Some((now+delay,now+Duration::from_secs(14)));
+        true
+    }
+    pub fn pending(&self)->bool{self.scheduled.is_some()}
+    pub fn attempted(&self)->bool{self.attempts>0}
+    pub fn confirmed(&mut self,now:Instant){
+        let since=*self.healthy_since.get_or_insert(now);
+        if now.saturating_duration_since(since)>=Duration::from_secs(30){self.attempts=0;}
+    }
+    pub fn interrupted(&mut self){self.healthy_since=None;}
+    pub fn check(&mut self,now:Instant,ready:bool)->Retry{
+        let Some((due,expires))=self.scheduled else{return Retry::Idle;};
+        if now>=expires{self.scheduled=None;return Retry::Expired;}
+        if !ready||now<due{return Retry::Wait;}
+        self.scheduled=None;
+        self.attempts+=1;
+        Retry::Start
+    }
+}
+
 #[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
 pub enum Mode {
     #[default] Compatibility,
@@ -15,6 +50,28 @@ pub enum Mode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_waits_for_restore_and_is_bounded_until_healthy_or_cancelled(){
+        let t=Instant::now();
+        let after=|secs|t+Duration::from_secs(secs);
+        let mut r=Recovery::default();
+        assert!(r.schedule(t));
+        assert_eq!(r.check(after(1),true),Retry::Wait);
+        assert_eq!(r.check(after(3),false),Retry::Wait);
+        assert_eq!(r.check(after(4),true),Retry::Start);
+        assert!(r.schedule(after(5)));
+        assert_eq!(r.check(after(8),true),Retry::Wait);
+        assert_eq!(r.check(after(9),true),Retry::Start);
+        assert!(!r.schedule(after(10)));
+        r.confirmed(after(10));
+        r.confirmed(after(40));
+        assert!(r.schedule(after(41)));
+        assert_eq!(r.check(after(55),false),Retry::Expired);
+        assert!(r.schedule(after(56)));
+        r=Recovery::default(); // Compatibility / emergency / module disabled.
+        assert_eq!(r.check(after(59),true),Retry::Idle);
+    }
 
     #[test]
     fn windows_restore_clears_legacy_hidden_and_reports_parked_secondary() {

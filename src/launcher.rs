@@ -16,6 +16,7 @@ pub(crate) mod start;
 /// Start and Spotlight share this UI thread. Carry the actual input method
 /// across the focus handoff, rather than reusing a layout left on our thread
 /// by an earlier popup. Never change the source app or the user's preferences.
+#[derive(Clone, Copy)]
 struct InputHandoff(HKL);
 impl InputHandoff {
     unsafe fn capture() -> Self {

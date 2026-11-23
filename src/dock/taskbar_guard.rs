@@ -242,7 +242,8 @@ unsafe fn restore(ids:&[WindowId]){
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 #[repr(i32)]
 pub(super) enum Exit { Requested=0, Emergency=20, ExplorerChanged=21, ShellRevealed=22,
-    DockLost=23, HotkeyUnavailable=24, HideFailed=25, LinkLost=26, HideRejected=27, ReadyTimeout=28 }
+    DockLost=23, HotkeyUnavailable=24, HideFailed=25, LinkLost=26, HideRejected=27, ReadyTimeout=28,
+    SessionSuspended=29 }
 impl Exit{
     fn from_code(code:Option<i32>)->Self{
         match code{Some(0)=>Self::Requested,Some(20)=>Self::Emergency,Some(21)=>Self::ExplorerChanged,
@@ -253,8 +254,9 @@ impl Exit{
         match self{
             Self::Requested=>"Đã chuyển sang chế độ tương thích Windows.",
             Self::Emergency=>"Đã hiện thanh tác vụ theo phím khôi phục Ctrl+Alt+Shift+F12.",
-            Self::ExplorerChanged=>"Explorer đã thay đổi thanh tác vụ. Đã về chế độ tương thích; bật lại chế độ Dock nếu cần.",
-            Self::ShellRevealed=>"Windows đã tự hiện thanh tác vụ. Đã về chế độ tương thích.",
+            Self::ExplorerChanged=>"Explorer đã thay đổi thanh tác vụ.",
+            Self::ShellRevealed=>"Windows đã tự hiện thanh tác vụ.",
+            Self::SessionSuspended=>"Đã hiện thanh tác vụ khi khóa màn hình.",
             Self::DockLost=>"Dock không còn phản hồi. Đã khôi phục thanh tác vụ Windows.",
             Self::HotkeyUnavailable=>"Không đăng ký được Ctrl+Alt+Shift+F12. Giữ thanh tác vụ Windows.",
             Self::HideFailed=>"Explorer vẫn giữ ít nhất một thanh tác vụ hiện. Đã trả về chế độ tương thích.",
@@ -266,7 +268,7 @@ impl Exit{
 }
 
 pub(super) struct Watch {
-    child:Child, stop:Handle, ready:Handle, armed:Handle, pulse:Handle, hidden:Vec<WindowId>, started:Instant,
+    child:Option<Child>, stop:Handle, ready:Handle, armed:Handle, pulse:Handle, hidden:Vec<WindowId>, started:Instant,
 }
 impl Watch {
     pub(super) fn restore_count(&self)->usize{self.hidden.len()}
@@ -289,10 +291,10 @@ impl Watch {
             .env_remove("TUANPC_DESK_TASKBAR_TRIAL_TRACE");
         if let Some(profile)=crate::trial::data_dir(){command.env("TUANPC_DESK_TASKBAR_TRIAL_TRACE",profile);}
         let child=command.spawn().map_err(|e|e.to_string())?;
-        Ok(Self{child,stop,ready,armed,pulse,hidden,started:Instant::now()})
+        Ok(Self{child:Some(child),stop,ready,armed,pulse,hidden,started:Instant::now()})
     }
     pub(super) fn poll(&mut self)->Result<bool,Exit>{
-        match self.child.try_wait(){
+        match self.child.as_mut().ok_or(Exit::LinkLost)?.try_wait(){
             Ok(Some(status))=>return Err(Exit::from_code(status.code())),
             Err(_)=>return Err(Exit::LinkLost),
             Ok(None)=>{}
@@ -301,6 +303,11 @@ impl Watch {
         if self.ready.fired(){return Ok(true);}
         if self.started.elapsed()>Duration::from_secs(4){return Err(Exit::ReadyTimeout);}
         Ok(false)
+    }
+    pub(super) fn stop(mut self)->Option<Child>{
+        // Drop signals stop and restores; retain the process handle so a
+        // successor cannot claim the recovery hotkey until cleanup has ended.
+        self.child.take()
     }
 }
 impl Drop for Watch{

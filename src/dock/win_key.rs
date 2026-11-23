@@ -139,12 +139,17 @@ unsafe extern "system" fn keyboard(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
         let (target,ticket)=TARGET.get();
         if target!=0&&!REPLAY_FAILED.get(){
             let mut keys=KEYS.get();
+            let win=matches!(e.vkCode as u16,VK_LWIN|VK_RWIN);
+            // Ordinary typing, including injected IME events, should not
+            // touch the Win-key state if no physical Win key is pending.
+            if !win&&keys.blocked.iter().all(Option::is_none){
+                return CallNextHookEx(null_mut(),code,w,l);
+            }
             if injected{
                 if e.dwExtraInfo!=REPLAY_TAG{keys.cancel();KEYS.set(keys);}
                 return CallNextHookEx(null_mut(),code,w,l);
             }
             let key=Stroke{vk:e.vkCode as u16,scan:e.scanCode as u16,extended:e.flags&LLKHF_EXTENDED!=0};
-            let win=key.win_index().is_some();
             let down=matches!(w as u32,WM_KEYDOWN|WM_SYSKEYDOWN);
             let foreground=if win{GetForegroundWindow() as usize}else{0};
             let repeat=win&&down&&GetAsyncKeyState(e.vkCode as i32)<0;

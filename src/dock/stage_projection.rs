@@ -96,12 +96,28 @@ impl Card{
         amount/16.0
     }
     pub(super) fn highlight(self,pixels:&mut[u8],w:i32,h:i32,ink:[u8;3],width:f32){
-        draw(pixels,w,h,self.rect.rect(),|x,y|{
+        use super::geometry::Rect;
+        let r=self.rect.rect();
+        let width=width.max(1.0);
+        let band=0.85*(1.0+self.depth)*(1.0+self.depth*r.h/r.w);
+        draw(pixels,w,h,Rect{x:r.x-1.0,y:r.y-1.0,w:r.w+2.0,h:r.h+2.0},|x,y|{
             let (u,v)=self.uv(x,y);
             let d=self.edge_distance(u,v);
-            let body=self.coverage(x,y,d);
-            let border=(1.0+d/width.max(1.0)).clamp(0.0,1.0);
-            Some((ink,body*border*235.0))
+            if d>=band||d<=-width-band{return None;}
+            // Integrate both sides of the thin projected stroke at the same
+            // sample positions as the thumbnail silhouette, including its corners.
+            let mut amount=0.0;
+            let slope=4.0/(1.0+self.depth);
+            for dy in [-0.375,-0.125,0.125,0.375]{
+                for dx in [-0.375,-0.125,0.125,0.375]{
+                    let (u,v)=self.uv(x+dx,y+dy);
+                    let d=self.edge_distance(u,v);
+                    let outer=(0.5-d*slope).clamp(0.0,1.0);
+                    let inner=(0.5-(d+width)*slope).clamp(0.0,1.0);
+                    amount+=outer-inner;
+                }
+            }
+            Some((ink,amount*(185.0/16.0)))
         });
     }
     pub(super) fn shadow(self,pixels:&mut[u8],w:i32,h:i32,layer:usize){

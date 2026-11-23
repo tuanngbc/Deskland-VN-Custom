@@ -14,9 +14,12 @@ pub(super) const LIST_ICON: i32 = 23;
 pub(super) const FOOTER_H: i32 = 50;
 pub(super) const POWER: i32 = 38;
 pub(super) const POWER_GAP: i32 = 12;
+pub(super) const RESTART: i32 = 32;
+pub(super) const POWER_CLUSTER: i32 = POWER + 6 + RESTART;
 pub(super) const MAX_WIDTH: i32 = 544;
+const MIN_HEIGHT: i32 = 388;
 pub(super) const MAX_HEIGHT: i32 = 528;
-const RECENT_H: i32 = 65;
+const USAGE_H: i32 = 58;
 pub(super) const ERROR_H: i32 = 20;
 
 #[derive(Clone, Copy)]
@@ -29,6 +32,7 @@ pub(super) struct Frame {
 pub(super) struct Flow {
     pub height: i32,
     pub recent_y: Option<i32>,
+    pub frequent_y: Option<i32>,
     pub footer_y: i32,
 }
 
@@ -55,7 +59,7 @@ impl Frame {
     fn row(self, grid: bool) -> i32 { if grid { GRID_ROW } else { LIST_ROW } }
 
     fn tail(self, recent: bool, error: bool) -> i32 {
-        FOOTER_H + if recent { RECENT_H } else { 0 } + if error { ERROR_H } else { 0 }
+        FOOTER_H + if recent { 2 * USAGE_H } else { 0 } + if error { ERROR_H } else { 0 }
     }
 
     pub fn show_recents(self, has_recents: bool, error: bool) -> bool {
@@ -64,8 +68,8 @@ impl Frame {
 
     pub fn flow(self, grid: bool, visible: usize, recent: bool, error: bool) -> Flow {
         let end = CONTENT_Y + (visible.div_ceil(self.columns(grid)) as i32 * self.row(grid)).max(36);
-        let footer_y = end + self.tail(recent, error) - FOOTER_H;
-        Flow { height: footer_y + FOOTER_H, recent_y: recent.then_some(end), footer_y }
+        let height = (end + self.tail(recent, error)).max(MIN_HEIGHT.min(self.max_height));
+        Flow { height, recent_y: recent.then_some(end), frequent_y: recent.then_some(end + USAGE_H), footer_y: height - FOOTER_H }
     }
 
     pub fn app(self, index: usize, grid: bool) -> (i32, i32, i32, i32) {
@@ -92,6 +96,8 @@ mod tests {
                         let flow = frame.flow(grid, limit, recent, error);
                         assert!(flow.height <= height);
                         assert_eq!(flow.recent_y.is_some(), recent);
+                        assert_eq!(flow.frequent_y.is_some(), recent);
+                        assert!(flow.height >= height.min(MIN_HEIGHT));
                         let (x,y,w,h) = frame.app(limit-1,grid);
                         assert!(x+w <= width-INSET && y+h < flow.footer_y);
                     }
@@ -101,6 +107,6 @@ mod tests {
         let wide = Frame::new(544,528);
         let narrow = Frame::new(300,528);
         assert!(wide.columns(true) > narrow.columns(true));
-        assert!(wide.flow(true,2,false,false).height < wide.flow(true,15,false,false).height);
+        assert!(wide.flow(true,2,true,false).height < wide.flow(true,15,true,false).height);
     }
 }
