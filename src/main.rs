@@ -1011,7 +1011,9 @@ impl App {
     fn configure_dock(&mut self) {
         launcher::dock_pins(&self.cfg.dock.pinned);
         self.dock_error=None;
-        if self.saver || self.headless || !self.cfg.dock.any_enabled() {self.dock_runtime=None;
+        let verifying_restore=self.dock_runtime.is_some() && !self.saver && !self.headless
+            && (self.dock_taskbar.effective.hidden()||self.dock_taskbar.effective.pending());
+        if self.saver || self.headless || (!self.cfg.dock.any_enabled()&&!verifying_restore) {self.dock_runtime=None;
             if self.dock_taskbar.effective.hidden()||self.dock_taskbar.effective.pending(){
                 self.dock_taskbar=dock::current_taskbar_status("Đã trả thanh tác vụ cho Windows khi tắt Dock.");
             }
@@ -1033,6 +1035,13 @@ impl App {
     }
     fn set_taskbar_status(&mut self,status:dock::TaskbarStatus){
         self.dock_taskbar=status;
+        // Keep the runtime just long enough to confirm asynchronous Explorer
+        // restoration when disabling the last active module.
+        if !self.cfg.dock.any_enabled()&&!self.dock_taskbar.effective.hidden()&&!self.dock_taskbar.effective.pending(){
+            self.dock_runtime=None;
+            self.dock_win_key_status="off".into();
+            self.post_dock_state();
+        }
         if settings::hwnd().is_some(){settings::sync(&self.settings_state());}
         let mut payload=serde_json::json!({"t":"dockTaskbarState"});
         self.dock_taskbar.add_fields(&mut payload);

@@ -173,7 +173,7 @@ test('taskbar hide is an explicit session command separate from saved Dock setti
   assert.equal(control.value,'dock');assert.equal(control.disabled,false);
   context.syncDockTaskbar({dockTaskbarEffective:'RESTORING',dockTaskbarActual:'VISIBLE'});
   assert.equal(control.value,'windows');assert.equal(control.disabled,true);
-  context.syncDockSettings({dockTaskbarEffective:'RESTORED_BY_WINDOWS',dockTaskbarActual:'VISIBLE',
+  context.syncDockSettings({dockTaskbarEffective:'RESTORED_BY_WINDOWS',dockTaskbarDesired:'dock',dockTaskbarActual:'VISIBLE',
     dockTaskbarActualLabel:'Đang hiện',dockTaskbarWindows:{visible:2,total:2,parked:0},dockTaskbarMessage:'Restored'});
   context.syncDockTaskbar({dockTaskbarHidden:true,dockTaskbarPending:true}); // stale legacy fields
   assert.equal(control.value,'windows');assert.equal(control.disabled,false);

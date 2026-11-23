@@ -38,6 +38,12 @@ impl Mode{
     }
     pub fn pending(self)->bool{matches!(self,Self::HidePending|Self::Restoring)}
     pub fn hidden(self)->bool{self==Self::Hidden}
+    fn watchdog(self)->&'static str{
+        match self{
+            Self::HidePending=>"STARTING",Self::Hidden=>"ARMED",Self::Restoring=>"STOPPING",
+            Self::Compatibility|Self::RestoredByWindows|Self::RestoredByWatchdog|Self::Error=>"INACTIVE",
+        }
+    }
     pub fn label(self)->&'static str{
         match self{
             Self::Compatibility=>"Tương thích Windows", Self::HidePending=>"Chờ xác nhận ẩn",
@@ -73,6 +79,7 @@ impl Status{
         value["dockTaskbarActualLabel"]=self.actual.label().into();
         value["dockTaskbarWindows"]=serde_json::json!({"total":self.actual.total,"visible":self.actual.visible,"parked":self.actual.parked});
         value["dockTaskbarReason"]=self.reason.into();
+        value["dockTaskbarWatchdog"]=self.effective.watchdog().into();
         value["dockTaskbarMessage"]=self.message.clone().into();
     }
 }

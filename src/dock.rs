@@ -1699,7 +1699,7 @@ unsafe fn dock_context(owner:HWND,bar:usize,index:usize,advanced:bool){
 thread_local!{
     static TASKBAR_WATCH:RefCell<Option<taskbar_guard::Watch>>=const{RefCell::new(None)};
     static TASKBAR_STATUS:RefCell<TaskbarStatus>=RefCell::new(TaskbarStatus::default());
-    static TASKBAR_RESTORE:RefCell<Option<(TaskbarMode,&'static str,String,Instant,usize)>>=const{RefCell::new(None)};
+    static TASKBAR_RESTORE:RefCell<Option<(bool,TaskbarMode,&'static str,String,Instant,usize)>>=const{RefCell::new(None)};
     static START_BOUND:Cell<bool>=const{Cell::new(false)};
     static WIN_KEY:RefCell<Option<win_key::Hook>>=const{RefCell::new(None)};
     static WIN_KEY_TOKEN:Cell<usize>=const{Cell::new(0)};
@@ -1810,6 +1810,7 @@ unsafe fn show_taskbar(reason:taskbar_guard::Exit,message:&str){
     if TASKBAR_RESTORE.with(|s|s.borrow().is_some()){return;}
     let control=CONTROL.get();
     let was_dock=taskbar_hidden();
+    let desired=reason!=Exit::Requested&&TASKBAR_STATUS.with(|s|s.borrow().desired);
     sync_start_hotkey(control,false);
     let old=TASKBAR_WATCH.with(|w|w.borrow_mut().take());
     let before=old.as_ref().map_or(1,taskbar_guard::Watch::restore_count);
@@ -1837,15 +1838,15 @@ unsafe fn show_taskbar(reason:taskbar_guard::Exit,message:&str){
         ||(was_dock&&reason!=Exit::ExplorerChanged&&current.visible+current.parked<before);
     if was_active&&incomplete&&SetTimer(control,TASKBAR_GUARD_TIMER,220,None)!=0{
         let expected=if was_dock&&reason!=Exit::ExplorerChanged{before}else{1};
-        TASKBAR_RESTORE.with(|s|s.replace(Some((mode,code,message.into(),Instant::now(),expected))));
-        publish_taskbar(false,TaskbarMode::Restoring,current,code,message);
+        TASKBAR_RESTORE.with(|s|s.replace(Some((desired,mode,code,message.into(),Instant::now(),expected))));
+        publish_taskbar(desired,TaskbarMode::Restoring,current,code,message);
     }else{
         TASKBAR_RESTORE.with(|s|s.borrow_mut().take());
         KillTimer(control,TASKBAR_GUARD_TIMER);
         if was_active&&incomplete{
-            publish_taskbar(false,TaskbarMode::Error,current,code,"Chưa xác minh được Windows đã hiện lại đầy đủ các thanh tác vụ.");
+            publish_taskbar(desired,TaskbarMode::Error,current,code,"Chưa xác minh được Windows đã hiện lại đầy đủ các thanh tác vụ.");
         }else{
-            publish_taskbar(false,mode,current,code,message);
+            publish_taskbar(desired,mode,current,code,message);
         }
     }
     sync_win_key();
@@ -1855,7 +1856,7 @@ unsafe fn set_taskbar_hidden(hidden:bool){
     if !hidden {show_taskbar(Exit::Requested,Exit::Requested.message());return;}
     if taskbar_active()||TASKBAR_RESTORE.with(|s|s.borrow().is_some()){return;}
     let current=taskbar_guard::current();
-    let fail=|code,msg|publish_taskbar(false,TaskbarMode::Error,current,code,msg);
+    let fail=|code,msg|publish_taskbar(true,TaskbarMode::Error,current,code,msg);
     if shell_access::native_busy(){
         fail("NativePanelOpen","Đợi bảng Windows đóng rồi bật lại chế độ Dock.");return;
     }
@@ -1881,17 +1882,17 @@ unsafe fn set_taskbar_hidden(hidden:bool){
 unsafe fn poll_taskbar(hwnd:HWND){
     use taskbar_guard::Exit;
     let actual=taskbar_guard::current();
-    if let Some((mode,code,message,started,expected))=TASKBAR_RESTORE.with(|s|s.borrow().clone()){
+    if let Some((desired,mode,code,message,started,expected))=TASKBAR_RESTORE.with(|s|s.borrow().clone()){
         if actual.known&&actual.visible+actual.parked>=expected{
             TASKBAR_RESTORE.with(|s|s.borrow_mut().take());
-            publish_taskbar(false,mode,actual,code,&message);
+            publish_taskbar(desired,mode,actual,code,&message);
             KillTimer(hwnd,TASKBAR_GUARD_TIMER);
         }else if started.elapsed()>=Duration::from_secs(3){
             TASKBAR_RESTORE.with(|s|s.borrow_mut().take());
-            publish_taskbar(false,TaskbarMode::Error,actual,code,"Chưa xác minh được Windows đã hiện lại đầy đủ các thanh tác vụ.");
+            publish_taskbar(desired,TaskbarMode::Error,actual,code,"Chưa xác minh được Windows đã hiện lại đầy đủ các thanh tác vụ.");
             KillTimer(hwnd,TASKBAR_GUARD_TIMER);
         }else{
-            publish_taskbar(false,TaskbarMode::Restoring,actual,code,&message);
+            publish_taskbar(desired,TaskbarMode::Restoring,actual,code,&message);
         }
         return;
     }
@@ -2035,6 +2036,9 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
         let label=if mode==TaskbarMode::Restoring{"Đang khôi phục thanh tác vụ Windows…"}else if mode.pending(){"Hủy yêu cầu ẩn thanh tác vụ"}
             else if mode.hidden(){"Chế độ tương thích Windows (hiện taskbar)"}else{"Chế độ Dock (ẩn taskbar cho phiên này)"};
         AppendMenuW(menu,MF_STRING|if mode==TaskbarMode::Restoring{MF_GRAYED}else{0},MENU_TASKBAR,wide(label).as_ptr());
+        if !status.message.is_empty()&&!mode.hidden(){
+            AppendMenuW(menu,MF_STRING|MF_GRAYED,0,wide(&status.message).as_ptr());
+        }
     }
     let extra=STATE.with(|s|{
         let state=s.borrow();
