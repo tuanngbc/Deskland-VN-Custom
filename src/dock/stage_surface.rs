@@ -460,14 +460,6 @@ impl Panel {
             let strength=emphasis.filter(|&(i,_)|i==view.target.index).map_or(0,|(_,a)|a);
             let ink=switch.filter(|&(i,_)|i==view.target.index).map_or(255,|(_,ink)|ink);
             view.blend_with_ink(data,w,h,strength,ink);
-            if view.mask&1!=0{
-                let active=look.active&(1<<view.target.index)!=0;
-                let edge=if active{palette.accent}else if look.dark{[88,81,75]}else{[248,243,235]};
-                let stroke=if active{2.4}else{1.0};
-                let shape=view.target.front_shape(view.mask,strength);
-                shape.highlight(data,w,h,edge,(self.dpi as f32/96.0)*stroke,glass);
-            }
-
         }
         if let Some((i,strength))=emphasis.filter(|&(i,a)|i<layout.count&&a>0&&look.projected[i]&1==0){
             let b=layout.card(i).rect();

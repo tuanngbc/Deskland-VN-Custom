@@ -2,7 +2,8 @@ name: Build TLauncher Rust
 
 on:
   push:
-    branches: [main, codex/rust-test, codex/rust-dock]
+    branches: [main, codex/rust-dock]
+    tags: [v*]
   workflow_dispatch:
 
 permissions:
@@ -118,6 +119,8 @@ jobs:
       - name: Package Rust native build
         run: |
           $short = '${{ github.sha }}'.Substring(0, 7)
+          $version = (Get-Item target\release\TLauncher.exe).VersionInfo.ProductVersion
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid executable version: $version" }
           $name = "TLauncher-Rust-$short-win-x64"
           $dir = "dist\$name"
           New-Item -ItemType Directory -Force $dir | Out-Null
@@ -131,6 +134,7 @@ jobs:
           }
           Copy-Item README-rust.md "$dir\README-rust.md"
           Copy-Item (Join-Path $env:RUNNER_TEMP "start-native.png") "$dir\START-NATIVE-CI.png"
+          $version | Set-Content "$dir\VERSION.txt" -Encoding ascii
           '${{ github.sha }}' | Set-Content "$dir\BUILD-COMMIT.txt" -Encoding ascii
           @"
           TLauncher Rust Native build

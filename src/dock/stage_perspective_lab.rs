@@ -101,7 +101,12 @@ fn native_stage_aa_comparison_at_three_dpi(){
                         let src=&mut textures[(row+j)%3];
                         let (sw,sh)=src.size;
                         if shadows{card.shadow_with_filter(data,w,h,j,filtered);}
-                        card.paint_with_filter(data,w,h,src.pixels(),sw,sh,j,filtered);
+                        if filtered{
+                            let radius=dpi as f32/96.0;
+                            card.paint_face(data,w,h,src.pixels(),sw,sh,j,true,Some(([88,81,75],0.9*radius,0.36)));
+                        }else{
+                            card.paint_with_filter(data,w,h,src.pixels(),sw,sh,j,false);
+                        }
                     }
                 }
             };

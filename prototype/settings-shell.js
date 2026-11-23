@@ -10,6 +10,26 @@
     for(const nav of document.querySelectorAll('.nav-item')){if(nav===button)nav.setAttribute('aria-current','page');else nav.removeAttribute('aria-current');}
     copy();$('pageViewport').scrollTop=0;requestAnimationFrame(()=>{layoutPreview();renderMonitors();});
   });
+  const dockTabs=[...document.querySelectorAll('.dock-groups [role=tab]')];
+  function selectDockTab(index,focus){
+    dockTabs.forEach((tab,i)=>{
+      const selected=i===index;
+      tab.setAttribute('aria-selected',String(selected));
+      tab.tabIndex=selected?0:-1;
+      $(tab.getAttribute('aria-controls')).hidden=!selected;
+    });
+    if(focus)dockTabs[index].focus();
+  }
+  dockTabs.forEach((tab,i)=>{
+    tab.addEventListener('click',()=>selectDockTab(i,false));
+    tab.addEventListener('keydown',e=>{
+      const step={ArrowLeft:-1,ArrowRight:1}[e.key];
+      const next=e.key==='Home'?0:e.key==='End'?dockTabs.length-1:
+        step?(i+step+dockTabs.length)%dockTabs.length:-1;
+      if(next<0)return;
+      e.preventDefault();selectDockTab(next,true);
+    });
+  });
   const normalize=s=>String(s).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/g,'d').toLowerCase();
   window.filterSettingsThemes=()=>{const query=normalize($('themeSearch').value);let count=0;for(const card of $('themes').children){card.hidden=!normalize(card.textContent).includes(query);if(!card.hidden)count++;}$('emptySearch').hidden=count>0;};
   $('themeSearch').addEventListener('input',window.filterSettingsThemes);

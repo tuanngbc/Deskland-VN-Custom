@@ -1083,7 +1083,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
                     sources[layer]=WindowIdentity::read_stage(handle as HWND);
                 }
                 targets.push(stage_snapshot::Target{owner:stage.hwnd as usize,layout,index,
-                    reduced:state.prefs.appearance.reduced_motion,sources});
+                    reduced:state.prefs.appearance.reduced_motion,dark,dpi:screen.dpi,sources});
             }
         }
         stage_updates.push((stage_index,layout,style,automatic,hide,changed,fixture_positions,model_count,rows));

@@ -209,7 +209,7 @@ fn native_stage_worker_keeps_independent_frames_through_minimize(){
     assert!(ids.iter().all(|id|id.pid==child.0.id()));
     let mut layout=Layout::landscape(240,320,96,21,5,2,false,true);
     layout.count=2;
-    let target=|i|cache::Target{owner:1,layout,index:i,reduced:true,sources:[Some(ids[i]),None,None,None,None]};
+    let target=|i|cache::Target{owner:1,layout,index:i,reduced:true,dark:true,dpi:96,sources:[Some(ids[i]),None,None,None,None]};
     let both=[target(0),target(1)];
     let sync=||{cache::complete();cache::sync(&both,null_mut(),true,0);};
     let spin=|condition:&dyn Fn()->bool|{

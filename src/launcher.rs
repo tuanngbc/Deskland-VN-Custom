@@ -59,12 +59,13 @@ impl Appearance {
 
 pub fn configure(appearance: Appearance) {
     PREFS.with(|c| *c.borrow_mut() = appearance.clone());
-    let backdrop = STATE.with(|c| c.borrow().as_ref().map(|s| (s.hwnd, s.width, s.height, s.scale, s.backdrop.clone())));
-    if let Some((hwnd, w, h, scale, backdrop)) = backdrop {
-        let glass = frost(&backdrop, w, h, scale, &appearance);
-        STATE.with(|c| if let Some(s) = c.borrow_mut().as_mut() { s.glass = glass; });
-        unsafe { InvalidateRect(hwnd, std::ptr::null(), 0); }
-    }
+    let hwnd = STATE.with(|c| {
+        let mut state=c.borrow_mut();
+        let s=state.as_mut()?;
+        s.glass=frost(&s.backdrop,s.width,s.height,s.scale,&appearance);
+        Some(s.hwnd)
+    });
+    if let Some(hwnd)=hwnd{unsafe{InvalidateRect(hwnd,std::ptr::null(),0);}}
 }
 
 const CLASS: &str = "TuanpcDeskLauncherGlass";
@@ -500,23 +501,24 @@ pub(crate) unsafe fn capture_glass(x: i32, y: i32, width: i32, height: i32) -> V
     SetStretchBltMode(dc, HALFTONE);
     let ok = StretchBlt(dc, 0, 0, bw, bh, screen, x, y, width, height, SRCCOPY);
     GdiFlush();
-    let raw = std::slice::from_raw_parts(bits as *const u8, (bw * bh * 4) as usize).to_vec();
+    let raw = if ok != 0 { std::slice::from_raw_parts(bits as *const u8, (bw * bh * 4) as usize).to_vec() } else { Vec::new() };
     SelectObject(dc, old); DeleteObject(bitmap); DeleteDC(dc); ReleaseDC(std::ptr::null_mut(), screen);
-    if ok == 0 { return Vec::new(); }
     raw
 }
 
 pub(crate) fn frost(raw: &[u8], width: i32, height: i32, scale: f32, appearance: &Appearance) -> Vec<u8> {
     let bw = (width / 4).max(1) as u32; let bh = (height / 4).max(1) as u32;
-    let Some(img) = image::RgbaImage::from_raw(bw, bh, raw.to_vec()) else { return Vec::new() };
+    let Some(img) = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(bw, bh, raw) else { return Vec::new() };
     let mut pixels = image::imageops::blur(&img, appearance.blur * scale / 4.0).into_raw();
     let dark = appearance.theme == "dark";
-    for (i, p) in pixels.chunks_exact_mut(4).enumerate() {
-        let y = i as f32 / bw as f32 / bh as f32;
-        let base = if dark { 24.0 } else { 247.0 };
-        let reflection = (1.0 - y).powf(5.0) * if dark { 15.0 } else { 8.0 };
-        for v in &mut p[..3] { *v = (*v as f32 * appearance.transparency + base * (1.0 - appearance.transparency) + reflection).clamp(0.0, 255.0) as u8; }
-        p[3] = 255;
+    let base = if dark { 24.0 } else { 247.0 };
+    let tint = base * (1.0 - appearance.transparency);
+    for (y, row) in pixels.chunks_exact_mut(bw as usize * 4).enumerate() {
+        let reflection = (1.0 - (y as f32 + 0.5) / bh as f32).powi(5) * if dark { 15.0 } else { 8.0 };
+        for p in row.chunks_exact_mut(4) {
+            for v in &mut p[..3] { *v = (*v as f32 * appearance.transparency + tint + reflection).clamp(0.0, 255.0) as u8; }
+            p[3] = 255;
+        }
     }
     pixels
 }

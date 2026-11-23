@@ -165,6 +165,7 @@ pub(super) const READY:u32=WM_APP+58;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct Target{
     pub owner:usize, pub layout:Layout, pub index:usize, pub reduced:bool,
+    pub dark:bool,pub dpi:u32,
     pub sources:[Option<WindowIdentity>;5],
 }
 impl Target{
@@ -199,12 +200,6 @@ impl Target{
         let unscale=|a:i32,c:i32|c as f32+(a as f32+0.5-c as f32)/scale;
         self.sources.get(layer).is_some_and(Option::is_some)&&self.card(layer,self.body(layer))
             .contains(unscale(x,cx),unscale(y,cy))
-    }
-    pub(super) fn front_shape(self,mask:u8,strength:u8)->Card{
-        let area=self.body(0);
-        let delta=self.zoom(mask,strength)-1.0;
-        let (dx,dy)=((area.w as f32*delta*0.5).round() as i32,(area.h as f32*delta*0.5).round() as i32);
-        self.card(0,Box2{x:area.x-dx,y:area.y-dy,w:area.w+2*dx,h:area.h+2*dy})
     }
     fn bounds(self)->Box2{
         let mut b=self.layout.card(self.index);
@@ -259,7 +254,12 @@ impl Preview{
                 };
                 let slab=target.card(layer,Box2{x:base.x-b.x,y:base.y-b.y,..base});
                 slab.shadow(&mut out,b.w,b.h,layer);
-                slab.paint_depth(&mut out,b.w,b.h,data,*w,*h,layer);
+                let active=layer==0&&target.layout.active==Some(target.index);
+                let edge=if active{super::surface::Palette::new(target.dark).accent}
+                    else if target.dark{[88,81,75]}else{[248,243,235]};
+                let scale=target.dpi as f32/96.0;
+                let (stroke,strength)=if active{(2.0*scale,0.74)}else{(0.9*scale,if target.dark{0.36}else{0.22})};
+                slab.paint_face(&mut out,b.w,b.h,data,*w,*h,layer,true,Some((edge,stroke,strength)));
             }
             Arc::<[u8]>::from(out)
         };
@@ -435,10 +435,12 @@ impl State{
                 entry.frame=None;entry.captured_at=None;
             }
         }
-        let mut keys=self.sources.iter().map(|(&id,s)|(id,s.last_used,s.frame.as_ref().map_or(0,|f|f.0.len()))).collect::<Vec<_>>();
+        let frame_bytes=|s:&Source|s.frame.as_ref().map_or(0,|f|f.0.len());
+        let mut len=self.sources.len();
+        let mut bytes:usize=self.sources.values().map(frame_bytes).sum();
+        if len<=MAX_ENTRIES&&bytes<=MAX_FRAME_BYTES{return;}
+        let mut keys=self.sources.iter().map(|(&id,s)|(id,s.last_used,frame_bytes(s))).collect::<Vec<_>>();
         keys.sort_unstable_by_key(|(_,t,_)|*t);
-        let mut len=keys.len();
-        let mut bytes:usize=keys.iter().map(|k|k.2).sum();
         for (id,_,size) in keys{
             if len<=MAX_ENTRIES&&bytes<=MAX_FRAME_BYTES{break;}
             self.sources.remove(&id);
@@ -620,7 +622,7 @@ mod tests{
         let mut layout=Layout::landscape(262,300,96,16,5,1,false,true);
         layout.count=1;layout.layers[0]=3;
         let id=|hwnd|Some(WindowIdentity{hwnd,pid:11,tid:13});
-        let target=Target{owner:9,layout,index:0,reduced:true,sources:[id(1),id(2),id(3),None,None]};
+        let target=Target{owner:9,layout,index:0,reduced:true,dark:true,dpi:96,sources:[id(1),id(2),id(3),None,None]};
         let frame=(vec![198;160*90*4],160,90);
         let view=Preview::project(target,&[None,Some(&frame),Some(&frame),None,None]);
         assert_eq!(view.mask,0b110);
@@ -636,7 +638,7 @@ mod tests{
             let mut layout=Layout::landscape(262,300,96,16,4,1,right,true);
             layout.count=1;layout.layers[0]=3;
             let id=|hwnd|Some(WindowIdentity{hwnd,pid:11,tid:13});
-            let tgt=Target{owner:9,layout,index:0,reduced:false,sources:[id(1),id(2),id(3),None,None]};
+            let tgt=Target{owner:9,layout,index:0,reduced:false,dark:true,dpi:96,sources:[id(1),id(2),id(3),None,None]};
             let textures=[(vec![198;160*90*4],160,90),(vec![215;75*125*4],75,125),(vec![232;92*92*4],92,92)];
             let raster=Preview::project(tgt,&[Some(&textures[0]),Some(&textures[1]),Some(&textures[2]),None,None]);
             assert_eq!(tgt.zoom(7,0),1.0);
@@ -668,7 +670,7 @@ mod tests{
             layout.active=Some(0);
             layout.height=layout.content_height();
             let id=WindowIdentity{hwnd:1,pid:11,tid:13};
-            let target=Target{owner:9,layout,index:0,reduced:false,sources:[Some(id),None,None,None,None]};
+            let target=Target{owner:9,layout,index:0,reduced:false,dark:true,dpi:96,sources:[Some(id),None,None,None,None]};
             let frame=(vec![210;160*90*4],160,90);
             let preview=Preview::project(target,&[Some(&frame),None,None,None,None]);
             let w=layout.width as usize;

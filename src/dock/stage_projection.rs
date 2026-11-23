@@ -22,19 +22,21 @@ pub(super) fn downsample_rows<'a>(sw:usize,sh:usize,dw:usize,dh:usize,row_at:imp
     let ys=bands(sh,dh);
     let mut result=vec![0u8;dw*dh*4];
     let denominator=(sw*sh) as u32;
+    let mut sums=vec![[0u32;4];dw];
     for (y,rows) in ys.iter().enumerate(){
-        for (x,cols) in xs.iter().enumerate(){
-            let mut sum=[0u32;4];
-            for &(sy,wy) in rows{
-                let row=row_at(sy);
+        sums.fill([0;4]);
+        for &(sy,wy) in rows{
+            let row=row_at(sy);
+            for (sum,cols) in sums.iter_mut().zip(&xs){
                 for &(sx,wx) in cols{
-                    let i=sx*4;
+                    let color=&row[sx*4..sx*4+4];
                     let weight=wx*wy;
-                    for c in 0..4{sum[c]+=row[i+c] as u32*weight;}
+                    for c in 0..4{sum[c]+=color[c] as u32*weight;}
                 }
             }
-            let at=(y*dw+x)*4;
-            for c in 0..4{result[at+c]=((sum[c]+denominator/2)/denominator) as u8;}
+        }
+        for (pixel,sum) in result[y*dw*4..(y+1)*dw*4].chunks_exact_mut(4).zip(&sums){
+            for c in 0..4{pixel[c]=((sum[c]+denominator/2)/denominator) as u8;}
         }
     }
     result
@@ -99,34 +101,18 @@ impl Card{
         let d=|x,y|{let (u,v)=self.uv(x,y);self.edge_distance(u,v)};
         (d(x+0.5,y)-d(x-0.5,y),d(x,y+0.5)-d(x,y-0.5))
     }
-    fn coverage(self,x:f32,y:f32,distance:f32)->f32{
-        // The inverse transform has a bounded local scale at the supported
-        // yaw. Only pixels near the silhouette need the local filter.
-        let band=0.85*(1.0+self.depth)*(1.0+self.depth*self.rect.h as f32/self.rect.w as f32);
-        if distance<=-band{return 1.0;}
-        if distance>=band{return 0.0;}
+    // The rim and face share a coverage mask. Painting the rim as a
+    // second translucent shape would increase silhouette alpha, and on
+    // zoom it would no longer line up with the resampled face.
+    fn coverage(self,x:f32,y:f32,distance:f32,stroke:f32)->(f32,f32){
+        let band=0.90*(1.0+self.depth)*(1.0+self.depth*self.rect.h as f32/self.rect.w as f32);
+        if distance<=-band-stroke*(1.0+self.depth)*1.5{return (1.0,0.0);}
+        if distance>=band{return (0.0,0.0);}
         let (dx,dy)=self.local_gradient(x,y);
-        pixel_coverage(distance,1.18*dx,1.18*dy)
-    }
-    pub(super) fn highlight(self,pixels:&mut[u8],w:i32,h:i32,ink:[u8;3],width:f32,glass:Option<&super::glass::Glass>){
-        use super::geometry::Rect;
-        let r=self.rect.rect();
-        let width=width.max(1.0);
-        let band=0.85*(1.0+self.depth)*(1.0+self.depth*r.h/r.w);
-        draw(pixels,w,h,Rect{x:r.x-1.0,y:r.y-1.0,w:r.w+2.0,h:r.h+2.0},|x,y|{
-            let (u,v)=self.uv(x,y);
-            let d=self.edge_distance(u,v);
-            if d>=band{return None;}
-            if d<=-width-band{
-                let glass=glass.filter(|_|d>-(width+band+3.0))?;
-                return Some((glass.tint(x,y,ink,230),125.0*(1.0+(d+width+band)/3.0)));
-            }
-            // Use the very same area filter on both sides of the thin line.
-            let (dx,dy)=self.local_gradient(x,y);
-            let outer=pixel_coverage(d,1.18*dx,1.18*dy);
-            let inner=pixel_coverage(d+width,1.18*dx,1.18*dy);
-            Some((ink,(outer-inner).max(0.0)*168.0))
-        });
+        let width=stroke*dx.hypot(dy);
+        let outer=pixel_coverage(distance,1.4*dx,1.4*dy);
+        let inner=pixel_coverage(distance+width,1.4*dx,1.4*dy);
+        (outer,(outer-inner).max(0.0))
     }
     pub(super) fn shadow(self,pixels:&mut[u8],w:i32,h:i32,layer:usize){
         self.shadow_with_filter(pixels,w,h,layer,true);
@@ -147,16 +133,19 @@ impl Card{
         self.paint_depth(pixels,w,h,src,sw,sh,0);
     }
     pub(super) fn paint_depth(self,pixels:&mut[u8],w:i32,h:i32,src:&[u8],sw:i32,sh:i32,layer:usize){
-        self.paint_with_filter(pixels,w,h,src,sw,sh,layer,true);
+        self.paint_face(pixels,w,h,src,sw,sh,layer,true,None);
     }
     pub(super) fn paint_with_filter(self,pixels:&mut[u8],w:i32,h:i32,src:&[u8],sw:i32,sh:i32,layer:usize,filtered:bool){
+        self.paint_face(pixels,w,h,src,sw,sh,layer,filtered,None);
+    }
+    pub(super) fn paint_face(self,pixels:&mut[u8],w:i32,h:i32,src:&[u8],sw:i32,sh:i32,layer:usize,filtered:bool,rim:Option<([u8;3],f32,f32)>){
         if sw<=0||sh<=0||src.len()<(sw as usize*sh as usize*4){return;}
         let source=sw as f32/sh as f32;
         let slot=self.rect.w as f32/self.rect.h as f32;
         let tall=source<=1.12;
         let portrait=source<0.92;
-        let fit_v=(slot/source).min(if filtered&&portrait{0.995}else if tall{0.96}else{0.94});
-        let fit_u=(source/slot*fit_v).min(if filtered&&portrait{0.985}else{0.96});
+        let fit_v=(slot/source).min(if filtered&&portrait{(1.0-2.0/self.rect.h as f32).max(0.80)}else if tall{0.96}else{0.94});
+        let fit_u=(source/slot*fit_v).min(if filtered&&portrait{(1.0-2.0/self.rect.w as f32).max(0.80)}else{0.96});
         let fit_v=fit_u*slot/source;
         let ambient=|side:usize|std::array::from_fn::<u8,3,_>(|channel|{
             // Derive the matte from the real window's edge colors, not
@@ -180,12 +169,17 @@ impl Card{
         let reduced=(mw!=sw||mh!=sh).then(||downsample(src,sw as usize,sh as usize,sw as usize*4,mw as usize,mh as usize));
         let src=reduced.as_deref().unwrap_or(src);
         let (sw,sh)=(mw,mh);
-        draw(pixels,w,h,self.rect.rect(),|x,y|{
+        let mut bounds=self.rect.rect();
+        if filtered{
+            bounds.x-=1.0;bounds.y-=1.0;bounds.w+=2.0;bounds.h+=2.0;
+        }
+        let stroke=rim.map_or(0.0,|(_,width,_)|width);
+        draw(pixels,w,h,bounds,|x,y|{
             let (u,v)=self.uv(x,y);
             let dist=self.edge_distance(u,v);
-            let coverage=if filtered{self.coverage(x,y,dist)}else{
-                [(-0.27,-0.27),(0.27,-0.27),(-0.27,0.27),(0.27,0.27)]
-                    .into_iter().filter(|&(dx,dy)|self.contains(x+dx,y+dy)).count() as f32/4.0
+            let (coverage,line)=if filtered{self.coverage(x,y,dist,stroke)}else{
+                ([(-0.27,-0.27),(0.27,-0.27),(-0.27,0.27),(0.27,0.27)]
+                    .into_iter().filter(|&(dx,dy)|self.contains(x+dx,y+dy)).count() as f32/4.0,0.0)
             };
             if coverage<=0.0{return None;}
             let far=if self.right{1.0-u}else{u}.clamp(0.0,1.0);
@@ -193,19 +187,26 @@ impl Card{
             let center=if filtered&&portrait{0.50}else if tall{if self.right{0.48}else{0.52}}else{0.50};
             let (su,sv)=(0.5+(u-center)/fit_u,0.5+(v-0.5)/fit_v);
             let opacity=255.0*coverage;
+            let finish=|c:usize,color:f32|{
+                let color=color*shade;
+                let color=if let Some((ink,_,strength))=rim.filter(|_|line>0.0){
+                    color+(ink[c] as f32-color)*(line/coverage)*strength
+                }else{color};
+                color.round() as u8
+            };
             let matte=|c:usize|{
                 let mix=u.clamp(0.0,1.0);
                 let color=matte_left[c] as f32*(1.0-mix)+matte_right[c] as f32*mix;
-                let rim=if filtered{(1.2+dist).clamp(0.0,1.0)*12.0}else{(1.6+dist).clamp(0.0,1.0)*24.0};
+                let rim=if filtered{0.0}else{(1.6+dist).clamp(0.0,1.0)*24.0};
                 color+rim
             };
             let content=if filtered{
                 let (uw,vh)=(fit_u*self.rect.w as f32,fit_v*self.rect.h as f32);
                 let edge=((su-0.5).abs()-0.5)*uw;
                 let cap=((sv-0.5).abs()-0.5)*vh;
-                (0.5-edge.max(cap)/(1.0+self.depth)).clamp(0.0,1.0)
+                (0.5-edge.max(cap)/(1.45*(1.0+self.depth))).clamp(0.0,1.0)
             }else if (0.0..=1.0).contains(&su)&&(0.0..=1.0).contains(&sv){1.0}else{0.0};
-            if content<=0.0{return Some((std::array::from_fn(|c|(matte(c)*shade).round() as u8),opacity));}
+            if content<=0.0{return Some((std::array::from_fn(|c|finish(c,matte(c))),opacity));}
             // Bilinear sampling after projective inverse maps all content,
             // rather than just tapering or rotating the thumbnail container.
             let fx=su.clamp(0.0,1.0)*(sw-1) as f32;
@@ -219,7 +220,7 @@ impl Card{
                 let end=at(ix,jy,k)*(1.0-a)+at(jx,jy,k)*a;
                 let sample=t*(1.0-b)+end*b;
                 let fill=if content>=1.0{sample}else{matte(k)*(1.0-content)+sample*content};
-                (fill*shade).round() as u8
+                finish(k,fill)
             });
             Some((tone,opacity))
         });
@@ -237,11 +238,41 @@ mod tests{
         assert_eq!(pixel_coverage(0.0,1.0,0.0),0.5);
     }
     #[test]
+    fn rim_preserves_the_fractional_silhouette_at_multiple_dpis(){
+        for (w,h) in [(100,140),(125,175),(150,210)]{
+            for right in [false,true]{
+                let (stride,rows)=(w+12,h+12);
+                let card=Card::new(Box2{x:6,y:6,w,h},right,28.0);
+                let frame=vec![240;80*130*4];
+                let mut body=vec![0;(stride*rows*4) as usize];
+                let mut rimmed=body.clone();
+                card.paint_face(&mut body,stride,rows,&frame,80,130,0,true,None);
+                card.paint_face(&mut rimmed,stride,rows,&frame,80,130,0,true,Some(([255,225,10],1.3,0.8)));
+                let mut partial=0;
+                let mut tinted=0;
+                for (a,b) in body.chunks_exact(4).zip(rimmed.chunks_exact(4)){
+                    assert_eq!(a[3],b[3],"drawing a rim must not thicken the edge");
+                    assert!(b[..3].iter().all(|&c|c<=b[3]));
+                    if a[3]>0&&a[3]<255{partial+=1;if a[..3]!=b[..3]{tinted+=1;}}
+                }
+                assert!(partial>w/2&&tinted>w/2);
+            }
+        }
+    }
+    #[test]
     fn fractional_box_preserves_thin_strokes_and_respects_stride(){
         let row=[0u8,0,0,255,255,255,255,255,0,0,0,255,99,99,99,99];
         let actual=downsample(&row,3,1,16,2,1);
         assert_eq!(actual,[85,85,85,255,85,85,85,255]);
         assert_eq!(downsample(&row,3,1,16,1,1),[85,85,85,255]);
         assert_eq!(downsample(&row,3,1,16,3,1),row[..12]);
+        let reads=std::cell::Cell::new(0);
+        let other=[150u8,150,150,255,150,150,150,255,150,150,150,255];
+        let both=downsample_rows(3,2,2,1,|y|{
+            reads.set(reads.get()+1);
+            if y==0{&row[..12]}else{&other}
+        });
+        assert_eq!(both,[118,118,118,255,118,118,118,255]);
+        assert_eq!(reads.get(),2);
     }
 }
