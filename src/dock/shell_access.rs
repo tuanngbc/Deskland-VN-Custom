@@ -95,6 +95,15 @@ unsafe fn top_windows()->Vec<HWND>{
     windows
 }
 
+unsafe fn taskbar_roots(bar:HWND,shell:u32)->Vec<HWND>{
+    let mut children=Vec::new();
+    EnumChildWindows(bar,Some(collect),(&mut children as *mut Vec<HWND>) as LPARAM);
+    // Windows 11 exposes the real Start and overflow controls under the
+    // XAML island's HWND, but they may not be in the outer taskbar UIA tree.
+    children.retain(|&h|pid(h)==shell&&class(h)=="Windows.UI.Composition.DesktopWindowContentBridge");
+    children.push(bar);
+    children
+}
 unsafe fn invoke_taskbar(automation:&IUIAutomation,target:Target,shell:u32,anchor:Option<Anchor>)->bool{
     if shell==0{return false;}
     let monitor=anchor.map(|a|MonitorFromPoint(a.point,MONITOR_DEFAULTTONEAREST));
@@ -102,9 +111,9 @@ unsafe fn invoke_taskbar(automation:&IUIAutomation,target:Target,shell:u32,ancho
     bars.sort_by_key(|&h|u8::from(monitor!=Some(MonitorFromWindow(h,MONITOR_DEFAULTTONEAREST))));
     let Ok(condition)=automation.ControlViewCondition()else{return false;};
     let started=std::time::Instant::now();
-    for bar in bars {
+    for hwnd in bars.into_iter().flat_map(|bar|taskbar_roots(bar,shell)) {
         if started.elapsed()>=Duration::from_millis(650){return false;}
-        let Ok(root)=automation.ElementFromHandle(AutomationHwnd(bar))else{continue;};
+        let Ok(root)=automation.ElementFromHandle(AutomationHwnd(hwnd))else{continue;};
         let Ok(children)=root.FindAll(TreeScope_Descendants,&condition)else{continue;};
         for index in 0..children.Length().unwrap_or(0).min(300){
             if started.elapsed()>=Duration::from_millis(650){return false;}
@@ -197,10 +206,8 @@ unsafe fn open_native(target:Target,anchor:Option<Anchor>,owner:HWND,control:HWN
         unsafe{
             let shell=pid(GetShellWindow());
             let was_open=native_popup(target,shell).is_some();
-            // The Win key uses the Windows Start experience without a slow
-            // taskbar accessibility traversal or depending on XAML IDs.
-            let mut invoked=target==Target::Start&&send_win(None);
-            if !invoked&&CoInitializeEx(None,COINIT_MULTITHREADED).is_ok(){
+            let mut invoked=false;
+            if CoInitializeEx(None,COINIT_MULTITHREADED).is_ok(){
                 {
                     let uia:windows::core::Result<IUIAutomation>=CoCreateInstance(&CUIAutomation,None,CLSCTX_INPROC_SERVER);
                     if let Ok(uia)=uia{
@@ -213,6 +220,7 @@ unsafe fn open_native(target:Target,anchor:Option<Anchor>,owner:HWND,control:HWN
                 }
                 CoUninitialize();
             }
+            if !invoked&&target==Target::Start{invoked=send_win(None);}
             let claimed=invoked&&(was_open||anchor.is_none_or(|anchor|place_popup(target,shell,anchor)));
             // Windows updates have changed the Start flyout class in the past.
             // Don't open a second panel when the real host took the foreground.
