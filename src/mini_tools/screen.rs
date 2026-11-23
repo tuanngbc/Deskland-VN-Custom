@@ -74,8 +74,8 @@ pub fn select_with_image(record:bool, initial:Option<RgbaImage>)->Result<Option<
     let origin=virtual_area();let image=initial.unwrap_or(Grab::new(origin)?.image()?);
     PICK.with(|c|*c.borrow_mut()=Some(Selection{image,origin,start:None,area:Area::default(),painted:Area::default(),result:None,record}));
     unsafe{
-        let cls=wide("tuanpc-deskCaptureSelection");let mut wc:WNDCLASSW=std::mem::zeroed();wc.lpfnWndProc=Some(proc);wc.lpszClassName=cls.as_ptr();wc.hCursor=LoadCursorW(std::ptr::null_mut(),IDC_CROSS);RegisterClassW(&wc);
-        let hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_APPWINDOW,cls.as_ptr(),wide(if record{"tuanpc-desk — Chọn vùng quay"}else{"tuanpc-desk — Chọn vùng chụp"}).as_ptr(),WS_POPUP,origin.x,origin.y,origin.w,origin.h,std::ptr::null_mut(),std::ptr::null_mut(),std::ptr::null_mut(),std::ptr::null());
+        let cls=wide("TLauncherCaptureSelection");let mut wc:WNDCLASSW=std::mem::zeroed();wc.lpfnWndProc=Some(proc);wc.lpszClassName=cls.as_ptr();wc.hCursor=LoadCursorW(std::ptr::null_mut(),IDC_CROSS);RegisterClassW(&wc);
+        let hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_APPWINDOW,cls.as_ptr(),wide(if record{"TLauncher — Chọn vùng quay"}else{"TLauncher — Chọn vùng chụp"}).as_ptr(),WS_POPUP,origin.x,origin.y,origin.w,origin.h,std::ptr::null_mut(),std::ptr::null_mut(),std::ptr::null_mut(),std::ptr::null());
         if hwnd.is_null(){PICK.with(|c|c.borrow_mut().take());return Err("Không mở được khung chọn vùng".into());}
         ShowWindow(hwnd,SW_SHOW);SetForegroundWindow(hwnd);super::loop_messages();
     }

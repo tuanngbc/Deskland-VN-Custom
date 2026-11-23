@@ -1,4 +1,4 @@
-// Resource script for tuanpc-desk.exe (compiled via Windows SDK rc.exe in build.rs)
+// Resource script for TLauncher.exe (compiled via Windows SDK rc.exe in build.rs)
 // Note: RT_MANIFEST is embedded separately via /MANIFEST:EMBED in build.rs.
 
 1 ICON "assets/app.ico"
@@ -17,12 +17,12 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName",      "tuanpc-desk contributors"
-            VALUE "FileDescription",  "tuanpc-desk - Adaptive Live Wallpaper"
+            VALUE "FileDescription",  "TLauncher - Desktop, Dock and Stage Manager"
             VALUE "FileVersion",      "1.1.0.0"
-            VALUE "InternalName",     "tuanpc-desk"
+            VALUE "InternalName",     "TLauncher"
             VALUE "LegalCopyright",   "Copyright (C) 2026 Deskland authors & Deskland-VN contributors (GPL-3.0)"
-            VALUE "OriginalFilename", "tuanpc-desk.exe"
-            VALUE "ProductName",      "tuanpc-desk"
+            VALUE "OriginalFilename", "TLauncher.exe"
+            VALUE "ProductName",      "TLauncher"
             VALUE "ProductVersion",   "1.1.0"
         END
     END

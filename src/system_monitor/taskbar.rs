@@ -154,7 +154,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             let owner = (*state).owner;
             let menu = CreatePopupMenu();
             AppendMenuW(menu, MF_STRING, 1, wide("Mở Trình quản lý tác vụ").as_ptr());
-            AppendMenuW(menu, MF_STRING, 2, wide("Cài đặt tuanpc-desk…").as_ptr());
+            AppendMenuW(menu, MF_STRING, 2, wide("Cài đặt TLauncher…").as_ptr());
             AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
             AppendMenuW(menu, MF_STRING, 3, wide("Ẩn thống kê trên taskbar").as_ptr());
             let mut point = POINT { x:0, y:0 };

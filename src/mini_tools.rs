@@ -141,11 +141,11 @@ pub fn dispatch(args:&[String])->bool {
     unsafe {if !mutex.is_null(){CloseHandle(mutex);} windows::Win32::System::Com::CoUninitialize();}
     true
 }
-pub fn message(text:&str) {unsafe {MessageBoxW(std::ptr::null_mut(),wide(text).as_ptr(),wide("tuanpc-desk — Tiện ích").as_ptr(),MB_OK|MB_ICONINFORMATION);}}
+pub fn message(text:&str) {unsafe {MessageBoxW(std::ptr::null_mut(),wide(text).as_ptr(),wide("TLauncher — Tiện ích").as_ptr(),MB_OK|MB_ICONINFORMATION);}}
 pub fn output_path(kind:&str,ext:&str)->Result<PathBuf,String> {
     let dir=if let Some(trial)=crate::trial::data_dir(){trial.join("captures")}else{
         std::env::var("USERPROFILE").map(PathBuf::from).map_err(|e|e.to_string())?
-            .join(if kind=="Screenshot"{"Pictures"}else{"Videos"}).join("tuanpc-desk")
+            .join(if kind=="Screenshot"{"Pictures"}else{"Videos"}).join("TLauncher")
     };
     std::fs::create_dir_all(&dir).map_err(|e|e.to_string())?;
     let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e|e.to_string())?;

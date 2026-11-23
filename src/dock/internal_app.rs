@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use windows_sys::Win32::{Foundation::*,Graphics::Gdi::*,UI::WindowsAndMessaging::*};
 
 pub(super) const KEY:&str="deskland:settings";
-pub(super) const LABEL:&str="Cài đặt tuanpc-desk";
+pub(super) const LABEL:&str="Cài đặt TLauncher";
 #[derive(Default)]
 struct Registry { hwnd:usize, listener:usize }
 static SETTINGS:Mutex<Registry>=Mutex::new(Registry{hwnd:0,listener:0});

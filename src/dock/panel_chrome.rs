@@ -25,7 +25,23 @@ impl Anchor {
         monitor.cbSize=mem::size_of::<MONITORINFO>() as u32;
         (GetMonitorInfoW(MonitorFromPoint(self.point,MONITOR_DEFAULTTONEAREST),&mut monitor)!=0).then_some(monitor.rcWork)
     }
+    pub unsafe fn hub_work(self,gap:i32)->Option<RECT>{
+        let mut info:MONITORINFO=mem::zeroed();
+        info.cbSize=mem::size_of::<MONITORINFO>() as u32;
+        (GetMonitorInfoW(MonitorFromPoint(self.point,MONITOR_DEFAULTTONEAREST),&mut info)!=0)
+            .then(||hub_area(info.rcMonitor,info.rcWork,self,gap))
+            .flatten()
+    }
     pub fn alpha(self)->u8{(254-self.transparency.clamp(4,74)/4) as u8}
+}
+fn hub_area(monitor:RECT,work:RECT,anchor:Anchor,gap:i32)->Option<RECT>{
+    let mut area=RECT{left:monitor.left,right:monitor.right,top:work.top,bottom:monitor.bottom};
+    match anchor.side{
+        DockSide::Bottom=>area.bottom=area.bottom.min(anchor.point.y-gap),
+        DockSide::Left=>area.left=area.left.max(anchor.point.x+gap),
+        DockSide::Right=>area.right=area.right.min(anchor.point.x-gap),
+    }
+    (area.right>area.left&&area.bottom>area.top).then_some(area)
 }
 pub(super) fn placement(work:RECT,anchor:Anchor,width:i32,height:i32,gap:i32)->(i32,i32){
     let p=anchor.point;
@@ -110,6 +126,19 @@ pub(super) unsafe fn child_color(dc:HDC,dark:bool)->LRESULT{
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn hub_uses_monitor_width_and_cannot_overlap_dock(){
+        let monitor=RECT{left:-1200,top:-200,right:0,bottom:700};
+        for work in [RECT{left:-900,..monitor},RECT{right:-270,..monitor}]{
+            let anchor=Anchor{point:POINT{x:-175,y:585},side:DockSide::Bottom,dark:false,transparency:32};
+            let area=hub_area(monitor,work,anchor,8).unwrap();
+            assert_eq!((area.left,area.right,area.bottom),(-1200,0,577));
+            assert_eq!(placement(area,anchor,400,330,8),(-400,247));
+            let height=area.bottom-area.top;
+            let (_,y)=placement(area,anchor,400,height,8);
+            assert!(y+height<anchor.point.y);
+        }
+    }
     #[test]
     fn popup_keeps_a_smooth_premultiplied_edge(){
         let mut data=vec![255;24*24*4];

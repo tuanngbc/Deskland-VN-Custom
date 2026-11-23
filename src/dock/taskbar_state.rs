@@ -65,7 +65,7 @@ impl Mode{
     pub fn label(self)->&'static str{
         match self{
             Self::Compatibility=>"Tương thích Windows", Self::HidePending=>"Chờ xác nhận ẩn",
-            Self::Hidden=>"Deskland đang ẩn thanh tác vụ",Self::Parked=>"Chế độ Dock · thanh Windows đang tự ẩn",
+            Self::Hidden=>"TLauncher đang ẩn thanh tác vụ",Self::Parked=>"Chế độ Dock · thanh Windows đang tự ẩn",
             Self::EdgePeek=>"Chế độ Dock · đang xác minh thanh Windows",Self::Restoring=>"Đang khôi phục",
             Self::RestoredByWindows=>"Windows đã lấy lại thanh tác vụ",
             Self::RestoredByWatchdog=>"Bộ bảo vệ đã khôi phục",Self::Error=>"Chưa xác minh được chế độ",

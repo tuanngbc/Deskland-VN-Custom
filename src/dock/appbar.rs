@@ -157,6 +157,23 @@ impl Bars {
         }
         (result,Some(bar.request.depth))
     }
+    pub fn dock_placement(&self, display:&Display, side:DockSide)->Display{
+        let (mut dock,_)=self.placement(display,false);
+        if side==DockSide::Bottom{
+            // Release only the Stage strip along the Dock's length. Keep
+            // the cross-axis position and any work area reserved by Windows.
+            for bar in self.bars.iter().filter(|b|b.request.display==display.id&&b.request.stage){
+                if let Some(r)=bar.position{
+                    match bar.request.side{
+                        DockSide::Left if r.right==dock.work.left=>dock.work.left=r.left.max(display.bounds.left),
+                        DockSide::Right if r.left==dock.work.right=>dock.work.right=r.right.min(display.bounds.right),
+                        _=>{}
+                    }
+                }
+            }
+        }
+        dock
+    }
 }
 
 #[cfg(test)]

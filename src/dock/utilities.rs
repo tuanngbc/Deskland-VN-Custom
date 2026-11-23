@@ -300,7 +300,7 @@ impl Widget {
             Notifications=>"Thông báo Windows",QuickSettings=>"Cài đặt nhanh",Spotlight=>"Spotlight",
             Explorer=>"File Explorer",Desktop=>"Hiện/ẩn desktop",Capture=>"Chụp màn hình",Record=>"Quay màn hình",
             Stats=>"Chỉ số taskbar",Wallpaper=>"Bật/tắt hình nền",Stage=>"Stage Manager",
-            Settings=>"Cài đặt Deskland",Windows=>"Chuyển cửa sổ",Metrics=>"Chỉ số máy"}
+            Settings=>"Cài đặt TLauncher",Windows=>"Chuyển cửa sổ",Metrics=>"Chỉ số máy"}
     }
     pub(super) fn simple(self)->Option<Action>{
         use Widget::*;
@@ -427,12 +427,11 @@ pub(super) fn available_in_dock_mode(widget:Option<Widget>)->bool{
 pub(super) fn local_action(action:Action)->bool{
     !matches!(action,Action::Notifications|Action::QuickSettings|Action::Desktop|Action::Windows|Action::Host(HostAction::SystemMonitor))
 }
-pub(super) unsafe fn show_hub(owner:HWND,point:POINT,profile:&Profile,dock_mode:bool){
+pub(super) unsafe fn show_hub(owner:HWND,anchor:chrome::Anchor,profile:&Profile,dock_mode:bool){
     // The overview is interactive immediately. Device-specific views request
     // their readings on demand; this click never waits on WLan / COM.
-    let anchor=chrome::Anchor::for_owner(owner,point);
     let initial=Snapshot{status:STATUS.with(|s|s.borrow().clone()),wlan:None,bluetooth:BluetoothState::Unknown,battery:battery()};
-    control_center::show(owner,anchor,hub_view(&initial,profile,dock_mode,false));
+    control_center::show_hub(owner,anchor,hub_view(&initial,profile,dock_mode,false));
 }
 pub(super) fn hub_view(snapshot:&Snapshot,profile:&Profile,dock_mode:bool,live:bool)->View{
     let mut cards=profile.order.iter().copied().filter(|w|!dock_mode||available_in_dock_mode(Some(*w))).filter(|w|!profile.hidden.contains(w)

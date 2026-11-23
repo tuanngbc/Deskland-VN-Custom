@@ -1,7 +1,7 @@
-# tuanpc-desk VN development notes
+# TLauncher VN development notes
 
 - Source chính là Rust native ở thư mục gốc (`src/`, `Cargo.toml`, `assets/`).
-- `prototype/` chứa giao diện cài đặt, thumbnail và shader dùng chung; phải được đóng gói cạnh `tuanpc-desk.exe`.
+- `prototype/` chứa giao diện cài đặt, thumbnail và shader dùng chung; phải được đóng gói cạnh `TLauncher.exe`.
 - Build kiểm tra: `cargo test --release`; build phát hành: `cargo build --release` trên Windows với Rust stable và Windows SDK.
 - GitHub Actions ở `.github/workflows/build-rust-test.yml` là workflow phát hành duy nhất.
 - Không đưa `target/`, EXE, log, profile cá nhân, credential hoặc dữ liệu ngoài repository vào git.

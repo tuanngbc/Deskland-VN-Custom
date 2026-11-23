@@ -1,10 +1,10 @@
-# tuanpc-desk — Rust Native
+# TLauncher — Rust Native
 
-tuanpc-desk là hình nền động native cho Windows, viết bằng Rust + Win32 + OpenGL. Đây là source chính của dự án; bản chạy nền không còn phụ thuộc vào host C# hay WebView2.
+TLauncher là hình nền động native cho Windows, viết bằng Rust + Win32 + OpenGL. Đây là source chính của dự án; bản chạy nền không còn phụ thuộc vào host C# hay WebView2.
 
 ## Chạy bản đã build
 
-Giữ `tuanpc-desk.exe` và thư mục `prototype` cùng cấp rồi chạy EXE. Mở Cài đặt bằng `tuanpc-desk.exe --settings`. Cấu hình nằm tại `%USERPROFILE%\\.deskland-rs\\settings.json`.
+Giữ `TLauncher.exe` và thư mục `prototype` cùng cấp rồi chạy EXE. Mở Cài đặt bằng `TLauncher.exe --settings`. Cấu hình nằm tại `%USERPROFILE%\\.deskland-rs\\settings.json`.
 
 ## Build từ source
 
@@ -13,10 +13,10 @@ GitHub Actions tự build trên Windows với Rust stable. Khi có Rust và Wind
 ```powershell
 cargo test --release
 cargo build --release
-.\\target\\release\\tuanpc-desk.exe
+.\\target\\release\\TLauncher.exe
 ```
 
-EXE phát hành được đổi tên thành `tuanpc-desk.exe`; giữ `prototype/` bên cạnh để dùng giao diện cài đặt và thumbnail. `--headless --snapshot <thư_mục> --exit-after-snapshot` dùng để kiểm tra nhanh nhiều màn hình.
+EXE phát hành được đổi tên thành `TLauncher.exe`; giữ `prototype/` bên cạnh để dùng giao diện cài đặt và thumbnail. `--headless --snapshot <thư_mục> --exit-after-snapshot` dùng để kiểm tra nhanh nhiều màn hình.
 
 ## Tính năng
 
@@ -26,6 +26,6 @@ EXE phát hành được đổi tên thành `tuanpc-desk.exe`; giữ `prototype/
 - Hỗ trợ screensaver và khóa màn hình Windows bằng cơ chế hệ điều hành.
 - Cài đặt chia thành 6 trang, có tìm giao diện và chế độ sáng/tối; WebView2 chỉ chạy khi mở Cài đặt.
 - Ghi hoặc nhập phím tắt tùy ý cho Spotlight, chụp, quay và khóa với cảnh động. Khi ghi, các phím tắt của ứng dụng tạm ngưng; khi xung đột, giữ tổ hợp cũ và hiện lỗi cụ thể.
-- Bản 1.1.0 đổi tên sản phẩm và EXE thành tuanpc-desk, giữ cấu hình trong thư mục dữ liệu cũ và chuyển mục tự khởi động sang EXE mới.
+- Bản 1.1.0 đổi tên sản phẩm và EXE thành TLauncher, giữ cấu hình trong thư mục dữ liệu cũ và chuyển mục tự khởi động sang EXE mới.
 
 Giấy phép và thông báo bản quyền nằm trong `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md` và `TRADEMARKS.md`.

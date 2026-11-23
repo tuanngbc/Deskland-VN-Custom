@@ -1,6 +1,6 @@
-# tuanpc-desk — Phiên bản Rust Native (Win32 + OpenGL 3.3)
+# TLauncher — Phiên bản Rust Native (Win32 + OpenGL 3.3)
 
-Phiên bản viết lại hoàn toàn bằng **Rust native (Win32 + OpenGL 3.3 qua WGL)** của tuanpc-desk, thay thế kiến trúc đa tiến trình C# + WebView2 thường trực để tối ưu triệt để RAM/CPU, bổ sung **tương tác chuột trực tiếp trên màn hình nền**, nâng tổng số chủ đề lên **16 chủ đề** và chuyển sang cơ chế **màn hình khóa thật 100% của Windows**.
+Phiên bản viết lại hoàn toàn bằng **Rust native (Win32 + OpenGL 3.3 qua WGL)** của TLauncher, thay thế kiến trúc đa tiến trình C# + WebView2 thường trực để tối ưu triệt để RAM/CPU, bổ sung **tương tác chuột trực tiếp trên màn hình nền**, nâng tổng số chủ đề lên **16 chủ đề** và chuyển sang cơ chế **màn hình khóa thật 100% của Windows**.
 
 ---
 
@@ -20,12 +20,12 @@ Phiên bản viết lại hoàn toàn bằng **Rust native (Win32 + OpenGL 3.3 q
    - Nếu máy không có WebView2 Runtime hoặc chạy độc lập một file `.exe` không kèm thư mục `prototype/`, ứng dụng tự động chuyển sang **cửa sổ Cài đặt Win32 thuần** (`src/settings.rs`) có đầy đủ chọn chủ đề, thanh trượt tham số và tùy chọn khóa màn hình.
 5. **Bảo mật chuẩn hệ điều hành — Chỉ dùng khóa thật của Windows (`src/lock.rs`):**
    - Không hook bàn phím mức thấp, không chặn `Win+L`, không lưu/kiểm mã PIN tự chế.
-   - Hỗ trợ khóa ngay (`LockWorkStation()`), trình bảo vệ màn hình cảnh động bảo mật (`tuanpc-desk.scr` với `ScreenSaverIsSecure=1`), phím tắt `Ctrl+Alt+L` và tự động đồng bộ cảnh hiện tại làm ảnh nền màn khóa Windows.
+   - Hỗ trợ khóa ngay (`LockWorkStation()`), trình bảo vệ màn hình cảnh động bảo mật (`TLauncher.scr` với `ScreenSaverIsSecure=1`), phím tắt `Ctrl+Alt+L` và tự động đồng bộ cảnh hiện tại làm ảnh nền màn khóa Windows.
    - Tự động phát hiện và cho phép khôi phục lại `Win+L` nếu bản C# cũ từng ghi `DisableLockWorkstation=1`.
 6. **Dừng dựng hình khi khuất hoặc khóa máy:**
    - Tự động tạm ngừng vẽ khi có cửa sổ phóng to / toàn màn hình che khuất màn hình nền, khi phiên Windows đang khóa (`WTSRegisterSessionNotification`), ở màn hình `Winlogon` / UAC, hoặc khi trình bảo vệ màn hình đang chạy.
 7. **Biểu tượng ứng dụng nhúng sẵn & Menu Khay hệ thống tinh gọn:**
-   - Nhúng trực tiếp icon đa độ phân giải (`16×16` đến `256×256`) và `VERSIONINFO` vào `tuanpc-desk.exe` qua `app.rc` + `build.rs` (hiển thị đồng bộ trên Explorer, Taskbar, Khay hệ thống và thanh tiêu đề Cài đặt).
+   - Nhúng trực tiếp icon đa độ phân giải (`16×16` đến `256×256`) và `VERSIONINFO` vào `TLauncher.exe` qua `app.rc` + `build.rs` (hiển thị đồng bộ trên Explorer, Taskbar, Khay hệ thống và thanh tiêu đề Cài đặt).
    - Menu chuột phải ở khay hệ thống gọn gàng: chỉ hiển thị chủ đề đang chọn (`✓ Chủ đề: <Tên chủ đề>`) cùng các tác vụ nhanh, việc đổi chủ đề và tinh chỉnh chuyên sâu tập trung tại cửa sổ **Cài đặt…**.
 
 ---
@@ -45,7 +45,7 @@ Phiên bản viết lại hoàn toàn bằng **Rust native (Win32 + OpenGL 3.3 q
 - **Ctrl+Shift+S:** kéo chọn vùng chụp; Space chọn cả màn hình đang trỏ chuột; Esc hủy. Sau khi chọn, trình sửa ảnh mở ngay: cắt, mũi tên, khung, bút, chữ, số bước, pixel và tô kín. Enter copy rồi đóng; Ctrl+C copy, Ctrl+S lưu PNG/JPG, Ctrl+Z/Y hoàn tác/làm lại. Có nút ghim trên cùng.
 - **Ctrl+Shift+R:** chọn vùng quay desktop, lưu MP4 H.264, 30 FPS mặc định (tùy chọn 60 FPS), thu tiếng máy hoặc không tiếng. Nhấn lại phím quay để dừng và lưu; Ctrl+Shift+P tạm dừng/tiếp tục. Bảng điều khiển cũng có các nút tương ứng. Không có webcam, mic hay chế độ game.
 - Đổi phím tắt và tùy chọn tại **Cài đặt → Tiện ích**. Nếu ứng dụng khác đang giữ phím, Cài đặt báo xung đột để chọn phím khác.
-- Ảnh lưu mặc định ở Pictures/tuanpc-desk, video ở Videos/tuanpc-desk trong hồ sơ người dùng. Không tự tải ảnh/video lên mạng.
+- Ảnh lưu mặc định ở Pictures/TLauncher, video ở Videos/TLauncher trong hồ sơ người dùng. Không tự tải ảnh/video lên mạng.
 - Hình nền giữ một tiến trình; mỗi tiện ích tạo một phiên của cùng EXE khi được gọi và thoát khi đóng. Bộ chụp, bộ mã hóa và âm thanh không được tạo lúc chạy nền. Quay dùng GDI và Media Foundation có trên Windows; tải CPU thực tế phụ thuộc vùng quay, FPS và bộ mã hóa của máy. Video có bảo vệ bản quyền có thể không được chụp.
 
 ## Danh sách 16 Chủ đề & Cơ chế Tương tác Chuột
@@ -89,23 +89,23 @@ cargo +stable-x86_64-pc-windows-gnu build --release
 ```
 
 ```powershell
-cd tuanpc-desk
+cd TLauncher
 cargo build --release
 
 # Chạy hình nền (mặc định đọc chủ đề lần trước hoặc beach, 20 FPS cơ sở)
-.\target\release\tuanpc-desk.exe
+.\target\release\TLauncher.exe
 
 # Hoặc chỉ định chủ đề / tốc độ khung hình ngay từ dòng lệnh
-.\target\release\tuanpc-desk.exe --theme stadium --fps 24
+.\target\release\TLauncher.exe --theme stadium --fps 24
 
 # Mở cửa sổ Cài đặt của tiến trình đang chạy (hoặc khởi động kèm Cài đặt)
-.\target\release\tuanpc-desk.exe --settings
+.\target\release\TLauncher.exe --settings
 
 # Mở thẳng cửa sổ Cài đặt Win32 thuần (bỏ qua WebView2)
-.\target\release\tuanpc-desk.exe --settings-win32
+.\target\release\TLauncher.exe --settings-win32
 
 # Thoát tiến trình đang chạy nền
-.\target\release\tuanpc-desk.exe --quit
+.\target\release\TLauncher.exe --quit
 ```
 
 ### Đầy đủ tham số dòng lệnh (CLI)
@@ -118,7 +118,7 @@ cargo build --release
 | `--settings` | Mở cửa sổ Cài đặt WebView2 (tự lùi về Win32 nếu thiếu WebView2/prototype). |
 | `--settings-win32` | Buộc mở giao diện Cài đặt Win32 cổ điển siêu nhẹ. |
 | `--saver` (hoặc `/s`) | Chạy thử ngay chế độ trình bảo vệ màn hình toàn màn hình. |
-| `--quit` | Gửi tín hiệu đóng an toàn tới tiến trình `tuanpc-desk.exe` đang chạy và dọn icon khay. |
+| `--quit` | Gửi tín hiệu đóng an toàn tới tiến trình `TLauncher.exe` đang chạy và dọn icon khay. |
 | `--snapshot <thư_mục>` | Xuất ảnh chụp khung hình GPU (`.bmp`) ra thư mục chỉ định sau 4 giây. |
 | `--exit-after-snapshot` | Tự động thoát ngay sau khi chụp xong `--snapshot` (dùng cho kiểm thử tự động). |
 | `--test-click` | Tự động mô phỏng thao tác click trên cảnh để kiểm thử hiệu ứng tương tác. |
@@ -127,7 +127,7 @@ cargo build --release
 | `--webview-debug` | Mở cổng Remote Debugging `9222` cho cửa sổ cài đặt WebView2. |
 
 - **Tệp cấu hình:** Lưu độc lập tại `~/.deskland-rs/settings.json` (lần chạy đầu tiên nếu chưa có sẽ tự kế thừa cấu hình từ `%LOCALAPPDATA%\DesklandPreview\settings.json` của bản C# mà không ghi đè dữ liệu cũ).
-- **Nhật ký hoạt động:** Ghi tại `tuanpc-desk.log` cạnh file `.exe` (hoặc `~/.deskland-rs/tuanpc-desk-saver.log` ở chế độ `.scr`), tự in thống kê RAM và tốc độ khung hình mỗi 10 giây.
+- **Nhật ký hoạt động:** Ghi tại `TLauncher.log` cạnh file `.exe` (hoặc `~/.deskland-rs/TLauncher-saver.log` ở chế độ `.scr`), tự in thống kê RAM và tốc độ khung hình mỗi 10 giây.
 
 ---
 
@@ -150,7 +150,7 @@ cargo build --release
 |---|---:|---:|---:|---:|---:|
 | Bản C# + WebView2 (`beach`) | 11 | ~620 MB | ~1.210 MB | ~250 MB | ~15% |
 | Bản C# + WebView2 (`meadow`) | 11 | ~650 MB | ~1.240 MB | ~266 MB | ~20% |
-| **Bản Rust (`tuanpc-desk`, `--present gdi` 2 màn Full HD)** | **1** | **~97,7 MB** | **~124,2 MB** | **~97,9 MB** | **~14%** |
+| **Bản Rust (`TLauncher`, `--present gdi` 2 màn Full HD)** | **1** | **~97,7 MB** | **~124,2 MB** | **~97,9 MB** | **~14%** |
 
 2. **Đo thực tế trên 1 màn hình Full HD với chủ đề phức tạp (`stadium` — 12 cầu thủ AI + khán đài + bóng)** *(chạy nền hàng ngày)*:
    - **Private RAM:** `~64,9 MB` (`Working Set ~95,4 MB`).
@@ -166,8 +166,8 @@ cargo build --release
 # Dock & Stage Manager development branch
 
 On `codex/rust-dock`, Dock and the initial Stage sidebar are managed by the
-existing `tuanpc-desk.exe`. Open **Settings → Dock & Stage Manager** or use
-Deskland's tray to enable wallpaper, Dock and Stage independently. No separate
+existing `TLauncher.exe`. Open **Settings → Dock & Stage Manager** or use
+TLauncher's tray to enable wallpaper, Dock and Stage independently. No separate
 manual `--dock` launch or configuration application is required. Enabled modules
 start through the existing Windows autostart entry and stop with Deskland.
 

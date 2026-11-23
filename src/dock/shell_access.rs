@@ -21,8 +21,8 @@ pub(super) enum Target { Start, Tray, Clock }
 impl Target {
     pub const ALL:[Self;3]=[Self::Start,Self::Tray,Self::Clock];
     pub fn title(self,dock_mode:bool)->&'static str {
-        if dock_mode {return match self{Self::Start=>"Start · Tìm kiếm Deskland",Self::Tray=>"Trung tâm điều khiển Deskland",Self::Clock=>"Ngày giờ · Lịch Deskland"};}
-        match self {Self::Start=>"Start · Windows",Self::Tray=>"Biểu tượng ẩn · Windows",Self::Clock=>"Ngày giờ · Lịch Deskland"}
+        if dock_mode {return match self{Self::Start=>"Start · Tìm kiếm TLauncher",Self::Tray=>"Trung tâm điều khiển TLauncher",Self::Clock=>"Ngày giờ · Lịch TLauncher"};}
+        match self {Self::Start=>"Start · Windows",Self::Tray=>"Trung tâm điều khiển TLauncher",Self::Clock=>"Ngày giờ · Lịch TLauncher"}
     }
 }
 
@@ -34,7 +34,7 @@ pub(super) fn local_buttons(takeover_active:bool,native_opt_in:bool)->bool{
 pub(super) fn route(dock_mode:bool,target:Target,context:bool)->Route{
     match (dock_mode,target,context){
         (true,Target::Start,false)=>Route::Launcher,
-        (true,Target::Start,true)|(true,Target::Tray,_)=>Route::Hub,
+        (true,Target::Start,true)|(_,Target::Tray,_)=>Route::Hub,
         (_,Target::Clock,_)=>Route::Calendar,
         _=>Route::Native,
     }
@@ -228,7 +228,7 @@ unsafe fn open_native(target:Target,anchor:Option<Anchor>,owner:HWND,control:HWN
             // Windows updates have changed the Start flyout class in the past.
             // Don't open a second panel when the real host took the foreground.
             if !claimed&&GetForegroundWindow() as usize==before{
-                crate::log!("DOCK_SHELL {target:?} native unavailable; using Deskland");
+                crate::log!("DOCK_SHELL {target:?} native unavailable; using TLauncher");
                 fallback();
             }
         }
@@ -249,7 +249,7 @@ mod tests{
     fn dock_mode_never_routes_mouse_or_keyboard_shell_buttons_to_explorer(){
         for target in Target::ALL{
             for context in [true,false]{
-                assert_eq!(route(false,target,context),if target==Target::Clock{Route::Calendar}else{Route::Native});
+                assert_eq!(route(false,target,context),match target{Target::Clock=>Route::Calendar,Target::Tray=>Route::Hub,Target::Start=>Route::Native});
                 assert_ne!(route(true,target,context),Route::Native);
             }
         }

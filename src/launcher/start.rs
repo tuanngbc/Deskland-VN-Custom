@@ -54,7 +54,7 @@ fn remember(model:&mut Model,path:&Path){
 }
 fn make_pin(value:&str)->Entry{
     let path=PathBuf::from(value);
-    let name=if value==SETTINGS{"Cài đặt tuanpc-desk".into()}
+    let name=if value==SETTINGS{"Cài đặt TLauncher".into()}
         else{crate::dock::command_pin::decode(value).map(|c|c.label)
             .unwrap_or_else(||path.file_stem().and_then(|s|s.to_str()).unwrap_or(value).replace('_'," "))};
     Entry{name,path,kind:"Pinned",detail:String::new()}
@@ -127,7 +127,7 @@ fn build_view(model:&Model)->StartView{
         tiles.push(Tile{hit,text:text.into(),rect:rr(r.0,r.1,r.2,r.3,s),entry,compact,pinned});
     };
     let controls=INSET+frame.search_width()+CONTROL_STEP-CONTROL;
-    for (i,hit,text) in [(0,Hit::Settings,"Cài đặt Deskland"),(1,Hit::Account,"Tài khoản") ]{
+    for (i,hit,text) in [(0,Hit::Settings,"Cài đặt TLauncher"),(1,Hit::Account,"Tài khoản") ]{
         put(hit,text,(controls+i*CONTROL_STEP,HEADER_Y+2,CONTROL,CONTROL),None,true,false);
     }
     put(Hit::Home,"Đã ghim",(INSET,TABS_Y,66,26),None,true,false);
@@ -374,7 +374,7 @@ unsafe fn paint_start(hwnd:HWND){
                 }
                 if let Some(symbol)=symbol{glyph(&mut surface,tile.rect,symbol,palette.ink,s);continue;}
                 if tile.hit==Hit::Account{
-                    let user=std::env::var("USERNAME").unwrap_or_else(|_|"Deskland".into());
+                    let user=std::env::var("USERNAME").unwrap_or_else(|_|"TLauncher".into());
                     center_label(dc,&initial(&user),tile.rect,heading,fg);
                     continue;
                 }
@@ -564,7 +564,7 @@ unsafe fn activate(hwnd:HWND,tile:Tile){
     let open=|name:&str,path:&str|launch(hwnd,Entry{name:name.into(),path:path.into(),kind:"Application",detail:String::new()});
     match tile.hit{
         Hit::Entry(_)=>if let Some(entry)=tile.entry{launch(hwnd,entry);},
-        Hit::Settings=>open("Cài đặt Deskland",SETTINGS),
+        Hit::Settings=>open("Cài đặt TLauncher",SETTINGS),
         Hit::Explorer=>open("File Explorer","explorer.exe"),
         Hit::Windows=>open("Cài đặt Windows","ms-settings:"),
         Hit::TaskManager=>open("Task Manager","Taskmgr.exe"),
@@ -787,7 +787,7 @@ pub(crate) fn toggle(owner:HWND,anchor:DockAnchor){
             let module=windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(ptr::null());
             let wc=WNDCLASSW{lpfnWndProc:Some(proc_start),hInstance:module,hCursor:LoadCursorW(ptr::null_mut(),IDC_ARROW),lpszClassName:cls.as_ptr(),..std::mem::zeroed()};
             RegisterClassW(&wc);
-            let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW,cls.as_ptr(),wide("tuanpc-desk Start").as_ptr(),WS_POPUP|WS_CLIPCHILDREN,
+            let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW,cls.as_ptr(),wide("TLauncher Start").as_ptr(),WS_POPUP|WS_CLIPCHILDREN,
                 0,0,1,1,ptr::null_mut(),ptr::null_mut(),module,ptr::null());
             if hwnd.is_null(){return;}
             let edit=CreateWindowExW(0,wide("EDIT").as_ptr(),wide("").as_ptr(),WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL as u32,

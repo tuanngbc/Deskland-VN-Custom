@@ -1,9 +1,13 @@
 [package]
-name = "tuanpc-desk"
+name = "tlauncher"
 version = "1.1.0"
 edition = "2021"
 license = "GPL-3.0-only"
-description = "tuanpc-desk native (Rust + OpenGL) - hình nền động tương tác thích ứng 16 chủ đề cho Windows"
+description = "TLauncher native (Rust + OpenGL) - hình nền động tương tác thích ứng 16 chủ đề cho Windows"
+
+[[bin]]
+name = "TLauncher"
+path = "src/main.rs"
 
 [dependencies]
 glow = "0.14"

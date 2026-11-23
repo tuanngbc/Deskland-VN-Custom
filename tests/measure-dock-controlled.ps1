@@ -19,7 +19,7 @@ $trial = (Resolve-Path -LiteralPath $TrialDir).Path
 if ((Get-Content -LiteralPath (Join-Path $trial '.tuanpc-desk-trial') -Raw).Trim() -cne 'tuanpc-desk isolated native smoke profile v1') { throw 'Trial marker mismatch' }
 if ((Get-Content -LiteralPath (Join-Path $trial 'dock-benchmark.enable') -Raw).Trim() -cne 'tuanpc-desk dock benchmark v1') { throw 'Benchmark marker mismatch' }
 $candidate = Get-CimInstance Win32_Process -Filter "ProcessId=$CandidateId"
-if (!$candidate -or $candidate.Name -ne 'tuanpc-desk.exe' -or !$candidate.CommandLine.Contains('--trial-dir') -or !$candidate.CommandLine.Contains($trial)) { throw 'Candidate ownership mismatch' }
+if (!$candidate -or $candidate.Name -notin @('tuanpc-desk.exe','TLauncher.exe') -or !$candidate.CommandLine.Contains('--trial-dir') -or !$candidate.CommandLine.Contains($trial)) { throw 'Candidate ownership mismatch' }
 $build = Split-Path -Parent $candidate.ExecutablePath
 if ((Get-Content -LiteralPath (Join-Path $build 'BUILD-COMMIT.txt') -Raw).Trim() -cne $BuildSha) { throw 'Candidate build mismatch' }
 if (Test-Path -LiteralPath (Join-Path $Evidence 'verdict.json')) { throw 'Select an unused evidence directory' }
@@ -107,7 +107,7 @@ $fixtureHwnd = [IntPtr][int64]$focusRecord.Hwnd
 [uint32]$owner = 0
 [void][DeskPerfCounters]::GetWindowThreadProcessId($fixtureHwnd,[ref]$owner)
 if ($owner -ne $fixtureProcess.Id) { throw 'Fixture HWND ownership mismatch' }
-$log = Join-Path $build 'tuanpc-desk.log'
+$log = Join-Path $build $(if($candidate.Name -eq 'TLauncher.exe'){'TLauncher.log'}else{'tuanpc-desk.log'})
 $settings = Join-Path $trial 'settings.json'
 $settingsHash = (Get-FileHash -LiteralPath $settings -Algorithm SHA256).Hash
 $cfg = Get-Content -LiteralPath $settings -Raw | ConvertFrom-Json

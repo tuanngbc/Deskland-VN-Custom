@@ -114,7 +114,7 @@ impl Panel{
         FillRect(dc,&rect(0,0,WIDTH,HEIGHT),GetStockObject(DC_BRUSH) as HBRUSH);
         l(rect(20,15,216,32),&format!("Tháng {} · {}",self.view.number,self.view.year),p.ink);
         SelectObject(dc,self.fonts[1]);
-        l(rect(21,50,215,22),&format!("{:02}:{:02}  ·  Lịch Deskland",self.local.hour,self.local.minute),p.muted);
+        l(rect(21,50,215,22),&format!("{:02}:{:02}  ·  Lịch TLauncher",self.local.hour,self.local.minute),p.muted);
         for button in Button::ALL{
             let (x,y,bw,bh)=button.bounds();
             let r=rect(x,y,bw,bh);
@@ -170,7 +170,7 @@ pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor){
     let class=wide(CLASS);
     if !chrome::register_with_style(&class,Some(proc),CS_DROPSHADOW){return;}
     let (x,y)=chrome::placement(work,anchor,w,h,chrome::scale(dpi,9));
-    let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST|WS_EX_LAYERED,class.as_ptr(),wide("Lịch Deskland").as_ptr(),
+    let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST|WS_EX_LAYERED,class.as_ptr(),wide("Lịch TLauncher").as_ptr(),
         WS_POPUP,x,y,w,h,owner,ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
     if hwnd.is_null(){return;}
     chrome::disable_system_border(hwnd);

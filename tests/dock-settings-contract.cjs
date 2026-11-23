@@ -209,7 +209,11 @@ test('compact status and metrics preserve per-display options',()=>{
   $('utilityMetrics').checked=true;$('utilityMetricGPU').checked=false;$('utilityMetricInterval').value='5';
   $('utilityMetrics').listeners.change();
   m=messages.pop();assert.equal(m.display,'side');assert.equal(m.profile.metrics.enabled,true);
-  assert.equal(m.profile.metrics.mask,27);assert.equal(m.profile.metrics.interval,5);
+    assert.equal(m.profile.metrics.mask,27);assert.equal(m.profile.metrics.interval,5);
+    $('utilityMetricMode').checked=true;$('utilityMetricMode').listeners.change();
+    assert.equal(messages.pop().profile.metrics.mode,'inline');
+    $('utilityMetricMode').checked=false;$('utilityMetricMode').listeners.change();
+    m=messages.pop();assert.equal(m.profile.metrics.mode,'popover');assert.equal(m.profile.metrics.enabled,true);
   $('utilityDisplay').listeners.change({target:{value:'main'}});
   assert.equal($('utilityMetrics').checked,false);
 });

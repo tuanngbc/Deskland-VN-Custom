@@ -9,7 +9,8 @@ function Percentile($values,[double]$p) {
     $ordered[[int][Math]::Max(0,[Math]::Ceiling($p*$ordered.Count)-1)]
 }
 function WallpaperFrameWindows($path,[double]$start,[double]$end) {
-    $log = Join-Path $path 'tuanpc-desk.log'
+    $log = Join-Path $path 'TLauncher.log'
+    if (!(Test-Path -LiteralPath $log)) { $log = Join-Path $path 'tuanpc-desk.log' }
     if (!(Test-Path -LiteralPath $log -PathType Leaf)) { return $null }
     $windows = @(Get-Content -LiteralPath $log -Encoding utf8 | ForEach-Object {
         if ($_ -match '^\[(\d+\.\d+)\].+\| (\d+\.\d+) khung/giây, CPU vẽ (\d+\.\d+) ms/khung$') {

@@ -1,6 +1,6 @@
-//! tuanpc-desk: bản Rust native (1 tiến trình, OpenGL 3.3) của tuanpc-desk — 16 chủ đề tương tác thích ứng.
-//! Chạy:   tuanpc-desk.exe [--theme <id>] [--fps 20] [--settings]
-//! Thoát:  tuanpc-desk.exe --quit   (hoặc menu khay hệ thống)
+//! TLauncher: bản Rust native (1 tiến trình, OpenGL 3.3) của TLauncher — 16 chủ đề tương tác thích ứng.
+//! Chạy:   TLauncher.exe [--theme <id>] [--fps 20] [--settings]
+//! Thoát:  TLauncher.exe --quit   (hoặc menu khay hệ thống)
 
 #![windows_subsystem = "windows"]
 
@@ -364,7 +364,7 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
                     AppendMenuW(menu, MF_STRING, CMD_WINL, wide("⚠ Bật lại Win+L của Windows (bản C# cũ đã tắt)").as_ptr());
                 }
                 AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
-                AppendMenuW(menu, MF_STRING, CMD_EXIT, wide("Thoát tuanpc-desk").as_ptr());
+                AppendMenuW(menu, MF_STRING, CMD_EXIT, wide("Thoát TLauncher").as_ptr());
                 let mut pt = POINT { x: 0, y: 0 };
                 GetCursorPos(&mut pt);
                 SetForegroundWindow(h);
@@ -394,7 +394,7 @@ unsafe extern "system" fn wall_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LR
 }
 
 /// Cửa sổ trình bảo vệ màn hình: có bất kỳ thao tác nào thì thoát. Việc khóa / mở khóa do Windows
-/// làm (ScreenSaverIsSecure), tuanpc-desk không kiểm mật khẩu và không chặn phím nào.
+/// làm (ScreenSaverIsSecure), TLauncher không kiểm mật khẩu và không chặn phím nào.
 unsafe extern "system" fn saver_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     let warm = SAVER_START.with(|c| c.get()).is_some_and(|t| t.elapsed().as_millis() > 800);
     match m {
@@ -2330,8 +2330,8 @@ fn main() {
             unsafe {
                 MessageBoxW(
                     std::ptr::null_mut(),
-                    wide("Bật / tắt trình bảo vệ màn hình tuanpc-desk trong menu khay của tuanpc-desk.\n\nKhi quay lại, Windows sẽ hiện màn hình đăng nhập thật (khóa bằng mật khẩu / PIN / Windows Hello của Windows).").as_ptr(),
-                    wide("tuanpc-desk").as_ptr(),
+                    wide("Bật / tắt trình bảo vệ màn hình TLauncher trong menu khay của TLauncher.\n\nKhi quay lại, Windows sẽ hiện màn hình đăng nhập thật (khóa bằng mật khẩu / PIN / Windows Hello của Windows).").as_ptr(),
+                    wide("TLauncher").as_ptr(),
                     MB_OK | MB_ICONINFORMATION,
                 );
             }
@@ -2349,7 +2349,7 @@ fn main() {
         timeBeginPeriod(1);
     }
 
-    let log_name = if saver { "tuanpc-desk-saver.log" } else { "tuanpc-desk.log" };
+    let log_name = if saver { "TLauncher-saver.log" } else { "TLauncher.log" };
     let log_dir = if is_scr || trial::active() { Some(lock::data_dir()) } else { std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) };
     let log_path = log_dir.map(|d| d.join(log_name)).unwrap_or_else(|| log_name.into());
     *LOG.lock().unwrap() = File::create(&log_path).ok();
@@ -2367,7 +2367,7 @@ fn main() {
         }
     }
     log!(
-        "tuanpc-desk {} khởi động{}: chủ đề {}, {fps} khung/giây",
+        "TLauncher {} khởi động{}: chủ đề {}, {fps} khung/giây",
         env!("CARGO_PKG_VERSION"),
         if saver { " (trình bảo vệ màn hình)" } else { "" },
         cfg.theme
@@ -2403,7 +2403,7 @@ fn main() {
     nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     nid.uCallbackMessage = WM_TRAY;
     nid.hIcon = unsafe { app_icon(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON)) };
-    for (i, c) in "tuanpc-desk".encode_utf16().enumerate() {
+    for (i, c) in "TLauncher".encode_utf16().enumerate() {
         nid.szTip[i] = c;
     }
     let headless = args.iter().any(|a| a == "--headless");
@@ -2429,7 +2429,7 @@ fn main() {
             b.uFlags = NIF_INFO;
             b.dwInfoFlags = NIIF_WARNING;
             let title = "Win+L của Windows đang bị tắt";
-            let text = "Bản C# cũ đã tắt khóa Windows. Chuột phải icon tuanpc-desk > \"Bật lại Win+L của Windows\".";
+            let text = "Bản C# cũ đã tắt khóa Windows. Chuột phải icon TLauncher > \"Bật lại Win+L của Windows\".";
             for (i, c) in title.encode_utf16().take(63).enumerate() {
                 b.szInfoTitle[i] = c;
             }
@@ -2484,7 +2484,7 @@ fn main() {
     };
     log!("Cách hiển thị: {}", if app.prefer_gpu {"GPU trực tiếp (GDI dự phòng)"} else if app.gdi { "GDI" } else { "OpenGL SwapBuffers" });
     // Khi chạy từ HKCU\...\Run, Windows có thể khởi động tiến trình trước khi
-    // Explorer dựng xong Progman/WorkerW. Chờ và thử lại để tuanpc-desk tự chạy
+    // Explorer dựng xong Progman/WorkerW. Chờ và thử lại để TLauncher tự chạy
     // ổn định sau đăng nhập thay vì thoát ngay ở lần gắn hình nền đầu tiên.
     let mut walls_ready = false;
     for attempt in 0..12 {
@@ -2747,11 +2747,11 @@ fn main() {
                         saver_check_at = None;
                         if let Err(e) = lock::uninstall_saver() {
                             log!("Tắt màn hình chờ lỗi: {e}");
-                            unsafe { MessageBoxW(settings::hwnd().unwrap_or(msg_hwnd), wide(&e).as_ptr(), wide("tuanpc-desk").as_ptr(), MB_OK | MB_ICONWARNING) };
+                            unsafe { MessageBoxW(settings::hwnd().unwrap_or(msg_hwnd), wide(&e).as_ptr(), wide("TLauncher").as_ptr(), MB_OK | MB_ICONWARNING) };
                         }
                     } else if let Err(e) = lock::install_saver(app.cfg.lock_idle_mins) {
                         log!("Đặt trình bảo vệ màn hình lỗi: {e}");
-                        unsafe { MessageBoxW(settings::hwnd().unwrap_or(msg_hwnd), wide(&e).as_ptr(), wide("tuanpc-desk").as_ptr(), MB_OK | MB_ICONWARNING) };
+                        unsafe { MessageBoxW(settings::hwnd().unwrap_or(msg_hwnd), wide(&e).as_ptr(), wide("TLauncher").as_ptr(), MB_OK | MB_ICONWARNING) };
                     }
                 }
                 Action::Idle(m) => {
@@ -2948,7 +2948,7 @@ fn main() {
                             app.cfg.lock_idle_mins = mins;
                             if let Err(e) = lock::install_saver(mins) {
                                 log!("Đặt trình bảo vệ màn hình lỗi: {e}");
-                                unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("tuanpc-desk").as_ptr(), MB_OK | MB_ICONWARNING) };
+                                unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("TLauncher").as_ptr(), MB_OK | MB_ICONWARNING) };
                                 web::post(&web_init(&app).to_string());
                             }
                         }
@@ -2960,7 +2960,7 @@ fn main() {
                     let mins = m.get("minutes").and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(app.cfg.lock_idle_mins).max(1);
                     app.cfg.lock_idle_mins = mins;
                     let status = match lock::install_saver(mins) {
-                        Ok(()) => "Đã bật màn hình chờ tuanpc-desk".to_string(),
+                        Ok(()) => "Đã bật màn hình chờ TLauncher".to_string(),
                         Err(e) => {
                             log!("Bật màn hình chờ lỗi: {e}");
                             format!("Không bật được màn hình chờ: {e}")
@@ -2972,7 +2972,7 @@ fn main() {
                 "awayDisable" => {
                     saver_check_at = None;
                     let status = match lock::uninstall_saver() {
-                        Ok(()) => "Đã tắt màn hình chờ tuanpc-desk; Windows đã xác nhận trạng thái".to_string(),
+                        Ok(()) => "Đã tắt màn hình chờ TLauncher; Windows đã xác nhận trạng thái".to_string(),
                         Err(e) => { log!("Tắt màn hình chờ lỗi: {e}"); format!("Không tắt được màn hình chờ: {e}") }
                     };
                     web::post(&away_state(&app, &status).to_string());
@@ -3284,11 +3284,11 @@ fn main() {
                     if lock::saver_installed() {
                         if let Err(e) = lock::uninstall_saver() {
                             log!("Tắt màn hình chờ lỗi: {e}");
-                            unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("tuanpc-desk").as_ptr(), MB_OK | MB_ICONWARNING) };
+                            unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("TLauncher").as_ptr(), MB_OK | MB_ICONWARNING) };
                         }
                     } else if let Err(e) = lock::install_saver(app.cfg.lock_idle_mins) {
                         log!("Đặt trình bảo vệ màn hình lỗi: {e}");
-                        unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("tuanpc-desk").as_ptr(), MB_OK | MB_ICONWARNING) };
+                        unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("TLauncher").as_ptr(), MB_OK | MB_ICONWARNING) };
                     }
                 }
                 CMD_SYNC => {
@@ -3336,14 +3336,14 @@ fn main() {
                 CMD_SAVER_NOW => {
                     let mut ready = lock::saver_active() && lock::saver_secure();
                     if !ready {
-                        let q = "\"Khóa với cảnh động\" dùng trình bảo vệ màn hình của Windows, có bật \"khi quay lại, hiện màn hình đăng nhập\".\n\nĐặt tuanpc-desk làm trình bảo vệ màn hình (có khóa) ngay bây giờ?";
-                        let r = unsafe { MessageBoxW(msg_hwnd, wide(q).as_ptr(), wide("tuanpc-desk").as_ptr(), MB_YESNO | MB_ICONQUESTION) };
+                        let q = "\"Khóa với cảnh động\" dùng trình bảo vệ màn hình của Windows, có bật \"khi quay lại, hiện màn hình đăng nhập\".\n\nĐặt TLauncher làm trình bảo vệ màn hình (có khóa) ngay bây giờ?";
+                        let r = unsafe { MessageBoxW(msg_hwnd, wide(q).as_ptr(), wide("TLauncher").as_ptr(), MB_YESNO | MB_ICONQUESTION) };
                         if r == IDYES {
                             match lock::install_saver(app.cfg.lock_idle_mins) {
                                 Ok(()) => ready = lock::saver_active() && lock::saver_secure(),
                                 Err(e) => {
                                     log!("Đặt trình bảo vệ màn hình lỗi: {e}");
-                                    unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("tuanpc-desk").as_ptr(), MB_OK | MB_ICONWARNING) };
+                                    unsafe { MessageBoxW(msg_hwnd, wide(&e).as_ptr(), wide("TLauncher").as_ptr(), MB_OK | MB_ICONWARNING) };
                                 }
                             }
                         }
@@ -3368,7 +3368,7 @@ fn main() {
             }
         }
         // Chỉ chẩn đoán lỗi khởi chạy saver. Không được tự gọi LockWorkStation:
-        // người dùng có thể đã chọn Never hoặc đã tắt màn hình chờ trong tuanpc-desk.
+        // người dùng có thể đã chọn Never hoặc đã tắt màn hình chờ trong TLauncher.
         if saver_check_at.is_some_and(|t| app.now() >= t) {
             saver_check_at = None;
             if lock::saver_active() && lock::saver_secure() && !lock::saver_running() && !SESSION_LOCKED.with(|c| c.get()) {
@@ -3526,7 +3526,7 @@ fn main() {
     log!("Đang thoát");
     web::close();
     if !headless && !saver {save_config(&app.cfg);}
-    // Join managed desktop UI before removing the Deskland tray/config owner.
+    // Join managed desktop UI before removing the TLauncher tray/config owner.
     app.dock_runtime=None;
     if !hook.is_null() {
         unsafe { UnhookWinEvent(hook) };

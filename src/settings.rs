@@ -479,7 +479,7 @@ fn open_fallback(state: &State) {
         let hwnd = CreateWindowExW(
             0,
             cls.as_ptr(),
-            wide("tuanpc-desk - Cài đặt").as_ptr(),
+            wide("TLauncher - Cài đặt").as_ptr(),
             style,
             (sw - w) / 2,
             (sh - h) / 2,

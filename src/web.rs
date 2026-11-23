@@ -243,7 +243,7 @@ unsafe fn create_host() -> Result<F::HWND,String> {
     let hwnd = CreateWindowExW(
         0,
         cls.as_ptr(),
-        wide("tuanpc-desk").as_ptr(),
+        wide("TLauncher").as_ptr(),
         WS_OVERLAPPEDWINDOW,
         ((sw - w) / 2).max(0),
         ((sh - h) / 2).max(0),

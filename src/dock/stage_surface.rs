@@ -68,7 +68,9 @@ impl Layout {
         let px=|n:i32|super::panel_chrome::scale(dpi,n);
         let mut l=Self::new(width,height,dpi,gap,limit,total,right);
         l.landscape=true;l.stack_design=stacked;
-        l.inset=px(9).min((width/10).max(1));
+        // Include the glow and detached icon inside the layered HWND, even
+        // when the active card expands or a perspective preview is hovered.
+        l.inset=px(15).min((width/8).max(1));
         l.radius=px(9);
         // Keep rear layers distinct without sacrificing the front silhouette.
         l.stack_step=(width/17).clamp(px(5).max(1),px(15).max(1));
@@ -112,8 +114,9 @@ impl Layout {
         let x=self.inset+if self.right{room+full-w}else{icon_room};
         let y=self.inset+(0..i).map(|n|height(n)+self.gap).sum::<i32>();
         if self.active==Some(i){
-            let dx=((w+12)/25).min(self.inset/2).max(0);
-            let dy=((h+16)/28).min(self.gap/3).min(self.inset/2).max(0);
+            let grow_limit=if self.landscape{self.radius/2}else{self.inset/2};
+            let dx=((w+12)/25).min(grow_limit).max(0);
+            let dy=((h+16)/28).min(self.gap/3).min(grow_limit).max(0);
             Box2{x:x-dx,y:y-dy,w:w+dx*2,h:h+dy*2}
         }else{Box2{x,y,w,h}}
     }
@@ -142,7 +145,7 @@ impl Layout {
         self.caption=self.caption.min((h/4).max(1));
     }
     fn step(self)->i32{self.stack_step}
-    fn icon_size(self)->i32{(if self.landscape{self.inset*7/2}else{self.inset*5}).min(self.card_h/2).max(1)}
+    fn icon_size(self)->i32{(if self.landscape{self.radius*7/2}else{self.inset*5}).min(self.card_h/2).max(1)}
     pub fn depth(self,i:usize)->usize{
         if self.stack_design{self.layers.get(i).copied().unwrap_or(0).max(1) as usize}
         else if self.stack&(1<<i)!=0{3}else{1}
@@ -161,9 +164,12 @@ impl Layout {
     fn detached_icon(self,i:usize)->Box2{
         let card=self.card(i);let size=self.icon_size().min((card.h/2).max(1));
         if self.landscape{
-            let over=(size/3).max(1).min(self.inset);
-            return Box2{x:if self.right{card.x+card.w-size+over}else{card.x-over},
-                y:card.y+card.h-size+over,w:size,h:size};
+            let over=(size/3).max(1).min(self.radius);
+            let ideal=if self.right{card.x+card.w-size+over}else{card.x-over};
+            let pad=((size+4)/5+2).min((self.width-size).max(0)/2);
+            let bottom_pad=(2*size+9)/10+2;
+            return Box2{x:ideal.clamp(pad,(self.width-size-pad).max(pad)),
+                y:(card.y+card.h-size+over).min((self.height-size-bottom_pad).max(0)),w:size,h:size};
         }
         Box2{x:if self.right{card.x+card.w+self.inset}else{card.x-size-self.inset},
             y:card.y+(card.h-size)/2,w:size,h:size}
@@ -264,10 +270,16 @@ impl Layout {
     }
     pub fn pages(self,count:usize)->Option<PageStrip>{self.nav().map(|bounds|PageStrip::new(bounds,count))}
     pub fn content_height(self)->i32{
-        let bottom=self.nav().map(|n|n.y+n.h)
-            .or_else(||self.count.checked_sub(1).map(|i|{let r=self.card(i);r.y+r.h+if self.landscape&&self.stack_design{self.icon_size()/4}else{0}}))
-            .unwrap_or(0);
-        (bottom+self.inset.max(7)).clamp(1,self.height.max(1))
+        let cards=(0..self.count).map(|i|{
+            let r=self.card(i);
+            let edge=r.y+r.h+self.inset.max(7);
+            if self.landscape&&self.stack_design{
+                let icon=self.detached_icon(i);
+                edge.max(icon.y+icon.h+(2*icon.w+9)/10+3)
+            }else{edge}
+        }).max().unwrap_or(0);
+        let nav=self.nav().map_or(0,|n|n.y+n.h+self.inset.max(7));
+        cards.max(nav).clamp(1,self.height.max(1))
     }
     pub fn hit(self,x:i32,y:i32)->Option<usize>{
         (0..self.count).find(|&i|self.member_hit(i,x,y).is_some())
@@ -347,7 +359,7 @@ impl Panel {
                 let b=layout.card(i).rect();
                 let radius=(layout.radius as f32).min(b.h/2.0);
                 if look.alpha.is_some()&&look.projected[i]&1==0{
-                    let k=(layout.inset as f32*0.82).max(2.0);
+                    let k=((if layout.landscape{layout.radius}else{layout.inset}) as f32*0.82).max(2.0);
                     let spread=Rect{x:b.x-k,y:b.y-k,w:b.w+2.0*k,h:b.h+2.0*k};
                     draw(data,w,h,spread,|x,y|{
                         let d=distance(b,radius,x,y-1.8);
@@ -701,6 +713,25 @@ mod tests {
         assert_eq!(l.card(middle+1),after);
         assert_eq!(l.nav(),Some(nav));
         assert!(active.y>=before.y+before.h&&active.y+active.h<=after.y);
+    }
+    #[test]
+    fn active_stage_icon_and_shadow_fit_at_the_edges_on_both_sides(){
+        for dpi in [96,144,192]{for right in [false,true]{for paged in [false,true]{
+            let mut layout=Layout::landscape(264*dpi as i32/96,830,dpi,9,5,if paged{8}else{3},right,true);
+            layout.count=if paged{layout.rows}else{layout.rows.min(3)};
+            for active in [0,layout.count-1]{
+                let mut l=Layout{active:Some(active),..layout};
+                l.height=l.content_height();
+                let c=l.card(active);
+                let icon=l.detached_icon(active);
+                let shadow=(2*icon.w+9)/10+1;
+                assert!(c.x>=10&&c.x+c.w<=l.width-10);
+                assert!(icon.x>=shadow&&icon.x+icon.w+shadow<=l.width);
+                assert!(icon.y+icon.h+shadow<=l.height);
+                let (x,y)=icon.center();
+                assert!(l.icon_hit(active,x,y));
+            }
+        }}}
     }
     #[test]
     fn mixed_heights_page_and_keep_hit_targets_within_portrait_rail(){

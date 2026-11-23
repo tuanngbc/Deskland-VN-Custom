@@ -330,13 +330,14 @@ pub(super) unsafe fn close_for(owner:HWND){
     let hwnd=PANE.with(|s|s.borrow().as_ref().filter(|p|owner.is_null()||owner==p.owner).map(|p|p.hwnd));
     if let Some(h)=hwnd{DestroyWindow(h);}
 }
-pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false);}
-pub(super) unsafe fn show_list(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,true);}
-unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool){
+pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,false);}
+pub(super) unsafe fn show_list(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,true,false);}
+pub(super) unsafe fn show_hub(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,true);}
+unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bool){
     super::utilities::close_panels();
-    let Some(work)=anchor.work()else{return;};
     let dpi=windows_sys::Win32::UI::HiDpi::GetDpiForWindow(owner).clamp(72,288);
     let px=|n|chrome::scale(dpi,n);
+    let Some(work)=(if hub{anchor.hub_work(px(8))}else{anchor.work()})else{return;};
     let double=!list&&view.metrics.map_or(view.cards.len()>3,|o|o.compact);
     let cols=if double&&work.right-work.left>=px(365){2}else{1};
     let width=px(if list{350}else if cols==2{432}else{328}).min(work.right-work.left);

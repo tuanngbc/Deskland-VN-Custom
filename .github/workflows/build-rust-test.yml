@@ -1,4 +1,4 @@
-name: Build tuanpc-desk Rust
+name: Build TLauncher Rust
 
 on:
   push:
@@ -104,7 +104,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./tests/trial-isolation.ps1 -Exe (Resolve-Path target/release/tuanpc-desk.exe).Path
+          ./tests/trial-isolation.ps1 -Exe (Resolve-Path target/release/TLauncher.exe).Path
           node tests/renderer-contract.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/shortcuts-contract.cjs
@@ -113,15 +113,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./tests/dock-benchmark-contract.ps1
           ./tests/dock-fixture-native.ps1
-          ./tests/cooperative-tray-poc.ps1 -Exe (Resolve-Path target/release/tuanpc-desk.exe).Path
+          ./tests/cooperative-tray-poc.ps1 -Exe (Resolve-Path target/release/TLauncher.exe).Path
 
       - name: Package Rust native build
         run: |
           $short = '${{ github.sha }}'.Substring(0, 7)
-          $name = "tuanpc-desk-Rust-$short-win-x64"
+          $name = "TLauncher-Rust-$short-win-x64"
           $dir = "dist\$name"
           New-Item -ItemType Directory -Force $dir | Out-Null
-          Copy-Item target\release\tuanpc-desk.exe "$dir\tuanpc-desk.exe"
+          Copy-Item target\release\TLauncher.exe "$dir\TLauncher.exe"
           # Dùng giao diện prototype hiện tại để có panorama, công tắc thời
           # gian/thời tiết và tìm vị trí; engine Rust nhận các message tương ứng.
           Copy-Item -Recurse prototype "$dir\prototype"
@@ -133,13 +133,13 @@ jobs:
           Copy-Item (Join-Path $env:RUNNER_TEMP "start-native.png") "$dir\START-NATIVE-CI.png"
           '${{ github.sha }}' | Set-Content "$dir\BUILD-COMMIT.txt" -Encoding ascii
           @"
-          tuanpc-desk Rust Native build
+          TLauncher Rust Native build
 
-          Giải nén toàn bộ thư mục này và chạy tuanpc-desk.exe.
+          Giải nén toàn bộ thư mục này và chạy TLauncher.exe.
           Giữ thư mục prototype cạnh file exe để mở Cài đặt.
           Bản này dùng engine Rust + Win32 + OpenGL. Dock và Stage Manager
-          được quản lý trong cùng tuanpc-desk.exe, bật riêng trong Cài đặt.
-          Khi bật Dock, Deskland ưu tiên chế độ ẩn thanh Windows. Có thể chọn Tương thích Windows trong Cài đặt.
+          được quản lý trong cùng TLauncher.exe, bật riêng trong Cài đặt.
+          Khi bật Dock, TLauncher ưu tiên chế độ ẩn thanh Windows. Có thể chọn Tương thích Windows trong Cài đặt.
           "@ | Set-Content "$dir\DOC-TRUOC.txt" -Encoding utf8
           Compress-Archive -Path $dir -DestinationPath "dist\$name.zip"
           $hash = (Get-FileHash "dist\$name.zip" -Algorithm SHA256).Hash.ToLower()
@@ -148,7 +148,7 @@ jobs:
       - name: Upload Rust artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tuanpc-desk-Rust-win-x64
+          name: TLauncher-Rust-win-x64
           path: |
             dist/*.zip
             dist/*.sha256

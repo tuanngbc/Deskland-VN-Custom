@@ -810,7 +810,7 @@ pub(crate) fn toggle_at(dock:Option<DockAnchor>) {
             RegisterClassExW(&wc);
             // An independent top-level window receives focus and keyboard input
             // without inheriting the hidden message window's visibility/owner chain.
-            let hwnd = CreateWindowExW(WS_EX_LAYERED|WS_EX_TOOLWINDOW, cls.as_ptr(), wide("tuanpc-desk Spotlight").as_ptr(), WS_POPUP, 0, 0, 684, 468, std::ptr::null_mut(), std::ptr::null_mut(), instance, std::ptr::null_mut());
+            let hwnd = CreateWindowExW(WS_EX_LAYERED|WS_EX_TOOLWINDOW, cls.as_ptr(), wide("TLauncher Spotlight").as_ptr(), WS_POPUP, 0, 0, 684, 468, std::ptr::null_mut(), std::ptr::null_mut(), instance, std::ptr::null_mut());
             if hwnd.is_null() { crate::log!("Launcher: CreateWindowEx failed {}", GetLastError()); return; }
             let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED);
             let mut all = entries();
