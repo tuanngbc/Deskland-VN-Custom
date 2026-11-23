@@ -88,6 +88,16 @@ impl Layout {
             y:card.y+(card.h-size)/2,w:size,h:size}
     }
     pub fn icon_hit(self,i:usize,x:i32,y:i32)->bool{self.stack_design&&self.detached_icon(i).hit(x,y)}
+    pub fn close_button(self,i:usize)->Option<Box2>{
+        if !self.stack_design||i>=self.count{return None;}
+        let c=self.card(i);
+        let size=(self.inset*7/2).clamp(14,self.caption.max(14));
+        if c.w<2*size+3*self.inset||c.h<self.caption{return None;}
+        Some(Box2{x:c.x+c.w-self.inset-size,y:c.y+c.h-(self.caption+size)/2,w:size,h:size})
+    }
+    pub fn close_hit(self,i:usize,x:i32,y:i32)->bool{
+        self.close_button(i).is_some_and(|b|b.hit(x,y))
+    }
     pub fn preview(self,i:usize)->RECT{self.preview_layer(i,0).0}
     pub fn preview_layer(self,i:usize,depth:usize)->(RECT,Option<RECT>){
         let c=self.rear(i,depth as i32);let p=self.inset.max(2);
@@ -167,7 +177,7 @@ impl Panel {
     }
     pub fn geometry(&self)->(i32,i32,u32){(self.layer.size.0,self.layer.size.1,self.dpi)}
     pub fn font(&self)->HFONT{self.font}
-    pub unsafe fn paint(&mut self,target:HDC,look:Look,items:&[Item],atlas:&Atlas,ready:&[bool],emphasis:Option<(usize,u8)>,layered:Option<(HWND,&[String],usize,usize)>)->bool {
+    pub unsafe fn paint(&mut self,target:HDC,look:Look,items:&[Item],atlas:&Atlas,ready:&[bool],emphasis:Option<(usize,u8)>,layered:Option<(HWND,&[String],usize,usize,Option<usize>)>)->bool {
         let (w,h)=self.layer.size;
         let layout=look.layout;
         let palette=Palette::new(look.dark);
@@ -261,13 +271,20 @@ impl Panel {
                 else{fallback_icon(data,w,h,center,tint);}
             }
         }
-        if let Some((hwnd,labels,page,pages))=layered {
+        if let Some((hwnd,labels,page,pages,hover))=layered {
             let mask_h=layout.caption.max(layout.nav_h)*2;
             if self.mask.as_ref().is_none_or(|m|m.size!=(w*2,mask_h)){self.mask=Layer::new(w*2,mask_h);}
             if let Some(mask)=self.mask.as_mut(){
                 let ink=palette.ink;
                 for (i,title) in labels.iter().enumerate(){
-                    let r=caption_box(layout,i);
+                    let mut r=caption_box(layout,i);
+                    if let Some(button)=hover.filter(|&index|index==i).and_then(|_|layout.close_button(i)){
+                        r.w=(button.x-r.x-layout.inset/2).max(1);
+                        rounded(data,w,h,button.rect(),button.w as f32/2.0,
+                            if look.dark{[116,71,68]}else{[247,219,216]},255);
+                        let mark=if look.dark{[255,218,215]}else{[117,36,34]};
+                        draw_mask_scaled(data,w,h,mask,self.large_fonts[0],button,"×",true,mark,2);
+                    }
                     let main=Box2{y:r.y+(r.h/10),h:r.h/2,..r};
                     let small=Box2{y:main.y+main.h,h:r.h-main.h-r.h/5,..r};
                     draw_mask_scaled(data,w,h,mask,self.large_fonts[0],main,title,false,ink,2);
@@ -413,6 +430,8 @@ mod tests {
             let front=l.card(0);
             let icon=l.detached_icon(0);let (x,y)=icon.center();
             assert!(l.icon_hit(0,x,y));assert_eq!(l.member_hit(0,x,y),Some(0));
+            let (x,y)=l.close_button(0).unwrap().center();
+            assert!(l.close_hit(0,x,y));assert_eq!(l.member_hit(0,x,y),Some(0));
             for layer in 1..count as usize{
                 let (slot,clip)=l.preview_layer(0,layer);
                 let clip=clip.unwrap();
@@ -517,7 +536,7 @@ mod tests {
             let labels=vec!["Fixture".to_owned();3];
             let mut panel=Panel::new(w,h,96).unwrap();
             let layer=Look{dark:true,layout:l,active:1,alpha:Some(155)};
-            let presented=panel.paint(null_mut(),layer,&items,&Atlas::new(),&[false,true,false],Some((0,200)),Some((hwnd,&labels,0,3)));
+            let presented=panel.paint(null_mut(),layer,&items,&Atlas::new(),&[false,true,false],Some((0,200)),Some((hwnd,&labels,0,3,None)));
             DestroyWindow(hwnd);
             assert!(presented,"the isolated layered Stage surface must submit pixels successfully");
             let pixels=panel.layer.pixels();

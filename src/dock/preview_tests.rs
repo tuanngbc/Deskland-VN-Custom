@@ -38,6 +38,17 @@ unsafe extern "system" fn fixture_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARA
         SetWindowPos(hwnd, ptr::null_mut(), 0, 0, 110, 360, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE);
         return 0;
     }
+    if msg == WM_PAINT && GetWindowLongPtrW(hwnd,GWL_EXSTYLE)&WS_EX_LAYERED as isize!=0 {
+        let mut paint:PAINTSTRUCT=mem::zeroed();
+        let dc=BeginPaint(hwnd,&mut paint);
+        let mut r:RECT=mem::zeroed();GetClientRect(hwnd,&mut r);
+        let mid=r.right/2;
+        for (rect,color) in [(RECT{right:mid,..r},0x00ff20ff),(RECT{left:mid,..r},0x00ffff10)]{
+            let brush=CreateSolidBrush(color);FillRect(dc,&rect,brush);DeleteObject(brush);
+        }
+        EndPaint(hwnd,&paint);
+        return 0;
+    }
     DefWindowProcW(hwnd, msg, w, l)
 }
 
@@ -86,6 +97,44 @@ unsafe fn require_released(ids: &[isize]) {
     }
 }
 
+// Lab only: can a public DirectComposition HWND wrapper render an actual
+// perspective transform of a foreign window? A successful HRESULT alone is
+// insufficient: this checks for our two fixture colors and the tapered edge.
+// No desktop capture loop, disk image, injected code, or product fallback.
+unsafe fn probe_perspective(source:HWND)->Result<&'static str,String>{
+    use windows::{core::{Interface,IUnknown},Win32::{Foundation::HWND as WinHwnd,
+        Graphics::DirectComposition::{DCompositionCreateDevice3,IDCompositionDesktopDevice,IDCompositionVisual3}}};
+    if preview_pid(source).is_err(){return Ok("source_not_eligible");}
+    let dest=window("Isolated Deskland perspective fixture",false);
+    SetWindowPos(dest.0,HWND_TOPMOST,430,110,344,180,SWP_NOACTIVATE|SWP_SHOWWINDOW);
+    let device:IDCompositionDesktopDevice=DCompositionCreateDevice3(None::<&IUnknown>).map_err(|e|format!("device:{e}"))?;
+    let target=device.CreateTargetForHwnd(WinHwnd(dest.0),true).map_err(|e|format!("target:{e}"))?;
+    let content=device.CreateSurfaceFromHwnd(WinHwnd(source)).map_err(|e|format!("source:{e}"))?;
+    let visual:IDCompositionVisual3=device.CreateVisual().and_then(|v|v.cast()).map_err(|e|format!("visual:{e}"))?;
+    let matrix=device.CreateMatrixTransform3D().map_err(|e|format!("matrix:{e}"))?;
+    // x'=(.72*x+20)/(1+.0016*x)
+    // y'=(.60*y+24+.144*x)/(1+.0016*x)
+    for (r,c,v) in [(0,0,0.72),(0,1,0.144),(0,3,0.0016),(1,1,0.60),(3,0,20.0),(3,1,24.0)]{
+        matrix.SetMatrixElement2(r,c,v).map_err(|e|format!("matrix_element:{e}"))?;
+    }
+    visual.SetContent(&content).map_err(|e|format!("content:{e}"))?;
+    visual.SetTransform(&matrix).map_err(|e|format!("transform:{e}"))?;
+    target.SetRoot(&visual).map_err(|e|format!("root:{e}"))?;
+    device.Commit().and_then(|_|device.WaitForCommitCompletion()).map_err(|e|format!("commit:{e}"))?;
+    UpdateWindow(dest.0);
+    DwmFlush();
+    let dc=GetDC(ptr::null_mut());
+    if dc.is_null(){return Ok("no_interactive_pixels");}
+    let mut point=POINT{x:0,y:0};ClientToScreen(dest.0,&mut point);
+    let pixel=|x,y|GetPixel(dc,point.x+x,point.y+y);
+    let (near,far,near_top,far_top)=(pixel(65,72),pixel(160,72),pixel(65,37),pixel(160,37));
+    ReleaseDC(ptr::null_mut(),dc);
+    println!("STAGE_PERSPECTIVE_PIXELS near={near:06x} far={far:06x} near_top={near_top:06x} far_top={far_top:06x}");
+    Ok(if near==0x00ff20ff&&far==0x00ffff10&&near_top==near&&far_top!=far{
+        "transformed_foreign_fixture_pixels"
+    }else{"no_verified_transformed_pixels"})
+}
+
 #[test]
 #[ignore = "live Windows compositor; explicitly run in CI"]
 fn native_preview_relationships_survive_switches_and_release() {
@@ -96,6 +145,7 @@ fn native_preview_relationships_survive_switches_and_release() {
             assert_ne!(SetWindowDisplayAffinity(windows[7].0, WDA_EXCLUDEFROMCAPTURE), 0);
             for (i, w) in windows.iter().enumerate() {
                 ShowWindow(w.0, if i == 8 { SW_SHOWMINNOACTIVE } else { SW_SHOWNOACTIVATE });
+                UpdateWindow(w.0);
             }
             let until = Instant::now() + Duration::from_secs(38);
             let mut msg: MSG = mem::zeroed();
@@ -129,6 +179,10 @@ fn native_preview_relationships_survive_switches_and_release() {
         assert_eq!(affinity, WDA_EXCLUDEFROMCAPTURE);
         assert_eq!(preview_pid(items[7].hwnd), Err(PreviewStep::Protected));
         assert_eq!(preview_pid(items[8].hwnd), Err(PreviewStep::Minimized));
+
+        if env::var_os("TUANPC_DESK_STAGE_COMPOSITION_LAB").is_some(){
+            println!("STAGE_PERSPECTIVE_POC {:?}",probe_perspective(items[1].hwnd));
+        }
 
         let dst = window("test compositor destination", false);
         let replacement = window("test replacement destination", false);

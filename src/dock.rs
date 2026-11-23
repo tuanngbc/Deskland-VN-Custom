@@ -239,12 +239,17 @@ impl StageEmphasis {
 struct Stage { hwnd:HWND, rail:HWND, collapsed:bool, auto_hide:bool, preview_hwnd:HWND, preview_boxes:Vec<RECT>, preview_visible:bool, layered:bool, opacity:u32, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, members:Vec<Vec<usize>>, order:Vec<String>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, emphasis:StageEmphasis, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews,
     resting:RECT, slide:Option<(std::time::Instant,i32)>, offset:i32, pressed:Option<StageTarget> }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-enum StageTarget { Group(u64), Window(usize,u32,u32), Page(usize) }
+enum StageTarget { Group(u64), AppGroup(usize,u32,u32), Window(usize,u32,u32), Close(usize,u32,u32), Page(usize) }
 impl Stage {
     unsafe fn target(&self,x:i32,y:i32)->Option<StageTarget>{
         if self.hidden{return None;}
         let layout=self.layout?;
         if let Some(i)=layout.hit(x,y) {
+            if self.hover==Some(i)&&layout.close_hit(i,x,y){
+                let hwnd=self.items.get(i)?.hwnd;
+                let (pid,tid)=window_owner(hwnd)?;
+                return Some(StageTarget::Close(hwnd as usize,pid,tid));
+            }
             let layer=layout.member_hit(i,x,y)?;
             if !layout.stack_design||layout.icon_hit(i,x,y){
                 if let Some(id)=self.groups.get(i).copied().flatten(){return Some(StageTarget::Group(id));}
@@ -252,6 +257,7 @@ impl Stage {
             // Old flat compatibility cards draw decorative edges only.
             let hwnd=*self.members.get(i)?.get(if layout.stack_design{layer}else{0})? as HWND;
             let (pid,tid)=window_owner(hwnd)?;
+            if layout.icon_hit(i,x,y){return Some(StageTarget::AppGroup(hwnd as usize,pid,tid));}
             return Some(StageTarget::Window(hwnd as usize,pid,tid));
         }
         layout.pages(self.pages)?.target(x,y,self.page).map(StageTarget::Page)
@@ -998,11 +1004,25 @@ fn close_status_tip(owner:HWND){
 }
 unsafe fn show_status_tip(owner:HWND){
     use windows_sys::Win32::UI::Controls::*;
+    let mut cursor:POINT=mem::zeroed();
+    let on_client=GetCursorPos(&mut cursor)!=0&&ScreenToClient(owner,&mut cursor)!=0;
     let label=STATE.with(|s|{
         let state=s.borrow();
         if let Some(stage)=state.stages.iter().find(|p|p.hwnd==owner&&!p.hidden&&!p.collapsed){
             let index=stage.hover?;
             let item=stage.items.get(index)?;
+            if let Some(layout)=stage.layout.filter(|layout|on_client&&layout.stack_design){
+                if layout.close_hit(index,cursor.x,cursor.y){return Some("Đóng cửa sổ phía trước".into());}
+                if !layout.icon_hit(index,cursor.x,cursor.y){
+                    if let Some(member)=layout.member_hit(index,cursor.x,cursor.y).and_then(|i|stage.members.get(index)?.get(i)){
+                        if let Some(w)=state.windows.iter().find(|w|w.hwnd as usize==*member){
+                            return Some(w.title.chars().take(512).collect());
+                        }
+                    }
+                }else if item.count>1{
+                    return Some(format!("{} · {} cửa sổ",item.title,item.count));
+                }
+            }
             return Some(if stage.groups.get(index).is_some_and(Option::is_some){
                 format!("{} · {} cửa sổ",item.title,item.count)
             }else{item.title.chars().take(512).collect()});
@@ -1103,9 +1123,9 @@ unsafe fn paint(hwnd:HWND){
         let ready=stage.items.iter().map(|item|(stage.preview_hwnd.is_null()||stage.preview_visible)&&stage.previews.includes(item.hwnd)).collect::<Vec<_>>();
         let dpi=state.screens.iter().find(|s|s.id==stage.display).map_or(96,|s|s.dpi);
         let dark=state.material.is_none_or(|m|m.dark);
-        Some((stage.items.clone(),ready,stage.groups.clone(),stage.selected,stage.layout?,stage.page,stage.pages,state.foreground,dpi,dark,stage.emphasis.highlight(stage.keyboard),stage.layered,stage.opacity))
+        Some((stage.items.clone(),ready,stage.groups.clone(),stage.selected,stage.layout?,stage.page,stage.pages,state.foreground,dpi,dark,stage.emphasis.highlight(stage.keyboard),stage.hover,stage.layered,stage.opacity))
     });
-    if let Some((items,ready,groups,active,layout,page,pages,foreground,dpi,dark,hover,layered,opacity))=stage {
+    if let Some((items,ready,groups,active,layout,page,pages,foreground,dpi,dark,emphasis,hover,layered,opacity))=stage {
         let key=hwnd as usize;
         let size=(area.right,area.bottom,dpi);
         let panel=STAGE_SURFACES.with(|s|s.borrow_mut().remove(&key));
@@ -1119,7 +1139,7 @@ unsafe fn paint(hwnd:HWND){
         }).collect::<Vec<_>>();
         let look=stage_surface::Look{dark,layout,active:active_mask,alpha:layered.then_some((opacity*255/100) as u8)};
         if layered{EndPaint(hwnd,&ps);}
-        let rendered=panel.as_mut().is_some_and(|p|p.paint(dc,look,&items,&atlas,&ready,hover,layered.then_some((hwnd,&labels[..],page,pages))));
+        let rendered=panel.as_mut().is_some_and(|p|p.paint(dc,look,&items,&atlas,&ready,emphasis,layered.then_some((hwnd,&labels[..],page,pages,hover))));
         if layered{
             if rendered{
                 if let Some(panel)=panel{STAGE_SURFACES.with(|s|s.borrow_mut().insert(key,panel));}
@@ -1893,9 +1913,9 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
             })
             .collect::<Vec<_>>();
         let targets=state.screens.iter().filter(|s|!stage_window_is_local(item,s.bounds)).map(|s|s.id.clone()).collect::<Vec<_>>();
-        Some((WindowIdentity::read(item)?,group,stage.display.clone(),stage.selected,local,state.workspaces.can_create(&stage.display),members,targets))
+        Some((WindowIdentity::read(item)?,group,stage.display.clone(),stage.selected,local,state.workspaces.can_create(&stage.display),members,targets,state.workspaces.is_separate(item)))
     });
-    let Some((identity,group,display,current,local,can_create,members,targets))=card else{return;};
+    let Some((identity,group,display,current,local,can_create,members,targets,separate))=card else{return;};
     let item=identity.hwnd as HWND;
     let menu=CreatePopupMenu();
     if menu.is_null(){return;}
@@ -1904,6 +1924,9 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
     const CLOSE:usize=8;
     const CLOSE_GROUP:usize=9;
     const ACTIVATE_GROUP:usize=10;
+    const SEPARATE:usize=11;
+    const REJOIN:usize=12;
+    const DISSOLVE_AUTO:usize=13;
     const MOVE_FIRST:usize=32;
     const DETACH_FIRST:usize=256;
     const SELECT_FIRST:usize=512;
@@ -1942,7 +1965,11 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
     }
     if members.len()>1||group.is_some(){add(ACTIVATE_GROUP,"Kích hoạt nhóm",true);}
     if members.len()>1{add(CLOSE_GROUP,"Đóng các cửa sổ trong nhóm…",true);}
-    add(4,"Giải tán nhóm và khôi phục cửa sổ",group.is_some());
+    if group.is_some(){add(4,"Giải tán nhóm và khôi phục cửa sổ",true);}
+    else if members.len()>1{
+        add(SEPARATE,"Tách cửa sổ này khỏi nhóm tự động",true);
+        add(DISSOLVE_AUTO,"Giải tán nhóm tự động trong phiên này",true);
+    }else if separate{add(REJOIN,"Cho phép tự động gom lại",true);}
     AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
     add(5,"Điều hướng Stage bằng bàn phím",true);
     let mut point=POINT{x,y};ClientToScreen(hwnd,&mut point);
@@ -2001,6 +2028,9 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
         }
         _=>{}
     }
+    let dissolve=if result==DISSOLVE_AUTO{
+        members.iter().map(|(target,_)|*target).filter(|&target|valid_member(target)).collect::<Vec<_>>()
+    }else{Vec::new()};
     update_state(|state|{
         // The menu can run a nested loop. Revalidate the original source and
         // display against the current enumeration before changing a workspace.
@@ -2018,6 +2048,9 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
             1 if still_local&&group.is_none()=>{state.workspaces.create(&display,item);}
             2 if still_local&&group.is_none()&&current==stage.selected=>state.workspaces.add(&display,item),
             4=>{if let Some(id)=group{state.workspaces.dissolve(id);}},
+            SEPARATE if group.is_none()=>state.workspaces.separate(item),
+            REJOIN if group.is_none()=>state.workspaces.rejoin(item),
+            DISSOLVE_AUTO if group.is_none()=>for target in dissolve{state.workspaces.separate(target.hwnd as HWND);},
             id if id>=DETACH_FIRST=>{
                 if let Some((group,(target,_)))=group.zip(members.get(id-DETACH_FIRST)){
                     let handle=target.hwnd as HWND;
@@ -2042,9 +2075,15 @@ unsafe fn activate_stage_member(hwnd:HWND,i:usize,member:Option<HWND>){
         let state=s.borrow();
         let stage=state.stages.iter().find(|p|p.hwnd==hwnd)?;
         if member.is_some_and(|h|!stage.members.get(i).is_some_and(|members|members.contains(&(h as usize)))){return None;}
-        Some((stage.items.get(i)?.clone(),stage.groups.get(i).copied().flatten(),stage.display.clone()))
+        let members=if member.is_none()&&stage.layout.is_some_and(|layout|layout.stack_design)&&stage.groups.get(i)==Some(&None){
+            stage.members.get(i)?.iter().copied().filter_map(|h|{
+                let target=h as HWND;
+                stage_window_is_local(target,stage.bounds).then(||WindowIdentity::read(target)).flatten()
+            }).collect()
+        }else{Vec::new()};
+        Some((stage.items.get(i)?.clone(),stage.groups.get(i).copied().flatten(),stage.display.clone(),members))
     });
-    if let Some((item,group,display))=selected {
+    if let Some((item,group,display,members))=selected {
         if let Some(id)=group{
             let mut focus=None;
             update_state(|state|{
@@ -2053,8 +2092,19 @@ unsafe fn activate_stage_member(hwnd:HWND,i:usize,member:Option<HWND>){
                 if let Some(p)=state.stages.iter_mut().find(|p|p.hwnd==hwnd&&p.selected!=Some(id)){p.begin_slide(reduced);}
                 refresh(state,false);
             });
-            if let Some(hwnd)=member.or(focus){focus_stage_window(hwnd);}
-        }else{focus_stage_window(member.unwrap_or(item.hwnd));}
+            if let Some(hwnd)=member{focus_stage_window(hwnd);}
+            else if let Some(hwnd)=focus{SetForegroundWindow(hwnd);}
+        }else{
+            // Group activation raises only local members in existing stacking
+            // order; it never minimizes or moves unrelated windows.
+            for entry in members.into_iter().rev(){
+                let target=entry.hwnd as HWND;
+                if target==item.hwnd||!entry.matches(target){continue;}
+                if IsIconic(target)!=0{ShowWindowAsync(target,SW_SHOWNOACTIVATE);}
+                SetWindowPos(target,HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_ASYNCWINDOWPOS);
+            }
+            focus_stage_window(member.unwrap_or(item.hwnd));
+        }
     }
 }
 unsafe fn turn_stage_page(hwnd:HWND,forward:bool)->bool{
@@ -2501,6 +2551,12 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 match target{
                     Some(StageTarget::Page(page))=>{go_to_stage_page(hwnd,page);}
                     Some(StageTarget::Group(_))=>{if let Some(i)=item{activate_stage(hwnd,i);}}
+                    Some(StageTarget::AppGroup(target,pid,tid))=>{
+                        if window_owner(target as HWND)==Some((pid,tid)){if let Some(i)=item{activate_stage(hwnd,i);}}
+                    }
+                    Some(StageTarget::Close(target,pid,tid))=>{
+                        if window_owner(target as HWND)==Some((pid,tid)){PostMessageW(target as HWND,WM_CLOSE,0,0);}
+                    }
                     Some(StageTarget::Window(target,pid,tid))=>{
                         if window_owner(target as HWND)==Some((pid,tid)){
                             let group=item.and_then(|i|STATE.with(|s|s.borrow().stages.iter().find(|p|p.hwnd==hwnd)?.groups.get(i).copied().flatten()));

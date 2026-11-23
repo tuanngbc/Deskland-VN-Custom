@@ -50,8 +50,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_surface::tests::native_slide_keeps_live_preview_host_aligned_without_activating_either_window -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:TUANPC_DESK_STAGE_COMPOSITION_LAB = '1'
           cargo test --release dock::previews::native_tests::native_preview_relationships_survive_switches_and_release -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item Env:TUANPC_DESK_STAGE_COMPOSITION_LAB
           cargo test --release dock::control_center::tests::native_popup_has_its_first_layer_before_pumping_input -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::taskbar_guard::tests::native_visibility_request_hides_a_window_without_moving_it -- --ignored --exact --nocapture --test-threads=1

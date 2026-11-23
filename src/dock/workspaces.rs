@@ -121,10 +121,11 @@ impl Member {
 }
 struct Group{id:u64,screen:String,members:Vec<Member>}
 #[derive(Default)]
-pub struct Workspaces{groups:Vec<Group>,active:HashMap<String,u64>,sequence:u64, detaching:Vec<Member>}
+pub struct Workspaces{groups:Vec<Group>,active:HashMap<String,u64>,sequence:u64, detaching:Vec<Member>,separate:HashMap<usize,Key>}
 impl Workspaces{
     pub unsafe fn prune(&mut self){
         self.advance();
+        self.separate.retain(|_,key|key.live());
         self.groups.retain_mut(|g|{
             g.members.retain(|m|m.key.live());
             !g.members.is_empty()
@@ -175,6 +176,11 @@ impl Workspaces{
         self.detaching.clear();
     }
     pub fn active(&self,screen:&str)->Option<u64>{self.active.get(screen).copied()}
+    pub fn is_separate(&self,hwnd:HWND)->bool{self.separate.contains_key(&(hwnd as usize))}
+    pub unsafe fn separate(&mut self,hwnd:HWND){
+        if let Some(key)=Key::read(hwnd){self.separate.insert(key.hwnd,key);}
+    }
+    pub fn rejoin(&mut self,hwnd:HWND){self.separate.remove(&(hwnd as usize));}
     pub fn members(&self,id:u64)->Vec<HWND>{
         self.groups.iter().find(|g|g.id==id)
             .map(|g|g.members.iter().map(|member|member.key.handle()).collect()).unwrap_or_default()
@@ -294,7 +300,7 @@ impl Workspaces{
         for w in windows.iter().filter(|w|w.path!=super::internal_app::KEY&&!known.contains(&(w.hwnd as usize))){
             let local=on_output(w.rect,bounds,monitors);
             if !global&&!local{continue;}
-            let key=app_key(w,automatic);
+            let key=app_key(w,automatic&&!self.is_separate(w.hwnd));
             let index=*indices.entry(key.clone()).or_insert_with(||{
                 cards.push(StageGroup{key,manual:None,members:Vec::new(),
                     item:Item{path:w.path.clone(),title:w.title.clone(),hwnd:w.hwnd,count:0,pinned:false}});
