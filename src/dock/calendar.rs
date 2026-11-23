@@ -63,7 +63,7 @@ impl Button{
     }
 }
 struct Panel{
-    hwnd:HWND,owner:HWND,anchor:chrome::Anchor,layer:Layer,
+    hwnd:HWND,owner:HWND,anchor:chrome::Anchor,layer:Layer,dpi:u32,shadow:Option<chrome::PanelShadow>,
     fonts:[HFONT;4],local:Local,view:Month,following:bool,dirty:bool,
     hover:Option<Button>,focus:Option<Button>,pressed:Option<Button>,
 }
@@ -159,17 +159,34 @@ pub(super) unsafe fn close_for(owner:HWND){
     let hwnd=PANEL.with(|s|s.borrow().as_ref().filter(|p|owner.is_null()||p.owner==owner).map(|p|p.hwnd));
     if let Some(hwnd)=hwnd{DestroyWindow(hwnd);}
 }
+pub(super) unsafe fn follow(owner:HWND,dock:crate::launcher::DockAnchor){
+    let target=PANEL.with(|slot|{
+        let mut slot=slot.borrow_mut();
+        let p=slot.as_mut().filter(|p|p.owner==owner)?;
+        let same=p.anchor.point.x==dock.point.x&&p.anchor.point.y==dock.point.y&&p.anchor.side==dock.side;
+        if same{return None;}
+        p.anchor.point=dock.point;p.anchor.side=dock.side;
+        Some((p.hwnd,p.anchor,p.dpi,p.layer.size))
+    });
+    let Some((hwnd,anchor,dpi,(w,h)))=target else{return;};
+    let Some(rect)=chrome::follow_rect(anchor,dpi,w,h)else{PostMessageW(hwnd,WM_CLOSE,0,0);return;};
+    SetWindowPos(hwnd,ptr::null_mut(),rect.left,rect.top,0,0,SWP_NOACTIVATE|SWP_NOSIZE|SWP_NOZORDER);
+    PANEL.with(|slot|if let Some(p)=slot.borrow_mut().as_mut().filter(|p|p.hwnd==hwnd){
+        chrome::PanelShadow::sync(&mut p.shadow,hwnd,owner,rect,dpi,anchor.side,anchor.dark);
+    });
+}
 pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor){
     super::utilities::close_panels();
-    let Some(work)=anchor.work()else{return;};
-    let dpi=GetDpiForWindow(owner).clamp(72,288)
+    let dock_dpi=GetDpiForWindow(owner).clamp(72,288);
+    let Some(work)=anchor.panel_work(dock_dpi)else{return;};
+    let dpi=dock_dpi
         .min(((work.right-work.left)*96/WIDTH).max(48) as u32)
         .min(((work.bottom-work.top)*96/HEIGHT).max(48) as u32);
     let (w,h)=(WIDTH*dpi as i32/96,HEIGHT*dpi as i32/96);
+    let Some(RECT{left:x,top:y,..})=chrome::follow_rect(anchor,dock_dpi,w,h)else{return;};
     let Some(layer)=Layer::new(w,h)else{return;};
     let class=wide(CLASS);
-    if !chrome::register_with_style(&class,Some(proc),CS_DROPSHADOW){return;}
-    let (x,y)=chrome::placement(work,anchor,w,h,chrome::scale(dpi,9));
+    if !chrome::register_with_style(&class,Some(proc),0){return;}
     let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST|WS_EX_LAYERED,class.as_ptr(),wide("Lịch TLauncher").as_ptr(),
         WS_POPUP,x,y,w,h,owner,ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
     if hwnd.is_null(){return;}
@@ -177,13 +194,16 @@ pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor){
     let fonts=[(22,560),(12,460),(14,510),(25,490)].map(|(size,weight)|
         crate::native_text::font_pixels((size*dpi as i32+48)/96,weight));
     let local=Local::now();
-    let mut panel=Panel{hwnd,owner,anchor,layer,fonts,local,view:local.month,following:true,
+    let mut panel=Panel{hwnd,owner,anchor,layer,dpi:dock_dpi,shadow:None,fonts,local,view:local.month,following:true,
         dirty:true,hover:None,focus:None,pressed:None};
     panel.paint();
     if !panel.layer.present(hwnd){DestroyWindow(hwnd);return;}
     PANEL.with(|slot|slot.replace(Some(panel)));
     SetTimer(hwnd,TIMER,1000,None);
     ShowWindow(hwnd,SW_SHOW);
+    PANEL.with(|s|if let Some(p)=s.borrow_mut().as_mut().filter(|p|p.hwnd==hwnd){
+        chrome::PanelShadow::sync(&mut p.shadow,hwnd,owner,RECT{left:x,top:y,right:x+w,bottom:y+h},dock_dpi,anchor.side,anchor.dark);
+    });
     SetForegroundWindow(hwnd);
     SetFocus(hwnd);
 }
@@ -316,6 +336,17 @@ mod tests{
                         image::save_buffer(dir.join(if dark{"calendar-dark.png"}else{"calendar-light.png"}),
                             &rgba,w as u32,h as u32,image::ColorType::Rgba8).unwrap();
                     }
+                });
+                let shadow=PANEL.with(|s|s.borrow().as_ref().unwrap().shadow.as_ref().expect("calendar shadow").hwnd);
+                let moved=crate::launcher::DockAnchor{point:POINT{x:anchor.point.x+18,y:anchor.point.y+32},side:anchor.side};
+                follow(owner,moved);
+                let mut moved_rect:RECT=mem::zeroed();GetWindowRect(hwnd,&mut moved_rect);
+                let gap=chrome::scale(GetDpiForWindow(owner),chrome::PANEL_GAP);
+                assert_eq!(moved.point.y-moved_rect.bottom,gap);
+                PANEL.with(|s|{
+                    let s=s.borrow();let p=s.as_ref().unwrap();
+                    assert_eq!(p.view,month(2026,3));
+                    assert_eq!(p.shadow.as_ref().unwrap().hwnd,shadow,"moving must reuse the shadow window");
                 });
                 SendMessageW(hwnd,WM_KEYDOWN,VK_HOME as usize,0);
                 PANEL.with(|s|{let s=s.borrow();let p=s.as_ref().unwrap();assert_eq!(p.view,p.local.month);});

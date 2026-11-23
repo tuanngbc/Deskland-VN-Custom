@@ -109,12 +109,16 @@ impl Layout {
         let height=|n:usize|self.heights.get(n).copied().filter(|&h|h>0).unwrap_or(self.card_h);
         let h=height(i);
         let full=self.card_width();
-        // Reduce the width with the height, and keep the card against its
-        // own side of the screen. This preserves the perspective silhouette.
+        // Reduce width with height to preserve the perspective silhouette.
+        // In Reserve mode, balance the leftover strip around the entire
+        // stack (including the rearmost card), with a slight bias toward the
+        // application so the gap there stays small.
         let w=if self.landscape{full.min((h*18/10).max(1))}else{full};
         let x=if self.align_to_work_area&&self.landscape{
             let visible_stack=if self.stack_design{self.step()*(self.depth(i).saturating_sub(1) as i32)}else{0};
-            if self.right{self.inset+visible_stack}else{self.width-self.inset-w-visible_stack}
+            let slack=(self.width-2*self.inset-w-visible_stack).max(0);
+            let inner=(slack*2/5).min(self.inset+5);
+            if self.right{self.inset+visible_stack+inner}else{self.width-self.inset-w-visible_stack-inner}
         }else{self.inset+if self.right{room+full-w}else{icon_room}};
         let y=self.inset+(0..i).map(|n|height(n)+self.gap).sum::<i32>();
         if self.active==Some(i){
@@ -672,7 +676,7 @@ pub(super) unsafe fn nav_label(dc:HDC,b:Box2,label:&str,ink:u32){
 mod tests {
     use super::*;
     #[test]
-    fn reserved_stage_aligns_singletons_and_stacks_to_the_window_edge(){
+    fn reserved_stage_balances_the_gaps_around_singletons_and_stacks(){
         for dpi in [96,144]{
             for right in [false,true]{
                 let mut layout=Layout::landscape(360,760,dpi,12,4,2,right,true);
@@ -680,9 +684,13 @@ mod tests {
                 layout.apply_heights(dpi,&[72,104]);
                 layout.align_to_work_area=true;
                 for i in 0..2{
-                    let last=layout.rear(i,layout.depth(i) as i32-1);
-                    if right{assert_eq!(last.x,layout.inset);}
-                    else{assert_eq!(last.x+last.w,layout.width-layout.inset);}
+                    let front=layout.card(i);
+                    let rear=layout.rear(i,layout.depth(i) as i32-1);
+                    let (inside,outside)=if right{(rear.x,layout.width-front.x-front.w)}else{(layout.width-rear.x-rear.w,front.x)};
+                    let spare=inside+outside-2*layout.inset;
+                    assert_eq!(inside,layout.inset+(spare*2/5).min(layout.inset+5));
+                    assert!(inside<=outside&&inside>=layout.inset);
+                    if spare>=5{assert!(outside<layout.inset+spare);}
                 }
             }
         }

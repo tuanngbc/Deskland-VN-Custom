@@ -50,28 +50,36 @@ pub struct Layout {
     pub side:DockSide,
 }
 impl Layout {
-    pub(super) fn start_anchor(&self)->crate::launcher::DockAnchor{
+    pub(super) fn popup_anchor(&self,slot:Rect,leading:bool,openness:f32)->crate::launcher::DockAnchor{
         use windows_sys::Win32::Foundation::POINT;
-        let (x,y)=match self.side{
-            DockSide::Bottom=>(self.start.x,self.glass.y),
-            DockSide::Left=>(self.glass.x+self.glass.w,self.start.y+self.start.h*0.5),
-            DockSide::Right=>(self.glass.x,self.start.y+self.start.h*0.5),
-        };
+        let mut x=if leading&&self.side==DockSide::Bottom{slot.x}else{slot.x+slot.w*0.5};
+        let mut y=slot.y+slot.h*0.5;
+        let (along,mut depth)=Self::collapse_scale(openness);
+        let g=self.glass;
+        if openness<=0.003{
+            let cross=if self.side==DockSide::Bottom{g.h}else{g.w};
+            depth=(4.0*self.scale/cross.max(1.0)).min(1.0);
+        }
+        match self.side{
+            DockSide::Bottom=>{x=g.x+g.w*0.5+(x-g.x-g.w*0.5)*along;y=g.y+g.h*(1.0-depth);}
+            DockSide::Left=>{x=g.x+g.w*depth;y=g.y+g.h*0.5+(y-g.y-g.h*0.5)*along;}
+            DockSide::Right=>{x=g.x+g.w*(1.0-depth);y=g.y+g.h*0.5+(y-g.y-g.h*0.5)*along;}
+        }
         crate::launcher::DockAnchor{point:POINT{x:self.window.left+x.round() as i32,
             y:self.window.top+y.round() as i32},side:self.side}
+    }
+    pub(super) fn collapse_scale(openness:f32)->(f32,f32){
+        let t=openness.clamp(0.0,1.0);
+        (0.49+0.51*t,0.17+0.83*t)
+    }
+    pub(super) fn start_anchor(&self,openness:f32)->crate::launcher::DockAnchor{
+        self.popup_anchor(self.start,true,openness)
     }
     pub fn hit(&self,x:f32,y:f32)->Option<usize>{
         self.slots.iter().position(|r|r.contains(x,y))
     }
-    pub(super) fn hub_anchor(&self)->crate::launcher::DockAnchor{
-        use windows_sys::Win32::Foundation::POINT;
-        let (x,y)=match self.side{
-            DockSide::Bottom=>(self.tray.x+self.tray.w*0.5,0.0),
-            DockSide::Left=>((self.window.right-self.window.left) as f32,self.tray.y+self.tray.h*0.5),
-            DockSide::Right=>(0.0,self.tray.y+self.tray.h*0.5),
-        };
-        crate::launcher::DockAnchor{point:POINT{x:self.window.left+x.round() as i32,
-            y:self.window.top+y.round() as i32},side:self.side}
+    pub(super) fn hub_anchor(&self,openness:f32)->crate::launcher::DockAnchor{
+        self.popup_anchor(self.tray,false,openness)
     }
     pub fn magnification_target(&self,x:f32,y:f32)->Option<f32>{
         let point=self.axis(x,y);
@@ -342,6 +350,28 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn panel_anchors_share_the_capsule_edge_as_dock_scales_and_folds(){
+        let bounds=RECT{left:-1440,top:-100,right:0,bottom:1600};
+        let screen=Display{id:"portrait".into(),name:String::new(),bounds,work:bounds,dpi:144,primary:false};
+        for position in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
+            let mut prior=None;
+            for dock_scale in [75,100,140]{
+                let style=Appearance{position,size:dock_scale,..Default::default()};
+                let l=measure_widgets(&screen,&style,5,None,0.0,Some(false),&[],28);
+                let edge=|p:crate::launcher::DockAnchor|match position{
+                    DockSide::Bottom=>-p.point.y,DockSide::Left=>p.point.x,DockSide::Right=>-p.point.x
+                };
+                let full=edge(l.start_anchor(1.0));
+                assert_eq!(edge(l.hub_anchor(1.0)),full);
+                assert_eq!(edge(l.popup_anchor(l.clock,false,1.0)),full);
+                assert!(edge(l.start_anchor(0.0))<edge(l.start_anchor(0.5)));
+                assert!(edge(l.start_anchor(0.5))<full);
+                if let Some(last)=prior{assert!(full>last);}
+                prior=Some(full);
+            }
+        }
+    }
     #[test]
     fn magnification_crosses_the_gap_without_stealing_clicks(){
         let bounds=RECT{left:-1080,top:-700,right:0,bottom:1220};

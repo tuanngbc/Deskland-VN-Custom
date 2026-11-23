@@ -1,7 +1,7 @@
 //! Dock Start has a separate window, layout and launch history. Only the
 //! app catalog, Shell launching and icon extraction are shared with Spotlight.
 use super::*;
-use crate::dock::{PopupPalette,PopupPixels};
+use crate::dock::{panel_chrome as chrome,PopupPalette,PopupPixels};
 use std::{collections::{HashMap,HashSet},ptr,rc::Rc,sync::mpsc::{self,Receiver,Sender},time::{Duration,Instant}};
 
 const CLASS:&str="TuanpcDeskStartPanel";
@@ -14,6 +14,7 @@ const EDIT_ID:usize=101;
 const APPLY:u32=WM_APP+115;
 const POLL:usize=1;
 const DISMISS_OUTSIDE:u32=WM_APP+116;
+const FOLLOW_DOCK:u32=WM_APP+117;
 const IDLE_TIMER:usize=2;
 const FOCUS_TIMER:usize=3;
 const IDLE_TIMEOUT:Duration=Duration::from_secs(20);
@@ -27,7 +28,7 @@ enum Hit { Home, Apps, Settings, Power, Restart, Page(i32), Explorer, Windows, T
 #[derive(Clone)]
 struct Tile { rect:RECT, hit:Hit, text:String, entry:Option<Entry>, compact:bool, pinned:bool }
 struct Model {
-    hwnd:HWND, edit:HWND, owner:HWND, anchor:DockAnchor, work:RECT, scale:f32, frame:Frame, dark:bool, area:Area,
+    hwnd:HWND, edit:HWND, owner:HWND, anchor:DockAnchor, work:RECT, dock_dpi:u32, scale:f32, frame:Frame, dark:bool, area:Area,
     all:Vec<Entry>, pins:Vec<String>, usage:Usage, query:String, page:usize, selected:usize,
     pressed:Option<(Hit,i32,i32)>, hover:Option<Hit>, keyboard:bool, view:StartView, error:String, glass:Rc<[u8]>, glass_height:i32, fonts:Fonts, avatar:Option<IconPixels>, avatar_rx:Option<Receiver<Option<IconPixels>>>, avatar_at:Option<Instant>,
     icons:HashMap<(PathBuf,i32),Option<IconPixels>>, loading:HashSet<(PathBuf,i32)>,
@@ -35,6 +36,7 @@ struct Model {
     catalog:Option<Receiver<Vec<Entry>>>, indexed_at:Option<Instant>,
 }
 thread_local!{
+    static SHADOW:RefCell<Option<chrome::PanelShadow>>=const{RefCell::new(None)};
     static START:RefCell<Option<Model>>=const{RefCell::new(None)};
     static EDIT_PROC:Cell<WNDPROC>=const{Cell::new(None)};
     static POINTER_HOOK:Cell<HHOOK>=const{Cell::new(ptr::null_mut())};
@@ -226,21 +228,37 @@ fn selected(model:&Model)->Option<Tile>{
     model.view.tiles.iter().filter(|t|matches!(t.hit,Hit::Entry(_))).nth(model.selected).cloned()
 }
 fn repaint(hwnd:HWND){unsafe{InvalidateRect(hwnd,ptr::null(),0);}}
-unsafe fn relayout(hwnd:HWND){
+pub(crate) fn follow_dock(anchor:DockAnchor){
+    let target=VISIBLE_START.load(std::sync::atomic::Ordering::Relaxed) as HWND;
+    if !target.is_null(){
+        let (w,l)=anchor.encode();
+        unsafe{PostMessageW(target,FOLLOW_DOCK,w,l);}
+    }
+}
+unsafe fn place(hwnd:HWND){
     let geometry=START.with(|s|{
-        let mut b=s.borrow_mut();let m=b.as_mut()?;
-        m.view=build_view(m);
-        let height=px(m.view.flow.height,m.scale);
-        let width=px(m.frame.width,m.scale);
-        let (x,y)=m.anchor.position(m.work,width,height,px(10,m.scale));
-        Some((x,y,width,height))
+        let b=s.borrow();let m=b.as_ref()?;
+        let (w,h)=(px(m.frame.width,m.scale),px(m.view.flow.height,m.scale));
+        if w>m.work.right-m.work.left||h>m.work.bottom-m.work.top{return None;}
+        let (x,y)=m.anchor.position(m.work,w,h,chrome::scale(m.dock_dpi,chrome::PANEL_GAP));
+        Some((RECT{left:x,top:y,right:x+w,bottom:y+h},m.dock_dpi,m.anchor.side,m.dark))
     });
-    let Some((x,y,width,height))=geometry else{return;};
+    let Some((r,dpi,side,dark))=geometry else{if IsWindowVisible(hwnd)!=0{hide(hwnd);}return;};
     let mut previous:RECT=std::mem::zeroed();
     GetWindowRect(hwnd,&mut previous);
-    if [previous.left,previous.top,previous.right,previous.bottom]!=[x,y,x+width,y+height]{
-        SetWindowPos(hwnd,ptr::null_mut(),x,y,width,height,SWP_NOACTIVATE|SWP_NOZORDER);
+    let size_changed=r.right-r.left!=previous.right-previous.left||r.bottom-r.top!=previous.bottom-previous.top;
+    if size_changed||r.left!=previous.left||r.top!=previous.top{
+        SetWindowPos(hwnd,ptr::null_mut(),r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_NOZORDER);
+        if size_changed{chrome::start_frame(hwnd,r.right-r.left,r.bottom-r.top,dpi);}
     }
+    if IsWindowVisible(hwnd)!=0{sync_shadow(hwnd,r,dpi,side,dark);}
+}
+unsafe fn sync_shadow(hwnd:HWND,rect:RECT,dpi:u32,side:crate::dock::DockSide,dark:bool){
+    SHADOW.with(|s|chrome::PanelShadow::sync(&mut s.borrow_mut(),hwnd,ptr::null_mut(),rect,dpi,side,dark));
+}
+unsafe fn relayout(hwnd:HWND){
+    START.with(|s|{if let Some(m)=s.borrow_mut().as_mut(){m.view=build_view(m);}});
+    place(hwnd);
     repaint(hwnd);
 }
 pub(super) fn pins_changed(){
@@ -366,9 +384,9 @@ unsafe fn paint_start(hwnd:HWND){
         }
         let selected=selected.filter(|_|m.keyboard||!m.query.is_empty());
         Some((m.scale,m.frame,m.dark,m.glass.clone(),tiles,icons,selected,m.hover.clone(),m.area,m.query.trim().is_empty(),
-            m.error.clone(),m.view.count,m.catalog.is_some()||!m.loading.is_empty()||m.avatar_rx.is_some(),m.view.flow,m.view.index_label.clone(),m.anchor,m.work,m.fonts))
+            m.error.clone(),m.view.count,m.catalog.is_some()||!m.loading.is_empty()||m.avatar_rx.is_some(),m.view.flow,m.view.index_label.clone(),m.anchor,m.work,m.dock_dpi,m.fonts))
     });
-    if let Some((s,frame,dark,glass,tiles,icons,selected,hover,area,empty_query,error,count,pending,flow,index_label,anchor,work,fonts))=view{
+    if let Some((s,frame,dark,glass,tiles,icons,selected,hover,area,empty_query,error,count,pending,flow,index_label,anchor,work,dock_dpi,fonts))=view{
         let width=px(frame.width,s);let height=px(flow.height,s);
         if let Some(mut surface)=PopupPixels::new(width,height){
             let dc=surface.dc();
@@ -383,8 +401,8 @@ unsafe fn paint_start(hwnd:HWND){
                 // contractions do not displace the material behind the panel.
                 let full_height=glass.len()/4/(width/4).max(1) as usize;
                 let envelope=START.with(|slot|slot.borrow().as_ref().map(|m|m.glass_height)).unwrap_or(height);
-                let (_,start)=anchor.position(work,width,envelope,px(10,s));
-                let (_,current)=anchor.position(work,width,height,px(10,s));
+                let (_,start)=anchor.position(work,width,envelope,chrome::scale(dock_dpi,chrome::PANEL_GAP));
+                let (_,current)=anchor.position(work,width,height,chrome::scale(dock_dpi,chrome::PANEL_GAP));
                 let crop=((current-start)/4).max(0).min(full_height.saturating_sub(1) as i32);
                 let mut info:BITMAPINFO=std::mem::zeroed();
                 info.bmiHeader.biSize=std::mem::size_of::<BITMAPINFOHEADER>() as u32;
@@ -537,6 +555,7 @@ unsafe fn stop_dismissal(hwnd:HWND){
 unsafe fn hide(hwnd:HWND){
     FOCUS.set(None);KillTimer(hwnd,FOCUS_TIMER);
     stop_dismissal(hwnd);
+    SHADOW.with(|s|s.replace(None));
     ShowWindow(hwnd,SW_HIDE);
     SetWindowPos(hwnd,HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
 }
@@ -555,6 +574,8 @@ unsafe fn show(hwnd:HWND,edit:HWND){
     FOCUS.set(Some((previous,input,Instant::now())));
     SetForegroundWindow(hwnd);
     if IsWindowVisible(hwnd)==0{FOCUS.set(None);return;}
+    place(hwnd);
+    if IsWindowVisible(hwnd)==0{return;}
     search_focus(hwnd,edit);
     if FOCUS.get().is_some(){SetTimer(hwnd,FOCUS_TIMER,40,None);}
     touch();
@@ -767,7 +788,21 @@ unsafe extern "system" fn proc_start(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
             }
             0
         }
-        WM_NCDESTROY=>{FOCUS.set(None);KillTimer(hwnd,FOCUS_TIMER);stop_dismissal(hwnd);DefWindowProcW(hwnd,msg,w,l)}
+        FOLLOW_DOCK=>{
+            let anchor=DockAnchor::decode(w,l);
+            let update=IsWindowVisible(hwnd)!=0&&START.with(|s|{
+                let mut slot=s.borrow_mut();
+                let Some(m)=slot.as_mut()else{return false;};
+                if m.anchor.same_position(anchor)||MonitorFromPoint(m.anchor.point,MONITOR_DEFAULTTONEAREST)!=
+                    MonitorFromPoint(anchor.point,MONITOR_DEFAULTTONEAREST){return false;}
+                let Some(work)=chrome::panel_work(anchor.point,anchor.side,chrome::scale(m.dock_dpi,chrome::PANEL_GAP))else{return false;};
+                m.anchor=anchor;m.work=work;
+                true
+            });
+            if update{place(hwnd);}
+            0
+        },
+        WM_NCDESTROY=>{SHADOW.with(|s|s.replace(None));FOCUS.set(None);KillTimer(hwnd,FOCUS_TIMER);stop_dismissal(hwnd);DefWindowProcW(hwnd,msg,w,l)}
         WM_TIMER if w==FOCUS_TIMER=>{
             let foreground=GetForegroundWindow();
             if !MENU.get()&&IsWindowVisible(hwnd)!=0&&foreground==hwnd{
@@ -933,7 +968,7 @@ pub(crate) fn toggle(owner:HWND,anchor:DockAnchor){
             SendMessageW(edit,0x00c5,128,0); // EM_LIMITTEXT
             SendMessageW(edit,0x1501,1,wide("Tìm ứng dụng…").as_ptr() as LPARAM); // EM_SETCUEBANNER
             let (icon_tx,icon_rx)=icon_worker();
-            START.with(|s|s.replace(Some(Model{hwnd,edit,owner,anchor,work:std::mem::zeroed(),scale:1.0,frame:Frame::new(MAX_WIDTH,MAX_HEIGHT),dark:false,area:Area::Home,all:Vec::new(),
+            START.with(|s|s.replace(Some(Model{hwnd,edit,owner,anchor,work:std::mem::zeroed(),dock_dpi:96,scale:1.0,frame:Frame::new(MAX_WIDTH,MAX_HEIGHT),dark:false,area:Area::Home,all:Vec::new(),
                 pins:Vec::new(),usage:usage_load(),query:String::new(),page:0,selected:0,pressed:None,hover:None,keyboard:false,
                 view:StartView{tiles:Vec::new(),page:0,count:0,columns:1,index_label:String::new(),flow:Frame::new(MAX_WIDTH,MAX_HEIGHT).flow(true,0,false,false)},
                 error:String::new(),glass:Rc::from([]),glass_height:0,
@@ -943,15 +978,17 @@ pub(crate) fn toggle(owner:HWND,anchor:DockAnchor){
         let monitor=MonitorFromPoint(anchor.point,MONITOR_DEFAULTTONEAREST);
         let mut info:MONITORINFO=std::mem::zeroed();info.cbSize=std::mem::size_of::<MONITORINFO>() as u32;
         if GetMonitorInfoW(monitor,&mut info)==0{return;}
-        let work=info.rcWork;
-        let _=SetWindowPos(hwnd,ptr::null_mut(),work.left,work.top,1,1,SWP_NOACTIVATE|SWP_NOZORDER);
-        let s=(windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd).clamp(72,288) as f32/96.0)
+        let _=SetWindowPos(hwnd,ptr::null_mut(),anchor.point.x,anchor.point.y,1,1,SWP_NOACTIVATE|SWP_NOZORDER);
+        let dock_dpi=windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd).clamp(72,288);
+        let gap=chrome::scale(dock_dpi,chrome::PANEL_GAP);
+        let Some(work)=chrome::panel_work(anchor.point,anchor.side,gap)else{return;};
+        let s=(dock_dpi as f32/96.0)
             .min((work.right-work.left) as f32/272.0).min((work.bottom-work.top) as f32/248.0).min(2.75);
         if s<=0.0{return;}
         let logical=|n:i32|(n as f32/s).floor() as i32;
         let frame=Frame::new(logical(work.right-work.left)-16,logical(work.bottom-work.top)-16);
         let (width,height)=(px(frame.width,s),px(frame.max_height(),s));
-        let (x,y)=anchor.position(work,width,height,px(10,s));
+        let (x,y)=anchor.position(work,width,height,gap);
         let prefs=PREFS.with(|p|p.borrow().clone());
         let dark=prefs.theme=="dark";
         #[cfg(not(test))]
@@ -962,7 +999,7 @@ pub(crate) fn toggle(owner:HWND,anchor:DockAnchor){
         let pins=DOCK_PINS.with(|p|p.borrow().clone());
         let old_fonts=START.with(|sref|{
             let mut b=sref.borrow_mut();let m=b.as_mut().unwrap();
-            m.scale=s;m.frame=frame;m.glass_height=height;m.anchor=anchor;m.work=work;m.owner=owner;m.dark=dark;m.pins=pins;m.area=Area::Home;m.query.clear();
+            m.scale=s;m.dock_dpi=dock_dpi;m.frame=frame;m.glass_height=height;m.anchor=anchor;m.work=work;m.owner=owner;m.dark=dark;m.pins=pins;m.area=Area::Home;m.query.clear();
             m.page=0;m.selected=0;m.pressed=None;m.hover=None;m.keyboard=false;m.error.clear();m.glass=glass.into();
             if m.catalog.is_none()&&m.indexed_at.is_none_or(|t|t.elapsed()>Duration::from_secs(180)){m.catalog=catalog_worker();}
             if !cfg!(test)&&m.avatar_rx.is_none()&&(m.avatar_at.is_none_or(|t|t.elapsed()>Duration::from_secs(300))||
@@ -976,9 +1013,7 @@ pub(crate) fn toggle(owner:HWND,anchor:DockAnchor){
         SetWindowTextW(edit,wide("").as_ptr());
         MoveWindow(edit,px(INSET+34,s),px(HEADER_Y+8,s),px(frame.search_width()-45,s),px(20,s),0);
         use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
-        let round=2i32;let border=0xffff_fffeu32;let mode=i32::from(dark);
-        DwmSetWindowAttribute(hwnd,33,(&round as *const i32).cast(),4);
-        DwmSetWindowAttribute(hwnd,34,(&border as *const u32).cast(),4);
+        let mode=i32::from(dark);
         DwmSetWindowAttribute(hwnd,20,(&mode as *const i32).cast(),4);
         relayout(hwnd);
         show(hwnd,edit);
@@ -1114,6 +1149,12 @@ mod tests {
             START.with(|s|assert_eq!(selected(s.borrow().as_ref().unwrap()).unwrap().text,"Paint"));
             let mut search:RECT=std::mem::zeroed();GetWindowRect(host,&mut search);
             assert!(search.bottom-search.top <= rc.bottom-rc.top);
+            let following=DockAnchor{point:POINT{x:point.x,y:point.y-22},side:crate::dock::DockSide::Bottom};
+            let (w,l)=following.encode();
+            SendMessageW(host,FOLLOW_DOCK,w,l);
+            let mut moved:RECT=std::mem::zeroed();GetWindowRect(host,&mut moved);
+            assert_eq!(search.bottom-moved.bottom,22);
+            START.with(|s|assert_eq!(s.borrow().as_ref().unwrap().query,"paint"));
             SendMessageW(host,APPLY,VK_RETURN as usize,0);
             assert_eq!(IsWindowVisible(host),0);
             START.with(|s|assert_eq!(s.borrow().as_ref().unwrap().usage.recent.paths,vec![PathBuf::from("mspaint.exe")]));

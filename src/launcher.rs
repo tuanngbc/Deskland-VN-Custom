@@ -774,6 +774,9 @@ pub fn toggle(_owner: HWND) {toggle_at(None);}
 #[derive(Clone,Copy)]
 pub(crate) struct DockAnchor {pub point:POINT,pub side:crate::dock::DockSide}
 impl DockAnchor {
+    pub(crate) fn same_position(self,other:Self)->bool{
+        self.side==other.side&&self.point.x==other.point.x&&self.point.y==other.point.y
+    }
     pub(crate) fn encode(self)->(WPARAM,LPARAM){
         let side=match self.side{crate::dock::DockSide::Bottom=>0,crate::dock::DockSide::Left=>1,crate::dock::DockSide::Right=>2};
         (((self.point.x as u32 as u64)|((side as u64)<<32)) as WPARAM,self.point.y as LPARAM)

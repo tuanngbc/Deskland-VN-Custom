@@ -42,7 +42,7 @@ pub(super) fn control_backing(base: f32) -> f32 {
 
 pub type Atlas = HashMap<String, Option<Arc<crate::launcher::IconPixels>>>;
 pub struct Surface {
-    layer:Layer,glass:Rect,material:Material,static_pixels:Vec<u8>,motion_pixels:Vec<u8>,icons:IconRasters,metric:Option<MetricInk>,clock:Option<ClockInk>,
+    layer:Layer,glass:Rect,material:Material,static_pixels:Vec<u8>,motion_pixels:Vec<u8>,icons:IconRasters,metric:Option<MetricInk>,clock:Option<ClockInk>,popup_anchor:Option<crate::launcher::DockAnchor>,
 }
 struct MetricInk{size:(i32,i32),fonts:[HFONT;3],mask:Layer,pixels:Vec<u8>,key:Option<(usize,MetricOptions,bool,bool)>,painted_at:Option<Instant>}
 impl Drop for MetricInk{fn drop(&mut self){unsafe{for &font in &self.fonts{if !font.is_null(){DeleteObject(font);}}}}}
@@ -154,7 +154,10 @@ impl ClockInk{
 impl Surface {
     pub unsafe fn new(w:i32,h:i32,glass:Rect,material:Material)->Option<Self>{
         let layer=Layer::new(w,h)?;
-        Some(Self{layer,glass,material,static_pixels:Vec::new(),motion_pixels:Vec::new(),icons:IconRasters::default(),metric:None,clock:None})
+        Some(Self{layer,glass,material,static_pixels:Vec::new(),motion_pixels:Vec::new(),icons:IconRasters::default(),metric:None,clock:None,popup_anchor:None})
+    }
+    pub fn update_popup_anchor(&mut self,anchor:crate::launcher::DockAnchor)->bool{
+        self.popup_anchor.replace(anchor).is_none_or(|old|!old.same_position(anchor))
     }
     pub fn size(&self)->(i32,i32){self.layer.size}
     pub fn set_material(&mut self,value:Material){
@@ -179,7 +182,7 @@ impl Surface {
         self.layer.present(hwnd)
     }
     pub unsafe fn paint(&mut self,hwnd:HWND,layout:&Layout,items:&[super::Item],atlas:&Atlas,start_icon:super::StartIcon,active:Option<usize>,minimized:u16,attention:u16,
-        hover:Option<usize>,drop_target:Option<usize>,openness:f32,feedback:Option<(usize,FeedbackKind,f32)>,metrics:Option<MetricOptions>,rail_face:usize,rail_opacity:f32)->bool{
+        hover:Option<usize>,drop_target:Option<usize>,openness:f32,feedback:Option<(usize,FeedbackKind,f32)>,metrics:Option<MetricOptions>,rail_face:usize,rail_opacity:f32,keyboard:Option<usize>,start_motion:f32)->bool{
         if self.has_motion_frame(layout,openness){
             return self.present_motion(hwnd,layout,openness,rail_face,rail_opacity);
         }
@@ -199,17 +202,16 @@ impl Surface {
             let front=active==Some(i);
             let asleep=(minimized & (1<<i))!=0;
             let tint=if self.material.dark{[245,248,252]}else{[58,69,78]};
-            if !matches!(atlas.get(&item.path),Some(Some(_)))&&control_alpha!=0 {
-                let r=Rect{x:slot.x+slot.w*0.10,y:slot.y+slot.h*0.10,w:slot.w*0.80,h:slot.h*0.80};
-                rounded(data,w,h,r,r.w*0.26,control_tint,control_alpha);
-            }
-            if front||hover==Some(i){
-                rounded(data,w,h,*slot,slot.w*0.25,if front{palette.accent}else{palette.ink},if front{38}else{31});
+            if keyboard==Some(i){
+                draw(data,w,h,*slot,|x,y|{
+                    let d=distance(*slot,slot.w*0.24,x,y)+1.0*scale;
+                    Some((palette.accent,(1.0*scale-d.abs()).clamp(0.0,1.0)*210.0))
+                });
             }
             if let Some(Some(icon))=atlas.get(&item.path){
                 self.icons.paint(data,w,h,*slot,icon);
             }else{
-                fallback_icon(data,w,h,*slot,tint);
+                fallback_mark(data,w,h,*slot,tint);
             }
             let (x,y)=layout.indicators[i];
             if item.count>0 {
@@ -297,10 +299,17 @@ impl Surface {
         }
         status_on(data,w,h,utility,scale,tint,None);
         let first=layout.shell_index();
-        for (i,slot) in [layout.start,layout.tray,layout.clock].into_iter().enumerate(){
-            if hover==Some(first+i){rounded(data,w,h,slot,8.0*scale,palette.ink,37);}
+        for (i,slot) in [layout.tray,layout.clock].into_iter().enumerate(){
+            if hover==Some(first+i+1){rounded(data,w,h,slot,8.0*scale,palette.ink,37);}
         }
-        paint_start(data,w,h,layout.start,start_icon,palette,self.material.dark);
+        let slot=layout.start;
+        let bounce=start_motion.clamp(-1.0,1.0);
+        let k=if self.material.reduced_motion{1.0}else if bounce<0.0{1.0+0.13*bounce}else{1.0+0.09*bounce};
+        if bounce!=0.0||keyboard==Some(first){
+            rounded(data,w,h,slot,slot.w*0.25,palette.ink,(bounce.abs()*45.0+if keyboard==Some(first){42.0}else{0.0}) as u8);
+        }
+        let at=Rect{x:slot.x+(1.0-k)*slot.w*0.5,y:slot.y+(1.0-k)*slot.h*0.5,w:slot.w*k,h:slot.h*k};
+        paint_start(data,w,h,at,start_icon,palette,self.material.dark,bounce);
         let t=layout.tray;
         let mid_x=t.x+t.w*0.5;let mid_y=t.y+t.h*0.5;
         let k=(t.w.min(t.h)*0.18).min(5.0*scale);
@@ -337,8 +346,7 @@ impl Surface {
 fn collapse_pixels(dst:&mut[u8],src:&[u8],w:i32,h:i32,glass:Rect,side:super::DockSide,openness:f32){
     use super::DockSide::*;
     let t=openness.clamp(0.0,1.0);
-    let along=0.49+0.51*t;
-    let depth=0.17+0.83*t;
+    let (along,depth)=Layout::collapse_scale(t);
     let opacity=(t/0.45).clamp(0.0,1.0);
     let (cx,cy,sx,sy)=match side{
         Bottom=>(glass.x+glass.w/2.0,glass.y+glass.h,along,depth),
@@ -378,7 +386,7 @@ fn collapse_pixels(dst:&mut[u8],src:&[u8],w:i32,h:i32,glass:Rect,side:super::Doc
     }
 }
 
-fn paint_start(data:&mut[u8],w:i32,h:i32,slot:Rect,icon:super::StartIcon,palette:Palette,dark:bool){
+fn paint_start(data:&mut[u8],w:i32,h:i32,slot:Rect,icon:super::StartIcon,palette:Palette,dark:bool,bounce:f32){
     use super::StartIcon::*;
     let size=slot.w.min(slot.h)*0.91;
     let base=Rect{x:slot.x+(slot.w-size)*0.5,y:slot.y+(slot.h-size)*0.5,w:size,h:size};
@@ -388,7 +396,9 @@ fn paint_start(data:&mut[u8],w:i32,h:i32,slot:Rect,icon:super::StartIcon,palette
         Orb=>(Some(if dark{[78,108,159]}else{[87,114,164]}),[255,251,246],2),
         Minimal=>(None,palette.ink,2),
     };
-    if let Some(color)=background{
+    if let Some(color)=background.map(|c|c.map(|v|if bounce>=0.0{
+        (v as f32+(255.0-v as f32)*bounce*0.18).round() as u8
+    }else{(v as f32*(1.0+bounce*0.22)).round() as u8})){
         rounded(data,w,h,base,size*if icon==Orb{0.5}else{0.24},color,255);
     }
     let glyph=size*if background.is_some(){0.57}else{0.72};
@@ -559,6 +569,9 @@ pub(super) fn rounded(data:&mut [u8],w:i32,h:i32,r:Rect,radius:f32,tint:[u8;3],o
 pub(super) fn fallback_icon(data:&mut[u8],w:i32,h:i32,slot:Rect,tint:[u8;3]){
     let inner=Rect{x:slot.x+slot.w*0.24,y:slot.y+slot.h*0.24,w:slot.w*0.52,h:slot.h*0.52};
     rounded(data,w,h,inner,slot.w*0.13,tint,84);
+    fallback_mark(data,w,h,slot,tint);
+}
+fn fallback_mark(data:&mut[u8],w:i32,h:i32,slot:Rect,tint:[u8;3]){
     for (u,v) in [(0.39,0.39),(0.61,0.39),(0.39,0.61),(0.61,0.61)]{
         let k=slot.w*0.06;
         rounded(data,w,h,Rect{x:slot.x+u*slot.w-k,y:slot.y+v*slot.h-k,w:k*2.0,h:k*2.0},k,tint,188);

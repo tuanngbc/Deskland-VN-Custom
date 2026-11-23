@@ -36,7 +36,7 @@ pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>
 mod utilities;
 mod wifi;
 mod control_center;
-mod panel_chrome;
+pub(crate) mod panel_chrome;
 mod appbar;
 mod shell_access;
 mod taskbar_guard;
@@ -154,20 +154,21 @@ enum FeedbackKind { Launch, Restore, Minimize, Failed }
 struct Feedback { path:String, kind:FeedbackKind, start:std::time::Instant }
 #[derive(Clone,Default)]
 struct Motion {
-    focus:Option<motion::Spring>, target:Option<f32>, zoom:motion::Spring, at:Option<std::time::Instant>, scheduled:bool,
+    focus:Option<motion::Spring>, target:Option<f32>, zoom:motion::Spring, start:motion::Spring, at:Option<std::time::Instant>, scheduled:bool,
 }
 impl Motion {
     fn focus_value(&self)->Option<f32>{self.focus.map(|f|f.value)}
-    fn tick(&mut self, now:std::time::Instant, speed:u32, reveal:&mut motion::Spring, shown:bool)->bool{
+    fn tick(&mut self, now:std::time::Instant, speed:u32, reveal:&mut motion::Spring, shown:bool,start_goal:f32)->bool{
         let dt=self.at.replace(now).map_or(0.016,|t|now.duration_since(t).as_secs_f32().clamp(0.001,0.090));
         let speed=speed as f32/100.0;
+        let start_moving=self.start.advance(start_goal,dt,35.0,0.005);
         let moving=reveal.advance(if shown{1.0}else{0.0},dt,25.0*speed,0.003);
         // A reveal already transforms the entire Dock. Finish that motion
         // before asking the layout to magnify individual icons again.
         if moving{return true;}
         if !shown{
             self.zoom=motion::Spring::rest(0.0);self.focus=None;
-            return false;
+            return start_moving;
         }
         let goal=if self.target.is_some(){1.0}else{0.0};
         let mut unsettled=self.zoom.advance(goal,dt,23.0*speed,0.0025);
@@ -176,7 +177,7 @@ impl Motion {
             unsettled|=focus.advance(target,dt,20.0+15.0*speed,0.12);
         }
         if self.target.is_none() && self.zoom.value==0.0 { self.focus=None; }
-        unsettled
+        unsettled||start_moving
     }
 }
 impl Bar {
@@ -213,6 +214,11 @@ impl Bar {
     fn drop_target(&self)->Option<usize>{
         let (x,y)=self.pointer?;
         self.drop_at(x,y)
+    }
+    fn start_goal(&self)->f32{
+        if self.collapsed{return 0.0;}
+        if self.pressed.as_ref().is_some_and(|p|!p.dragged&&p.target==DockTarget::Shell(shell_access::Target::Start)){return -1.0;}
+        if self.layout.as_ref().is_some_and(|l|self.hovered==l.shell_index() as i32){1.0}else{0.0}
     }
     fn schedule(&mut self)->bool{
         let start=!self.motion.scheduled;
@@ -680,9 +686,13 @@ fn stage_legacy_layout()->bool{crate::trial::benchmark_active()||crate::trial::d
 fn stage_width_cap(width:i32)->i32{
     if stage_legacy_layout(){(width/5).max(62)}else{(width*28/100).max(1)}
 }
+fn stage_margin(screen:&Screen)->i32{
+    let scale=(screen.dpi as f32/96.0).clamp(0.75,3.0);
+    ((if stage_legacy_layout(){8.0}else{4.0})*scale).round() as i32
+}
 fn stage_depth(screen:&Screen,style:StageStyle)->i32{
-    let margin=(8.0*(screen.dpi as f32/96.0).clamp(0.75,3.0)).round() as i32;
-    stage_width(screen,style).min(stage_width_cap(screen.bounds.right-screen.bounds.left))+margin
+    let trim=if stage_legacy_layout(){0}else{panel_chrome::scale(screen.dpi,16)};
+    (stage_width(screen,style).min(stage_width_cap(screen.bounds.right-screen.bounds.left))-trim).max(1)+stage_margin(screen)
 }
 unsafe fn sync_appbars(state:&mut State,topology:bool){
     // Don't ask Explorer to renegotiate AppBars while the watchdog is
@@ -726,7 +736,7 @@ fn stage_rect(screen:&Screen,style:StageStyle)->RECT { stage_rect_with_depth(scr
 fn stage_rect_with_depth(screen:&Screen,style:StageStyle,depth:Option<i32>)->RECT {
     let scale=(screen.dpi as f32/96.0).clamp(0.75,3.0);
     let px=|n:f32|(n*scale).round() as i32;
-    let margin=px(8.0);
+    let margin=stage_margin(screen);
     let width=depth.map_or_else(||stage_width(screen,style).min(stage_width_cap(screen.work.right-screen.work.left)),|d|(d-margin).max(1));
     let edge=if style.right==Some(true){screen.work.right-width-margin}else{screen.work.left+margin};
     let top=screen.work.top+((screen.work.bottom-screen.work.top)/12).min(px(90.0));
@@ -1279,6 +1289,20 @@ fn stage_caption<'a>(title:&str,peers:impl Iterator<Item=&'a str>)->String{
     }
     title.to_owned()
 }
+unsafe fn retarget_start(hwnd:HWND){
+    let state=STATE.with(|s|{
+        let mut state=s.borrow_mut();
+        let reduced=state.prefs.appearance.reduced_motion;
+        let b=state.bars.iter_mut().find(|b|b.hwnd==hwnd)?;
+        let goal=b.start_goal();
+        if b.motion.start.value==goal{return None;}
+        if reduced{b.motion.start=motion::Spring::rest(goal);Some(false)}else{Some(b.schedule())}
+    });
+    if let Some(start)=state{
+        if start{SetTimer(hwnd,MOTION_TIMER,16,None);}
+        InvalidateRect(hwnd,ptr::null(),0);
+    }
+}
 unsafe fn paint(hwnd:HWND){
     let layered=STATE.with(|s|{
         let state=s.borrow();
@@ -1287,10 +1311,10 @@ unsafe fn paint(hwnd:HWND){
             .map(|i|(i,f.kind,if state.prefs.appearance.reduced_motion{0.2}else{f.start.elapsed().as_secs_f32()/0.42})));
         Some((bar.layout.clone()?,bar.items.clone(),bar.hovered,bar.keyboard,state.material?,bar.active,bar.minimized,bar.attention,bar.drop_target(),bar.reveal.value.clamp(0.0,1.0),feedback,bar.motion.at,state.prefs.appearance.start_icon,
             state.screens.iter().find(|d|same_rect(d.bounds,bar.bounds))
-                .and_then(|d|state.prefs.utility_profiles.get(&d.id)).map(|p|p.metrics),bar.rail_face,bar.rail.opacity))
+                .and_then(|d|state.prefs.utility_profiles.get(&d.id)).map(|p|p.metrics),bar.rail_face,bar.rail.opacity,if state.prefs.appearance.reduced_motion{bar.start_goal()}else{bar.motion.start.value}))
     });
     let mut ps:PAINTSTRUCT=mem::zeroed();let dc=BeginPaint(hwnd,&mut ps);
-    if let Some((layout,items,hovered,keyboard,material,active,minimized,attention,drop_target,openness,feedback,animation_tick,start_icon,metrics,rail_face,rail_opacity))=layered{
+    if let Some((layout,items,hovered,keyboard,material,active,minimized,attention,drop_target,openness,feedback,animation_tick,start_icon,metrics,rail_face,rail_opacity,start_motion))=layered{
         EndPaint(hwnd,&ps);
         let key=hwnd as usize;
         let paint=animation_tick.filter(|_|perf::active()).map(|tick|(tick,std::time::Instant::now()));
@@ -1305,10 +1329,15 @@ unsafe fn paint(hwnd:HWND){
                 let mut a=a.borrow_mut();
                 a.as_mut().map(|atlas|atlas.request(&items)).unwrap_or_default()
             })};
-            let applied=if openness<=0.003 {canvas.rail(hwnd,&layout,rail_face,rail_opacity)} else {canvas.paint(hwnd,&layout,&items,&atlas,start_icon,active,minimized,attention,keyboard.or_else(||usize::try_from(hovered).ok()),drop_target,openness,feedback,metrics,rail_face,rail_opacity)};
+            let applied=if openness<=0.003 {canvas.rail(hwnd,&layout,rail_face,rail_opacity)} else {canvas.paint(hwnd,&layout,&items,&atlas,start_icon,active,minimized,attention,keyboard.or_else(||usize::try_from(hovered).ok()),drop_target,openness,feedback,metrics,rail_face,rail_opacity,keyboard,start_motion)};
             if applied{
                 if let Some((tick,paint))=paint{perf::submitted(key,tick,paint);}
+                let start=layout.start_anchor(openness);
+                let moved=canvas.update_popup_anchor(start);
                 SURFACES.with(|s|s.borrow_mut().insert(key,canvas));
+                if moved{crate::launcher::start::follow_dock(start);}
+                control_center::follow_hub(hwnd,layout.hub_anchor(openness));
+                calendar::follow(hwnd,layout.popup_anchor(layout.clock,false,openness));
                 return;
             }
         }
@@ -2269,7 +2298,7 @@ unsafe fn poll_taskbar(hwnd:HWND){
 }
 unsafe fn open_dock_hub(owner:HWND,dock_mode:bool){
     let dock=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==owner&&!b.hidden)
-        .and_then(|b|b.layout.as_ref()).map(geometry::Layout::hub_anchor));
+        .and_then(|b|Some(b.layout.as_ref()?.hub_anchor(b.reveal.value))));
     let Some(dock)=dock else{return;};
     let anchor=panel_chrome::Anchor::for_owner(owner,dock.point);
     UTILITY_ANCHOR.with(|a|a.set(None));
@@ -2288,17 +2317,15 @@ unsafe fn shell_anchor(owner:HWND,target:shell_access::Target)->Option<panel_chr
         let bar=state.bars.iter().find(|b|b.hwnd==owner&&!b.hidden)?;
         let layout=bar.layout.as_ref()?;
         let rect=match target{shell_access::Target::Start=>layout.start,shell_access::Target::Tray=>layout.tray,shell_access::Target::Clock=>layout.clock};
-        let mut point=POINT{x:(rect.x+rect.w*0.5).round() as i32,y:(rect.y+rect.h*0.5).round() as i32};
-        (ClientToScreen(owner,&mut point)!=0).then_some(point)
+        Some(layout.popup_anchor(rect,false,bar.reveal.value).point)
     });
     slot.map(|point|panel_chrome::Anchor::for_owner(owner,point))
 }
 fn start_anchor_for(state:&State,bar:&Bar,screen:&Display)->crate::launcher::DockAnchor{
+    if let Some(layout)=&bar.layout{return layout.start_anchor(bar.reveal.value);}
     let display=state.appbars.dock_placement(screen,state.prefs.appearance.position);
-    // Compute the unmagnified frame, independent of transient hover and
-    // auto-hide translation. The panel also keeps this anchor during search.
     geometry::measure_cluster(&display,&state.prefs.appearance,bar.items.len(),None,0.0,
-        &bar.pinned_widgets,state.prefs.utility_cluster(&screen.id)).start_anchor()
+        &bar.pinned_widgets,state.prefs.utility_cluster(&screen.id)).start_anchor(bar.reveal.value)
 }
 fn dock_start_anchor(owner:HWND)->Option<crate::launcher::DockAnchor>{
     STATE.with(|s|{
@@ -2950,7 +2977,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if GetCapture()==hwnd{ReleaseCapture();}
             if tracked.1{SetTimer(hwnd,MOTION_TIMER,16,None);}
             if tracked.2{SetTimer(hwnd,HIDE_TIMER,650,None);}
-            if tracked.0{InvalidateRect(hwnd,ptr::null(),0);}
+            if tracked.0{retarget_start(hwnd);InvalidateRect(hwnd,ptr::null(),0);}
             0
         },
         WM_TIMER if w==STAGE_MOTION_TIMER=>{
@@ -3067,7 +3094,8 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let now=std::time::Instant::now();
                 let old_zoom=b.motion.zoom.value;
                 let old_focus=b.motion.focus_value();
-                let mut again=b.motion.tick(now,prefs.appearance.animation_speed,&mut b.reveal,!b.collapsed);
+                let goal=if prefs.appearance.reduced_motion{0.0}else{b.start_goal()};
+                let mut again=b.motion.tick(now,prefs.appearance.animation_speed,&mut b.reveal,!b.collapsed,goal);
                 if old_zoom!=b.motion.zoom.value||old_focus!=b.motion.focus_value(){
                     let placement=appbars.dock_placement(display,prefs.appearance.position);
                     let layout=geometry::measure_cluster(&placement,&prefs.appearance,b.items.len(),b.motion.focus_value(),b.motion.zoom.value,&b.pinned_widgets,prefs.utility_cluster(&display.id));
@@ -3196,6 +3224,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 }
             }
             if animate{SetTimer(hwnd,MOTION_TIMER,16,None);}
+            if track{retarget_start(hwnd);}
             if changed{InvalidateRect(hwnd,ptr::null(),0);}
             0
         }
@@ -3220,7 +3249,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 bar.pressed=target.map(|target|Press{double:msg==WM_LBUTTONDBLCLK,..Press::new(target,x,y)});
                 (capture,start)
             });
-            if !start{crate::launcher::start::dismiss_from_dock();}
+            if !start{crate::launcher::start::dismiss_from_dock();}else{retarget_start(hwnd);}
             if capture{SetCapture(hwnd);}
             0
         },
@@ -3231,7 +3260,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 state.bars.iter_mut().find(|b|b.hwnd==hwnd).is_some_and(|b|b.pressed.take().is_some())
             });
             if msg==WM_CANCELMODE&&GetCapture()==hwnd{ReleaseCapture();}
-            if redraw{InvalidateRect(hwnd,ptr::null(),0);}
+            if redraw{retarget_start(hwnd);InvalidateRect(hwnd,ptr::null(),0);}
             if msg==WM_CANCELMODE{DefWindowProcW(hwnd,msg,w,l)}else{0}
         },
         WM_KILLFOCUS=>{
@@ -3385,6 +3414,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             });
             if GetCapture()==hwnd{ReleaseCapture();}
             if let Some((press,click,item,drop,auto))=action{
+                retarget_start(hwnd);
                 InvalidateRect(hwnd,ptr::null(),0);
                 if let (DockTarget::App(path),Some((anchor,after)))=(press.target,drop){
                     emit(Event::Edit(Edit::MovePin{path,anchor,after}));

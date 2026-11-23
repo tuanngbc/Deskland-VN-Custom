@@ -1,5 +1,5 @@
 //! Shared window anchoring and alpha for native utility popovers.
-use super::{DockSide,surface::Palette};
+use super::{DockSide,geometry::Rect,glass_probe::Layer,surface::{draw,distance,Palette}};
 use windows_sys::Win32::{
     Foundation::*,Graphics::{Dwm::DwmSetWindowAttribute,Gdi::*},
     System::LibraryLoader::GetModuleHandleW,
@@ -25,21 +25,24 @@ impl Anchor {
         monitor.cbSize=mem::size_of::<MONITORINFO>() as u32;
         (GetMonitorInfoW(MonitorFromPoint(self.point,MONITOR_DEFAULTTONEAREST),&mut monitor)!=0).then_some(monitor.rcWork)
     }
-    pub unsafe fn hub_work(self,gap:i32)->Option<RECT>{
-        let mut info:MONITORINFO=mem::zeroed();
-        info.cbSize=mem::size_of::<MONITORINFO>() as u32;
-        (GetMonitorInfoW(MonitorFromPoint(self.point,MONITOR_DEFAULTTONEAREST),&mut info)!=0)
-            .then(||hub_area(info.rcMonitor,info.rcWork,self,gap))
-            .flatten()
+    pub unsafe fn panel_work(self,dpi:u32)->Option<RECT>{
+        panel_work(self.point,self.side,scale(dpi,PANEL_GAP))
     }
     pub fn alpha(self)->u8{(254-self.transparency.clamp(4,74)/4) as u8}
 }
-fn hub_area(monitor:RECT,work:RECT,anchor:Anchor,gap:i32)->Option<RECT>{
+pub(crate) const PANEL_GAP:i32=10;
+pub(crate) unsafe fn panel_work(point:POINT,side:DockSide,gap:i32)->Option<RECT>{
+    let mut info:MONITORINFO=mem::zeroed();
+    info.cbSize=mem::size_of::<MONITORINFO>() as u32;
+    (GetMonitorInfoW(MonitorFromPoint(point,MONITOR_DEFAULTTONEAREST),&mut info)!=0)
+        .then(||panel_area(info.rcMonitor,info.rcWork,point,side,gap)).flatten()
+}
+fn panel_area(monitor:RECT,work:RECT,point:POINT,side:DockSide,gap:i32)->Option<RECT>{
     let mut area=RECT{left:monitor.left,right:monitor.right,top:work.top,bottom:work.bottom};
-    match anchor.side{
-        DockSide::Bottom=>area.bottom=monitor.bottom.min(anchor.point.y-gap),
-        DockSide::Left=>area.left=area.left.max(anchor.point.x+gap),
-        DockSide::Right=>area.right=area.right.min(anchor.point.x-gap),
+    match side{
+        DockSide::Bottom=>area.bottom=monitor.bottom.min(point.y-gap),
+        DockSide::Left=>area.left=area.left.max(point.x+gap),
+        DockSide::Right=>area.right=area.right.min(point.x-gap),
     }
     (area.right>area.left&&area.bottom>area.top).then_some(area)
 }
@@ -52,7 +55,13 @@ pub(super) fn placement(work:RECT,anchor:Anchor,width:i32,height:i32,gap:i32)->(
     };
     (x.clamp(work.left,(work.right-width).max(work.left)),y.clamp(work.top,(work.bottom-height).max(work.top)))
 }
-pub(super) fn scale(dpi:u32,n:i32)->i32{
+pub(super) unsafe fn follow_rect(anchor:Anchor,dpi:u32,width:i32,height:i32)->Option<RECT>{
+    let work=anchor.panel_work(dpi)?;
+    if width>work.right-work.left||height>work.bottom-work.top{return None;}
+    let (x,y)=placement(work,anchor,width,height,scale(dpi,PANEL_GAP));
+    Some(RECT{left:x,top:y,right:x+width,bottom:y+height})
+}
+pub(crate) fn scale(dpi:u32,n:i32)->i32{
     (n*dpi.clamp(72,288) as i32+48)/96
 }
 pub(super) unsafe fn register(name:&[u16],proc:WNDPROC)->bool{
@@ -79,6 +88,69 @@ pub(super) unsafe fn disable_system_border(hwnd:HWND){
     let no_border=0xfffffffeu32; // DWMWA_COLOR_NONE
     let _=DwmSetWindowAttribute(hwnd,33,(&no_round as *const u32).cast(),4);
     let _=DwmSetWindowAttribute(hwnd,34,(&no_border as *const u32).cast(),4);
+}
+/// Common shadow for the three Dock panels. Its transparent surface never
+/// covers the capsule; the Dock-facing falloff reaches zero within the gap.
+pub(crate) struct PanelShadow{pub(super) hwnd:HWND,style:(i32,i32,u32,DockSide,bool),inset:(i32,i32),at:(i32,i32)}
+impl Drop for PanelShadow{
+    fn drop(&mut self){unsafe{DestroyWindow(self.hwnd);}}
+}
+impl PanelShadow{
+    pub(crate) unsafe fn sync(slot:&mut Option<Self>,panel:HWND,owner:HWND,rect:RECT,dpi:u32,side:DockSide,dark:bool){
+        let (width,height)=(rect.right-rect.left,rect.bottom-rect.top);
+        let style=(width,height,dpi,side,dark);
+        if let Some(shadow)=slot.as_mut().filter(|s|s.style==style){
+            let at=(rect.left-shadow.inset.0,rect.top-shadow.inset.1);
+            if shadow.at!=at{
+                SetWindowPos(shadow.hwnd,ptr::null_mut(),at.0,at.1,0,0,SWP_NOACTIVATE|SWP_NOSIZE|SWP_NOZORDER);
+                shadow.at=at;
+            }
+            return;
+        }
+        *slot=None;
+        let pad=scale(dpi,21);
+        let near=(scale(dpi,PANEL_GAP)-1).max(1);
+        let (left,right,bottom)=match side{
+            DockSide::Bottom=>(pad,pad,near),
+            DockSide::Left=>(near,pad,pad),
+            DockSide::Right=>(pad,near,pad),
+        };
+        let at=(rect.left-left,rect.top-pad);
+        let (w,h)=(width+left+right,height+pad+bottom);
+        let Some(mut layer)=Layer::new(w,h)else{return;};
+        let card=Rect{x:left as f32,y:pad as f32,w:width as f32,h:height as f32};
+        let canvas=Rect{x:0.0,y:0.0,w:w as f32,h:h as f32};
+        let radius=scale(dpi,16) as f32;
+        let data=layer.pixels();data.fill(0);
+        draw(data,w,h,canvas,|x,y|{
+            let d=distance(card,radius,x,y);
+            let toward=match side{
+                DockSide::Bottom=>(y-card.y-card.h).max(0.0),
+                DockSide::Left=>(card.x-x).max(0.0),
+                DockSide::Right=>(x-card.x-card.w).max(0.0),
+            };
+            let falloff=(1.0-d.max(0.0)/pad as f32).clamp(0.0,1.0);
+            let facing=(1.0-toward/near as f32).clamp(0.0,1.0);
+            let inner=(1.0+d/(pad as f32*0.5)).clamp(0.0,1.0);
+            Some(([20,18,16],if dark{104.0}else{84.0}*falloff*falloff*facing*facing*inner))
+        });
+        let name=crate::desktop::wide("STATIC");
+        let hwnd=CreateWindowExW(WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW|WS_EX_TOPMOST,
+            name.as_ptr(),ptr::null(),WS_POPUP,at.0,at.1,w,h,owner,ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
+        if hwnd.is_null(){return;}
+        let shadow=Self{hwnd,style,inset:(left,pad),at};
+        disable_system_border(hwnd);
+        if layer.present_at(hwnd,Some(POINT{x:at.0,y:at.1}),255)&&
+            SetWindowPos(hwnd,panel,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW)!=0{
+            *slot=Some(shadow);
+        }
+    }
+}
+pub(crate) unsafe fn start_frame(hwnd:HWND,width:i32,height:i32,dpi:u32){
+    let disabled=1u32; // DWMNCRP_DISABLED: the shared shadow supplies the frame.
+    let _=DwmSetWindowAttribute(hwnd,2,(&disabled as *const u32).cast(),4);
+    disable_system_border(hwnd);
+    clip_corners(hwnd,width,height,dpi);
 }
 pub(super) fn mask_popup(data:&mut [u8],w:i32,h:i32,radius:f32,opacity:u8){
     let (w,h)=(w as usize,h as usize);
@@ -127,16 +199,32 @@ pub(super) unsafe fn child_color(dc:HDC,dark:bool)->LRESULT{
 mod tests{
     use super::*;
     #[test]
-    fn hub_uses_monitor_width_and_cannot_overlap_dock(){
-        let monitor=RECT{left:-1200,top:-200,right:0,bottom:700};
-        for work in [RECT{left:-900,..monitor},RECT{right:-270,..monitor}]{
-            let anchor=Anchor{point:POINT{x:-175,y:585},side:DockSide::Bottom,dark:false,transparency:32};
-            let area=hub_area(monitor,work,anchor,8).unwrap();
-            assert_eq!((area.left,area.right,area.bottom),(-1200,0,577));
-            assert_eq!(placement(area,anchor,400,330,8),(-400,247));
-            let height=area.bottom-area.top;
-            let (_,y)=placement(area,anchor,400,height,8);
-            assert!(y+height<anchor.point.y);
+    fn panel_has_the_same_gap_across_dpis_edges_and_dock_sizes(){
+        let monitor=RECT{left:-1440,top:-300,right:0,bottom:1200};
+        for dpi in [96,144,192]{
+            let gap=scale(dpi,PANEL_GAP);
+            for displacement in [52,90,175]{
+                for side in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
+                    let point=match side{
+                        DockSide::Bottom=>POINT{x:-90,y:monitor.bottom-displacement},
+                        DockSide::Left=>POINT{x:monitor.left+displacement,y:-240},
+                        DockSide::Right=>POINT{x:monitor.right-displacement,y:-240},
+                    };
+                    // Work area is inset by Stage. Along the edge of the
+                    // Dock, only the physical monitor constrains the popup.
+                    let work=RECT{left:-1140,right:-260,..monitor};
+                    let area=panel_area(monitor,work,point,side,gap).unwrap();
+                    let anchor=Anchor{point,side,dark:false,transparency:32};
+                    let (w,h)=(scale(dpi,320),scale(dpi,348));
+                    let (x,y)=placement(area,anchor,w,h,gap);
+                    assert!(x>=area.left&&x+w<=area.right&&y>=area.top&&y+h<=area.bottom);
+                    match side{
+                        DockSide::Bottom=>assert_eq!((x+w,point.y-(y+h)),(monitor.right,gap)),
+                        DockSide::Left=>assert_eq!(x-point.x,gap),
+                        DockSide::Right=>assert_eq!(point.x-(x+w),gap),
+                    }
+                }
+            }
         }
     }
     #[test]
