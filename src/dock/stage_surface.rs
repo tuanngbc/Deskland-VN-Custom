@@ -78,8 +78,7 @@ impl Layout {
         l.caption=px(20);
         let limit=limit.clamp(1,8);
         let wanted=total.min(limit).max(1) as i32;
-        let typical_width=l.card_width()+if stacked{2*l.step()}else{0};
-        let row_height=(typical_width*10/18).max(1);
+        let row_height=(l.card_width()*10/18).max(1);
         let min_h=row_height.min(px(60)).max(1);
         let roomy_gap=gap.max(px(21));
         let need_nav=if total>limit{l.nav_h+roomy_gap}else{0};
