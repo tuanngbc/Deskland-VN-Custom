@@ -1,5 +1,8 @@
 //! The layered Stage surface paints premultiplied cards and caption masks.
 //! A regular owned HWND displays the live DWM rectangles above it.
+#[cfg(test)]
+#[path = "stage_perspective_lab.rs"]
+mod perspective_lab;
 use super::surface::Palette;
 use super::{geometry::Rect,surface::{rounded,draw,distance,control_backing,CONTROL_OPACITY,IconRasters,fallback_icon,Atlas},glass_probe::Layer,Item};
 use crate::desktop::wide;
@@ -41,7 +44,7 @@ pub(super) struct Layout {
     pub width:i32,pub height:i32,pub card_h:i32,pub inset:i32,pub gap:i32,
     pub radius:i32,pub caption:i32,pub rows:usize,pub count:usize,pub paged:bool,
     pub stack:u8,pub nav_h:i32,pub right:bool,
-    pub layers:[u8;8],pub stack_design:bool,
+    pub layers:[u8;8],pub stack_design:bool,pub landscape:bool,stack_step:i32,
 }
 impl Layout {
     pub fn new(width:i32,height:i32,dpi:u32,gap:i32,limit:usize,total:usize,right:bool)->Self{
@@ -59,18 +62,37 @@ impl Layout {
         let available=(height-2*inset-reserve-(shown-1)*gap)/shown;
         let ideal=((width-4*inset)*3/5+px(42)).clamp(min_h,px(160));
         let card_h=available.min(ideal).max(1);
-        Self{width,height,card_h,inset,gap,radius:px(18),caption:px(37),rows,count:0,paged,stack:0,nav_h,right,layers:[0;8],stack_design:false}
+        Self{width,height,card_h,inset,gap,radius:px(18),caption:px(37),rows,count:0,paged,stack:0,nav_h,right,layers:[0;8],stack_design:false,landscape:false,stack_step:(inset*4/5).max(3)}
+    }
+    pub fn landscape(width:i32,height:i32,dpi:u32,gap:i32,limit:usize,total:usize,right:bool,stacked:bool)->Self{
+        let px=|n:i32|super::panel_chrome::scale(dpi,n);
+        let mut l=Self::new(width,height,dpi,gap,limit,total,right);
+        l.landscape=true;l.stack_design=stacked;
+        l.inset=px(9).min((width/10).max(1));
+        l.radius=px(9);
+        l.stack_step=(width/21).clamp(px(3).max(1),px(12).max(1));
+        l.caption=px(20);
+        l.gap=gap.max(px(18));
+        let row_height=(l.card(0).w*10/18).max(1);
+        let row_space=|nav:i32|(height-2*l.inset-nav+l.gap).max(0)/(row_height+l.gap);
+        let limit=limit.clamp(1,8);
+        l.paged=total>row_space(0).max(1).min(limit as i32) as usize;
+        let nav=if l.paged{l.nav_h+l.gap}else{0};
+        l.rows=(row_space(nav).max(1) as usize).min(limit);
+        l.card_h=row_height.min((height-2*l.inset-nav).max(1));
+        l.caption=l.caption.min((l.card_h/4).max(1));
+        l
     }
     pub fn card(self,i:usize)->Box2 {
         // Reserve the same margin for the stack on every card so thumbnails
         // do not jump sideways when a window joins a group.
-        let room=if self.stack_design{self.step()*4}else{(self.inset*2).min((self.width-12).max(0)/3)};
-        let icon_room=if self.stack_design{self.icon_size()+self.inset}else{0};
+        let room=if self.stack_design{self.step()*4}else if self.landscape{0}else{(self.inset*2).min((self.width-12).max(0)/3)};
+        let icon_room=if self.stack_design&&!self.landscape{self.icon_size()+self.inset}else{0};
         let x=self.inset+if self.right{room}else{icon_room};
         Box2{x,y:self.inset+i as i32*(self.card_h+self.gap),w:(self.width-2*self.inset-room-icon_room).max(1),h:self.card_h}
     }
-    fn step(self)->i32{(self.inset*4/5).max(3)}
-    fn icon_size(self)->i32{(self.inset*5).min(self.card_h/2).max(1)}
+    fn step(self)->i32{self.stack_step}
+    fn icon_size(self)->i32{(if self.landscape{self.inset*7/2}else{self.inset*5}).min(self.card_h/2).max(1)}
     pub fn depth(self,i:usize)->usize{
         if self.stack_design{self.layers.get(i).copied().unwrap_or(0).max(1) as usize}
         else if self.stack&(1<<i)!=0{3}else{1}
@@ -80,19 +102,36 @@ impl Layout {
         if depth==0{return c;}
         let d=if self.stack_design{self.step()*depth}else{(self.inset*(depth+1)/2).max(1)};
         c.x+=if self.right{-d}else{d};
-        c.y+=d/3;c.h=(c.h-d/2).max(1);c
+        if self.landscape{c.y+=(d/6).min(self.inset);c.h=(c.h-d/4).max(1);}
+        else{c.y+=d/3;c.h=(c.h-d/2).max(1);}
+        c
     }
     fn detached_icon(self,i:usize)->Box2{
         let card=self.card(i);let size=self.icon_size();
+        if self.landscape{
+            let over=(size/4).max(1).min(self.inset);
+            return Box2{x:if self.right{card.x+card.w-size+over}else{card.x-over},
+                y:card.y+card.h-size+over,w:size,h:size};
+        }
         Box2{x:if self.right{card.x+card.w+self.inset}else{card.x-size-self.inset},
             y:card.y+(card.h-size)/2,w:size,h:size}
     }
     pub fn icon_hit(self,i:usize,x:i32,y:i32)->bool{self.stack_design&&self.detached_icon(i).hit(x,y)}
+    pub fn icon_cutouts(self)->Vec<RECT>{
+        if !self.landscape||!self.stack_design{return Vec::new();}
+        (0..self.count).map(|i|self.detached_icon(i).win()).collect()
+    }
     pub fn close_button(self,i:usize)->Option<Box2>{
         if !self.stack_design||i>=self.count{return None;}
         let c=self.card(i);
         let size=(self.inset*7/2).clamp(14,self.caption.max(14));
         if c.w<2*size+3*self.inset||c.h<self.caption{return None;}
+        if self.landscape{
+            let size=size.min(self.caption-2);
+            if size<12{return None;}
+            return Some(Box2{x:if self.right{c.x+self.inset/2}else{c.x+c.w-self.inset/2-size},
+                y:c.y+c.h-self.caption+(self.caption-size)/2,w:size,h:size});
+        }
         Some(Box2{x:c.x+c.w-self.inset-size,y:c.y+c.h-(self.caption+size)/2,w:size,h:size})
     }
     pub fn close_hit(self,i:usize,x:i32,y:i32)->bool{
@@ -133,7 +172,7 @@ impl Layout {
     pub fn pages(self,count:usize)->Option<PageStrip>{self.nav().map(|bounds|PageStrip::new(bounds,count))}
     pub fn content_height(self)->i32{
         let bottom=self.nav().map(|n|n.y+n.h)
-            .or_else(||self.count.checked_sub(1).map(|i|{let r=self.card(i);r.y+r.h}))
+            .or_else(||self.count.checked_sub(1).map(|i|{let r=self.card(i);r.y+r.h+if self.landscape&&self.stack_design{self.icon_size()/4}else{0}}))
             .unwrap_or(0);
         (bottom+self.inset.max(7)).clamp(1,self.height.max(1))
     }
@@ -200,7 +239,11 @@ impl Panel {
                 for layer in (1..layout.depth(i)).rev(){
                     let v=(layout.depth(i)-layer) as u8*5;
                     let c=if look.dark{[78+v,69+v,61+v]}else{[208+v,202+v,197+v]};
-                    rounded(data,w,h,layout.rear(i,layer as i32).rect(),radius,c,alpha.max(205));
+                    let r=layout.rear(i,layer as i32).rect();
+                    if layout.landscape{
+                        rounded(data,w,h,Rect{x:r.x-1.0,y:r.y+2.0,w:r.w+2.0,h:r.h+1.0},radius+1.0,[10,12,16],57);
+                    }
+                    rounded(data,w,h,r,radius,c,alpha.max(205));
                 }
                 let active=look.active&(1<<i)!=0;
                 let edge=if active{palette.accent}else if look.dark{[102,92,82]}else{[224,215,208]};
@@ -259,6 +302,11 @@ impl Panel {
             let size=(layout.caption*2/3).max(1) as f32;
             let small=if layout.stack_design{layout.detached_icon(i).rect()}
                 else{Rect{x:(c.x+layout.inset) as f32,y:(c.y+c.h) as f32-(layout.caption as f32+size)/2.0,w:size,h:size}};
+            if layout.landscape&&layout.stack_design{
+                let shadow=Rect{x:small.x-2.0,y:small.y,w:small.w+4.0,h:small.h+3.0};
+                rounded(data,w,h,shadow,small.w*0.26,[12,14,19],52);
+                rounded(data,w,h,small,small.w*0.23,if look.dark{[51,53,60]}else{[247,248,252]},228);
+            }
             if let Some(Some(icon))=atlas.get(&item.path){self.icons.paint(data,w,h,small,icon);}
             else{fallback_icon(data,w,h,small,tint);}
             let slot=layout.preview(i);
@@ -279,11 +327,26 @@ impl Panel {
                 for (i,title) in labels.iter().enumerate(){
                     let mut r=caption_box(layout,i);
                     if let Some(button)=hover.filter(|&index|index==i).and_then(|_|layout.close_button(i)){
-                        r.w=(button.x-r.x-layout.inset/2).max(1);
+                        if layout.landscape&&layout.right{
+                            let left=button.x+button.w+layout.inset/2;
+                            r.w=(r.x+r.w-left).max(1);r.x=left;
+                        }else{r.w=(button.x-r.x-layout.inset/2).max(1);}
                         rounded(data,w,h,button.rect(),button.w as f32/2.0,
                             if look.dark{[116,71,68]}else{[247,219,216]},255);
                         let mark=if look.dark{[255,218,215]}else{[117,36,34]};
                         draw_mask_scaled(data,w,h,mask,self.large_fonts[0],button,"×",true,mark,2);
+                    }
+                    if layout.landscape{
+                        let extras=items[i].count.saturating_sub(5);
+                        if extras>0&&r.w>layout.inset*6{
+                            let width=(layout.inset*4).min(r.w/2);
+                            let badge=Box2{x:r.x+r.w-width,y:r.y+2,w:width,h:(r.h-4).max(1)};
+                            rounded(data,w,h,badge.rect(),badge.h as f32/2.0,palette.accent,if look.dark{54}else{39});
+                            draw_mask_scaled(data,w,h,mask,self.large_fonts[1],badge,&format!("+{extras}"),true,ink,2);
+                            r.w-=width+layout.inset/2;
+                        }
+                        draw_mask_scaled(data,w,h,mask,self.large_fonts[0],r,title,false,ink,2);
+                        continue;
                     }
                     let main=Box2{y:r.y+(r.h/10),h:r.h/2,..r};
                     let small=Box2{y:main.y+main.h,h:r.h-main.h-r.h/5,..r};
@@ -323,6 +386,11 @@ impl Drop for Panel {
 }
 fn caption_box(layout:Layout,i:usize)->Box2{
     let c=layout.card(i);
+    if layout.landscape{
+        let icon=if layout.stack_design{layout.icon_size()+layout.inset/2}else{0};
+        return Box2{x:c.x+layout.inset+if layout.right{0}else{icon},y:c.y+c.h-layout.caption,
+            w:(c.w-2*layout.inset-icon).max(1),h:layout.caption};
+    }
     let caption_offset=if layout.stack_design{0}else{layout.caption};
     Box2{x:c.x+layout.inset+caption_offset,y:c.y+c.h-layout.caption,w:c.w-2*layout.inset-caption_offset,h:layout.caption}
 }
@@ -440,6 +508,25 @@ mod tests {
                 assert_eq!(l.member_hit(0,x,y),Some(layer),"side={right}, layer={layer}");
             }
         }}}
+    }
+    #[test]
+    fn landscape_groups_keep_their_width_and_overlay_inside_their_ink_bounds(){
+        for dpi in [96,120,144]{for right in [false,true]{
+            let mut l=Layout::landscape(252*dpi as i32/96,580,dpi,8,5,8,right,true);
+            l.count=l.rows;l.layers[0]=5;
+            let front=l.card(0);
+            let icon=l.detached_icon(0);
+            assert!((1.60..=2.00).contains(&(front.w as f32/front.h as f32)));
+            assert!(icon.y<front.y+front.h&&icon.y+icon.h>front.y+front.h);
+            assert!(if right{icon.x+icon.w>front.x+front.w}else{icon.x<front.x});
+            assert_eq!(l.member_hit(0,icon.center().0,icon.center().1),Some(0));
+            let rear=l.rear(0,4);
+            assert!(rear.x>=0&&rear.x+rear.w<=l.width);
+            assert!(l.content_height()>=l.card(l.count-1).y+l.card_h+icon.h/4);
+            let (_,exposed)=l.preview_layer(0,4);
+            let exposed=exposed.unwrap();
+            assert!(exposed.right-exposed.left>=8*dpi as i32/96);
+        }}
     }
     #[test]
     fn pager_uses_the_same_cells_for_painted_dots_and_page_selection() {

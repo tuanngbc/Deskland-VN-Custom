@@ -153,6 +153,9 @@ fn fit_layer(slot:RECT,source:SIZE,clip:Option<RECT>)->Option<(RECT,Option<RECT>
 // This non-layered DWM destination is visible only where a registered
 // thumbnail is drawn. The layered Stage surface under it draws the cards.
 pub unsafe fn clip_destination(window:HWND,areas:&[RECT])->bool{
+    clip_destination_except(window,areas,&[])
+}
+pub unsafe fn clip_destination_except(window:HWND,areas:&[RECT],cutouts:&[RECT])->bool{
     let combined=CreateRectRgn(0,0,0,0);
     if combined.is_null(){return false;}
     for a in areas {
@@ -160,6 +163,13 @@ pub unsafe fn clip_destination(window:HWND,areas:&[RECT])->bool{
         if tile.is_null(){DeleteObject(combined);return false;}
         let ok=CombineRgn(combined,combined,tile,RGN_OR)!=0;
         DeleteObject(tile);
+        if !ok{DeleteObject(combined);return false;}
+    }
+    for cutout in cutouts{
+        let hole=CreateRectRgn(cutout.left,cutout.top,cutout.right,cutout.bottom);
+        if hole.is_null(){DeleteObject(combined);return false;}
+        let ok=CombineRgn(combined,combined,hole,RGN_DIFF)!=0;
+        DeleteObject(hole);
         if !ok{DeleteObject(combined);return false;}
     }
     if SetWindowRgn(window,combined,1)!=0{true}else{DeleteObject(combined);false}

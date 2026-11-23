@@ -236,7 +236,7 @@ impl StageEmphasis {
         keyboard.map(|i|(i,255)).or_else(||self.index.map(|i|(i,self.strength)))
     }
 }
-struct Stage { hwnd:HWND, rail:HWND, collapsed:bool, auto_hide:bool, preview_hwnd:HWND, preview_boxes:Vec<RECT>, preview_visible:bool, layered:bool, opacity:u32, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, members:Vec<Vec<usize>>, order:Vec<String>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, emphasis:StageEmphasis, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews,
+struct Stage { hwnd:HWND, rail:HWND, collapsed:bool, auto_hide:bool, preview_hwnd:HWND, preview_boxes:Vec<RECT>, preview_cutouts:Vec<RECT>, preview_visible:bool, layered:bool, opacity:u32, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, members:Vec<Vec<usize>>, order:Vec<String>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, emphasis:StageEmphasis, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews,
     resting:RECT, slide:Option<(std::time::Instant,i32)>, offset:i32, pressed:Option<StageTarget> }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 enum StageTarget { Group(u64), AppGroup(usize,u32,u32), Window(usize,u32,u32), Close(usize,u32,u32), Page(usize) }
@@ -586,11 +586,16 @@ fn dock_depth(screen:&Screen,style:&Appearance,cluster:geometry::Cluster)->i32 {
 }
 fn stage_width(screen:&Screen,style:StageStyle)->i32{
     let scale=(screen.dpi as f32/96.0).clamp(0.75,3.0);
-    (160.0*style.scale as f32/100.0*scale).round() as i32
+    let base=if stage_legacy_layout(){160.0}else{252.0};
+    (base*style.scale as f32/100.0*scale).round() as i32
+}
+fn stage_legacy_layout()->bool{crate::trial::benchmark_active()||crate::trial::demo_active()}
+fn stage_width_cap(width:i32)->i32{
+    if stage_legacy_layout(){(width/5).max(62)}else{(width*28/100).max(1)}
 }
 fn stage_depth(screen:&Screen,style:StageStyle)->i32{
     let margin=(8.0*(screen.dpi as f32/96.0).clamp(0.75,3.0)).round() as i32;
-    stage_width(screen,style).min(((screen.bounds.right-screen.bounds.left)/5).max(62))+margin
+    stage_width(screen,style).min(stage_width_cap(screen.bounds.right-screen.bounds.left))+margin
 }
 unsafe fn sync_appbars(state:&mut State,topology:bool){
     // Don't ask Explorer to renegotiate AppBars while the watchdog is
@@ -635,7 +640,7 @@ fn stage_rect_with_depth(screen:&Screen,style:StageStyle,depth:Option<i32>)->REC
     let scale=(screen.dpi as f32/96.0).clamp(0.75,3.0);
     let px=|n:f32|(n*scale).round() as i32;
     let margin=px(8.0);
-    let width=depth.map_or_else(||stage_width(screen,style).min(((screen.work.right-screen.work.left)/5).max(62)),|d|d-margin);
+    let width=depth.map_or_else(||stage_width(screen,style).min(stage_width_cap(screen.work.right-screen.work.left)),|d|(d-margin).max(1));
     let edge=if style.right==Some(true){screen.work.right-width-margin}else{screen.work.left+margin};
     let top=screen.work.top+((screen.work.bottom-screen.work.top)/12).min(px(90.0));
     let height=((screen.work.bottom-screen.work.top)-px(150.0)).clamp(px(112.0),px(650.0*style.scale as f32/100.0).max(px(112.0)));
@@ -706,7 +711,7 @@ unsafe fn recreate(state:&mut State) {
                     SetWindowLongPtrW(stage_hwnd,GWL_EXSTYLE,GetWindowLongPtrW(stage_hwnd,GWL_EXSTYLE)& !(WS_EX_LAYERED as isize));
                     previews::style_destination(stage_hwnd);
                 }
-                state.stages.push(Stage{hwnd:stage_hwnd,rail:ptr::null_mut(),collapsed:false,auto_hide:false,preview_hwnd,preview_boxes:Vec::new(),preview_visible:false,layered,opacity:style.opacity,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),members:Vec::new(),order:Vec::new(),selected:None,layout:None,page:0,pages:1,hidden:true,hover:None,emphasis:StageEmphasis::default(),keyboard:None,previous_focus:0,previews:previews::Previews::default(),
+                state.stages.push(Stage{hwnd:stage_hwnd,rail:ptr::null_mut(),collapsed:false,auto_hide:false,preview_hwnd,preview_boxes:Vec::new(),preview_cutouts:Vec::new(),preview_visible:false,layered,opacity:style.opacity,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),members:Vec::new(),order:Vec::new(),selected:None,layout:None,page:0,pages:1,hidden:true,hover:None,emphasis:StageEmphasis::default(),keyboard:None,previous_focus:0,previews:previews::Previews::default(),
                     resting:r,slide:None,offset:0,pressed:None});
             } else { emit(Event::Error(format!("Create Stage window: {}",GetLastError()))); }
         }
@@ -801,15 +806,20 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             stage.auto_hide=auto;stage.collapsed=auto;
         }
         if !auto&&!stage.rail.is_null(){DestroyWindow(stage.rail);stage.rail=ptr::null_mut();}
-        let automatic=!crate::trial::benchmark_active()&&!crate::trial::demo_active();
+        let automatic=!stage_legacy_layout();
         let mut cards=state.workspaces.cards(&stage.display,stage.bounds,&monitor_bounds,&state.windows,state.prefs.all_windows,automatic,foreground as HWND);
         if automatic{cards.sort_by_cached_key(|card|stage.order.iter().position(|key|*key==card.key).unwrap_or(usize::MAX));}
         stage.order=cards.iter().map(|card|card.key.clone()).collect::<Vec<_>>();
         let items=cards.iter().map(|card|card.item.clone()).collect::<Vec<_>>();
         let groups=cards.iter().map(|card|card.manual).collect::<Vec<_>>();
         let members=cards.into_iter().map(|card|card.members).collect::<Vec<_>>();
-        let mut layout=stage_surface::Layout::new(bounds.right-bounds.left,bounds.bottom-bounds.top,screen.dpi,stage_gap(screen,style),
-            style.group_limit as usize,items.len(),style.right==Some(true));
+        let mut layout=if automatic{
+            stage_surface::Layout::landscape(bounds.right-bounds.left,bounds.bottom-bounds.top,screen.dpi,stage_gap(screen,style),
+                style.group_limit as usize,items.len(),style.right==Some(true),style.stack_groups&&stage.layered)
+        }else{
+            stage_surface::Layout::new(bounds.right-bounds.left,bounds.bottom-bounds.top,screen.dpi,stage_gap(screen,style),
+                style.group_limit as usize,items.len(),style.right==Some(true))
+        };
         let rows=layout.rows;
         let selected=state.workspaces.active(&stage.display);
         let old_pages=stage.pages;
@@ -903,11 +913,13 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let mut clip_ok=true;
         if !stage.preview_hwnd.is_null(){
             let areas=stage.previews.areas();
-            let reshape=areas.len()!=stage.preview_boxes.len()||areas.iter().zip(&stage.preview_boxes).any(|(&a,&b)|!same_rect(a,b));
-            let clipped=!reshape||previews::clip_destination(stage.preview_hwnd,&areas);
+            let cutouts=layout.icon_cutouts();
+            let differs=|a:&[RECT],b:&[RECT]|a.len()!=b.len()||a.iter().zip(b).any(|(&a,&b)|!same_rect(a,b));
+            let reshape=differs(&areas,&stage.preview_boxes)||differs(&cutouts,&stage.preview_cutouts);
+            let clipped=!reshape||previews::clip_destination_except(stage.preview_hwnd,&areas,&cutouts);
             clip_ok=clipped;
             let show=clipped&&!areas.is_empty()&&!hide;
-            if clipped&&reshape{stage.preview_boxes=areas;}
+            if clipped&&reshape{stage.preview_boxes=areas;stage.preview_cutouts=cutouts;}
             if stage.preview_visible!=show{
                 ShowWindow(stage.preview_hwnd,if show{SW_SHOWNOACTIVATE}else{SW_HIDE});
                 stage.preview_visible=show;
