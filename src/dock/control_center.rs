@@ -275,6 +275,27 @@ impl Panel{
         if self.layered{chrome::mask_popup(self.layer.pixels(),w,h,px(16) as f32,self.anchor.alpha());}
     }
 }
+pub(super) fn wants_status()->bool{
+    PANE.with(|s|s.borrow().as_ref().is_some_and(|p|p.view.cards.iter()
+        .any(|card|card.icon.is_some_and(super::utilities::live_widget))))
+}
+pub(super) unsafe fn status_changed(){
+    let hwnd=PANE.with(|s|{
+        let mut s=s.borrow_mut();let p=s.as_mut()?;
+        let overview=p.view.title=="Trung tâm điều khiển";
+        let mut changed=false;
+        for card in &mut p.view.cards{
+            if let Some(widget)=card.icon.filter(|&w|super::utilities::live_widget(w)){
+                changed=true;
+                if overview&&!card.hint.is_empty(){
+                    card.hint=super::utilities::status_detail(widget).unwrap_or_default();
+                }
+            }
+        }
+        if changed{p.dirty=true;Some(p.hwnd)}else{None}
+    });
+    if let Some(hwnd)=hwnd{InvalidateRect(hwnd,ptr::null(),0);}
+}
 pub(super) fn ticket(owner:HWND)->Option<usize>{
     PANE.with(|s|s.borrow().as_ref().filter(|p|p.owner==owner).map(|p|p.tag))
 }

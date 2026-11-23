@@ -10,7 +10,7 @@ pub(super) const NOTICE:u32=WM_APP+57;
 const TAP_WITHOUT_CURSOR:isize=isize::MIN;
 const MASK_ERROR:isize=isize::MAX;
 pub(super) fn cursor_now()->Option<POINT>{
-    let mut point=POINT::default();
+    let mut point=POINT{x:0,y:0};
     (unsafe{GetCursorPos(&mut point)}!=0).then_some(point)
 }
 fn encode_tap(point:Option<POINT>)->LPARAM{

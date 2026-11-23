@@ -1,11 +1,11 @@
 //! One bounded, on-demand provider for all Dock displays. No probes while
-//! idle, no active WLAN or Bluetooth scans, and no Shell/COM queries on the UI thread.
+//! when no status surface is visible; no active WLAN or Bluetooth scans, and no Shell/COM queries on the UI thread.
 use super::{WM_UTILITY_READY,open,
     control_center::{self,View,Card,Command,MetricOptions},panel_chrome as chrome,
     surface::Palette,wifi};
 use crate::desktop::wide;
 use serde_json::{json,Value};
-use std::{cell::Cell,mem,ptr,sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}}};
+use std::{cell::{Cell,RefCell},mem,ptr,sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}}};
 use windows::Win32::Media::Audio::{*,Endpoints::IAudioEndpointVolume};
 use windows::Win32::System::Com::*;
 use windows_sys::Win32::{
@@ -19,24 +19,72 @@ use windows_sys::Win32::{
         TBCD_CHANNEL,TBCD_THUMB,TBM_GETTHUMBRECT},Input::KeyboardAndMouse::*,WindowsAndMessaging::*},
 };
 
-#[derive(Clone, Copy, Debug)]
-enum Link { None, Wired, WiFi(Option<u8>), Both(Option<u8>) }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Link { None, Disconnected, Disabled, Wired, WiFi(Option<u8>), Both(Option<u8>) }
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub(super) enum NetworkGlyph{Unknown,Disconnected,Disabled,Wired,Wifi(u8)}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub(super) enum VolumeGlyph{Unknown,Muted,Waves(u8)}
+#[derive(Clone,Debug,Default,PartialEq,Eq)]
+pub(super) struct Status{network:Option<Link>,ssid:Option<String>,audio:Option<Audio>}
+thread_local!{static STATUS:RefCell<Status>=RefCell::new(Status::default());}
+impl Status{
+    fn read(audio:Option<Audio>)->Self{
+        let (network,ssid)=unsafe{network()};
+        Self{network,ssid,audio}
+    }
+    fn network_glyph(&self)->NetworkGlyph{
+        match self.network{
+            None=>NetworkGlyph::Unknown,
+            Some(Link::None|Link::Disconnected)=>NetworkGlyph::Disconnected,
+            Some(Link::Disabled)=>NetworkGlyph::Disabled,
+            Some(Link::Wired)=>NetworkGlyph::Wired,
+            Some(Link::WiFi(q)|Link::Both(q))=>NetworkGlyph::Wifi(q.map_or(0,|p|(p/25+1).min(4))),
+        }
+    }
+    fn volume_glyph(&self)->VolumeGlyph{
+        self.audio.map_or(VolumeGlyph::Unknown,|a|if a.muted||a.level==0{VolumeGlyph::Muted}
+            else{VolumeGlyph::Waves(match a.level{1..=33=>1,34..=66=>2,_=>3})})
+    }
+    fn detail(&self,widget:Widget)->Option<String>{
+        match widget{
+            Widget::Network=>{
+                let full=network_label(self.network);
+                let state=full.split_once(" · ").map_or(full.as_str(),|(_,s)|s);
+                Some(self.ssid.as_ref().map_or_else(||state.into(),|name|format!("{name} · {state}")))
+            }
+            Widget::Sound=>Some(self.audio.map_or("Không đọc được âm lượng".into(),|a|
+                if a.muted{format!("Tắt tiếng · {}%",a.level)}else{format!("{}%",a.level)})),
+            _=>None,
+        }
+    }
+}
+pub(super) fn status_glyphs()->(NetworkGlyph,VolumeGlyph){STATUS.with(|s|{let s=s.borrow();(s.network_glyph(),s.volume_glyph())})}
+pub(super) fn status_detail(w:Widget)->Option<String>{STATUS.with(|s|s.borrow().detail(w))}
+pub(super) fn replace_status(status:Status)->bool{STATUS.with(|s|{
+    let mut s=s.borrow_mut();if *s==status{return false;}*s=status;true
+})}
+pub(super) fn replace_audio(audio:Option<Audio>)->bool{STATUS.with(|s|{
+    let mut s=s.borrow_mut();if s.audio==audio{return false;}s.audio=audio;true
+})}
+pub(super) fn live_widget(w:Widget)->bool{matches!(w,Widget::Network|Widget::Sound)}
 struct ClassicDevice { name:String, connected:bool, paired:bool }
 enum BluetoothState { Unknown, Adapter(Vec<ClassicDevice>) }
 #[derive(Clone,Copy)]
 enum BatteryState { Unknown, Absent, Present{level:Option<u8>,ac:Option<bool>,charging:bool} }
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub(super) struct Audio { level:u32, muted:bool }
-pub(super) struct Snapshot { network:Option<Link>, wlan:Option<wifi::View>, bluetooth:BluetoothState, battery:BatteryState, audio:Option<Audio> }
+pub(super) struct Snapshot { pub status:Status, wlan:Option<wifi::View>, bluetooth:BluetoothState, battery:BatteryState }
 
 #[derive(Clone,Copy)]
-enum JobKind { Read, AudioRead, Volume(u32), Mute }
+enum JobKind { Read, ReadStatus, AudioRead, Volume(u32), Mute }
 
 /// Fixture-only endpoint. Neither moving the fixture slider nor rapidly
 /// toggling its mute can write to a Windows audio device.
 static DEMO_VOLUME: Mutex<Audio> = Mutex::new(Audio { level: 46, muted: false });
 fn fixture_audio(value:&mut Audio, kind:JobKind)->Audio {
     match kind {
-        JobKind::Read|JobKind::AudioRead=>{},
+        JobKind::Read|JobKind::ReadStatus|JobKind::AudioRead=>{},
         JobKind::Volume(value_percent)=>value.level=value_percent.min(100),
         JobKind::Mute=>value.muted=!value.muted,
     }
@@ -44,7 +92,7 @@ fn fixture_audio(value:&mut Audio, kind:JobKind)->Audio {
 }
 #[derive(Default)]
 struct State {
-    pending:AtomicBool, result:Mutex<Option<Snapshot>>,
+    pending:AtomicBool, result:Mutex<Option<Snapshot>>, status_result:Mutex<Option<Status>>,
     audio_result:Mutex<Option<(usize,Option<Audio>)>>, closed:AtomicBool,
 }
 static WORK_ACTIVE:AtomicBool=AtomicBool::new(false);
@@ -74,6 +122,11 @@ impl Provider {
         if self.state.result.lock().map_or(true,|slot|slot.is_some()){return false;}
         self.submit(owner,ptr::null_mut(),JobKind::Read,network,change)
     }
+    pub fn read_status(&self,owner:HWND)->bool{
+        if self.state.status_result.lock().map_or(true,|slot|slot.is_some()){return false;}
+        self.submit(owner,ptr::null_mut(),JobKind::ReadStatus,false,None)
+    }
+    pub fn take_status(&self)->Option<Status>{self.state.status_result.lock().ok()?.take()}
     pub fn take(&self)->Option<Snapshot>{self.state.result.lock().ok()?.take()}
     pub fn take_audio_result(&self)->Option<(usize,Option<Audio>)>{self.state.audio_result.lock().ok()?.take()}
     pub fn apply(&self,owner:HWND,panel:HWND,action:Option<Action>)->bool{
@@ -97,8 +150,10 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut std::ffi::c_vo
                 }
             }
             let wlan=job.network.then(||wifi::read(job.change));
-            let snapshot=Snapshot{network:network(),wlan,bluetooth,battery:battery(),audio};
+            let snapshot=Snapshot{status:Status::read(audio),wlan,bluetooth,battery:battery()};
             if let Ok(mut result)=state.result.lock(){*result=Some(snapshot);}
+        }else if matches!(job.kind,JobKind::ReadStatus){
+            if let Ok(mut result)=state.status_result.lock(){*result=Some(Status::read(audio));}
         }else if let Ok(mut result)=state.audio_result.lock(){
             *result=Some((job.panel,audio));
         }
@@ -122,7 +177,7 @@ unsafe fn audio(kind:JobKind)->Option<Audio>{
         match kind {
             JobKind::Volume(percent)=>volume.SetMasterVolumeLevelScalar(percent.min(100) as f32/100.0,ptr::null())?,
             JobKind::Mute=>volume.SetMute(!muted,ptr::null())?,
-            JobKind::Read|JobKind::AudioRead=>{}
+            JobKind::Read|JobKind::ReadStatus|JobKind::AudioRead=>{}
         }
         let level=(volume.GetMasterVolumeLevelScalar()?.clamp(0.0,1.0)*100.0).round() as u32;
         Ok(Audio{level,muted:volume.GetMute()?.as_bool()})
@@ -131,24 +186,33 @@ unsafe fn audio(kind:JobKind)->Option<Audio>{
     value
 }
 
-unsafe fn network()->Option<Link>{
+unsafe fn network()->(Option<Link>,Option<String>){
     let mut table=ptr::null_mut();
-    if GetIfTable2(&mut table)!=0||table.is_null(){return None;}
-    let mut lan=false;let mut wifi=false;
+    if GetIfTable2(&mut table)!=0||table.is_null(){return (None,None);}
+    let (mut lan,mut wifi,mut wifi_enabled,mut wifi_present)=(false,false,false,false);
     for i in 0..(*table).NumEntries.min(1024) as usize {
         let row=&*ptr::addr_of!((*table).Table).cast::<MIB_IF_ROW2>().add(i);
-        if row.OperStatus!=IfOperStatusUp||row.InterfaceAndOperStatusFlags._bitfield&1==0{continue;}
+        if row.InterfaceAndOperStatusFlags._bitfield&1==0{continue;}
+        if row.Type==71{
+            wifi_present=true;
+            wifi_enabled|=row.AdminStatus==1; // NET_IF_ADMIN_STATUS_UP
+        }
+        if row.OperStatus!=IfOperStatusUp{continue;}
         // IANA ifType: 6 ethernetCsmacd, 71 ieee80211. Only physical adapters.
         lan|=row.Type==6;wifi|=row.Type==71;
     }
     FreeMibTable(table.cast());
-    let signal=if wifi{wifi_signal()}else{None};
-    Some(match (lan,wifi){(true,true)=>Link::Both(signal),(true,false)=>Link::Wired,(false,true)=>Link::WiFi(signal),_=>Link::None})
+    let (signal,ssid)=if wifi{wifi_signal()}else{(None,None)};
+    let link=match (lan,wifi){
+        (true,true)=>Link::Both(signal),(true,false)=>Link::Wired,(false,true)=>Link::WiFi(signal),
+        _ if wifi_enabled=>Link::Disconnected,_ if wifi_present=>Link::Disabled,_=>Link::None,
+    };
+    (Some(link),ssid)
 }
-unsafe fn wifi_signal()->Option<u8>{
+unsafe fn wifi_signal()->(Option<u8>,Option<String>){
     let mut h=ptr::null_mut();let mut version=0;
-    if WlanOpenHandle(2,ptr::null(),&mut version,&mut h)!=0||h.is_null(){return None;}
-    let mut list=ptr::null_mut();let mut signal=None;
+    if WlanOpenHandle(2,ptr::null(),&mut version,&mut h)!=0||h.is_null(){return (None,None);}
+    let mut list=ptr::null_mut();let mut signal=None;let mut ssid=None;
     if WlanEnumInterfaces(h,ptr::null(),&mut list)==0&&!list.is_null(){
         for i in 0..(*list).dwNumberOfItems.min(32) as usize {
             let iface=&*ptr::addr_of!((*list).InterfaceInfo).cast::<WLAN_INTERFACE_INFO>().add(i);
@@ -156,8 +220,15 @@ unsafe fn wifi_signal()->Option<u8>{
             let (mut length,mut info)=(0,ptr::null_mut());
             if WlanQueryInterface(h,&iface.InterfaceGuid,wlan_intf_opcode_current_connection,ptr::null(),&mut length,&mut info,ptr::null_mut())==0&&!info.is_null(){
                 if length as usize>=mem::size_of::<WLAN_CONNECTION_ATTRIBUTES>(){
-                    let strength=(*info.cast::<WLAN_CONNECTION_ATTRIBUTES>()).wlanAssociationAttributes.wlanSignalQuality.min(100) as u8;
-                    signal=Some(signal.map_or(strength,|v:u8|v.max(strength)));
+                    let association=&(*info.cast::<WLAN_CONNECTION_ATTRIBUTES>()).wlanAssociationAttributes;
+                    let strength=association.wlanSignalQuality.min(100) as u8;
+                    if signal.is_none_or(|v|strength>v){
+                        signal=Some(strength);
+                        let raw=&association.dot11Ssid;
+                        let name=String::from_utf8_lossy(&raw.ucSSID[..(raw.uSSIDLength as usize).min(raw.ucSSID.len())])
+                            .chars().filter(|c|!c.is_control()).collect::<String>();
+                        ssid=(!name.trim().is_empty()&&!crate::trial::demo_active()).then_some(name);
+                    }
                 }
                 WlanFreeMemory(info);
             }
@@ -165,7 +236,7 @@ unsafe fn wifi_signal()->Option<u8>{
         WlanFreeMemory(list.cast());
     }
     WlanCloseHandle(h,ptr::null());
-    signal
+    (signal,ssid)
 }
 unsafe fn bluetooth()->BluetoothState{
     let mut radio=ptr::null_mut();
@@ -319,6 +390,8 @@ fn network_label(state:Option<Link>)->String{
         None=>"Mạng · Không đọc được trạng thái".into(),
         Some(Link::None)=>"Mạng · Không có kết nối vật lý".into(),
         Some(Link::Wired)=>"Mạng · Ethernet đã kết nối".into(),
+        Some(Link::Disconnected)=>"Mạng · Wi-Fi chưa kết nối".into(),
+        Some(Link::Disabled)=>"Mạng · Adapter Wi-Fi đã tắt".into(),
         Some(Link::WiFi(signal)|Link::Both(signal))=>{
             let kind=if matches!(state,Some(Link::Both(_))){"Ethernet và Wi-Fi"}else{"Wi-Fi"};
             signal.map_or_else(||format!("Mạng · {kind} đã kết nối"),|q|format!("Mạng · {kind}, tín hiệu {q}%"))
@@ -337,8 +410,7 @@ fn device_label(state:&BluetoothState)->String{
 }
 fn utility_hint(widget:Widget,snapshot:&Snapshot)->String{
     match widget{
-        Widget::Network=>network_label(snapshot.network).split_once(" · ").map_or(String::new(),|(_,s)|s.to_owned()),
-        Widget::Sound=>snapshot.audio.as_ref().map_or("Không đọc được âm lượng".into(),|a|if a.muted{"Đang tắt tiếng".into()}else{format!("{}%",a.level)}),
+        Widget::Network|Widget::Sound=>snapshot.status.detail(widget).unwrap_or_default(),
         Widget::Bluetooth=>device_label(&snapshot.bluetooth),
         Widget::Battery=>match snapshot.battery{
             BatteryState::Present{level,charging,..}=>level.map_or("".into(),|n|format!("{n}%{}",if charging{" · Đang sạc"}else{""})),
@@ -359,7 +431,7 @@ pub(super) unsafe fn show_hub(owner:HWND,point:POINT,profile:&Profile,dock_mode:
     // The overview is interactive immediately. Device-specific views request
     // their readings on demand; this click never waits on WLan / COM.
     let anchor=chrome::Anchor::for_owner(owner,point);
-    let initial=Snapshot{network:None,wlan:None,bluetooth:BluetoothState::Unknown,battery:battery(),audio:None};
+    let initial=Snapshot{status:STATUS.with(|s|s.borrow().clone()),wlan:None,bluetooth:BluetoothState::Unknown,battery:battery()};
     control_center::show(owner,anchor,hub_view(&initial,profile,dock_mode,false));
 }
 pub(super) fn hub_view(snapshot:&Snapshot,profile:&Profile,dock_mode:bool,live:bool)->View{
@@ -586,7 +658,7 @@ pub(super) unsafe fn close_panels(){
     control_center::close_for(ptr::null_mut());
 }
 pub(super) unsafe fn audio_from_snapshot(owner:HWND,point:POINT,snapshot:&Snapshot)->bool{
-    let Some(audio)=snapshot.audio.as_ref() else{return false;};
+    let Some(audio)=snapshot.status.audio.as_ref() else{return false;};
     audio_panel(owner,point,audio.level,audio.muted);
     true
 }
@@ -743,6 +815,23 @@ unsafe extern "system" fn audio_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
 mod tests {
     use super::*;
     #[test]
+    fn native_status_maps_signal_and_volume_without_guessing(){
+        for (p,bars) in [(0,1),(24,1),(25,2),(50,3),(75,4),(100,4)]{
+            let s=Status{network:Some(Link::WiFi(Some(p))),..Status::default()};
+            assert_eq!(s.network_glyph(),NetworkGlyph::Wifi(bars));
+        }
+        for (link,shape) in [(Link::WiFi(None),NetworkGlyph::Wifi(0)),(Link::Wired,NetworkGlyph::Wired),
+            (Link::Disconnected,NetworkGlyph::Disconnected),(Link::Disabled,NetworkGlyph::Disabled)]{
+            assert_eq!(Status{network:Some(link),..Status::default()}.network_glyph(),shape);
+        }
+        for (level,muted,shape) in [(0,false,VolumeGlyph::Muted),(25,false,VolumeGlyph::Waves(1)),
+            (50,false,VolumeGlyph::Waves(2)),(75,false,VolumeGlyph::Waves(3)),
+            (100,false,VolumeGlyph::Waves(3)),(75,true,VolumeGlyph::Muted)]{
+            assert_eq!(Status{audio:Some(Audio{level,muted}),..Status::default()}.volume_glyph(),shape);
+        }
+        assert_eq!(Status::default().volume_glyph(),VolumeGlyph::Unknown);
+    }
+    #[test]
     fn fixture_endpoint_writes_are_observable_and_mute_preserves_level() {
         let mut sample=Audio{level:46,muted:false};
         assert_eq!(fixture_audio(&mut sample,JobKind::Read).level,46);
@@ -777,7 +866,7 @@ mod tests {
             DestroyWindow(hwnd);
             let report=snapshot.expect("read-only probe must complete in a bounded time");
             assert!(report.wlan.is_some());
-            if let Some(audio)=report.audio{assert!(audio.level<=100);}
+            if let Some(audio)=report.status.audio{assert!(audio.level<=100);}
             if let BatteryState::Present{level:Some(level),..}=report.battery{assert!(level<=100);}
         }
     }

@@ -1069,7 +1069,9 @@ unsafe fn show_status_tip(owner:HWND){
         let bar=state.bars.iter().find(|b|b.hwnd==owner&&!b.hidden&&!b.collapsed)?;
         if let Some(target)=bar.pointer.and_then(|(x,y)|bar.shell_target(x,y)){return Some(target.title(local_shell_buttons()).to_owned());}
         let item=bar.status_hover?;
-        Some(item.map_or("Bảng tiện ích",UtilityWidget::title).to_owned())
+        Some(if let Some((widget,detail))=item.and_then(|w|utilities::status_detail(w).map(|d|(w,d))){
+            format!("{} · {detail}",widget.title())
+        }else{item.map_or("Bảng tiện ích",UtilityWidget::title).to_owned()})
     });
     let Some(label)=label.filter(|label|!label.is_empty())else{return;};
     close_status_tip(ptr::null_mut());
@@ -1335,10 +1337,32 @@ fn utility_profile(hwnd:HWND)->Option<UtilityProfile>{
 fn apply_audio(panel:HWND,action:Option<utilities::Action>)->bool{
     UTILITIES.with(|u|u.borrow().as_ref().is_some_and(|p|p.apply(CONTROL.with(Cell::get),panel,action)))
 }
+fn dock_wants_status(bar:&Bar)->bool{
+    !bar.hidden&&!bar.collapsed&&bar.layout.as_ref().is_some_and(|l|
+        l.inline.iter().any(|(w,_)|utilities::live_widget(*w)))
+}
+fn request_dock_status(){
+    let wanted=STATE.with(|s|{let s=s.borrow();!s.suspended&&(
+        s.bars.iter().any(dock_wants_status)||control_center::wants_status())});
+    if wanted{
+        UTILITIES.with(|u|u.borrow_mut().get_or_insert_with(utilities::Provider::new).read_status(CONTROL.get()));
+    }
+}
+unsafe fn status_changed(){
+    let bars=STATE.with(|s|s.borrow().bars.iter().filter(|b|dock_wants_status(b)).map(|b|b.hwnd).collect::<Vec<_>>());
+    for hwnd in bars{InvalidateRect(hwnd,ptr::null(),0);}
+    control_center::status_changed();
+}
 unsafe fn show_utilities(){
+    let status=UTILITIES.with(|u|u.borrow().as_ref().and_then(utilities::Provider::take_status));
+    if status.is_some_and(utilities::replace_status){status_changed();}
     let result=UTILITIES.with(|u|u.borrow().as_ref().and_then(utilities::Provider::take_audio_result));
-    if let Some((panel,result))=result{utilities::reflect_audio(panel as HWND,result);}
+    if let Some((panel,result))=result{
+        if utilities::replace_audio(result){status_changed();}
+        utilities::reflect_audio(panel as HWND,result);
+    }
     let Some(snapshot)=UTILITIES.with(|u|u.borrow().as_ref().and_then(utilities::Provider::take)) else{return;};
+    if utilities::replace_status(snapshot.status.clone()){status_changed();}
     let target=UTILITY_ANCHOR.with(|a|a.take());
     let hub=UTILITY_HUB.with(|a|a.take());
     let Some((bar,point,widget,dock_mode,ticket))=target else{
@@ -2499,7 +2523,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_TIMER if w==WORKSPACE_TIMER=>{update_state(|state|{state.workspaces.advance();});0},
-        WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}else{refresh_dock_clock();sync_win_key();}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
+        WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}else{refresh_dock_clock();sync_win_key();request_dock_status();}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
         WM_TIMECHANGE=>{refresh_dock_clock();0},
         WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_DPICHANGED=>{
             if msg==WM_DISPLAYCHANGE&&taskbar_active(){show_taskbar("Đã hiện lại thanh tác vụ khi thay đổi màn hình.");}

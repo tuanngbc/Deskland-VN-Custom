@@ -505,19 +505,45 @@ pub(super) fn status_on(data:&mut[u8],w:i32,h:i32,cell:Rect,scale:f32,tint:[u8;3
             (dx-r*(ux*0.68-uy*lateral)).hypot(dy-r*(uy*0.68+ux*lateral))
         }
     };
+    use super::utilities::{NetworkGlyph,VolumeGlyph};
+    let (network,volume)=super::utilities::status_glyphs();
+    let stroke=(0.78*scale).max(0.66);
+    let cover=|d:f32|(0.5+stroke-edge*d).clamp(0.0,1.0);
     draw(data,w,h,ink,|x,y|{
         let (x,y)=((x-px)/edge,(y-py)/edge);
+        let segments=|parts:&[(f32,f32,f32,f32)]|parts.iter().map(|&(ax,ay,bx,by)|line(x,y,ax,ay,bx,by))
+            .fold(f32::INFINITY,f32::min);
         let d=match widget {
             None=>[0.22_f32,0.50,0.78].into_iter().map(|cx|(x-cx).hypot(y-0.50)-0.045).fold(f32::INFINITY,f32::min),
             Some(Network)=>{
-                let bands=[0.54,0.365,0.195].into_iter().map(|r|arc(x,y,0.50,0.73,r,0.0,-1.0)).fold(f32::INFINITY,f32::min);
-                bands.min((x-0.50).hypot(y-0.76)-0.025)
+                if network==NetworkGlyph::Wired{
+                    let d=segments(&[(0.25,0.24,0.75,0.24),(0.25,0.24,0.25,0.68),(0.75,0.24,0.75,0.68),
+                        (0.25,0.68,0.40,0.68),(0.60,0.68,0.75,0.68),(0.40,0.68,0.40,0.80),
+                        (0.60,0.68,0.60,0.80),(0.40,0.80,0.60,0.80),(0.42,0.24,0.42,0.40),(0.58,0.24,0.58,0.40)]);
+                    return Some((tint,cover(d)*247.0));
+                }
+                let bands=[(x-0.50).hypot(y-0.80)-0.033,
+                    arc(x,y,0.50,0.78,0.20,0.0,-1.0),arc(x,y,0.50,0.78,0.38,0.0,-1.0),
+                    arc(x,y,0.50,0.78,0.56,0.0,-1.0)];
+                let (count,mark)=match network{
+                    NetworkGlyph::Wifi(n)=>(n,f32::INFINITY),
+                    NetworkGlyph::Disabled=>(0,line(x,y,0.18,0.18,0.82,0.84)),
+                    NetworkGlyph::Disconnected=>(0,segments(&[(0.65,0.64,0.86,0.85),(0.86,0.64,0.65,0.85)])),
+                    _=>(0,f32::INFINITY),
+                };
+                let a=bands.into_iter().enumerate().fold(cover(mark),|a,(i,d)|
+                    a.max(cover(d)*if i<usize::from(count){1.0}else{0.23}));
+                return Some((tint,a*247.0));
             }
             Some(Sound)=>{
-                let horn=[(0.10,0.39,0.25,0.39),(0.10,0.39,0.10,0.61),(0.10,0.61,0.25,0.61),
-                    (0.25,0.39,0.48,0.22),(0.25,0.61,0.48,0.78),(0.48,0.22,0.48,0.78)]
-                    .into_iter().map(|(ax,ay,bx,by)|line(x,y,ax,ay,bx,by)).fold(f32::INFINITY,f32::min);
-                horn.min(arc(x,y,0.47,0.50,0.24,1.0,0.0)).min(arc(x,y,0.47,0.50,0.45,1.0,0.0))
+                let horn=segments(&[(0.09,0.39,0.21,0.39),(0.09,0.39,0.09,0.61),(0.09,0.61,0.21,0.61),
+                    (0.21,0.39,0.40,0.23),(0.21,0.61,0.40,0.77),(0.40,0.23,0.40,0.77)]);
+                match volume{
+                    VolumeGlyph::Muted=>horn.min(segments(&[(0.56,0.37,0.83,0.63),(0.83,0.37,0.56,0.63)])),
+                    VolumeGlyph::Unknown=>horn.min(line(x,y,0.57,0.50,0.77,0.50)),
+                    VolumeGlyph::Waves(n)=>[0.16,0.32,0.49].into_iter().take(usize::from(n))
+                        .fold(horn,|d,r|d.min(arc(x,y,0.42,0.50,r,1.0,0.0))),
+                }
             }
             Some(widget)=>widget.glyph().iter().map(|&(ax,ay,bx,by)|{
                 // Expand each control equally about its optical center.
@@ -525,8 +551,7 @@ pub(super) fn status_on(data:&mut[u8],w:i32,h:i32,cell:Rect,scale:f32,tint:[u8;3
                 line(x,y,pos(ax),pos(ay),pos(bx),pos(by))
             }).fold(f32::INFINITY,f32::min),
         };
-        let stroke=(0.78*scale).max(0.66);
-        Some((tint,(0.5+stroke-edge*d).clamp(0.0,1.0)*247.0))
+        Some((tint,cover(d)*247.0))
     });
 }
 
