@@ -27,109 +27,130 @@ fn thumb_size(w:usize,h:usize)->(usize,usize){
     ((w*360/side).max(1),(h*360/side).max(1))
 }
 
-pub(super) unsafe fn frame(hwnd: windows_sys::Win32::Foundation::HWND, valid:impl Fn()->bool) -> Result<(Vec<u8>,i32,i32),String> {
-    if !valid() { return Err("window identity, visibility or affinity denied".into()); }
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetAncestor,GA_ROOT};
-    if GetAncestor(hwnd,GA_ROOT)!=hwnd{return Err("WGC requires a top-level HWND".into());}
-    fn step<T>(s:&str,r:windows::core::Result<T>)->Result<T,String>{r.map_err(|e|format!("{s}: {e}"))}
-    step("RoInitialize",RoInitialize(RO_INIT_MULTITHREADED))?;
-    struct Apartment;
-    impl Drop for Apartment { fn drop(&mut self){unsafe{RoUninitialize();}} }
-    let _apartment=Apartment;
-    if !step("WGC support",GraphicsCaptureSession::IsSupported())? {
-        return Err("WGC not supported on this session".into());
+fn step<T>(s:&str,r:windows::core::Result<T>)->Result<T,String>{
+    r.map_err(|e|format!("{s}: {e}"))
+}
+struct Apartment;
+impl Apartment {
+    unsafe fn enter()->Result<Self,String>{
+        step("RoInitialize",RoInitialize(RO_INIT_MULTITHREADED)).map(|_|Self)
     }
-    let mut device=None;
-    let mut context=None;
-    step("D3D11 hardware device",D3D11CreateDevice(None::<&IDXGIAdapter>,D3D_DRIVER_TYPE_HARDWARE,
-        HMODULE::default(),D3D11_CREATE_DEVICE_BGRA_SUPPORT,None,D3D11_SDK_VERSION,
-        Some(&mut device),None,Some(&mut context)))?;
-    let device=device.ok_or("missing D3D11 device")?;
-    let context=context.ok_or("missing D3D11 context")?;
-    let dxgi=step("DXGI device",device.cast::<IDXGIDevice>())?;
-    let inspectable=step("WinRT D3D11 device",CreateDirect3D11DeviceFromDXGIDevice(&dxgi))?;
-    let winrt=step("IDirect3DDevice",inspectable.cast::<IDirect3DDevice>())?;
-    let interop=step("WGC item factory",factory::<GraphicsCaptureItem,IGraphicsCaptureItemInterop>())?;
-    let item:GraphicsCaptureItem=step("CreateForWindow",interop.CreateForWindow(OwnedWindow(hwnd)))?;
-    let size=step("WGC item size",item.Size())?;
-    if size.Width<1||size.Height<1||!budget(size.Width,size.Height){return Err("window exceeds capture budget".into());}
-    let pool=step("frame pool",Direct3D11CaptureFramePool::CreateFreeThreaded(
-        &winrt,DirectXPixelFormat::B8G8R8A8UIntNormalized,1,size))?;
-    let result=(||{
-        let session=step("capture session",pool.CreateCaptureSession(&item))?;
+}
+impl Drop for Apartment { fn drop(&mut self){unsafe{RoUninitialize();}} }
+
+struct CaptureDevice {
+    device:ID3D11Device, context:ID3D11DeviceContext, winrt:IDirect3DDevice,
+}
+impl CaptureDevice {
+    unsafe fn new()->Result<Self,String>{
+        if !step("WGC support",GraphicsCaptureSession::IsSupported())?{
+            return Err("WGC not supported on this session".into());
+        }
+        let mut device=None;
+        let mut context=None;
+        step("D3D11 hardware device",D3D11CreateDevice(None::<&IDXGIAdapter>,D3D_DRIVER_TYPE_HARDWARE,
+            HMODULE::default(),D3D11_CREATE_DEVICE_BGRA_SUPPORT,None,D3D11_SDK_VERSION,
+            Some(&mut device),None,Some(&mut context)))?;
+        let device=device.ok_or("missing D3D11 device")?;
+        let context=context.ok_or("missing D3D11 context")?;
+        let dxgi=step("DXGI device",device.cast::<IDXGIDevice>())?;
+        let inspectable=step("WinRT D3D11 device",CreateDirect3D11DeviceFromDXGIDevice(&dxgi))?;
+        let winrt=step("IDirect3DDevice",inspectable.cast::<IDirect3DDevice>())?;
+        Ok(Self{device,context,winrt})
+    }
+    unsafe fn frame(&self,hwnd:HWND,valid:impl Fn()->bool)->Result<Frame,String>{
+        if !valid(){return Err("window identity, visibility or affinity denied".into());}
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetAncestor,GA_ROOT};
+        if GetAncestor(hwnd,GA_ROOT)!=hwnd{return Err("WGC requires a top-level HWND".into());}
+        let Self{device,context,winrt}=self;
+        let interop=step("WGC item factory",factory::<GraphicsCaptureItem,IGraphicsCaptureItemInterop>())?;
+        let item:GraphicsCaptureItem=step("CreateForWindow",interop.CreateForWindow(OwnedWindow(hwnd)))?;
+        let size=step("WGC item size",item.Size())?;
+        if size.Width<1||size.Height<1||!budget(size.Width,size.Height){return Err("window exceeds capture budget".into());}
+        let pool=step("frame pool",Direct3D11CaptureFramePool::CreateFreeThreaded(
+            winrt,DirectXPixelFormat::B8G8R8A8UIntNormalized,1,size))?;
         let result=(||{
-            step("omit cursor",session.SetIsCursorCaptureEnabled(false))?;
-            let (tx,rx)=mpsc::sync_channel(1);
-            let notify=TypedEventHandler::new(move|_,_|{let _=tx.try_send(());Ok(())});
-            let token=step("frame event",pool.FrameArrived(&notify))?;
+            let session=step("capture session",pool.CreateCaptureSession(&item))?;
             let result=(||{
-                step("StartCapture",session.StartCapture())?;
-                let mut arrived=false;
-                for _ in 0..20{
-                    if !valid(){return Err("capture cancelled".into());}
-                    match rx.recv_timeout(Duration::from_millis(100)){
-                        Ok(())=>{arrived=true;break;}
-                        Err(mpsc::RecvTimeoutError::Disconnected)=>break,
-                        Err(mpsc::RecvTimeoutError::Timeout)=>{},
-                    }
-                }
-                if !arrived{return Err("no WGC frame within 2 s".into());}
-                if !valid(){return Err("window closed, changed or no longer visible".into());}
-                let frame=step("read first frame",pool.TryGetNextFrame())?;
+                step("omit cursor",session.SetIsCursorCaptureEnabled(false))?;
+                let (tx,rx)=mpsc::sync_channel(1);
+                let notify=TypedEventHandler::new(move|_,_|{let _=tx.try_send(());Ok(())});
+                let token=step("frame event",pool.FrameArrived(&notify))?;
                 let result=(||{
-                    let size=step("frame content size",frame.ContentSize())?;
-                    if size.Width<1||size.Height<1||!budget(size.Width,size.Height){
-                        return Err("window resized beyond capture limit".into());
-                    }
-                    let surface=step("frame surface",frame.Surface())?;
-                    let interop=step("surface DXGI access",surface.cast::<IDirect3DDxgiInterfaceAccess>())?;
-                    let texture:ID3D11Texture2D=step("frame texture",interop.GetInterface())?;
-                    let mut desc=D3D11_TEXTURE2D_DESC::default();
-                    texture.GetDesc(&mut desc);
-                    let (w,h)=(size.Width as u32,size.Height as u32);
-                    if desc.Format!=DXGI_FORMAT_B8G8R8A8_UNORM||desc.Width<w||desc.Height<h||
-                        !budget(desc.Width as i32,desc.Height as i32)||desc.SampleDesc.Count!=1{
-                        return Err("unexpected WGC texture format or size".into());
-                    }
-                    desc.Width=w;desc.Height=h;desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;
-                    desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ.0 as _;desc.MiscFlags=0;
-                    let mut staging=None;
-                    step("WGC staging texture",device.CreateTexture2D(&desc,None,Some(&mut staging)))?;
-                    let staging=staging.ok_or("missing staging texture")?;
-                    let region=D3D11_BOX{left:0,top:0,front:0,right:w,bottom:h,back:1};
-                    context.CopySubresourceRegion(&staging,0,0,0,0,&texture,0,Some(&region));
-                    let mut mapped=D3D11_MAPPED_SUBRESOURCE::default();
-                    step("WGC readback",context.Map(&staging,0,D3D11_MAP_READ,0,Some(&mut mapped)))?;
-                    let (dw,dh)=thumb_size(w as usize,h as usize);
-                    let mut bytes=vec![0;dw*dh*4];
-                    let ptr=mapped.pData as *const u8;
-                    if ptr.is_null()||mapped.RowPitch<(w*4){
-                        context.Unmap(&staging,0);
-                        return Err("invalid staging mapping".into());
-                    }
-                    for y in 0..dh{
-                        let sy=(y*h as usize/dh)*mapped.RowPitch as usize;
-                        for x in 0..dw{
-                            let sx=x*w as usize/dw*4;
-                            std::ptr::copy_nonoverlapping(ptr.add(sy+sx),bytes.as_mut_ptr().add((y*dw+x)*4),4);
+                    step("StartCapture",session.StartCapture())?;
+                    let mut arrived=false;
+                    for _ in 0..20{
+                        if !valid(){return Err("capture cancelled".into());}
+                        match rx.recv_timeout(Duration::from_millis(100)){
+                            Ok(())=>{arrived=true;break;}
+                            Err(mpsc::RecvTimeoutError::Disconnected)=>break,
+                            Err(mpsc::RecvTimeoutError::Timeout)=>{},
                         }
                     }
-                    context.Unmap(&staging,0);
-                    if !valid(){return Err("window changed during capture".into());}
-                    if !bytes.chunks_exact(4).any(|p|p[0]|p[1]|p[2]!=0){return Err("capture was blank".into());}
-                    Ok((bytes,dw as i32,dh as i32))
+                    if !arrived{return Err("no WGC frame within 2 s".into());}
+                    if !valid(){return Err("window closed, changed or no longer visible".into());}
+                    let frame=step("read first frame",pool.TryGetNextFrame())?;
+                    let result=(||{
+                        let size=step("frame content size",frame.ContentSize())?;
+                        if size.Width<1||size.Height<1||!budget(size.Width,size.Height){
+                            return Err("window resized beyond capture limit".into());
+                        }
+                        let surface=step("frame surface",frame.Surface())?;
+                        let interop=step("surface DXGI access",surface.cast::<IDirect3DDxgiInterfaceAccess>())?;
+                        let texture:ID3D11Texture2D=step("frame texture",interop.GetInterface())?;
+                        let mut desc=D3D11_TEXTURE2D_DESC::default();
+                        texture.GetDesc(&mut desc);
+                        let (w,h)=(size.Width as u32,size.Height as u32);
+                        if desc.Format!=DXGI_FORMAT_B8G8R8A8_UNORM||desc.Width<w||desc.Height<h||
+                            !budget(desc.Width as i32,desc.Height as i32)||desc.SampleDesc.Count!=1{
+                            return Err("unexpected WGC texture format or size".into());
+                        }
+                        desc.Width=w;desc.Height=h;desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;
+                        desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ.0 as _;desc.MiscFlags=0;
+                        let mut staging=None;
+                        step("WGC staging texture",device.CreateTexture2D(&desc,None,Some(&mut staging)))?;
+                        let staging=staging.ok_or("missing staging texture")?;
+                        let region=D3D11_BOX{left:0,top:0,front:0,right:w,bottom:h,back:1};
+                        context.CopySubresourceRegion(&staging,0,0,0,0,&texture,0,Some(&region));
+                        let mut mapped=D3D11_MAPPED_SUBRESOURCE::default();
+                        step("WGC readback",context.Map(&staging,0,D3D11_MAP_READ,0,Some(&mut mapped)))?;
+                        let (dw,dh)=thumb_size(w as usize,h as usize);
+                        let mut bytes=vec![0;dw*dh*4];
+                        let ptr=mapped.pData as *const u8;
+                        if ptr.is_null()||mapped.RowPitch<(w*4){
+                            context.Unmap(&staging,0);
+                            return Err("invalid staging mapping".into());
+                        }
+                        for y in 0..dh{
+                            let sy=(y*h as usize/dh)*mapped.RowPitch as usize;
+                            for x in 0..dw{
+                                let sx=x*w as usize/dw*4;
+                                std::ptr::copy_nonoverlapping(ptr.add(sy+sx),bytes.as_mut_ptr().add((y*dw+x)*4),4);
+                            }
+                        }
+                        context.Unmap(&staging,0);
+                        if !valid(){return Err("window changed during capture".into());}
+                        if !bytes.chunks_exact(4).any(|p|p[0]|p[1]|p[2]!=0){return Err("capture was blank".into());}
+                        Ok((bytes,dw as i32,dh as i32))
+                    })();
+                    let _=frame.Close();
+                    result
                 })();
-                let _=frame.Close();
+                let _=pool.RemoveFrameArrived(token);
                 result
             })();
-            let _=pool.RemoveFrameArrived(token);
+            let _=session.Close();
             result
         })();
-        let _=session.Close();
+        let _=pool.Close();
         result
-    })();
-    let _=pool.Close();
-    result
+    }
+}
+
+pub(super) unsafe fn frame(hwnd:HWND,valid:impl Fn()->bool)->Result<Frame,String>{
+    if !valid(){return Err("window identity, visibility or affinity denied".into());}
+    let _apartment=Apartment::enter()?;
+    CaptureDevice::new()?.frame(hwnd,valid)
 }
 
 pub(super) const READY:u32=WM_APP+58;
@@ -235,12 +256,50 @@ impl Source{
 }
 struct Job{
     source:WindowIdentity, stamp:Stamp, live:Arc<AtomicBool>,
-    receiver:mpsc::Receiver<Result<Frame,String>>,thread:JoinHandle<()>,
+    receiver:mpsc::Receiver<Result<Frame,String>>,
+}
+struct Request{
+    source:WindowIdentity, stamp:Stamp, live:Arc<AtomicBool>,
+    reply:mpsc::SyncSender<Result<Frame,String>>,
+}
+struct Worker{sender:mpsc::SyncSender<Request>,thread:JoinHandle<()>}
+impl Worker{
+    fn new(controller:usize)->std::io::Result<Self>{
+        let (sender,rx)=mpsc::sync_channel::<Request>(1);
+        let thread=std::thread::Builder::new().name("Deskland Stage capture".into()).spawn(move||unsafe{
+            let apartment=Apartment::enter();
+            let mut device=None;
+            loop{
+                let req=if device.is_some(){
+                    match rx.recv_timeout(Duration::from_secs(15)){
+                        Ok(req)=>req,
+                        Err(mpsc::RecvTimeoutError::Timeout)=>{device=None;continue;},
+                        Err(mpsc::RecvTimeoutError::Disconnected)=>break,
+                    }
+                }else if let Ok(req)=rx.recv(){req}else{break;};
+                let valid=||req.live.load(Ordering::Relaxed)&&stamp(req.source).as_ref()==Some(&req.stamp);
+                let result=(||{
+                    apartment.as_ref().map_err(Clone::clone)?;
+                    if !valid(){return Err("capture cancelled".into());}
+                    if device.is_none(){device=Some(CaptureDevice::new()?);}
+                    device.as_ref().unwrap().frame(req.source.hwnd as HWND,valid)
+                })();
+                if result.is_err(){device=None;}
+                let _=req.reply.send(result);
+                PostMessageW(controller as HWND,READY,0,0);
+            }
+        })?;
+        Ok(Self{sender,thread})
+    }
+    fn join(self){
+        drop(self.sender);
+        let _=self.thread.join();
+    }
 }
 struct Raster{revisions:[u64;5],preview:Preview}
 #[derive(Default)]
 struct State{
-    job:Option<Job>, sources:HashMap<WindowIdentity,Source>, views:Vec<Raster>,
+    job:Option<Job>, worker:Option<Worker>, sources:HashMap<WindowIdentity,Source>, views:Vec<Raster>,
     generation:u64, next_capture:Option<Instant>, foreground:usize,
 }
 thread_local!{static CURRENT:RefCell<State>=RefCell::new(State::default());}
@@ -328,17 +387,12 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
         if state.job.is_none()&&state.next_capture.is_none_or(|time|now>=time){
             if let Some(id)=wanted.into_iter().find(|id|state.sources.contains_key(id)){
                 let stamp=state.sources[&id].stamp.clone().unwrap();
-                let live=Arc::new(AtomicBool::new(true));let cancel=live.clone();
-                let (sender,receiver)=mpsc::sync_channel(1);
-                let control=controller as usize;
-                let expected=stamp.clone();
-                if let Ok(thread)=std::thread::Builder::new().name("Deskland Stage capture".into()).spawn(move||unsafe{
-                    let valid=||cancel.load(Ordering::Relaxed)&&self::stamp(id).as_ref()==Some(&expected);
-                    let result=frame(id.hwnd as HWND,valid);
-                    let _=sender.send(result);
-                    PostMessageW(control as HWND,READY,0,0);
-                }){
-                    state.job=Some(Job{source:id,stamp,live,receiver,thread});
+                let live=Arc::new(AtomicBool::new(true));
+                let (reply,receiver)=mpsc::sync_channel(1);
+                if state.worker.is_none(){state.worker=Worker::new(controller as usize).ok();}
+                let req=Request{source:id,stamp:stamp.clone(),live:live.clone(),reply};
+                if state.worker.as_ref().is_some_and(|w|w.sender.try_send(req).is_ok()){
+                    state.job=Some(Job{source:id,stamp,live,receiver});
                 }
                 state.next_capture=Some(now+Duration::from_millis(180));
             }
@@ -375,8 +429,6 @@ pub(super) fn complete(){
         let Some(job)=state.job.take() else{return;};
         let result=job.receiver.try_recv();
         if matches!(result,Err(mpsc::TryRecvError::Empty)){state.job=Some(job);return;}
-        // The worker has finished the capture before publishing its result.
-        let _=job.thread.join();
         if !job.live.load(Ordering::Relaxed)||unsafe{stamp(job.source)}.as_ref()!=Some(&job.stamp){return;}
         state.generation=state.generation.wrapping_add(1).max(1);
         let generation=state.generation;
@@ -406,8 +458,13 @@ pub(super) fn hide(owner:usize){
     CURRENT.with(|c|c.borrow_mut().views.retain(|v|v.preview.target.owner!=owner));
 }
 pub(super) fn shutdown(){
-    let job=CURRENT.with(|c|{let mut s=c.borrow_mut();s.views.clear();s.sources.clear();s.job.take()});
-    if let Some(job)=job{job.live.store(false,Ordering::Relaxed);let _=job.thread.join();}
+    let worker=CURRENT.with(|c|{
+        let mut s=c.borrow_mut();
+        s.views.clear();s.sources.clear();
+        if let Some(job)=s.job.take(){job.live.store(false,Ordering::Relaxed);}
+        s.worker.take()
+    });
+    if let Some(worker)=worker{worker.join();}
 }
 
 #[cfg(test)]

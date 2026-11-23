@@ -1091,7 +1091,12 @@ unsafe fn show_status_tip(owner:HWND){
                             let title:String=w.title.chars().take(512).collect();
                             let layer=stage.members[index].iter().position(|id|id==member).unwrap_or(0);
                             let cached=stage_snapshot::target(owner as usize,index).is_some_and(|(_,mask)|mask&(1<<layer)!=0);
-                            return Some(if cached{format!("{title} · Ảnh phối cảnh đã lưu tạm")}else{title});
+                            let preview=if cached{"Ảnh phối cảnh đã lưu tạm"}
+                                else if stage.preview_visible&&stage.previews.includes(w.hwnd){"Xem trước DWM"}
+                                else if matches!(previews::permitted_pid(w.hwnd),Err(previews::PreviewStep::Protected|previews::PreviewStep::AffinityQuery(_))){
+                                    "Windows không cho phép xem trước"
+                                }else{"Biểu tượng ứng dụng"};
+                            return Some(format!("{title} · {preview}"));
                         }
                     }
                 }else if item.count>1{

@@ -150,3 +150,95 @@ pub(super) fn native_wgc_projects_one_owned_hwnd_or_reports_blocked() {
     let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE").map(std::path::PathBuf::from)else{return;};
     inspect(&dir,false).unwrap();
 }
+
+
+// Separate fixture process exercises the same external-HWND eligibility and
+// persistent worker used by Stage, without touching a runner or owner app.
+#[cfg(test)]
+#[test]
+#[ignore = "spawned only by the isolated native Stage worker test"]
+fn native_worker_fixture_host(){
+    let Some(path)=std::env::var_os("TUANPC_DESK_STAGE_FIXTURE_READY")else{return;};
+    unsafe{
+        let first=window(true).unwrap();
+        let second=window(true).unwrap();
+        SetWindowTextW(first.0,wide("Stage fixture one").as_ptr());
+        SetWindowTextW(second.0,wide("Stage fixture two").as_ptr());
+        SetWindowPos(second.0,null_mut(),12,296,WIDTH,HEIGHT,SWP_NOACTIVATE|SWP_NOZORDER);
+        let ready=std::path::PathBuf::from(path);
+        let tmp=ready.with_extension("tmp");
+        std::fs::write(&tmp,format!("{} {}",first.0 as usize,second.0 as usize)).unwrap();
+        std::fs::rename(tmp,ready).unwrap();
+        let mut msg=std::mem::zeroed();
+        while GetMessageW(&mut msg,null_mut(),0,0)>0{
+            TranslateMessage(&msg);DispatchMessageW(&msg);
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+#[ignore = "requires isolated Windows graphics session and a child fixture"]
+fn native_stage_worker_keeps_independent_frames_through_minimize(){
+    use super::{stage_snapshot as cache,stage_surface::Layout,WindowIdentity};
+    use std::process::{Child,Command,Stdio};
+    struct FixtureProcess(Child);
+    impl Drop for FixtureProcess{
+        fn drop(&mut self){let _=self.0.kill();let _=self.0.wait();}
+    }
+    struct Reset;
+    impl Drop for Reset{fn drop(&mut self){cache::shutdown();}}
+    let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE").map(std::path::PathBuf::from)else{return;};
+    let path=dir.join(format!("stage-worker-ready-{}.txt",std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let child=FixtureProcess(Command::new(std::env::current_exe().unwrap())
+        .args(["--ignored","--exact","dock::stage_capture_lab::native_worker_fixture_host"])
+        .env("TUANPC_DESK_STAGE_FIXTURE_READY",&path).stdout(Stdio::null()).spawn().unwrap());
+    let _reset=Reset;
+    let started=Instant::now();
+    let handles=loop{
+        if let Ok(text)=std::fs::read_to_string(&path){
+            let _=std::fs::remove_file(&path);
+            break text.split_whitespace().map(|h|h.parse::<usize>().unwrap()).collect::<Vec<_>>();
+        }
+        assert!(started.elapsed()<Duration::from_secs(8),"child fixture did not start");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(handles.len(),2);
+    let ids=handles.iter().map(|&h|unsafe{WindowIdentity::read(h as HWND).unwrap()}).collect::<Vec<_>>();
+    assert!(ids.iter().all(|id|id.pid==child.0.id()));
+    let mut layout=Layout::landscape(240,320,96,21,5,2,false,true);
+    layout.count=2;
+    let target=|i|cache::Target{owner:1,layout,index:i,reduced:true,sources:[Some(ids[i]),None,None,None,None]};
+    let both=[target(0),target(1)];
+    let sync=||{cache::complete();cache::sync(&both,null_mut(),true,0);};
+    let spin=|condition:&dyn Fn()->bool|{
+        let start=Instant::now();
+        loop{
+            sync();
+            if condition(){return true;}
+            if start.elapsed()>=Duration::from_secs(7){return false;}
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    };
+    let result=if !spin(&||cache::views(1).len()==2){
+        let statuses=handles.iter().map(|&h|unsafe{super::previews::preview_pid(h as HWND)}).collect::<Vec<_>>();
+        format!("STAGE_EXTERNAL_FIXTURE=BLOCKED eligibility={statuses:?} projected={}",cache::views(1).len())
+    }else{
+        let hwnd=handles[0] as HWND;
+        assert_ne!(unsafe{ShowWindowAsync(hwnd,SW_MINIMIZE)},0);
+        assert!(spin(&||unsafe{IsIconic(hwnd)!=0}));
+        assert_eq!(cache::views(1).len(),2,"minimize removed a valid source frame or the other card");
+        assert_eq!(cache::target(1,0).map(|v|v.1),Some(1));
+        assert_ne!(unsafe{ShowWindowAsync(hwnd,SW_RESTORE)},0);
+        assert!(spin(&||unsafe{IsIconic(hwnd)==0}));
+        assert_eq!(cache::views(1).len(),2,"restore lost the last valid frame");
+        assert_ne!(unsafe{PostMessageW(hwnd,WM_CLOSE,0,0)},0);
+        assert!(spin(&||unsafe{IsWindow(hwnd)==0}));
+        assert!(cache::target(1,0).is_none());
+        assert_eq!(cache::target(1,1).map(|v|v.1),Some(1));
+        "STAGE_EXTERNAL_FIXTURE=PASS two owned child HWNDs, independent previews, minimize/restore/close".to_owned()
+    };
+    println!("{result}");
+    std::fs::write(dir.join("stage-external-fixture-result.txt"),result).unwrap();
+}

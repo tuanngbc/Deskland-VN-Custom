@@ -1,0 +1,5 @@
+# Stage: card height settings
+
+The effective logical height is: card override, then display override, then global choice, then automatic. Explicit values are clamped to 72–180 logical px at 96 DPI. Windows DPI scaling happens when laying out and paginating each rail. Short displays make additional pages and may fit a single large card within the available space. Rendering, scroll/page navigation and hit testing read the same row heights.
+
+Web and Win32 Settings can select the preview mode, global height and per-display height at runtime. Right-click a card to set or reset its override. Saved automatic-group overrides also appear in Web Settings for editing or reset. Overrides use a normalized exe path or AppUserModelID. Manual and other transient card overrides are session-only: neither HWNDs nor temporary group numbers enter JSON. Per-display preferences are kept if a monitor disconnects. Existing profiles default to perspective and automatic height without modifying existing dock placement, shortcuts or themes.

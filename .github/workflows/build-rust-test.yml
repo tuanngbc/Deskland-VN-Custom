@@ -53,6 +53,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_capture_lab::native_wgc_projects_one_owned_hwnd_or_reports_blocked -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::stage_capture_lab::native_stage_worker_keeps_independent_frames_through_minimize -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_surface::tests::native_slide_keeps_live_preview_host_aligned_without_activating_either_window -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:TUANPC_DESK_STAGE_COMPOSITION_LAB = '1'
@@ -153,6 +155,7 @@ jobs:
           path: |
             ${{ runner.temp }}/stage-fixture-evidence/*.png
             ${{ runner.temp }}/stage-fixture-evidence/stage-wgc-result.txt
+            ${{ runner.temp }}/stage-fixture-evidence/stage-external-fixture-result.txt
             ${{ runner.temp }}/start-native*.png
             ${{ runner.temp }}/typography-evidence/*.png
           if-no-files-found: error

@@ -1,0 +1,5 @@
+# Real tray bridge: current state
+
+**BLOCKED** for a collector that both coexists with Explorer and retrieves external notification icons while the native taskbar remains hidden. No permitted backend produced verified existing icons, subsequent events and callbacks. The prior read-only probe is useful negative evidence. The [cooperative POC](SYSTEM_TRAY_POC.md) only validates its own peer and is not repeated as external-app evidence.
+
+Deskland keeps the caret as Control Center and keeps minimized windows separate from notification icons. There are no newly simulated tray rows. If an isolated disposable machine becomes available, first verify coexistence and recovery with actual third-party applications before integrating an adapter. A proposed adapter boundary separates discovery/snapshot, new/updated/deleted items, and gestures with owner/identity revalidation. Session disconnect would clear all stale entries. Do not publish an external icon action until its event and native menu are proven.
