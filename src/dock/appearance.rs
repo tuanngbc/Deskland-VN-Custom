@@ -77,10 +77,13 @@ mod tests{
     use super::*;
     #[test]
     fn start_icon_defaults_for_old_profiles_and_roundtrips(){
-        assert_eq!(Appearance::from_json(&json!({"size":self.size,"iconSize":48})).start_icon,StartIcon::Windows);
+        let old=Appearance::from_json(&json!({"iconSize":48}));
+        assert_eq!(old.start_icon,StartIcon::Windows);
+        assert_eq!(old.size,100);
+        assert_eq!(Appearance::from_json(&json!({"size":170})).size,140);
         assert_eq!(Appearance::from_json(&json!({"startIcon":"unknown"})).start_icon,StartIcon::Windows);
         for (icon,_) in StartIcon::ALL{
-            let settings=Appearance{start_icon:icon,..Default::default()};
+            let settings=Appearance{start_icon:icon,size:115,..Default::default()};
             assert_eq!(Appearance::from_json(&settings.json()),settings);
         }
     }
