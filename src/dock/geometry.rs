@@ -163,25 +163,26 @@ pub(super) struct Cluster {
     pub cell:u32,
     pub gap:u32,
     pub inline_metrics:bool,
+    pub signals:usize,
 }
 impl Cluster {
     pub fn cross(self)->f32{
         if self.side.is_none(){0.0}
         else{
-            let grid=2.0*self.cell as f32+self.gap as f32+8.0;
+            let grid=if self.signals==0{0.0}else{self.signals as f32*self.cell as f32+self.signals.saturating_sub(1) as f32*self.gap as f32+8.0};
             grid.max(if self.inline_metrics{68.0}else{0.0})
         }
     }
 }
 #[cfg(test)]
 fn measure_widgets(display:&Display,style:&Appearance,count:usize,focus:Option<f32>,amount:f32,side:Option<bool>,pinned:&[UtilityWidget],cell:u32)->Layout{
-    measure_cluster(display,style,count,focus,amount,pinned,Cluster{side,cell,gap:4,inline_metrics:false})
+    measure_cluster(display,style,count,focus,amount,pinned,Cluster{side,cell,gap:4,inline_metrics:false,signals:pinned.len()})
 }
 pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,focus:Option<f32>,amount:f32,pinned:&[UtilityWidget],cluster:Cluster)->Layout{
     let vertical=style.position!=DockSide::Bottom;
     let leading_requested=cluster.side==Some(true);
     let host=cluster.side.is_some();
-    let scale=(display.dpi as f32/96.0).clamp(0.75,3.0);
+    let scale=style.pixel_scale(display.dpi);
     let screen_w=(display.work.right-display.work.left).max(1) as f32;
     let screen_h=(display.work.bottom-display.work.top).max(1) as f32;
     let (axis,cross_axis)=if vertical{(screen_h,screen_w)}else{(screen_w,screen_h)};
@@ -407,7 +408,7 @@ mod tests{
                 for position in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
                     for side in [Some(true),Some(false)]{
                         let style=Appearance{position,magnification:55,..Default::default()};
-                        let cfg=Cluster{side,cell:28,gap:4,inline_metrics:false};
+                        let cfg=Cluster{side,cell:28,gap:4,inline_metrics:false,signals:2};
                         let a=measure_cluster(&screen,&style,7,None,0.0,&pins,cfg);
                         let b=measure_cluster(&screen,&style,7,Some(a.axis(a.slots[3].x,a.slots[3].y)),1.0,&pins,cfg);
                         assert_eq!(a.scan.w,b.scan.w);assert!(((b.scan.x-b.start.x)-(a.scan.x-a.start.x)).abs()<0.001);assert_eq!(a.inline,b.inline);
@@ -442,7 +443,7 @@ mod tests{
             let r=RECT{left:-1080,top:-240,right:0,bottom:1680};
             let screen=Display{id:"display".into(),name:String::new(),bounds:r,work:r,primary:false,dpi:144};
             let style=Appearance{position,magnification:55,..Default::default()};
-            let cfg=Cluster{side:Some(false),cell:28,gap:4,inline_metrics:true};
+            let cfg=Cluster{side:Some(false),cell:28,gap:4,inline_metrics:true,signals:2};
             let a=measure_cluster(&screen,&style,6,None,0.0,&pins,cfg);
             let b=measure_cluster(&screen,&style,6,Some(a.axis(a.slots[2].x,a.slots[2].y)),1.0,&pins,cfg);
             let rect=a.metrics.unwrap();
@@ -452,7 +453,7 @@ mod tests{
         }
         let r=RECT{left:0,top:0,right:440,bottom:800};
         let screen=Display{id:"narrow".into(),name:String::new(),bounds:r,work:r,primary:false,dpi:192};
-        let cfg=Cluster{side:Some(false),cell:28,gap:4,inline_metrics:true};
+        let cfg=Cluster{side:Some(false),cell:28,gap:4,inline_metrics:true,signals:2};
         let result=measure_cluster(&screen,&Appearance::default(),10,None,0.0,&pins,cfg);
         assert!(result.metrics.is_none()&&result.utility.w==0.0);
     }
@@ -461,7 +462,7 @@ mod tests{
         let bounds=RECT{left:-1600,top:-900,right:0,bottom:600};
         let work=RECT{left:-1490,top:-820,right:0,bottom:552};
         let display=Display{id:"display".into(),name:String::new(),bounds,work,primary:false,dpi:144};
-        let cfg=Cluster{side:Some(false),cell:28,gap:4,inline_metrics:true};
+        let cfg=Cluster{side:Some(false),cell:28,gap:4,inline_metrics:true,signals:2};
         let pins=[UtilityWidget::Network,UtilityWidget::Sound,UtilityWidget::Metrics];
         for position in [DockSide::Bottom,DockSide::Left,DockSide::Right] {
             for leading in [true,false] {

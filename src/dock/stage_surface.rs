@@ -45,6 +45,7 @@ pub(super) struct Layout {
     pub radius:i32,pub caption:i32,pub rows:usize,pub count:usize,pub paged:bool,
     pub stack:u8,pub nav_h:i32,pub right:bool,pub active:Option<usize>,
     pub layers:[u8;8],heights:[i32;8],pub stack_design:bool,pub landscape:bool,stack_step:i32,
+    pub align_to_work_area:bool,
 }
 impl Layout {
     pub fn new(width:i32,height:i32,dpi:u32,gap:i32,limit:usize,total:usize,right:bool)->Self{
@@ -62,7 +63,7 @@ impl Layout {
         let available=(height-2*inset-reserve-(shown-1)*gap)/shown;
         let ideal=((width-4*inset)*3/5+px(42)).clamp(min_h,px(160));
         let card_h=available.min(ideal).max(1);
-        Self{width,height,card_h,inset,gap,radius:px(18),caption:px(37),rows,count:0,paged,stack:0,nav_h,right,active:None,layers:[0;8],heights:[0;8],stack_design:false,landscape:false,stack_step:(inset*4/5).max(3)}
+        Self{width,height,card_h,inset,gap,radius:px(18),caption:px(37),rows,count:0,paged,stack:0,nav_h,right,active:None,layers:[0;8],heights:[0;8],stack_design:false,landscape:false,stack_step:(inset*4/5).max(3),align_to_work_area:false}
     }
     pub fn landscape(width:i32,height:i32,dpi:u32,gap:i32,limit:usize,total:usize,right:bool,stacked:bool)->Self{
         let px=|n:i32|super::panel_chrome::scale(dpi,n);
@@ -111,7 +112,10 @@ impl Layout {
         // Reduce the width with the height, and keep the card against its
         // own side of the screen. This preserves the perspective silhouette.
         let w=if self.landscape{full.min((h*18/10).max(1))}else{full};
-        let x=self.inset+if self.right{room+full-w}else{icon_room};
+        let x=if self.align_to_work_area&&self.landscape{
+            let visible_stack=if self.stack_design{self.step()*(self.depth(i).saturating_sub(1) as i32)}else{0};
+            if self.right{self.inset+visible_stack}else{self.width-self.inset-w-visible_stack}
+        }else{self.inset+if self.right{room+full-w}else{icon_room}};
         let y=self.inset+(0..i).map(|n|height(n)+self.gap).sum::<i32>();
         if self.active==Some(i){
             let grow_limit=if self.landscape{self.radius/2}else{self.inset/2};
@@ -667,6 +671,22 @@ pub(super) unsafe fn nav_label(dc:HDC,b:Box2,label:&str,ink:u32){
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reserved_stage_aligns_singletons_and_stacks_to_the_window_edge(){
+        for dpi in [96,144]{
+            for right in [false,true]{
+                let mut layout=Layout::landscape(360,760,dpi,12,4,2,right,true);
+                layout.count=2;layout.layers[0]=1;layout.layers[1]=4;
+                layout.apply_heights(dpi,&[72,104]);
+                layout.align_to_work_area=true;
+                for i in 0..2{
+                    let last=layout.rear(i,layout.depth(i) as i32-1);
+                    if right{assert_eq!(last.x,layout.inset);}
+                    else{assert_eq!(last.x+last.w,layout.width-layout.inset);}
+                }
+            }
+        }
+    }
     #[test]
     fn group_arrow_hit_boxes_stay_on_either_side_at_mixed_dpi(){
         for dpi in [96,120,144,192]{

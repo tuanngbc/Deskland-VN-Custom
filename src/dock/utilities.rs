@@ -336,10 +336,11 @@ impl Widget {
 #[derive(Clone,Debug,PartialEq,Eq)]
 pub struct Profile {
     pub enabled:bool,pub leading:bool,pub details:bool,pub cell:u32,pub two_rows:bool,pub gap:u32,
+    pub network_on_dock:bool,pub sound_on_dock:bool,
     pub metrics:MetricOptions,pub order:Vec<Widget>,pub hidden:Vec<Widget>,pub inline:Vec<Widget>,
 }
 impl Default for Profile {
-    fn default()->Self{Self{enabled:true,leading:false,details:true,cell:28,two_rows:true,gap:4,metrics:MetricOptions::default(),order:Widget::ALL.to_vec(),hidden:Vec::new(),inline:Vec::new()}}
+    fn default()->Self{Self{enabled:true,leading:false,details:true,cell:28,two_rows:true,gap:4,network_on_dock:true,sound_on_dock:true,metrics:MetricOptions::default(),order:Widget::ALL.to_vec(),hidden:Vec::new(),inline:Vec::new()}}
 }
 impl Profile {
     pub fn from_json(v:&Value)->Self{
@@ -356,16 +357,20 @@ impl Profile {
         for w in Widget::ALL {if !order.contains(&w){order.push(w);}}
         let hidden=read("hidden");
         let inline=read("inline").into_iter().take(10).collect();
-        Self{enabled:v["enabled"].as_bool().unwrap_or(true),leading:v["side"]=="left",
+        let legacy=v["enabled"].as_bool().unwrap_or(true);
+        Self{enabled:legacy,network_on_dock:v["networkOnDock"].as_bool().unwrap_or(legacy&&!hidden.contains(&Widget::Network)),
+            sound_on_dock:v["soundOnDock"].as_bool().unwrap_or(legacy&&!hidden.contains(&Widget::Sound)),leading:v["side"]=="left",
             details:v["details"].as_bool().unwrap_or(true),cell:v["cell"].as_u64().map_or(28,|n|n.clamp(24,32) as u32),
             two_rows:v["rows"].as_u64()!=Some(1),gap:v["gap"].as_u64().map_or(4,|n|n.clamp(2,8) as u32),metrics:MetricOptions::from_json(&v["metrics"]),order,hidden,inline}
     }
     pub fn json(&self)->Value{
-        json!({"enabled":self.enabled,"side":if self.leading{"left"}else{"right"},"details":self.details,"cell":self.cell,"rows":if self.two_rows{2}else{1},"gap":self.gap,"metrics":self.metrics.json(),
+        json!({"enabled":self.enabled,"networkOnDock":self.network_on_dock,"soundOnDock":self.sound_on_dock,"side":if self.leading{"left"}else{"right"},"details":self.details,"cell":self.cell,"rows":if self.two_rows{2}else{1},"gap":self.gap,"metrics":self.metrics.json(),
             "order":self.order.iter().map(|w|w.key()).collect::<Vec<_>>(),
             "hidden":self.hidden.iter().map(|w|w.key()).collect::<Vec<_>>(),
             "inline":self.inline.iter().map(|w|w.key()).collect::<Vec<_>>()})
     }
+    pub(super) fn dock_signals(&self)->usize{usize::from(self.network_on_dock)+usize::from(self.sound_on_dock)}
+    pub(super) fn dock_metrics(&self)->bool{self.metrics.enabled&&self.metrics.inline&&self.metrics.mask!=0&&!self.hidden.contains(&Widget::Metrics)}
     pub fn pinned(&self)->Vec<Widget>{
         if !self.enabled{return Vec::new();}
         let show_battery=self.inline.contains(&Widget::Battery)&&unsafe{matches!(battery(),BatteryState::Present{..})};

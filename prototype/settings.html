@@ -194,7 +194,8 @@
       <summary data-i18n="utilityTitle">Tiện ích Dock</summary>
       <label class="setting-row"><b data-i18n="dockDisplayTarget">Màn hình hiển thị</b><select id="utilityDisplay"></select></label>
       <div id="utilityControls" hidden>
-        <label class="setting-row"><b>Hiện Mạng và Âm thanh trên Dock</b><input id="utilityEnabled" type="checkbox"></label>
+        <label class="setting-row"><b>Hiện nút Mạng trên Dock</b><input id="utilityNetworkOnDock" type="checkbox"></label>
+        <label class="setting-row"><b>Hiện nút Âm lượng trên Dock</b><input id="utilitySoundOnDock" type="checkbox"></label>
         <label class="setting-row"><b>Vị trí chỉ số trên Dock</b><select id="utilitySide"><option value="left" data-i18n="dockLeft">Bên trái</option><option value="right" data-i18n="dockRight">Bên phải</option></select></label>
         <label class="setting-row"><b data-i18n="utilityDetails">Hiện thông tin trong bảng tiện ích</b><input id="utilityDetails" type="checkbox"></label>
         <label class="setting-row"><b>Cỡ nút tiện ích</b><select id="utilityCell"><option value="24">Nhỏ · 24 px</option><option value="28">Chuẩn · 28 px</option><option value="32">Dễ bấm · 32 px</option></select></label>
@@ -252,6 +253,7 @@
     </div>
   </section>
   <section class="setting-card"><h3 data-i18n="dockAppearanceTitle">Kiểu hiển thị Dock</h3><p class="dock-section-copy">Đổi màu, kích cỡ và cách Dock chuyển động.</p>
+    <label class="setting-row"><b>Kích thước toàn bộ Dock</b><span><input id="dockLook_size" type="range" min="75" max="140" value="100"> <output id="dockValue_size">100%</output></span></label>
     <label class="setting-row"><b data-i18n="dockIconSize">Cỡ biểu tượng</b><span><input id="dockLook_iconSize" type="range" min="28" max="60" value="44"> <output id="dockValue_iconSize">44</output></span></label>
     <label class="setting-row"><b>Biểu tượng nút Start</b><select id="dockLook_startIcon"><option value="windows">Logo Windows</option><option value="grid">Lưới ứng dụng</option><option value="orb">Huy hiệu Dock</option><option value="minimal">Bốn ô đơn sắc</option></select></label>
     <label class="setting-row"><b data-i18n="dockSpacing">Khoảng cách biểu tượng</b><span><input id="dockLook_spacing" type="range" min="4" max="22" value="10"> <output id="dockValue_spacing">10</output></span></label>
@@ -888,8 +890,8 @@ const dockFallbackText={
   dockDisplayNone:'Chưa có màn hình',dockDisplayOff:'Đã tắt',dockDisplayTarget:'Màn hình hiển thị'
 };
 const dockText=key=>{const value=t(key);return value===key?dockFallbackText[key]||value:value;};
-const dockLookDefaults={iconSize:44,startIcon:'windows',spacing:10,transparency:36,position:'bottom',theme:'auto',magnification:38,animationSpeed:100,reducedMotion:false,autoHide:false};
-const dockLookRanges=['iconSize','spacing','transparency','magnification','animationSpeed'];
+const dockLookDefaults={size:100,iconSize:44,startIcon:'windows',spacing:10,transparency:36,position:'bottom',theme:'auto',magnification:38,animationSpeed:100,reducedMotion:false,autoHide:false};
+const dockLookRanges=['size','iconSize','spacing','transparency','magnification','animationSpeed'];
 const dockLookSwitches=['reducedMotion','autoHide'];
 const dockLookKeys=[...dockLookRanges,'position','theme','startIcon',...dockLookSwitches];
 function showDockAppearance(){
@@ -1036,7 +1038,10 @@ let metricDrafts=new Map();
 const utilityDefault=()=>({enabled:true,side:'right',details:true,cell:28,rows:2,gap:4,metrics:null,order:[...utilityKeys],hidden:[],inline:[]});
 function utilityProfile(){
   const map=dockOptions.utilityProfiles||{};
-  return {...utilityDefault(),...(Object.hasOwn(map,utilityDisplay)?map[utilityDisplay]:{})};
+  const profile=Object.hasOwn(map,utilityDisplay)?map[utilityDisplay]:{};
+  const p={...utilityDefault(),...profile};
+  return {...p,networkOnDock:p.networkOnDock??(p.enabled&&!p.hidden.includes('network')),
+    soundOnDock:p.soundOnDock??(p.enabled&&!p.hidden.includes('audio'))};
 }
 function renderUtilityControls(){
   const picker=$('utilityDisplay');
@@ -1046,7 +1051,8 @@ function renderUtilityControls(){
   picker.value=utilityDisplay||'';picker.disabled=!utilityDisplay;
   $('utilityControls').hidden=!utilityDisplay;
   const p=utilityProfile();
-  $('utilityEnabled').checked=p.enabled;
+  $('utilityNetworkOnDock').checked=p.networkOnDock;
+  $('utilitySoundOnDock').checked=p.soundOnDock;
   $('utilitySide').value=p.side;
   $('utilityDetails').checked=p.details;
   $('utilityCell').value=String(p.cell);
@@ -1082,7 +1088,9 @@ function moveUtility(key,to){
 $('utilityDisplay').addEventListener('change',e=>{utilityDisplay=e.target.value;renderUtilityControls();});
 $('utilityCell').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),cell:Number($('utilityCell').value)}));
 $('utilityGap').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),gap:Number($('utilityGap').value)}));
-$('utilityEnabled').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),enabled:$('utilityEnabled').checked}));
+for(const [id,key] of [['utilityNetworkOnDock','networkOnDock'],['utilitySoundOnDock','soundOnDock']]){
+  $(id).addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),[key]:$(id).checked}));
+}
 $('utilityDetails').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),details:$('utilityDetails').checked}));
 $('utilitySide').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),side:$('utilitySide').value}));
 function saveMetrics(){

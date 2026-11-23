@@ -158,7 +158,18 @@ impl Surface {
     }
     pub fn size(&self)->(i32,i32){self.layer.size}
     pub fn set_material(&mut self,value:Material){
-        if self.material!=value{self.material=value;self.static_pixels.clear();}
+        if self.material!=value{self.material=value;self.static_pixels.clear();self.motion_pixels.clear();}
+    }
+    pub fn has_motion_frame(&self,layout:&Layout,openness:f32)->bool{
+        openness>0.003&&openness<1.0&&self.glass==layout.glass&&!self.motion_pixels.is_empty()
+    }
+    unsafe fn present_motion(&mut self,hwnd:HWND,layout:&Layout,openness:f32,rail_face:usize,rail_opacity:f32)->bool{
+        let (w,h)=self.layer.size;
+        let data=self.layer.pixels();
+        collapse_pixels(data,&self.motion_pixels,w,h,layout.glass,layout.side,openness);
+        let rail=((0.24-openness)/0.24).clamp(0.0,1.0);
+        if rail>0.0{paint_rail(data,w,h,layout,rail_face,rail_opacity*rail*rail);}
+        self.layer.present(hwnd)
     }
     pub unsafe fn rail(&mut self,hwnd:HWND,layout:&Layout,rail_face:usize,rail_opacity:f32)->bool{
         let (w,h)=self.layer.size;
@@ -169,6 +180,9 @@ impl Surface {
     }
     pub unsafe fn paint(&mut self,hwnd:HWND,layout:&Layout,items:&[super::Item],atlas:&Atlas,start_icon:super::StartIcon,active:Option<usize>,minimized:u16,attention:u16,
         hover:Option<usize>,drop_target:Option<usize>,openness:f32,feedback:Option<(usize,FeedbackKind,f32)>,metrics:Option<MetricOptions>,rail_face:usize,rail_opacity:f32)->bool{
+        if self.has_motion_frame(layout,openness){
+            return self.present_motion(hwnd,layout,openness,rail_face,rail_opacity);
+        }
         let (w,h)=self.layer.size;
         let scale=layout.scale;
         if self.glass!=layout.glass||self.static_pixels.is_empty() {
@@ -310,9 +324,7 @@ impl Surface {
         if openness<1.0 {
             self.motion_pixels.resize(data.len(),0);
             self.motion_pixels.copy_from_slice(data);
-            collapse_pixels(data,&self.motion_pixels,w,h,layout.glass,layout.side,openness);
-            let rail=((0.24-openness)/0.24).clamp(0.0,1.0);
-            if rail>0.0{paint_rail(data,w,h,layout,rail_face,rail_opacity*rail*rail);}
+            return self.present_motion(hwnd,layout,openness,rail_face,rail_opacity);
         }else if !self.motion_pixels.is_empty(){
             self.motion_pixels=Vec::new();
         }
@@ -338,22 +350,29 @@ fn collapse_pixels(dst:&mut[u8],src:&[u8],w:i32,h:i32,glass:Rect,side:super::Doc
     let x1=(cx+(w as f32-cx)*sx).ceil().min(w as f32) as i32;
     let y0=(cy-cy*sy).floor().max(0.0) as i32;
     let y1=(cy+(h as f32-cy)*sy).ceil().min(h as f32) as i32;
-    let sample=|x:i32,y:i32,c:usize|{
-        if x<0||y<0||x>=w||y>=h{0.0}else{f32::from(src[((y*w+x)*4) as usize+c])}
+    let opacity=(opacity*256.0).round() as u32;
+    let sample_axis=|output:i32,center:f32,scale:f32|{
+        let p=center+(output as f32+0.5-center)/scale-0.5;
+        let first=p.floor() as i32;
+        (first,((p-first as f32)*256.0).round() as u32)
     };
+    let columns=(x0..x1).map(|x|sample_axis(x,cx,sx)).collect::<Vec<_>>();
+    let stride=w as usize*4;
+    let row=|y:i32|if 0<=y&&y<h{&src[y as usize*stride..(y as usize+1)*stride]}else{&[]};
+    let pixel=|line:&[u8],x:i32|if x>=0&&x<w{
+        let at=x as usize*4;
+        line.get(at..at+4).map_or([0;4],|p|[p[0],p[1],p[2],p[3]])
+    }else{[0;4]};
     for y in y0..y1{
-        let py=cy+(y as f32+0.5-cy)/sy-0.5;
-        let iy=py.floor() as i32;
-        let fy=py-iy as f32;
-        for x in x0..x1{
-            let px=cx+(x as f32+0.5-cx)/sx-0.5;
-            let ix=px.floor() as i32;
-            let fx=px-ix as f32;
-            let at=((y*w+x)*4) as usize;
+        let (iy,fy)=sample_axis(y,cy,sy);
+        let (top,bottom)=(row(iy),row(iy+1));
+        let at=(y*w+x0) as usize*4;
+        for (out,&(ix,fx)) in dst[at..at+columns.len()*4].chunks_exact_mut(4).zip(&columns){
+            let (a,b,low_left,d)=(pixel(top,ix),pixel(top,ix+1),pixel(bottom,ix),pixel(bottom,ix+1));
             for c in 0..4{
-                let a=sample(ix,iy,c)*(1.0-fx)+sample(ix+1,iy,c)*fx;
-                let b=sample(ix,iy+1,c)*(1.0-fx)+sample(ix+1,iy+1,c)*fx;
-                dst[at+c]=((a*(1.0-fy)+b*fy)*opacity).round() as u8;
+                let hi=u32::from(a[c])*(256-fx)+u32::from(b[c])*fx;
+                let lo=u32::from(low_left[c])*(256-fx)+u32::from(d[c])*fx;
+                out[c]=(((hi*(256-fy)+lo*fy)*opacity+(1<<23))>>24) as u8;
             }
         }
     }

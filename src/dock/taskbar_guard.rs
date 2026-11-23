@@ -182,6 +182,9 @@ unsafe fn visual_snapshot(raw:&[Snapshot],auto_hide:bool)->Vec<Snapshot>{
 }
 pub(super) unsafe fn current()->super::taskbar_state::Observation{
     let Some(rows)=snapshot()else{return Default::default();};
+    if !rows.iter().any(|row|row.visible){
+        return super::taskbar_state::Observation{known:true,total:rows.len(),visible:0,parked:0};
+    }
     let visible=visual_snapshot(&rows,appbar_state()&ABS_AUTOHIDE!=0).iter().filter(|row|row.visible).count();
     super::taskbar_state::Observation{known:true,total:rows.len(),visible,
         parked:rows.iter().filter(|row|row.visible).count().saturating_sub(visible)}
@@ -371,10 +374,11 @@ impl InventoryGap{
 
 unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle,expected:&[Snapshot],proof:Option<&std::path::Path>,started:Instant)->Exit{
     let Some(starting)=snapshot()else{return Exit::ExplorerChanged;};
-    if starting!=expected{return Exit::ExplorerChanged;}
+    // Visibility may change between the parent's snapshot and this child,
+    // especially when the previous session just restored Explorer.
+    if health(expected,Some(&starting))==Some(Exit::ExplorerChanged){return Exit::ExplorerChanged;}
     trace(proof,"before-hide",started,Some(&starting));
-    let hidden=starting.iter().filter(|item|item.visible).map(|item|item.id).collect::<Vec<_>>();
-    if hidden.is_empty()||parent.fired()||stop.fired(){return Exit::Requested;}
+    if parent.fired()||stop.fired(){return Exit::Requested;}
     let mut msg:MSG=mem::zeroed();
     PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_NOREMOVE);
     if RegisterHotKey(ptr::null_mut(),HOTKEY,MOD_CONTROL|MOD_ALT|MOD_SHIFT|MOD_NOREPEAT,VK_F12 as u32)==0{return Exit::HotkeyUnavailable;}
@@ -384,24 +388,32 @@ unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle
     }
     let mut rollback=Restore(Vec::new());
     if SetEvent(armed.0)==0{return Exit::LinkLost;}
-    for &id in &hidden{
+    for pass in 0..60{
         if parent.fired()||stop.fired(){return Exit::Requested;}
-        if !id.matches(){return Exit::ExplorerChanged;}
-        if !request_hide(id.hwnd()){return Exit::HideRejected;}
-        rollback.0.push(id);
-    }
-    for _ in 0..60{
-        if parent.fired()||stop.fired(){return Exit::Requested;}
-        match health(expected,snapshot().as_deref()){
+        let rows=if pass==0{Some(starting.clone())}else{snapshot()};
+        match health(expected,rows.as_deref()){
             None=>break,
-            Some(Exit::ShellRevealed)=>thread::sleep(Duration::from_millis(24)),
+            Some(Exit::ShellRevealed)=>{
+                // Claim only visible, revalidated bars from the original
+                // inventory. A bar that was hidden on startup can reappear.
+                if matches!(pass,0|6|14|30){
+                    for row in rows.as_deref().unwrap_or_default().iter().filter(|r|r.visible){
+                        let id=row.id;
+                        if !id.matches(){return Exit::ExplorerChanged;}
+                        if parent.fired()||stop.fired(){return Exit::Requested;}
+                        if !rollback.0.contains(&id){rollback.0.push(id);}
+                        if !request_hide(id.hwnd()){return Exit::HideRejected;}
+                    }
+                }
+                thread::sleep(Duration::from_millis(24));
+            }
             Some(reason)=>return reason,
         }
     }
     if let Some(reason)=health(expected,snapshot().as_deref()){
         return if reason==Exit::ShellRevealed{Exit::HideFailed}else{reason};
     }
-    let events=BarEvents::new(hidden.clone());
+    let events=BarEvents::new(expected.iter().map(|r|r.id).collect());
     if proof.is_some(){
         let current=snapshot();
         trace(proof,"hidden-confirmed",started,current.as_deref());
@@ -448,10 +460,11 @@ unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle
                     Reveal::Hide=>{
                         if parent.fired(){return Some(Exit::DockLost);}
                         if stop.fired(){return Some(Exit::Requested);}
-                        if !hidden.contains(&row.id)||!row.id.matches(){
+                        if !row.id.matches(){
                             if row.visible{conflict=true;break;}
                             continue;
                         }
+                        if !rollback.0.contains(&row.id){rollback.0.push(row.id);}
                         trace(proof,&format!("rehide-request:{}",row.id.handle),started,Some(rows));
                         if !request_hide(row.id.hwnd()){
                             trace(proof,&format!("rehide-rejected:{}",row.id.handle),started,Some(rows));

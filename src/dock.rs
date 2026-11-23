@@ -161,6 +161,14 @@ impl Motion {
     fn tick(&mut self, now:std::time::Instant, speed:u32, reveal:&mut motion::Spring, shown:bool)->bool{
         let dt=self.at.replace(now).map_or(0.016,|t|now.duration_since(t).as_secs_f32().clamp(0.001,0.090));
         let speed=speed as f32/100.0;
+        let moving=reveal.advance(if shown{1.0}else{0.0},dt,25.0*speed,0.003);
+        // A reveal already transforms the entire Dock. Finish that motion
+        // before asking the layout to magnify individual icons again.
+        if moving{return true;}
+        if !shown{
+            self.zoom=motion::Spring::rest(0.0);self.focus=None;
+            return false;
+        }
         let goal=if self.target.is_some(){1.0}else{0.0};
         let mut unsettled=self.zoom.advance(goal,dt,23.0*speed,0.0025);
         if let Some(target)=self.target{
@@ -168,7 +176,6 @@ impl Motion {
             unsettled|=focus.advance(target,dt,20.0+15.0*speed,0.12);
         }
         if self.target.is_none() && self.zoom.value==0.0 { self.focus=None; }
-        unsettled|=reveal.advance(if shown{1.0}else{0.0},dt,22.0*speed,0.003);
         unsettled
     }
 }
@@ -652,7 +659,7 @@ fn available_items(all:&[AppWindow],screen:RECT,prefs:&Preferences)->Vec<Item>{
     result
 }
 fn dock_depth(screen:&Screen,style:&Appearance,cluster:geometry::Cluster)->i32 {
-    let scale=(screen.dpi as f32/96.0).clamp(0.75,3.0);
+    let scale=style.pixel_scale(screen.dpi);
     let zoom=if style.reduced_motion{0.0}else{style.magnification as f32/100.0};
     (8.0*scale+((style.icon_size as f32*(1.0+zoom)+18.0).max(cluster.cross())*scale+12.0*scale).ceil()).ceil() as i32
 }
@@ -663,11 +670,10 @@ fn stage_width(screen:&Screen,style:StageStyle)->i32{
 }
 fn dock_status_widgets(profile:Option<&UtilityProfile>)->Vec<UtilityWidget>{
     use UtilityWidget::{Network,Sound,Metrics};
-    if profile.is_some_and(|p|!p.enabled){return Vec::new();}
-    let mut cells=[Network,Sound].into_iter().filter(|w|profile.is_none_or(|p|!p.hidden.contains(w))).collect::<Vec<_>>();
-    if profile.is_some_and(|p|p.metrics.enabled&&p.metrics.inline&&p.metrics.mask!=0&&!p.hidden.contains(&Metrics)){
-        cells.push(Metrics);
-    }
+    let mut cells=Vec::with_capacity(3);
+    if profile.is_none_or(|p|p.network_on_dock){cells.push(Network);}
+    if profile.is_none_or(|p|p.sound_on_dock){cells.push(Sound);}
+    if profile.is_some_and(|p|p.dock_metrics()){cells.push(Metrics);}
     cells
 }
 fn stage_legacy_layout()->bool{crate::trial::benchmark_active()||crate::trial::demo_active()}
@@ -873,7 +879,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             }
         }
         let fullscreen=state.suspended || screen.is_some_and(|s|fullscreen_outputs.contains(&s.id));
-        if b.collapsed&&!fullscreen&&(topology||changed||b.hidden||b.rail_face==0){
+        if b.collapsed&&!fullscreen&&b.reveal.value<=0.24&&(topology||changed||b.hidden||b.rail_face==0){
             if let Some(layout)=&b.layout{
                 let face=stage_rail::sample(surface::rail_bounds(layout),layout.side,false,b.rail_face);
                 changed|=face!=b.rail_face;
@@ -939,6 +945,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             stage_surface::Layout::new(bounds.right-bounds.left,bounds.bottom-bounds.top,screen.dpi,stage_gap(screen,style),
                 style.group_limit as usize,items.len(),style.right==Some(true))
         };
+        layout.align_to_work_area=depth.is_some()&&automatic;
         let rows=layout.rows;
         let keys=stage.order.clone();
         stage.session_heights.retain(|key,_|keys.contains(key));
@@ -1294,10 +1301,10 @@ unsafe fn paint(hwnd:HWND){
             canvas.set_material(material);
             // Clone Arc handles only; do not hold the atlas borrow across
             // UpdateLayeredWindow, which may dispatch nested Win32 messages.
-            let atlas=ATLAS.with(|a|{
+            let atlas=if canvas.has_motion_frame(&layout,openness)||openness<=0.003{surface::Atlas::default()}else{ATLAS.with(|a|{
                 let mut a=a.borrow_mut();
                 a.as_mut().map(|atlas|atlas.request(&items)).unwrap_or_default()
-            });
+            })};
             let applied=if openness<=0.003 {canvas.rail(hwnd,&layout,rail_face,rail_opacity)} else {canvas.paint(hwnd,&layout,&items,&atlas,start_icon,active,minimized,attention,keyboard.or_else(||usize::try_from(hovered).ok()),drop_target,openness,feedback,metrics,rail_face,rail_opacity)};
             if applied{
                 if let Some((tick,paint))=paint{perf::submitted(key,tick,paint);}
@@ -2162,6 +2169,14 @@ unsafe fn set_taskbar_hidden(hidden:bool){
     }
     begin_taskbar_hide(taskbar_guard::current());
 }
+unsafe fn start_saved_taskbar_mode(){
+    // The previous owner has exited, but Explorer may still be settling an
+    // initially hidden secondary bar. Use the same bounded recovery on boot.
+    let actual=taskbar_guard::current();
+    if schedule_taskbar_retry(){
+        publish_taskbar(true,TaskbarMode::HidePending,actual,"StartupWait","Đang đợi Explorer ổn định để bật chế độ Dock…");
+    }else{begin_taskbar_hide(actual);}
+}
 unsafe fn begin_taskbar_hide(current:taskbar_state::Observation){
     let fail=|code,msg|publish_taskbar(true,TaskbarMode::Error,current,code,msg);
     if shell_access::native_busy(){
@@ -2234,7 +2249,7 @@ unsafe fn poll_taskbar(hwnd:HWND){
         Some(Err(reason))=>show_taskbar(reason,reason.message()),
         None=>{
             let ready=taskbar_retry_pending()&&stopped&&actual.known&&actual.total>0
-                &&actual.visible+actual.parked==actual.total&&eligible_for_taskbar()&&!shell_access::native_busy();
+                &&actual.visible+actual.parked>0&&eligible_for_taskbar()&&!shell_access::native_busy();
             match TASKBAR_RETRY.with(|r|r.borrow_mut().check(Instant::now(),ready)){
                 Retry::Idle=>{KillTimer(hwnd,TASKBAR_GUARD_TIMER);}
                 Retry::Wait=>{}
@@ -2244,7 +2259,8 @@ unsafe fn poll_taskbar(hwnd:HWND){
                 }
                 Retry::Expired=>{
                     let status=TASKBAR_STATUS.with(|s|s.borrow().clone());
-                    publish_taskbar(status.desired,status.effective,actual,status.reason,"Chưa thể bật lại Dock an toàn. Có thể thử lại từ Cài đặt.");
+                    let mode=if status.effective.pending(){TaskbarMode::Error}else{status.effective};
+                    publish_taskbar(status.desired,mode,actual,status.reason,"Chưa thể bật lại Dock an toàn. Có thể thử lại từ Cài đặt.");
                     KillTimer(hwnd,TASKBAR_GUARD_TIMER);
                 }
             }
@@ -3058,6 +3074,11 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                     b.hovered=b.pointer.and_then(|(x,y)|layout.hot(x,y)).map_or(-1,|i|i as i32);
                     b.layout=Some(layout);
                 }
+                if b.collapsed&&b.rail_face==0&&b.reveal.value<=0.24{
+                    if let Some(layout)=&b.layout{
+                        b.rail_face=stage_rail::sample(surface::rail_bounds(layout),layout.side,false,0);
+                    }
+                }
                 if b.feedback.as_ref().is_some_and(|f|now.duration_since(f.start).as_millis()>=420){b.feedback=None;}
                 again|=b.feedback.is_some();
                 if !again{b.motion.at=None;b.motion.scheduled=false;}
@@ -3484,7 +3505,7 @@ unsafe fn drain_commands() {
                 if repaint||icons_changed{for b in &state.bars{InvalidateRect(b.hwnd,ptr::null(),0);}}
                 if icons_changed{for stage in &state.stages{InvalidateRect(stage.hwnd,ptr::null(),0);}}
             });sync_win_key();
-                if enable_default&&!cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active(){set_taskbar_hidden(true);}
+                if enable_default&&!cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active(){start_saved_taskbar_mode();}
             },
             Command::Suspend(on)=>{
                 if on&&(taskbar_active()||taskbar_retry_pending()){
@@ -3604,7 +3625,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         if ready.send(Ok(control as usize)).is_err(){PostQuitMessage(0);}
         else if !cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active()
             && STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.taskbar_default}) {
-            set_taskbar_hidden(true);
+            start_saved_taskbar_mode();
         }
         let mut msg:MSG=mem::zeroed();
         while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0{

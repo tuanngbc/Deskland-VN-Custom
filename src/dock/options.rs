@@ -290,12 +290,10 @@ impl Options {
     }
     pub(super) fn utility_cluster(&self,id:&str)->super::geometry::Cluster{
         let p=self.utility_profiles.get(id);
-        super::geometry::Cluster{side:self.utility_position(id),cell:p.map_or(28,|p|p.cell),
-            gap:p.map_or(4,|p|p.gap),
-            inline_metrics:p.is_some_and(|p|p.metrics.enabled&&p.metrics.inline&&p.metrics.mask!=0&&!p.hidden.contains(&super::UtilityWidget::Metrics))}
-    }
-    pub fn utility_position(&self,id:&str)->Option<bool>{
-        match self.utility_profiles.get(id){Some(p) if !p.enabled||p.hidden.len()==super::utilities::Widget::ALL.len()=>None,Some(p)=>Some(p.leading),None=>Some(false)}
+        let signals=p.map_or(2,|p|p.dock_signals());
+        let inline_metrics=p.is_some_and(|p|p.dock_metrics());
+        super::geometry::Cluster{side:(signals>0||inline_metrics).then(||p.is_some_and(|p|p.leading)),
+            cell:p.map_or(28,|p|p.cell),gap:p.map_or(4,|p|p.gap),inline_metrics,signals}
     }
     pub fn stable_stage_key(key:&str)->bool{persistent_group(key)}
     pub fn stage_style(&self, id: &str) -> StageStyle {

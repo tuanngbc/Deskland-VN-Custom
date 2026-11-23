@@ -96,10 +96,48 @@ struct Panel {
     layered:bool,dirty:bool,
     hwnd:HWND,owner:HWND,tag:usize,anchor:chrome::Anchor,dpi:u32,layer:Layer,ink:Option<Layer>,
     fonts:[HFONT;4], view:View, metrics:Option<Metrics>, index:Option<usize>, pressed:Option<usize>, page:usize,
-    cols:usize,per_page:usize, row_height:i32,list:bool,entrance:Option<(std::time::Instant,POINT)>,
+    cols:usize,per_page:usize, row_height:i32,list:bool,entrance:Option<(std::time::Instant,POINT)>,shadow:Option<HubShadow>,
 }
 impl Drop for Panel {
     fn drop(&mut self){unsafe{for &f in &self.fonts{if !f.is_null(){DeleteObject(f);}}}}
+}
+
+struct HubShadow(HWND);
+impl Drop for HubShadow{
+    fn drop(&mut self){unsafe{DestroyWindow(self.0);}}
+}
+impl HubShadow{
+    unsafe fn show(hwnd:HWND,owner:HWND,x:i32,y:i32,width:i32,height:i32,dpi:u32,anchor:chrome::Anchor,gap:i32)->Option<Self>{
+        use super::{geometry::Rect,surface::{draw,distance}};
+        let pad=chrome::scale(dpi,15).max(1);
+        let Some(work)=anchor.work()else{return None;};
+        // Use the full monitor horizontally just like the hub. Keep shadow
+        // ink on the panel's side of the anchor so it cannot dim the Dock.
+        let work=anchor.hub_work((gap/4).max(1)).unwrap_or(work);
+        let left=(x-pad).max(work.left);
+        let top=(y-pad).max(work.top);
+        let right=(x+width+pad).min(work.right);
+        let bottom=(y+height+pad).min(work.bottom);
+        let w=right-left;let h=bottom-top;
+        let mut layer=Layer::new(w,h)?;
+        let down=chrome::scale(dpi,4) as f32;
+        let card=Rect{x:(x-left) as f32,y:(y-top) as f32+down,w:width as f32,h:height as f32};
+        let radius=chrome::scale(dpi,16) as f32;
+        let canvas=Rect{x:0.0,y:0.0,w:w as f32,h:h as f32};
+        let data=layer.pixels();data.fill(0);
+        draw(data,w,h,canvas,|x,y|{
+            let depth=(1.0-distance(card,radius,x,y).max(0.0)/(pad as f32-down)).clamp(0.0,1.0);
+            Some(([16,13,10],if anchor.dark{150.0}else{124.0}*depth*depth))
+        });
+        let shadow=CreateWindowExW(WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW|WS_EX_TOPMOST,
+            wide("STATIC").as_ptr(),wide("").as_ptr(),WS_POPUP,left,top,w,h,owner,ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
+        if shadow.is_null(){return None;}
+        let handle=Self(shadow);
+        chrome::disable_system_border(shadow);
+        if !layer.present_at(shadow,Some(POINT{x:left,y:top}),255)||
+            SetWindowPos(shadow,hwnd,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW)==0{return None;}
+        Some(handle)
+    }
 }
 thread_local!{
     static PANE:RefCell<Option<Panel>>=const{RefCell::new(None)};
@@ -368,7 +406,7 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bo
     let metrics=view.metrics.map(Metrics::new);
     let start=std::time::Instant::now();
     let animated=list&&!super::STATE.with(|s|s.borrow().prefs.appearance.reduced_motion);
-    let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,fonts,view,metrics,index:None,pressed:None,page:0,cols,per_page,row_height,list,entrance:None};
+    let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,fonts,view,metrics,index:None,pressed:None,page:0,cols,per_page,row_height,list,entrance:None,shadow:None};
     // A hidden HWND can't be relied on to dispatch WM_PAINT. Submit the
     // completed bitmap directly, then show the window with content.
     p.paint();
@@ -384,6 +422,10 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bo
     }
     PANE.with(|s|s.replace(Some(p)));
     ShowWindow(hwnd,SW_SHOW);UpdateWindow(hwnd);
+    if hub&&IsWindow(hwnd)!=0{
+        let shadow=HubShadow::show(hwnd,owner,x,y,width,height,dpi,anchor,px(8));
+        PANE.with(|s|if let Some(p)=s.borrow_mut().as_mut().filter(|p|p.hwnd==hwnd){p.shadow=shadow;});
+    }
     SetForegroundWindow(hwnd);SetFocus(hwnd);
     crate::log!("DOCK_PANEL first frame {} in {} ms",if list{"list"}else{"cards"},start.elapsed().as_millis());
     PANE.with(|s|{if let Some(m)=s.borrow().as_ref().and_then(|p|p.metrics.as_ref()){
@@ -539,8 +581,15 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 (p.hwnd,p.layer.pixels()[((h/2*w+w/2)*4+3) as usize])
             });
             assert!(IsWindowVisible(popup)!=0&&alpha>200);
-            close_for(owner);DestroyWindow(owner);
+            close_for(owner);
             assert_eq!(IsWindow(popup),0);
+            show_hub(owner,chrome::Anchor{point:POINT{x:220,y:550},side:super::super::DockSide::Bottom,dark:false,transparency:30},
+                View{title:"Control Center".into(),hint:String::new(),cards:vec![],metrics:None});
+            let shadow=PANE.with(|p|p.borrow().as_ref().unwrap().shadow.as_ref().expect("hub shadow").0);
+            assert_ne!(IsWindowVisible(shadow),0);
+            assert_ne!(GetWindowLongPtrW(shadow,GWL_EXSTYLE)&WS_EX_TRANSPARENT as isize,0);
+            close_for(owner);DestroyWindow(owner);
+            assert_eq!(IsWindow(shadow),0);
         }
     }
     #[test] fn inline_readings_keep_slots_stable_when_an_engine_has_no_sample(){

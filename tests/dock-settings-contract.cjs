@@ -93,17 +93,24 @@ test('appearance edits do not overwrite placement, scope, or pins',()=>{
   assert.equal(m.appearance.transparency,64);
   assert.equal(m.appearance.position,'left');
 });
-test('Start icon selection survives acknowledgement and preserves Dock size',()=>{
-  context.syncDockSettings({dock:{appearance:{iconSize:52,position:'left'}}});
+test('whole Dock scale and Start icon preserve the other appearance settings',()=>{
+  context.syncDockSettings({dock:{appearance:{size:110,iconSize:52,position:'left'}}});
   const icon=$('dockLook_startIcon');
   assert.equal(icon.value,'windows');
   icon.value='orb';icon.listeners.change();
   const updated=messages.pop();
   assert.equal(updated.appearance.startIcon,'orb');
   assert.equal(updated.appearance.iconSize,52);
+  assert.equal(updated.appearance.size,110);
   assert.equal(updated.appearance.position,'left');
   context.syncDockSettings({dock:{appearance:updated.appearance}});
   assert.equal(icon.value,'orb');
+  $('dockLook_size').value='125';
+  $('dockLook_size').listeners.change();
+  const scaled=messages.pop();
+  assert.equal(scaled.appearance.size,125);
+  assert.equal(scaled.appearance.iconSize,52);
+  assert.equal(scaled.appearance.startIcon,'orb');
 });
 test('stage layout changes one display and leaves saved disconnected layouts untouched',()=>{
   const main={id:'landscape',name:'Main',w:2560,h:1080,dpi:96,primary:true};
@@ -158,7 +165,8 @@ test('utility order, visibility and reset are isolated to the selected monitor',
   const d={id:'main',name:'Main',w:2560,h:1080,dpi:96,primary:true};
   context.syncDockSettings({dockDisplays:[d,{...d,id:'portrait',primary:false}],dock:{utilityProfiles:{main:{enabled:false}}}});
   $('utilityDisplay').listeners.change({target:{value:'portrait'}});
-  assert.equal($('utilityEnabled').checked,true);
+  assert.equal($('utilityNetworkOnDock').checked,true);
+  assert.equal($('utilitySoundOnDock').checked,true);
   context.moveUtility('bluetooth',0);
   const first=messages.pop();
   assert.equal(first.t,'utilityProfile');
@@ -169,7 +177,28 @@ test('utility order, visibility and reset are isolated to the selected monitor',
   $('utilityReset').listeners.click();
   assert.equal(messages.pop().profile.hidden.length,0);
   $('utilityDisplay').listeners.change({target:{value:'main'}});
-  assert.equal($('utilityEnabled').checked,false);
+  assert.equal($('utilityNetworkOnDock').checked,false);
+  assert.equal($('utilitySoundOnDock').checked,false);
+});
+test('Dock network, sound and metrics visibility are independent',()=>{
+  const d={id:'signals-test',name:'Main',w:2560,h:1080,dpi:96,primary:true};
+  context.syncDockSettings({dockDisplays:[d],dock:{utilityProfiles:{[d.id]:{enabled:false,
+    networkOnDock:false,soundOnDock:true,metrics:{enabled:true,mode:'inline',mask:31,interval:2,compact:true}}}}});
+  assert.equal($('utilityNetworkOnDock').checked,false);
+  assert.equal($('utilitySoundOnDock').checked,true);
+  assert.equal($('utilityMetricMode').checked,true);
+  $('utilitySoundOnDock').checked=false;
+  $('utilitySoundOnDock').listeners.change();
+  assert.equal(messages.pop().profile.metrics.mode,'inline');
+  $('utilityNetworkOnDock').checked=true;
+  $('utilityNetworkOnDock').listeners.change();
+  assert.equal(messages.pop().profile.soundOnDock,false);
+  $('utilityMetricMode').checked=false;
+  $('utilityMetricMode').listeners.change();
+  const profile=messages.pop().profile;
+  assert.equal(profile.metrics.mode,'popover');
+  assert.equal(profile.networkOnDock,true);
+  assert.equal(profile.soundOnDock,false);
 });
 test('taskbar selector preserves user intent while separately reporting the verified state',()=>{
   context.syncDockSettings({dock:{enabled:true},dockTaskbarHidden:false});

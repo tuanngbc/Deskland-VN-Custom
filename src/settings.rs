@@ -695,6 +695,10 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
                 item(title,appearance.theme==theme,Appearance{theme,..appearance.clone()});
             }
             AppendMenuW(look,MF_SEPARATOR,0,std::ptr::null());
+            for (size,title) in [(80,"Dock nhỏ · 80%"),(100,"Dock chuẩn · 100%"),(125,"Dock lớn · 125%")]{
+                item(title,appearance.size==size,Appearance{size,..appearance.clone()});
+            }
+            AppendMenuW(look,MF_SEPARATOR,0,std::ptr::null());
             for (icon_size,title) in [(34,"Biểu tượng nhỏ"),(44,"Biểu tượng chuẩn"),(56,"Biểu tượng lớn")]{
                 item(title,appearance.icon_size==icon_size,Appearance{icon_size,..appearance.clone()});
             }

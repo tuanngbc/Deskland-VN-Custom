@@ -42,6 +42,21 @@ pub(super) fn downsample_rows<'a>(sw:usize,sh:usize,dw:usize,dh:usize,row_at:imp
 
 #[derive(Clone,Copy)]
 pub(super) struct Card{pub rect:Box2,pub right:bool,pub depth:f32}
+
+// Area of a unit pixel cut by the tangent of the projected edge. Continuous
+// coverage avoids the visible alpha steps of a fixed subpixel sample grid.
+fn pixel_coverage(distance:f32,dx:f32,dy:f32)->f32{
+    let a=dx.abs().max(dy.abs());
+    let b=dx.abs().min(dy.abs());
+    if a<0.001{return (distance<=0.0) as u8 as f32;}
+    let t=(a+b)*0.5-distance;
+    if t<=0.0{0.0}
+    else if t>=a+b{1.0}
+    else if b<0.001{(t/a).clamp(0.0,1.0)}
+    else if t<b{t*t/(2.0*a*b)}
+    else if t>a{let tail=a+b-t;1.0-tail*tail/(2.0*a*b)}
+    else{(t-b*0.5)/a}
+}
 impl Card{
     /// Normalized pinhole projection. Translate the near corner to the
     /// start of the slot; keep the midpoint of the vertical edges fixed.
@@ -80,20 +95,18 @@ impl Card{
         let qy=(v*h-h/2.0).abs()-(h/2.0-radius);
         if qx>0.0&&qy>0.0{qx.hypot(qy)-radius}else{qx.max(qy)-radius}
     }
+    fn local_gradient(self,x:f32,y:f32)->(f32,f32){
+        let d=|x,y|{let (u,v)=self.uv(x,y);self.edge_distance(u,v)};
+        (d(x+0.5,y)-d(x-0.5,y),d(x,y+0.5)-d(x,y-0.5))
+    }
     fn coverage(self,x:f32,y:f32,distance:f32)->f32{
         // The inverse transform has a bounded local scale at the supported
-        // yaw. Only pixels near the silhouette need the sixteen sub-samples.
+        // yaw. Only pixels near the silhouette need the local filter.
         let band=0.85*(1.0+self.depth)*(1.0+self.depth*self.rect.h as f32/self.rect.w as f32);
         if distance<=-band{return 1.0;}
         if distance>=band{return 0.0;}
-        let mut amount=0.0;
-        for dy in [-0.375,-0.125,0.125,0.375]{
-            for dx in [-0.375,-0.125,0.125,0.375]{
-                let (u,v)=self.uv(x+dx,y+dy);
-                amount+=(0.5-self.edge_distance(u,v)*4.0/(1.0+self.depth)).clamp(0.0,1.0);
-            }
-        }
-        amount/16.0
+        let (dx,dy)=self.local_gradient(x,y);
+        pixel_coverage(distance,1.18*dx,1.18*dy)
     }
     pub(super) fn highlight(self,pixels:&mut[u8],w:i32,h:i32,ink:[u8;3],width:f32){
         use super::geometry::Rect;
@@ -104,20 +117,11 @@ impl Card{
             let (u,v)=self.uv(x,y);
             let d=self.edge_distance(u,v);
             if d>=band||d<=-width-band{return None;}
-            // Integrate both sides of the thin projected stroke at the same
-            // sample positions as the thumbnail silhouette, including its corners.
-            let mut amount=0.0;
-            let slope=4.0/(1.0+self.depth);
-            for dy in [-0.375,-0.125,0.125,0.375]{
-                for dx in [-0.375,-0.125,0.125,0.375]{
-                    let (u,v)=self.uv(x+dx,y+dy);
-                    let d=self.edge_distance(u,v);
-                    let outer=(0.5-d*slope).clamp(0.0,1.0);
-                    let inner=(0.5-(d+width)*slope).clamp(0.0,1.0);
-                    amount+=outer-inner;
-                }
-            }
-            Some((ink,amount*(185.0/16.0)))
+            // Use the very same area filter on both sides of the thin line.
+            let (dx,dy)=self.local_gradient(x,y);
+            let outer=pixel_coverage(d,1.18*dx,1.18*dy);
+            let inner=pixel_coverage(d+width,1.18*dx,1.18*dy);
+            Some((ink,(outer-inner).max(0.0)*168.0))
         });
     }
     pub(super) fn shadow(self,pixels:&mut[u8],w:i32,h:i32,layer:usize){
@@ -221,6 +225,13 @@ impl Card{
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn diagonal_coverage_changes_continuously_with_subpixel_motion(){
+        let samples=(0..16).map(|x|pixel_coverage((x as f32-7.5)/24.0,0.7,1.0)).collect::<Vec<_>>();
+        assert!(samples.windows(2).all(|w|w[0]>w[1]&&w[0]-w[1]<0.06));
+        assert!((samples[0]+samples[15]-1.0).abs()<0.0001);
+        assert_eq!(pixel_coverage(0.0,1.0,0.0),0.5);
+    }
     #[test]
     fn fractional_box_preserves_thin_strokes_and_respects_stride(){
         let row=[0u8,0,0,255,255,255,255,255,0,0,0,255,99,99,99,99];
