@@ -28,6 +28,7 @@ mod previews;
 mod workspaces;
 mod perf;
 mod stage_surface;
+mod stage_rail;
 mod stage_projection;
 mod stage_snapshot;
 mod stage_capture_lab;
@@ -941,10 +942,21 @@ unsafe fn refresh(state:&mut State, topology:bool) {
                 let dpi=screen.dpi.clamp(72,288) as i32;
                 let w=(5*dpi+48)/96;
                 let h=(64*dpi+48)/96;
-                let x=if style.right==Some(true){screen.work.right-w}else{screen.work.left};
+                let right=style.right==Some(true);
+                let x=if right{screen.work.right-w}else{screen.work.left};
                 let y=bounds.top;
                 let mut old:RECT=mem::zeroed();GetWindowRect(stage.rail,&mut old);
-                if IsWindowVisible(stage.rail)==0||!same_rect(old,RECT{left:x,top:y,right:x+w,bottom:y+h}){
+                let rail_bounds=RECT{left:x,top:y,right:x+w,bottom:y+h};
+                let moving=IsWindowVisible(stage.rail)==0||!same_rect(old,rail_bounds);
+                if moving||active_changed||topology{
+                    let previous=GetWindowLongPtrW(stage.rail,GWLP_USERDATA);
+                    let face=stage_rail::sample(rail_bounds,right,previous as usize) as isize;
+                    if face!=previous{
+                        SetWindowLongPtrW(stage.rail,GWLP_USERDATA,face);
+                        InvalidateRect(stage.rail,ptr::null(),0);
+                    }
+                }
+                if moving{
                     SetWindowPos(stage.rail,HWND_TOPMOST,x,y,w,h,SWP_NOACTIVATE|SWP_SHOWWINDOW);
                 }
             }
@@ -1039,7 +1051,9 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             .fold((0, 0), |(a, b), (c, d)| (a + c, b + d));
         crate::trial::benchmark_stage_links(fixture, other);
     }
-    let live_profiles=state.bars.iter().filter(|b|!b.hidden&&!b.collapsed&&b.layout.as_ref().is_some_and(|l|l.metrics.is_some()))
+    // A collapsed bar is still configured to show the inline tile. Keep its
+    // feed warm, while INLINE_UPDATE skips repainting collapsed bars.
+    let live_profiles=state.bars.iter().filter(|b|!b.hidden&&b.layout.as_ref().is_some_and(|l|l.metrics.is_some()))
         .filter_map(|b|state.screens.iter().find(|d|same_rect(d.bounds,b.bounds)))
         .filter_map(|d|state.prefs.utility_profiles.get(&d.id)).map(|p|p.metrics)
         .filter(|p|p.enabled&&p.inline&&p.mask!=0);
@@ -1437,12 +1451,6 @@ unsafe fn show_utilities(){
     let Some(profile)=utility_profile(hwnd).filter(|p|p.enabled||dock_mode) else{return;};
     if control_center::ticket(hwnd)==Some(ticket){utilities::show_view(hwnd,point,&snapshot,&profile,Some(widget),dock_mode);}
 }
-fn queue_inline_refresh_if_needed(hwnd:HWND){
-    let exists=STATE.with(|s|s.borrow().bars.iter().any(|b|b.hwnd==hwnd&&b.layout.as_ref().is_some_and(|l|l.metrics.is_some())));
-    // The timer tick only changes the sampling demand on a reveal.
-    if exists{unsafe{SetTimer(CONTROL.with(Cell::get),INLINE_WAKE,35,None);}}
-}
-const INLINE_WAKE:usize=11;
 fn refresh_dock_clock(){
     use windows_sys::Win32::System::SystemInformation::GetLocalTime;
     thread_local!{static CLOCK:Cell<Option<(u16,u16,u16,u16,u16)>>=const{Cell::new(None)};}
@@ -2842,7 +2850,6 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_TIMER if hwnd==CONTROL.get()&&w==STAGE_CAPTURE_TIMER=>{KillTimer(hwnd,STAGE_CAPTURE_TIMER);queue_refresh();0},
-        WM_TIMER if w==INLINE_WAKE=>{KillTimer(hwnd,INLINE_WAKE);update_state(|s|refresh(s,false));0},
         WM_TIMER if w==control_center::INLINE_TIMER=>{control_center::inline_tick(hwnd);0},
         control_center::INLINE_UPDATE=>{
             if control_center::inline_receive(w){
@@ -2893,11 +2900,11 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 if changed{InvalidateRect(hwnd,ptr::null(),0);}
                 return 0;
             }
-            let (changed,animate,track,reveal)=STATE.with(|s|{
+            let (changed,animate,track)=STATE.with(|s|{
                 let mut state=s.borrow_mut();
                 let reduced=state.prefs.appearance.reduced_motion;
                 let magnify=!reduced&&state.prefs.appearance.magnification!=0;
-                let Some(b)=state.bars.iter_mut().find(|b|b.hwnd==hwnd) else{return (false,false,false,false)};
+                let Some(b)=state.bars.iter_mut().find(|b|b.hwnd==hwnd) else{return (false,false,false)};
                 let prev=b.hovered;
                 let prev_drop=b.drop_target();
                 // Capture on a non-activating window can miss an off-window
@@ -2915,10 +2922,10 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                     let changed=desired!=b.motion.target;
                     b.motion.target=desired;
                     let start=start_reveal||(changed&&b.schedule());
-                    (reveal||prev!=b.hovered||prev_drop!=b.drop_target(),start,true,reveal)
+                    (reveal||prev!=b.hovered||prev_drop!=b.drop_target(),start,true)
                 }else{
                     b.hovered=if x>=12&&(x-12)/ITEM_WIDTH<b.items.len() as i32{(x-12)/ITEM_WIDTH}else{-1};
-                    (prev!=b.hovered,false,true,reveal)
+                    (prev!=b.hovered,false,true)
                 }
             });
             if track{
@@ -2942,7 +2949,6 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 }
             }
             if animate{SetTimer(hwnd,MOTION_TIMER,16,None);}
-            if reveal{queue_inline_refresh_if_needed(hwnd);}
             if changed{InvalidateRect(hwnd,ptr::null(),0);}
             0
         }
@@ -3191,7 +3197,12 @@ unsafe extern "system" fn stage_rail_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->
             let mut paint:PAINTSTRUCT=mem::zeroed();
             let dc=BeginPaint(hwnd,&mut paint);
             let mut area:RECT=mem::zeroed();GetClientRect(hwnd,&mut area);
-            fill(dc,area,0x00917d68);
+            let (rim,face)=stage_rail::colors(GetWindowLongPtrW(hwnd,GWLP_USERDATA) as usize);
+            fill(dc,area,rim);
+            if area.right-area.left>2&&area.bottom-area.top>2{
+                area.left+=1;area.right-=1;area.top+=1;area.bottom-=1;
+                fill(dc,area,face);
+            }
             EndPaint(hwnd,&paint);0
         }
         WM_MOUSEMOVE=>{
@@ -3297,12 +3308,10 @@ unsafe fn focus_dock(){
         let idx=state.bars.iter().position(|bar|!bar.hidden&&pos.x>=bar.bounds.left&&pos.x<bar.bounds.right&&pos.y>=bar.bounds.top&&pos.y<bar.bounds.bottom)
             .or_else(||state.bars.iter().position(|b|!b.hidden))?;
         let bar=&mut state.bars[idx];
-        let reveal=bar.collapsed;
         bar.collapse(false,true);bar.keyboard=Some(bar.layout.as_ref().map_or(0,|l|l.key_order()[0]));bar.previous_focus=foreground as isize;
-        Some((bar.hwnd,reveal))
+        Some(bar.hwnd)
     });
-    if let Some((hwnd,reveal))=target{
-        if reveal{queue_inline_refresh_if_needed(hwnd);}
+    if let Some(hwnd)=target{
         KillTimer(hwnd,HIDE_TIMER);
         SetForegroundWindow(hwnd);
         SetFocus(hwnd);

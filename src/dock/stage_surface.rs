@@ -609,9 +609,9 @@ mod tests {
 
     #[test]
     fn six_cards_fit_with_automatic_and_custom_heights_at_mixed_dpi(){
-        for dpi in [96,144,192]{for right in [true,false]{
+        for dpi in [96,144,192]{for right in [true,false]{for (height,gap) in [(505,6),(650,19)]{
             let px=|n|super::super::panel_chrome::scale(dpi,n);
-            let layout=Layout::landscape(px(266),px(505),dpi,px(6),6,9,right,true);
+            let layout=Layout::landscape(px(266),px(height),dpi,px(gap),6,9,right,true);
             let pages=layout.page_ranges(9);
             assert_eq!(pages,vec![0..6,6..9]);
             for explicit in [false,true]{
@@ -632,7 +632,7 @@ mod tests {
             let short=Layout::landscape(px(266),px(300),dpi,px(6),6,9,right,true);
             assert!(short.rows<6);
             assert_eq!(short.page_ranges(9).into_iter().flatten().count(),9);
-        }}
+        }}}
     }
 
     #[test]
