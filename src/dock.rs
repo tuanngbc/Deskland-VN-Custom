@@ -1594,12 +1594,16 @@ unsafe fn app_click(owner:HWND,key:ClickKey,target:HWND,double:bool)->Option<App
 unsafe fn minimize_click(window:WindowIdentity)->bool{
     let hwnd=window.hwnd as HWND;
     window.matches_stage()&&IsIconic(hwnd)==0&&(internal_app::owns(hwnd)||GetWindowLongPtrW(hwnd,GWL_STYLE)&WS_MINIMIZEBOX as isize!=0)
-        &&ShowWindowAsync(hwnd,SW_MINIMIZE)!=0
+        &&ShowWindowAsync(hwnd,if taskbar_hidden(){SW_SHOWMINNOACTIVE}else{SW_MINIMIZE})!=0
 }
 unsafe fn finish_double_click(click:AppClick)->Option<FeedbackKind>{
     let window=click.window?;
     let hwnd=window.hwnd as HWND;
     if !window.matches_stage(){return None;}
+    if crate::trial::active()&&taskbar_hidden(){
+        let surface=match click.key{ClickKey::Dock(_)=>"Dock",ClickKey::Stage(_)=>"Stage"};
+        crate::log!("DOCK_TASKBAR_APP gesture=double-click surface={} hwnd={} was_open={}",surface,window.hwnd,click.was_open);
+    }
     if click.was_open{minimize_click(window).then_some(FeedbackKind::Minimize)}
     else if IsIconic(hwnd)!=0{focus_stage_window(hwnd);Some(FeedbackKind::Restore)}
     else{None}
@@ -2038,7 +2042,7 @@ unsafe fn poll_taskbar(hwnd:HWND){
             // grace period); the UI still reports the observation immediately.
             let mode=TaskbarMode::confirmed(actual);
             let detail=if !actual.known{"Chưa đọc được trạng thái thanh Windows; bộ khôi phục vẫn đang giám sát."}
-                else if actual.visible>0{"Thanh Windows đang hiện; Dock tiếp tục hoạt động trong lúc bộ giám sát chờ thanh tự ẩn."}
+                else if actual.visible>0{"Thanh Windows vừa xuất hiện; Deskland đang xử lý để ẩn lại."}
                 else if actual.parked>0{"Windows đã đẩy thanh tác vụ ra mép tự ẩn; Dock vẫn quản lý phiên này."}
                 else{"Chế độ Dock đang bật cho phiên này. Ctrl+Alt+Shift+F12 để hiện thanh Windows."};
             publish_taskbar(true,mode,actual,"HideConfirmed",detail);

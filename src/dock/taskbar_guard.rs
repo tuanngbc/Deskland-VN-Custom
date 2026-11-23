@@ -1,6 +1,6 @@
 use crate::desktop::wide;
 use std::{
-    env, mem, ptr, thread,
+    cell::{Cell,RefCell}, env, mem, ptr, thread,
     io::{self,Write},
     path::PathBuf,
     os::windows::process::CommandExt,
@@ -11,7 +11,7 @@ use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::{GetMonitorInfoW,MonitorFromWindow,MONITORINFO,MONITOR_DEFAULTTONEAREST},
     System::Threading::{CreateEventW,OpenEventW,OpenProcess,QueryFullProcessImageNameW,SetEvent,WaitForSingleObject,PROCESS_QUERY_LIMITED_INFORMATION},
-    UI::{Input::KeyboardAndMouse::{RegisterHotKey,UnregisterHotKey,MOD_ALT,MOD_CONTROL,MOD_NOREPEAT,MOD_SHIFT,VK_F12},
+    UI::{Accessibility::{SetWinEventHook,UnhookWinEvent,HWINEVENTHOOK},Input::KeyboardAndMouse::{RegisterHotKey,UnregisterHotKey,MOD_ALT,MOD_CONTROL,MOD_NOREPEAT,MOD_SHIFT,VK_F12},
         Shell::{SHAppBarMessage,APPBARDATA,ABM_GETSTATE,ABS_AUTOHIDE},WindowsAndMessaging::*},
 };
 
@@ -90,34 +90,85 @@ fn parked_at_bottom(bar:RECT,display:RECT)->bool{
     span>=(display.right-display.left)/2&&span>0&&bar.bottom-bar.top>=16
         &&(display.bottom-3..=display.bottom+3).contains(&bar.top)&&bar.bottom>display.bottom
 }
-fn pointer_over_bar(point:POINT,bar:RECT,display:RECT)->bool{
-    // Use the actual on-screen strip, including the revealed area above
-    // the bottom edge. A half off-screen bar must not claim another output.
-    point.x>=bar.left.max(display.left)&&point.x<bar.right.min(display.right)
-        &&point.y>=bar.top.max(display.top)&&point.y<bar.bottom.min(display.bottom)
-}
-
-// This timer starts after the pointer leaves the revealed bar, not when
-// Explorer starts to show it. Re-entering the bar cancels the countdown.
-const AUTO_HIDE_SETTLE:Duration=Duration::from_secs(3);
+// One outstanding hide per original bar. If Explorer does not honor it or
+// keeps reopening it rapidly, release the lease rather than fight the shell.
+const HIDE_ACK:Duration=Duration::from_millis(650);
+const REOPEN_BURST:Duration=Duration::from_secs(1);
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-enum Reveal{Idle,Started,Waiting,Ended,Persistent}
+enum Reveal{Idle,Hide,Waiting,Parked,Settled,Conflict}
 #[derive(Clone,Copy,Default)]
-struct AutoHideReveal{active:bool,away_since:Option<Instant>}
-impl AutoHideReveal{
-    fn observe(&mut self,visible:bool,over_bar:bool,now:Instant)->Reveal{
-        if !visible{
-            let ended=std::mem::take(self).active;
-            return if ended{Reveal::Ended}else{Reveal::Idle};
+struct RevealRepair{pending:Option<Instant>,exposed_since:Option<Instant>,parked_attempted:bool,burst:Option<(Instant,u8)>}
+#[derive(Clone,Copy,PartialEq,Eq)]
+enum Visibility{Hidden,Parked,Exposed}
+impl RevealRepair{
+    fn observe(&mut self,visibility:Visibility,now:Instant)->Reveal{
+        if visibility!=Visibility::Exposed{self.exposed_since=None;}
+        if visibility==Visibility::Hidden{
+            self.parked_attempted=false;
+            return if self.pending.take().is_some(){Reveal::Settled}else{Reveal::Idle};
         }
-        let started=!std::mem::replace(&mut self.active,true);
-        if over_bar{self.away_since=None;}
-        else if now.saturating_duration_since(*self.away_since.get_or_insert(now))>=AUTO_HIDE_SETTLE{
-            return Reveal::Persistent;
+        if visibility==Visibility::Parked{
+            // Prefer hiding before the edge can trigger Explorer. If Explorer
+            // leaves its thin strip parked, do not fight it while off-screen.
+            self.parked_attempted|=self.pending.is_some();
+            if let Some(since)=self.pending{
+                if now.saturating_duration_since(since)<HIDE_ACK{return Reveal::Waiting;}
+                self.pending=None;
+                return Reveal::Parked;
+            }
+            if self.parked_attempted{return Reveal::Idle;}
+            self.parked_attempted=true;
+            return if self.can_hide(now){self.pending=Some(now);Reveal::Hide}else{Reveal::Parked};
         }
-        if started{Reveal::Started}else{Reveal::Waiting}
+        if self.pending.is_some(){
+            let shown=*self.exposed_since.get_or_insert(now);
+            return if now.saturating_duration_since(shown)>=HIDE_ACK{Reveal::Conflict}else{Reveal::Waiting};
+        }
+        self.exposed_since=Some(now);
+        if !self.can_hide(now){return Reveal::Conflict;}
+        self.pending=Some(now);
+        Reveal::Hide
+    }
+    fn can_hide(&mut self,now:Instant)->bool{
+        let (first,count)=self.burst.get_or_insert((now,0));
+        if now.saturating_duration_since(*first)>=REOPEN_BURST{(*first,*count)=(now,0);}
+        if *count>=3{return false;}
+        *count+=1;
+        true
     }
 }
+
+thread_local!{
+    static WATCHED_BARS:RefCell<Vec<WindowId>>=const{RefCell::new(Vec::new())};
+    static VISIBILITY_DIRTY:Cell<bool>=const{Cell::new(false)};
+}
+unsafe extern "system" fn bar_event(_:HWINEVENTHOOK,_event:u32,hwnd:HWND,object:i32,child:i32,_tid:u32,_time:u32){
+    if object==OBJID_WINDOW && child==0 && WATCHED_BARS.with(|bars|
+        bars.borrow().iter().any(|bar|bar.hwnd()==hwnd)){
+        VISIBILITY_DIRTY.set(true);
+    }
+}
+
+struct BarEvents(Vec<HWINEVENTHOOK>);
+impl BarEvents{
+    unsafe fn new(bars:Vec<WindowId>)->Self{
+        let pid=bars.first().map_or(0,|bar|bar.pid);
+        if pid==0{return Self(Vec::new());}
+        WATCHED_BARS.with(|targets|targets.replace(bars));
+        VISIBILITY_DIRTY.set(false);
+        Self([(EVENT_OBJECT_SHOW,EVENT_OBJECT_HIDE),(EVENT_OBJECT_LOCATIONCHANGE,EVENT_OBJECT_LOCATIONCHANGE)]
+            .into_iter().map(|(first,last)|SetWinEventHook(first,last,ptr::null_mut(),Some(bar_event),pid,0,WINEVENT_OUTOFCONTEXT))
+            .filter(|hook|!hook.is_null()).collect())
+    }
+}
+impl Drop for BarEvents{
+    fn drop(&mut self){
+        for hook in self.0.drain(..){unsafe{UnhookWinEvent(hook);}}
+        WATCHED_BARS.with(|targets|targets.borrow_mut().clear());
+        VISIBILITY_DIRTY.set(false);
+    }
+}
+
 unsafe fn visual_snapshot(raw:&[Snapshot],auto_hide:bool)->Vec<Snapshot>{
     raw.iter().map(|row|{
         let mut row=*row;
@@ -178,7 +229,14 @@ unsafe fn request_hide(hwnd:HWND)->bool{
         SWP_HIDEWINDOW|SWP_NOACTIVATE|SWP_NOZORDER|SWP_NOOWNERZORDER|SWP_NOMOVE|SWP_NOSIZE|SWP_ASYNCWINDOWPOS)!=0
 }
 unsafe fn restore(ids:&[WindowId]){
-    for &id in ids{if id.matches()&&IsWindowVisible(id.hwnd())==0{ShowWindowAsync(id.hwnd(),SW_SHOWNA);}}
+    // Queue the restore even if a previously queued hide has not run yet.
+    // Only windows this lease originally hid are passed here.
+    for &id in ids{
+        if id.matches(){
+            SetWindowPos(id.hwnd(),ptr::null_mut(),0,0,0,0,
+                SWP_SHOWWINDOW|SWP_NOACTIVATE|SWP_NOZORDER|SWP_NOOWNERZORDER|SWP_NOMOVE|SWP_NOSIZE|SWP_ASYNCWINDOWPOS);
+        }
+    }
 }
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
@@ -307,7 +365,6 @@ impl InventoryGap{
 unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle,expected:&[Snapshot],proof:Option<&std::path::Path>,started:Instant)->Exit{
     let Some(starting)=snapshot()else{return Exit::ExplorerChanged;};
     if starting!=expected{return Exit::ExplorerChanged;}
-    let auto_hide=appbar_state()&ABS_AUTOHIDE!=0;
     trace(proof,"before-hide",started,Some(&starting));
     let hidden=starting.iter().filter(|item|item.visible).map(|item|item.id).collect::<Vec<_>>();
     if hidden.is_empty()||parent.fired()||stop.fired(){return Exit::Requested;}
@@ -337,15 +394,18 @@ unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle
     if let Some(reason)=health(expected,snapshot().as_deref()){
         return if reason==Exit::ShellRevealed{Exit::HideFailed}else{reason};
     }
-    if proof.is_some(){let current=snapshot();trace(proof,"hidden-confirmed",started,current.as_deref());}
+    let events=BarEvents::new(hidden.clone());
+    if proof.is_some(){
+        let current=snapshot();
+        trace(proof,"hidden-confirmed",started,current.as_deref());
+        if events.0.len()!=2{trace(proof,"visibility-hook-incomplete",started,current.as_deref());}
+    }
     if SetEvent(ready.0)==0{return Exit::LinkLost;}
     let signals=[parent.0,stop.0,pulse.0];
-    // Each original bar has an independent reveal timer. A pointer over
-    // one output cannot keep a different, persistently visible bar alive.
-    let mut reveals=vec![AutoHideReveal::default();expected.len()];
+    let mut reveals=vec![RevealRepair::default();expected.len()];
     let mut inventory_gap=InventoryGap::default();
     let mut inventory_missing=false;
-    let interval=if proof.is_some(){250}else if auto_hide{750}else{1000};
+    let interval=if proof.is_some(){250}else{750};
     wait_for_restore(&signals,interval,Duration::from_secs(6),||{
         let mut current=snapshot();
         let now=Instant::now();
@@ -368,38 +428,40 @@ unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle
             inventory_gap.expired(true,now);
             if std::mem::take(&mut inventory_missing){trace(proof,"inventory-recovered",started,current.as_deref());}
         }
-        let raw_status=health(expected,current.as_deref());
-        let status=if raw_status==Some(Exit::ShellRevealed)&&auto_hide&&appbar_state()&ABS_AUTOHIDE!=0{
-            let mut pos:POINT=mem::zeroed();
-            let cursor=if GetCursorPos(&mut pos)!=0{Some(pos)}else{None};
-            let now=Instant::now();
-            let mut began=false;
-            let mut ended=false;
-            let mut persistent=false;
-            for (row,peek) in current.as_deref().unwrap_or_default().iter().zip(&mut reveals){
-                let (visible,over)=if row.visible{
-                    let pair=geometry(row.id);
-                    let on_screen=pair.0.zip(pair.1);
-                    (!on_screen.is_some_and(|(bar,display)|parked_at_bottom(bar,display)),
-                        cursor.zip(on_screen).is_some_and(|(point,(bar,display))|pointer_over_bar(point,bar,display)))
-                }else{(false,false)};
-                match peek.observe(visible,over,now){
-                    Reveal::Started=>began=true,
-                    Reveal::Ended=>ended=true,
-                    Reveal::Persistent=>persistent=true,
-                    Reveal::Waiting|Reveal::Idle=>{}
+        let rows=current.as_deref().unwrap_or_default();
+        let status=if health(expected,Some(rows))==Some(Exit::ExplorerChanged){
+            Some(Exit::ExplorerChanged)
+        }else{
+            let auto_hide=rows.iter().any(|row|row.visible)&&appbar_state()&ABS_AUTOHIDE!=0;
+            let visual=visual_snapshot(rows,auto_hide);
+            let mut conflict=false;
+            for ((raw,row),repair) in rows.iter().zip(&visual).zip(&mut reveals){
+                let visibility=if row.visible{Visibility::Exposed}else if raw.visible{Visibility::Parked}else{Visibility::Hidden};
+                match repair.observe(visibility,now){
+                    Reveal::Hide=>{
+                        if parent.fired(){return Some(Exit::DockLost);}
+                        if stop.fired(){return Some(Exit::Requested);}
+                        if !hidden.contains(&row.id)||!row.id.matches(){
+                            if row.visible{conflict=true;break;}
+                            continue;
+                        }
+                        trace(proof,&format!("rehide-request:{}",row.id.handle),started,Some(rows));
+                        if !request_hide(row.id.hwnd()){
+                            trace(proof,&format!("rehide-rejected:{}",row.id.handle),started,Some(rows));
+                            if row.visible{conflict=true;break;}
+                        }
+                    }
+                    Reveal::Settled=>trace(proof,&format!("rehide-confirmed:{}",row.id.handle),started,Some(rows)),
+                    Reveal::Parked=>trace(proof,&format!("rehide-parked:{}",row.id.handle),started,Some(rows)),
+                    Reveal::Conflict=>{
+                        trace(proof,&format!("rehide-conflict:{}",row.id.handle),started,Some(rows));
+                        conflict=true;
+                        break;
+                    }
+                    Reveal::Idle|Reveal::Waiting=>{}
                 }
             }
-            if began{trace(proof,"edge-reveal-observed",started,current.as_deref());}
-            if ended{trace(proof,"edge-reveal-ended",started,current.as_deref());}
-            persistent.then_some(Exit::ShellRevealed)
-        }else{
-            if raw_status.is_none(){
-                let mut ended=false;
-                for peek in &mut reveals{ended|=std::mem::take(peek).active;}
-                if ended{trace(proof,"edge-reveal-ended",started,current.as_deref());}
-            }
-            raw_status
+            conflict.then_some(Exit::ShellRevealed)
         };
         if let Some(reason)=status{trace(proof,&format!("before-restore:{reason:?}"),started,current.as_deref());}
         status
@@ -411,18 +473,25 @@ unsafe fn wait_for_restore(signals:&[HANDLE;3],interval:u32,lease:Duration,mut h
     let mut pulse=Instant::now();
     let mut observed=Instant::now();
     loop{
-        match MsgWaitForMultipleObjects(signals.len() as u32,signals.as_ptr(),0,interval,QS_HOTKEY){
+        match MsgWaitForMultipleObjectsEx(signals.len() as u32,signals.as_ptr(),interval,QS_ALLINPUT,MWMO_INPUTAVAILABLE){
             WAIT_OBJECT_0=>return Exit::DockLost,
             n if n==WAIT_OBJECT_0+1=>return Exit::Requested,
             n if n==WAIT_OBJECT_0+2=>pulse=Instant::now(),
             n if n==WAIT_OBJECT_0+3=>{
-                if PeekMessageW(&mut msg,ptr::null_mut(),WM_HOTKEY,WM_HOTKEY,PM_REMOVE)!=0&&msg.wParam==HOTKEY as usize{return Exit::Emergency;}
+                // Out-of-context WinEvents arrive on this message queue.
+                // Bound each batch so a busy Explorer cannot starve Stop.
+                for _ in 0..32{
+                    if PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)==0{break;}
+                    if msg.message==WM_HOTKEY&&msg.wParam==HOTKEY as usize{return Exit::Emergency;}
+                    if msg.message==WM_QUIT{return Exit::Requested;}
+                    DispatchMessageW(&msg);
+                }
             }
             WAIT_TIMEOUT=>{},
             _=>return Exit::LinkLost,
         }
         if pulse.elapsed()>=lease{return Exit::DockLost;}
-        if observed.elapsed()>=Duration::from_millis(interval as u64){
+        if VISIBILITY_DIRTY.replace(false)||observed.elapsed()>=Duration::from_millis(interval as u64){
             observed=Instant::now();
             if let Some(reason)=health(){return reason;}
         }
@@ -454,51 +523,44 @@ mod tests{
         assert!(!parked_at_bottom(bounds([-1080,1187,-1000,1235]),portrait));
     }
     #[test]
-    fn owner_recording_reveal_stays_in_dock_while_hovering_and_during_explorer_slide(){
-        let main=RECT{left:0,top:0,right:2560,bottom:1080};
-        let bar=RECT{left:0,top:1032,right:2560,bottom:1080};
-        let point=POINT{x:2473,y:1071};
-        // The old bottom-eight-pixel check returned false here.
-        assert!(pointer_over_bar(point,bar,main));
-        assert!(!pointer_over_bar(POINT{x:2473,y:1080},bar,main));
-        let t=Instant::now();
-        let mut reveal=AutoHideReveal::default();
-        assert_eq!(reveal.observe(true,true,t),Reveal::Started);
-        assert_eq!(reveal.observe(true,true,t+Duration::from_secs(15)),Reveal::Waiting);
-        let away=t+Duration::from_secs(16);
-        assert_eq!(reveal.observe(true,false,away),Reveal::Waiting);
-        assert_eq!(reveal.observe(false,false,away+Duration::from_millis(240)),Reveal::Ended);
-        // First sample may already be after the pointer left. It still gets
-        // a chance to settle; this is not immediate Explorer replacement.
-        assert_eq!(reveal.observe(true,false,away+Duration::from_secs(4)),Reveal::Started);
-        assert_eq!(reveal.observe(false,false,away+Duration::from_secs(5)),Reveal::Ended);
-    }
-    #[test]
-    fn persistent_reveal_is_independent_of_pointer_activity_on_the_other_screen(){
-        let main=RECT{left:0,top:0,right:2560,bottom:1080};
-        let main_bar=RECT{top:1032,..main};
-        let portrait=RECT{left:-1080,top:-731,right:0,bottom:1189};
-        let portrait_bar=RECT{top:1141,..portrait};
-        let pointer=POINT{x:-300,y:1180};
-        assert!(pointer_over_bar(pointer,portrait_bar,portrait));
-        assert!(!pointer_over_bar(pointer,main_bar,main));
+    fn owner_trace_rehides_only_the_secondary_bar_after_the_pointer_stays_on_primary(){
+        let primary=RECT{left:0,top:0,right:2560,bottom:1080};
+        let secondary=RECT{left:-1080,top:-731,right:0,bottom:1189};
+        let parked=RECT{top:1078,bottom:1126,..primary};
+        let visible=RECT{top:1141,..secondary};
+        assert!(parked_at_bottom(parked,primary));
+        assert!(!parked_at_bottom(visible,secondary));
+        let mut repairs=[RevealRepair::default();2];
         let now=Instant::now();
-        let mut a=AutoHideReveal::default();
-        let mut b=AutoHideReveal::default();
-        assert_eq!(a.observe(true,false,now),Reveal::Started);
-        assert_eq!(b.observe(true,true,now),Reveal::Started);
-        assert_eq!(a.observe(true,false,now+AUTO_HIDE_SETTLE-Duration::from_millis(1)),Reveal::Waiting);
-        assert_eq!(a.observe(true,false,now+AUTO_HIDE_SETTLE),Reveal::Persistent);
-        assert_eq!(b.observe(true,true,now+AUTO_HIDE_SETTLE),Reveal::Waiting);
+        assert_eq!(repairs[0].observe(Visibility::Hidden,now),Reveal::Idle);
+        assert_eq!(repairs[1].observe(Visibility::Exposed,now),Reveal::Hide);
+        assert_eq!(repairs[1].observe(Visibility::Hidden,now+Duration::from_millis(30)),Reveal::Settled);
+        assert_eq!(repairs[1].observe(Visibility::Hidden,now+Duration::from_secs(3)),Reveal::Idle);
+        assert_eq!(repairs[1].observe(Visibility::Exposed,now+Duration::from_secs(4)),Reveal::Hide);
     }
     #[test]
-    fn returning_to_the_revealed_bar_restarts_its_settle_window(){
-        let start=Instant::now();
-        let mut reveal=AutoHideReveal::default();
-        assert_eq!(reveal.observe(true,false,start),Reveal::Started);
-        assert_eq!(reveal.observe(true,true,start+Duration::from_secs(2)),Reveal::Waiting);
-        assert_eq!(reveal.observe(true,false,start+Duration::from_secs(4)),Reveal::Waiting);
-        assert_eq!(reveal.observe(true,false,start+Duration::from_secs(7)),Reveal::Persistent);
+    fn a_parked_reopen_is_handled_before_hover_but_does_not_cause_a_visible_shell_conflict(){
+        let now=Instant::now();
+        let mut repair=RevealRepair::default();
+        assert_eq!(repair.observe(Visibility::Parked,now),Reveal::Hide);
+        assert_eq!(repair.observe(Visibility::Parked,now+HIDE_ACK),Reveal::Parked);
+        assert_eq!(repair.observe(Visibility::Parked,now+Duration::from_secs(2)),Reveal::Idle);
+        assert_eq!(repair.observe(Visibility::Exposed,now+Duration::from_secs(3)),Reveal::Hide);
+        assert_eq!(repair.observe(Visibility::Hidden,now+Duration::from_millis(3020)),Reveal::Settled);
+    }
+    #[test]
+    fn a_refused_hide_or_rapid_reopen_releases_the_lease(){
+        let now=Instant::now();
+        let mut unresponsive=RevealRepair::default();
+        assert_eq!(unresponsive.observe(Visibility::Exposed,now),Reveal::Hide);
+        assert_eq!(unresponsive.observe(Visibility::Exposed,now+HIDE_ACK-Duration::from_millis(1)),Reveal::Waiting);
+        assert_eq!(unresponsive.observe(Visibility::Exposed,now+HIDE_ACK),Reveal::Conflict);
+        let mut reopened=RevealRepair::default();
+        for ms in [0,80,160]{
+            assert_eq!(reopened.observe(Visibility::Exposed,now+Duration::from_millis(ms)),Reveal::Hide);
+            assert_eq!(reopened.observe(Visibility::Hidden,now+Duration::from_millis(ms+20)),Reveal::Settled);
+        }
+        assert_eq!(reopened.observe(Visibility::Exposed,now+Duration::from_millis(240)),Reveal::Conflict);
     }
     #[test]
     fn distinguishes_explicit_restore_parent_exit_and_missing_dock_heartbeat() {
@@ -544,6 +606,32 @@ mod tests{
                 thread::sleep(Duration::from_millis(10));
             }
             assert_eq!(IsWindowVisible(hwnd),0);
+            let listener=BarEvents::new(vec![WindowId::read(hwnd).unwrap()]);
+            assert_eq!(listener.0.len(),2);
+            let events=[1,1,0].map(|manual|Handle::from_raw(CreateEventW(ptr::null(),manual,0,ptr::null())).unwrap());
+            let signals=events.each_ref().map(|event|event.0);
+            assert_ne!(ShowWindowAsync(hwnd,SW_SHOWNA),0);
+            let mut repair=RevealRepair::default();
+            let start=Instant::now();
+            let mut requested=false;
+            let reason=wait_for_restore(&signals,2500,Duration::from_secs(3),||{
+                match repair.observe(if IsWindowVisible(hwnd)!=0{Visibility::Exposed}else{Visibility::Hidden},Instant::now()){
+                    Reveal::Hide=>{
+                        assert!(start.elapsed()<Duration::from_millis(2500),"the WinEvent must wake recovery before the periodic check");
+                        assert!(!requested);
+                        requested=true;
+                        assert!(request_hide(hwnd));
+                    }
+                    Reveal::Settled=>return Some(Exit::Requested),
+                    Reveal::Conflict=>return Some(Exit::ShellRevealed),
+                    Reveal::Idle|Reveal::Waiting|Reveal::Parked=>{}
+                }
+                None
+            });
+            assert!(requested);
+            assert_eq!(reason,Exit::Requested);
+            assert_eq!(IsWindowVisible(hwnd),0);
+            drop(listener);
             let mut after:RECT=mem::zeroed();
             assert_ne!(GetWindowRect(hwnd,&mut after),0);
             assert_eq!((before.left,before.top,before.right,before.bottom),(after.left,after.top,after.right,after.bottom));
