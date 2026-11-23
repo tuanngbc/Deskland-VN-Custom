@@ -4,6 +4,10 @@ TLauncher mang **hình nền động, Dock, Stage Manager và Spotlight lấy c�
 
 **[Tải TLauncher 1.0.0 cho Windows 11 x64](https://github.com/tuanngbc/TLauncher/releases/download/v1.0.0/TLauncher-1.0.0-win-x64.zip)** · [Trang phát hành và mã kiểm tra](https://github.com/tuanngbc/TLauncher/releases/tag/v1.0.0)
 
+![Ảnh thật TLauncher trên màn dọc 1080×1920 và màn ngang 2560×1080, với hình nền Bãi biển toàn cảnh, đồng hồ và Dock](docs/images/showcase/dual-monitor-real.webp)
+
+*Ảnh chụp trên Windows 11. Hai màn chạy chung cảnh Bãi biển và mỗi màn có Dock riêng. Các cụm icon vẫn tạo hình đảo; biểu tượng, tên tệp và phần xem trước Stage đã được che trong ảnh.*
+
 <!-- product-guide:start -->
 ## Hình nền động và tương tác
 
