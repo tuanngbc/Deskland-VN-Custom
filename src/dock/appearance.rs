@@ -10,8 +10,9 @@ impl DockSide {
 #[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
 pub enum Theme { #[default] Auto, Light, Dark }
 impl Theme {
-    fn parse(value:&Value)->Self {match value.as_str(){Some("light")=>Self::Light,Some("dark")=>Self::Dark,_=>Self::Auto}}
-    fn key(self)->&'static str {match self{Self::Auto=>"auto",Self::Light=>"light",Self::Dark=>"dark"}}
+    pub(super) fn parse(value:&Value)->Self {match value.as_str(){Some("light")=>Self::Light,Some("dark")=>Self::Dark,_=>Self::Auto}}
+    pub(super) fn key(self)->&'static str {match self{Self::Auto=>"auto",Self::Light=>"light",Self::Dark=>"dark"}}
+    pub(super) fn dark(self,system:bool)->bool{match self{Self::Auto=>system,Self::Light=>false,Self::Dark=>true}}
 }
 
 #[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]

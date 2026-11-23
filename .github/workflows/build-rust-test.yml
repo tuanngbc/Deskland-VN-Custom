@@ -139,7 +139,7 @@ jobs:
           Giữ thư mục prototype cạnh file exe để mở Cài đặt.
           Bản này dùng engine Rust + Win32 + OpenGL. Dock và Stage Manager
           được quản lý trong cùng tuanpc-desk.exe, bật riêng trong Cài đặt.
-          Thanh tác vụ Windows được giữ nguyên theo mặc định. Chế độ ẩn chỉ áp dụng cho phiên hiện tại.
+          Khi bật Dock, Deskland ưu tiên chế độ ẩn thanh Windows. Có thể chọn Tương thích Windows trong Cài đặt.
           "@ | Set-Content "$dir\DOC-TRUOC.txt" -Encoding utf8
           Compress-Archive -Path $dir -DestinationPath "dist\$name.zip"
           $hash = (Get-FileHash "dist\$name.zip" -Algorithm SHA256).Hash.ToLower()

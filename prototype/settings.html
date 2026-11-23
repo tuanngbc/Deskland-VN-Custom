@@ -89,7 +89,7 @@
         <button class="ghost-btn" id="widgetReset">Đặt lại vị trí</button>
       </div>
       <div class="environment-controls">
-        <label class="environment-select"><span>Kích cỡ</span><input id="widgetScale" type="range" min="0.5" max="2" step="0.05" value="1"><output id="widgetScaleValue">100%</output></label>
+        <label class="environment-select"><span>Kích cỡ</span><input id="widgetScale" type="range" min="0.7" max="1.6" step="0.05" value="1"><output id="widgetScaleValue">100%</output></label>
         <label class="environment-select"><span>Độ trong mờ</span><input id="widgetOpacity" type="range" min="0.1" max="1" step="0.05" value="0.72"><output id="widgetOpacityValue">72%</output></label>
       </div>
       <div class="environment-controls">
@@ -97,6 +97,16 @@
         <label class="environment-select"><span>Y</span><input id="widgetY" type="number" step="1" placeholder="Tự động"></label>
       </div>
       <p class="monitor-detail">Khi mở khóa, kéo đồng hồ bằng chuột. Khi khóa, đồng hồ tự xuyên qua chuột để anh vẫn thao tác desktop.</p>
+    </section><section class="setting-card">
+      <h3>Đồng hồ thứ hai</h3>
+      <p class="monitor-detail" id="clock2Hint">Có thể đặt mỗi đồng hồ trên một màn hình.</p>
+      <label class="setting-row"><b>Hiện đồng hồ thứ hai</b><input type="checkbox" id="clock2Enabled"></label>
+      <div id="clock2Controls" hidden>
+        <label class="setting-row"><b>Màn hình</b><select id="clock2Monitor"></select></label>
+        <label class="setting-row"><b>Kích cỡ riêng</b><span><input id="clock2Scale" type="range" min="0.7" max="1.6" step="0.05"><output id="clock2Value"></output></span></label>
+        <label class="setting-row"><b>Khóa vị trí đồng hồ thứ hai</b><input type="checkbox" id="clock2Locked"></label>
+        <button type="button" class="ghost-btn" id="clock2Reset">Đặt lại vị trí đồng hồ thứ hai</button>
+      </div>
     </section><section class="setting-card"><h3 data-i18n="clockLinesTitle">Tinh chỉnh từng dòng</h3><p class="monitor-detail" data-i18n="clockLinesDescription">Vị trí tính từ gốc của đồng hồ. Kích cỡ và độ trong mờ được lưu riêng cho từng dòng.</p><div class="environment-controls widget-line-controls"><strong class="widget-line-title" data-i18n="clockLine0">Giờ</strong>
         <label>Giờ X <input id="widgetTimeX" type="number" step="1"></label><label>Y <input id="widgetTimeY" type="number" step="1"></label><label>Cỡ <input id="widgetTimeSize" type="range" min="0.5" max="2" step="0.05"></label><label>Mờ <input id="widgetTimeOpacity" type="range" min="0" max="1" step="0.05"></label>
       </div><div class="environment-controls widget-line-controls"><strong class="widget-line-title" data-i18n="clockLine1">Thứ</strong>
@@ -158,7 +168,7 @@
     <p class="monitor-detail" id="dockWinKeyStatus" role="status"></p>
     <label class="setting-row switch-row"><b>Mở Start bằng Ctrl + Alt + Space</b><input type="checkbox" id="dockStartShortcut" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <p class="dock-section-copy">Phím tắt tùy chọn chỉ hoạt động khi Dock đã ẩn taskbar. Phím Win và các tổ hợp Win vẫn do Windows xử lý.</p>
-    <p class="monitor-detail">Chỉ áp dụng cho phiên này. Ctrl+Alt+Shift+F12 để hiện lại thanh Windows.</p>
+    <p class="monitor-detail">Chế độ đã chọn được lưu cho lần mở sau. Ctrl+Alt+Shift+F12 để hiện lại thanh Windows trong phiên này.</p>
     <p class="monitor-detail" id="taskbarTakeoverStatus" role="status" aria-live="polite"></p>
   </section>
   <section class="setting-card dock-command-card">
@@ -231,6 +241,7 @@
     <div id="stageStyleControls" hidden>
       <label class="setting-row"><b data-i18n="dockStageSide">Vị trí Stage Manager</b><select id="stageStyle_side"><option value="default" data-i18n="stageInheritSide">Dùng vị trí chung</option><option value="left" data-i18n="dockLeft">Bên trái</option><option value="right" data-i18n="dockRight">Bên phải</option></select></label>
       <label class="setting-row"><b>Chiều cao thẻ trên màn hình này</b><select id="stageStyle_cardHeight"><option value="0">Dùng chiều cao chung</option><option value="72">72 px</option><option value="90">90 px</option><option value="108">108 px</option><option value="126">126 px</option><option value="144">144 px</option><option value="162">162 px</option><option value="180">180 px</option></select></label>
+      <label class="setting-row"><b>Màu Stage</b><select id="stageStyle_theme"><option value="auto" data-i18n="appearanceSystem">Theo hệ thống</option><option value="light" data-i18n="launcherLight">Sáng</option><option value="dark" data-i18n="launcherDark">Tối</option></select></label>
       <label class="setting-row"><b data-i18n="stageScale">Kích thước Stage</b><span><input type="range" id="stageStyle_scale" min="75" max="140" step="1"><output id="stageValue_scale"></output></span></label>
       <label class="setting-row"><b data-i18n="stageSpacing">Khoảng cách thẻ Stage</b><span><input type="range" id="stageStyle_spacing" min="2" max="20" step="1"><output id="stageValue_spacing"></output></span></label>
       <label class="setting-row"><b data-i18n="stageGroupLimit">Số thẻ Stage mỗi trang</b><span><input type="range" id="stageStyle_groupLimit" min="1" max="8" step="1"><output id="stageValue_groupLimit"></output></span></label>
@@ -249,7 +260,7 @@
     <label class="setting-row"><b data-i18n="dockPosition">Cạnh màn hình</b><select id="dockLook_position">
       <option value="bottom" data-i18n="dockBottom">Bên dưới</option><option value="left" data-i18n="dockLeft">Bên trái</option><option value="right" data-i18n="dockRight">Bên phải</option>
     </select></label>
-    <label class="setting-row"><b data-i18n="dockTheme">Màu sắc</b><select id="dockLook_theme"><option value="auto" data-i18n="appearanceSystem">Theo hệ thống</option><option value="light" data-i18n="launcherLight">Sáng</option><option value="dark" data-i18n="launcherDark">Tối</option></select></label>
+    <label class="setting-row"><b>Màu Dock</b><select id="dockLook_theme"><option value="auto" data-i18n="appearanceSystem">Theo hệ thống</option><option value="light" data-i18n="launcherLight">Sáng</option><option value="dark" data-i18n="launcherDark">Tối</option></select></label>
     <label class="setting-row switch-row"><b data-i18n="dockReducedMotion">Giảm chuyển động</b><input type="checkbox" id="dockLook_reducedMotion" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <label class="setting-row switch-row"><b data-i18n="dockAutoHide">Ẩn Dock khi cửa sổ phóng tối đa</b><input type="checkbox" id="dockLook_autoHide" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <p class="monitor-detail" data-i18n="dockAlphaHint">Bề mặt trong suốt theo từng điểm ảnh. Bản này chưa làm mờ nền phía sau.</p>
@@ -532,16 +543,48 @@ function setEnvironment(patch) {
 function renderWidget() {
   const w = Object.assign({ enabled: true, locked: true }, state.widget || {});
   state.widget = w;
+  renderSecondClock();
   $('widgetEnabled').checked = w.enabled !== false;
   $('widgetLocked').checked = w.locked !== false;
   $('widgetScale').value = String(w.scale || 1);
   $('widgetScaleValue').value = Math.round(Number($('widgetScale').value) * 100) + '%';
   $('widgetOpacity').value = String(w.opacity || 0.72);
   $('widgetOpacityValue').value = Math.round(Number($('widgetOpacity').value) * 100) + '%';
-  $('widgetX').value = Number.isFinite(Number(w.x)) && Number(w.x) >= 0 ? String(w.x) : '';
-  $('widgetY').value = Number.isFinite(Number(w.y)) && Number(w.y) >= 0 ? String(w.y) : '';
+  $('widgetX').value = Number.isFinite(w.x) && w.x !== -1 ? String(w.x) : '';
+  $('widgetY').value = Number.isFinite(w.y) && w.y !== -1 ? String(w.y) : '';
   for (const [key, prefix] of [['time','widgetTime'], ['weekday','widgetWeekday'], ['date','widgetDate']]) { const l = Object.assign({x:120,y:0,opacity:1,size:1}, w[key] || {}); $(prefix+'X').value=l.x; $(prefix+'Y').value=l.y; $(prefix+'Size').value=l.size; $(prefix+'Opacity').value=l.opacity; }
 }
+function renderSecondClock() {
+  const second=state.widget?.second||{};
+  const display=$('clock2Monitor');
+  const available=Array.isArray(dockDisplays)?dockDisplays:[];
+  const option=(label,value)=>new Option(label,value);
+  const list=[option('Tự chọn màn hình còn lại',''),...available.map(d=>option(d.name||d.id,d.id))];
+  if(second.monitor&&!available.some(d=>d.id===second.monitor))list.push(option('Màn hình đã ngắt kết nối',second.monitor));
+  display.replaceChildren(...list);
+  display.value=second.monitor||'';
+  $('clock2Enabled').checked=!!second.enabled;
+  $('clock2Controls').hidden=!second.enabled;
+  $('clock2Locked').checked=second.locked!==false;
+  $('clock2Scale').value=String(second.scale||1);
+  $('clock2Value').value=Math.round(Number($('clock2Scale').value)*100)+'%';
+  $('clock2Hint').textContent=available.length<2?'Đồng hồ thứ hai sẽ hiện khi có màn hình khác kết nối.':'Chọn màn hình còn lại. Mở khóa để kéo đồng hồ trong màn hình đó.';
+}
+function updateSecondClock(changes,redraw=true){
+  if(!state.widget)state.widget={};
+  state.widget.second={...state.widget.second,...changes};
+  if(redraw)renderSecondClock();
+  send({t:'secondClock',...changes});
+}
+$('clock2Enabled').addEventListener('change',e=>updateSecondClock({enabled:e.target.checked}));
+$('clock2Locked').addEventListener('change',e=>updateSecondClock({locked:e.target.checked},false));
+$('clock2Monitor').addEventListener('change',e=>updateSecondClock({monitor:e.target.value},false));
+$('clock2Scale').addEventListener('input',e=>{
+  const scale=Number(e.target.value);
+  $('clock2Value').value=Math.round(scale*100)+'%';
+  updateSecondClock({scale},false);
+});
+$('clock2Reset').addEventListener('click',()=>send({t:'secondClock',reset:true}));
 $('environmentTime').addEventListener('change', e => setEnvironment({ time: e.target.checked }));
 $('environmentWeather').addEventListener('change', e => setEnvironment({ weather: e.target.checked }));
 $('weatherPreset').addEventListener('change', e => setEnvironment({ preset: e.target.value }));
@@ -925,11 +968,11 @@ $('stageOverrideReset').addEventListener('click',()=>{
   const group=$('stageOverrideApp').value;
   if(group)send({t:'stageGroupHeight',group,height:0});
 });
-const stageStyleDefaults={cardHeight:0,side:'default',scale:100,spacing:6,groupLimit:5,opacity:76,groupPresentation:'stacked'};
+const stageStyleDefaults={cardHeight:0,theme:'auto',side:'default',scale:100,spacing:6,groupLimit:5,opacity:76,groupPresentation:'stacked'};
 const stageStyleFor=id=>({...stageStyleDefaults,...(Object.hasOwn(dockOptions.stageStyles||{},id)?dockOptions.stageStyles[id]:{})});
 const stageRight=id=>{const side=stageStyleFor(id).side;return (side==='default'?dockOptions.stageSide:side)==='right';};
 const stageUnits={scale:'%',spacing:' px',groupLimit:'',opacity:'%'};
-const stageStyleKeys=['cardHeight','side','scale','spacing','groupLimit','opacity','groupPresentation'];
+const stageStyleKeys=['cardHeight','theme','side','scale','spacing','groupLimit','opacity','groupPresentation'];
 function showStageStyle(){
   $('stagePreviewMode').value=dockOptions.stagePresentation==='dwm'?'dwm':'perspective';
   selectHeight($('stageDefaultHeight'),dockOptions.stageCardHeight||0);
@@ -1499,6 +1542,7 @@ function onHost(m) {
     syncSystemMonitor(m);
   } else if (m.t === 'dockState') {
     syncDockSettings(m);
+    renderSecondClock();
   } else if (m.t === 'dockPinResult') {
     setDockPinResult(m);
   } else if (m.t === 'dockTaskbarState') {

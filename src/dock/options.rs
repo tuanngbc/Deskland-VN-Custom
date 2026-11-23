@@ -36,9 +36,10 @@ pub struct StageStyle {
     pub group_limit: u32,
     pub opacity: u32,
     pub stack_groups: bool,
+    pub theme:super::Theme,
 }
 impl Default for StageStyle {
-    fn default() -> Self { Self { card_height:0,right: None, scale: 100, spacing: 6, group_limit: 5, opacity: 76, stack_groups: true } }
+    fn default() -> Self { Self { card_height:0,right: None, scale: 100, spacing: 6, group_limit: 5, opacity: 76, stack_groups: true,theme:super::Theme::Auto } }
 }
 impl StageStyle {
     pub fn from_json(v: &Value) -> Self {
@@ -51,12 +52,13 @@ impl StageStyle {
             group_limit: size("groupLimit", 5, 1, 8),
             opacity: size("opacity", 76, 35, 100),
             stack_groups: v["groupPresentation"].as_str()!=Some("flat"),
+            theme:super::Theme::parse(&v["theme"]),
         }
     }
     fn json(self) -> Value {
         json!({"cardHeight":self.card_height,"side":match self.right{Some(false)=>"left",Some(true)=>"right",None=>"default"},
             "scale":self.scale,"spacing":self.spacing,"groupLimit":self.group_limit,"opacity":self.opacity,
-            "groupPresentation":if self.stack_groups{"stacked"}else{"flat"}})
+            "groupPresentation":if self.stack_groups{"stacked"}else{"flat"},"theme":self.theme.key()})
     }
 }
 
@@ -121,6 +123,7 @@ impl DisplayTarget {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Options {
     pub enabled: bool,
+    pub taskbar_default:bool,
     pub stage_enabled: bool,
     pub pinned: Vec<String>,
     pub app_icons:crate::app_icons::Overrides,
@@ -146,6 +149,7 @@ pub enum Edit {
     StagePresentation(bool), StageCardHeight(u32), StageGroupHeight(String,u32),
     UtilityProfile(String, Profile),
     WindowPolicy(String, WindowPolicy),
+    TaskbarDefault(bool),
     AppIcon{key:String,file:Option<String>},
 }
 impl Edit {
@@ -210,6 +214,7 @@ impl Edit {
                     }
                 }
             }
+            Self::TaskbarDefault(on)=>options.taskbar_default=on,
             Self::DockEnabled(on)=>options.enabled=on,
             Self::StageEnabled(on)=>options.stage_enabled=on,
         }
@@ -217,7 +222,7 @@ impl Edit {
 }
 impl Default for Options {
     fn default() -> Self {
-        Self { enabled: false, stage_enabled: false, pinned: Vec::new(), app_icons:Default::default(), all_windows: false, native_shell_buttons:false, start_shortcut:false, win_key_start:false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), stage_perspective:true,stage_card_height:0,stage_card_overrides:BTreeMap::new(),appearance: Appearance::default(),utility_profiles:BTreeMap::new(),window_policies:BTreeMap::new() }
+        Self { enabled: false, taskbar_default:true, stage_enabled: false, pinned: Vec::new(), app_icons:Default::default(), all_windows: false, native_shell_buttons:false, start_shortcut:false, win_key_start:false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), stage_perspective:true,stage_card_height:0,stage_card_overrides:BTreeMap::new(),appearance: Appearance::default(),utility_profiles:BTreeMap::new(),window_policies:BTreeMap::new() }
     }
 }
 impl Options {
@@ -225,6 +230,7 @@ impl Options {
         let mut seen = HashSet::new();
         Self {
             enabled: v["enabled"].as_bool().unwrap_or(false),
+            taskbar_default:v["taskbarDefault"].as_bool().unwrap_or(true),
             stage_enabled: v["stageEnabled"].as_bool().unwrap_or(false),
             pinned: v["pinned"].as_array().map(|a| a.iter().filter_map(Value::as_str)
                 .filter(|s| !s.is_empty() && s.len() <= 32760 && !s.contains('\0'))
@@ -298,7 +304,7 @@ impl Options {
         settings
     }
     pub fn json(&self) -> Value {
-        json!({"version":2,"enabled":self.enabled,"stageEnabled":self.stage_enabled,
+        json!({"version":2,"enabled":self.enabled,"taskbarDefault":self.taskbar_default,"stageEnabled":self.stage_enabled,
             "pinned":self.pinned,"allWindows":self.all_windows,"nativeShellButtons":self.native_shell_buttons,"startShortcut":self.start_shortcut,"winKeyStart":self.win_key_start,"stageSide":self.stage_side,
             "appIcons":self.app_icons.iter().map(|(app,image)|json!({"app":app,"image":image})).collect::<Vec<_>>(),
             "stagePresentation":if self.stage_perspective{"perspective"}else{"dwm"},"stageCardHeight":self.stage_card_height,"stageCardOverrides":self.stage_card_overrides,
@@ -312,6 +318,23 @@ impl Options {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn taskbar_preference_defaults_to_deskland_but_preserves_explicit_windows(){
+        let mut options=Options::migrate(&json!({"dock":{"enabled":true}}),None);
+        assert!(options.taskbar_default&&options.enabled);
+        Edit::TaskbarDefault(false).apply(&mut options);
+        assert!(!Options::from_json(&options.json()).taskbar_default);
+        assert!(!Options::default().enabled,"this preference must not enable Dock by itself");
+    }
+    #[test]
+    fn dock_and_per_display_stage_themes_round_trip_independently(){
+        let options=Options::from_json(&json!({"appearance":{"theme":"dark"},"stageStyles":{"main":{"theme":"light"},"aux":{"theme":"dark"}}}));
+        let restored=Options::from_json(&options.json());
+        assert_eq!(restored.appearance.theme,super::super::Theme::Dark);
+        assert_eq!(restored.stage_style("main").theme,super::super::Theme::Light);
+        assert_eq!(restored.stage_style("aux").theme,super::super::Theme::Dark);
+        assert_eq!(restored.stage_style("new").theme,super::super::Theme::Auto);
+    }
     #[test]
     fn stage_preview_and_height_migration_preserve_existing_choices(){
         let legacy=json!({"stageEnabled":true,"stageStyles":{"vertical":{"side":"right"}}});

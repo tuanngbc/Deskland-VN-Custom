@@ -174,7 +174,7 @@ impl Motion {
             unsettled|=focus.advance(target,dt,20.0+15.0*speed,0.12);
         }
         if self.target.is_none() && self.zoom.value==0.0 { self.focus=None; }
-        unsettled|=reveal.advance(if shown{1.0}else{0.0},dt,28.0*speed,0.003);
+        unsettled|=reveal.advance(if shown{1.0}else{0.0},dt,22.0*speed,0.003);
         unsettled
     }
 }
@@ -284,7 +284,7 @@ fn rail_opacity(elapsed:std::time::Duration,reduced:bool)->f32{
     if reduced||t>=1.0{RAIL_DIM}else{1.0+(RAIL_DIM-1.0)*t*t*(3.0-2.0*t)}
 }
 
-struct Stage { hwnd:HWND, rail:HWND, collapsed:bool, auto_hide:bool, preview_hwnd:HWND, preview_boxes:Vec<RECT>, preview_cutouts:Vec<RECT>, preview_visible:bool, layered:bool, opacity:u32, bounds:RECT, display:String, items:Vec<Item>, keys:Vec<String>, session_heights:HashMap<String,u32>, representatives:HashMap<String,WindowIdentity>, groups:Vec<Option<u64>>, members:Vec<Vec<usize>>, order:Vec<String>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, emphasis:StageEmphasis, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews,
+struct Stage { hwnd:HWND, rail:HWND, collapsed:bool, auto_hide:bool, preview_hwnd:HWND, preview_boxes:Vec<RECT>, preview_cutouts:Vec<RECT>, preview_visible:bool, layered:bool, opacity:u32, dark:bool, bounds:RECT, display:String, items:Vec<Item>, keys:Vec<String>, session_heights:HashMap<String,u32>, representatives:HashMap<String,WindowIdentity>, groups:Vec<Option<u64>>, members:Vec<Vec<usize>>, order:Vec<String>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, emphasis:StageEmphasis, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews,
     resting:RECT, slide:Option<(std::time::Instant,i32)>, offset:i32, group_switch:Option<GroupSwitch>, pressed:Option<(StageTarget,bool)> }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 enum StageTarget { Picker(WindowIdentity), Cycle(WindowIdentity, bool), Window(usize,u32,u32), Close(usize,u32,u32), Page(usize) }
@@ -363,7 +363,7 @@ unsafe fn position_stage(hwnd:HWND,preview:HWND,rect:RECT,offset:i32){
     SetWindowPos(hwnd,ptr::null_mut(),x,rect.top,width,height,flags);
 }
 #[derive(Default)]
-struct State { bars:Vec<Bar>, stages:Vec<Stage>, windows:Vec<AppWindow>, prefs:Preferences, screens:Vec<Screen>, suspended:bool, foreground:isize, workspaces:workspaces::Workspaces, material:Option<surface::Material>, appbars:appbar::Bars, reservation_failed:bool }
+struct State { bars:Vec<Bar>, stages:Vec<Stage>, windows:Vec<AppWindow>, prefs:Preferences, screens:Vec<Screen>, suspended:bool, foreground:isize, workspaces:workspaces::Workspaces, material:Option<surface::Material>, system_dark:bool, appbars:appbar::Bars, reservation_failed:bool }
 thread_local! {
     static STATE:RefCell<State>=RefCell::new(State::default());
     static CONTROL:Cell<HWND>=const{Cell::new(ptr::null_mut())};
@@ -797,7 +797,7 @@ unsafe fn recreate(state:&mut State) {
                     SetWindowLongPtrW(stage_hwnd,GWL_EXSTYLE,GetWindowLongPtrW(stage_hwnd,GWL_EXSTYLE)& !(WS_EX_LAYERED as isize));
                     previews::style_destination(stage_hwnd);
                 }
-                state.stages.push(Stage{hwnd:stage_hwnd,rail:ptr::null_mut(),collapsed:false,auto_hide:false,preview_hwnd,preview_boxes:Vec::new(),preview_cutouts:Vec::new(),preview_visible:false,layered,opacity:style.opacity,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),keys:Vec::new(),session_heights:HashMap::new(),representatives:HashMap::new(),groups:Vec::new(),members:Vec::new(),order:Vec::new(),selected:None,layout:None,page:0,pages:1,hidden:true,hover:None,emphasis:StageEmphasis::default(),keyboard:None,previous_focus:0,previews:previews::Previews::default(),
+                state.stages.push(Stage{hwnd:stage_hwnd,rail:ptr::null_mut(),collapsed:false,auto_hide:false,preview_hwnd,preview_boxes:Vec::new(),preview_cutouts:Vec::new(),preview_visible:false,layered,opacity:style.opacity,dark:true,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),keys:Vec::new(),session_heights:HashMap::new(),representatives:HashMap::new(),groups:Vec::new(),members:Vec::new(),order:Vec::new(),selected:None,layout:None,page:0,pages:1,hidden:true,hover:None,emphasis:StageEmphasis::default(),keyboard:None,previous_focus:0,previews:previews::Previews::default(),
                     resting:r,slide:None,offset:0,group_switch:None,pressed:None});
             } else { emit(Event::Error(format!("Create Stage window: {}",GetLastError()))); }
         }
@@ -812,7 +812,8 @@ unsafe fn refresh(state:&mut State, topology:bool) {
     }
     let material_changed=if topology||state.material.is_none(){
         let style=&state.prefs.appearance;
-        let material=surface::Material::system(style.theme,style.transparency,style.reduced_motion);
+        state.system_dark=surface::Material::system_dark();
+        let material=surface::Material::themed(style.theme,state.system_dark,style.transparency,style.reduced_motion);
         state.material.replace(material)!=Some(material)
     }else{false};
     state.windows=if state.suspended||!state.prefs.any_enabled(){Vec::new()}else{windows(state.prefs.stage_enabled&&!crate::trial::benchmark_active()&&!crate::trial::demo_active())};
@@ -974,8 +975,11 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             stage.keys.get(i)==visible_keys.get(i)&&items.get(i).is_some_and(|item|item.hwnd as usize==swap.source)));
         stage.keys=visible_keys;
         let mut changed=stage.members!=members||stage.items!=items||stage.groups!=groups||stage.selected!=selected||active_changed||material_changed||old_pages!=stage.pages;
-        changed|=stage.opacity!=style.opacity;stage.opacity=style.opacity;
+        let dark=style.theme.dark(state.system_dark);
+        changed|=stage.opacity!=style.opacity||stage.dark!=dark;
+        stage.opacity=style.opacity;stage.dark=dark;
         layout.count=items.len();
+        layout.active=members.iter().position(|windows|windows.contains(&(foreground as usize)));
         layout.stack_design=automatic&&style.stack_groups&&stage.layered;
         layout.height=layout.content_height();
         bounds.bottom=bounds.top+layout.height;
@@ -1322,7 +1326,7 @@ unsafe fn paint(hwnd:HWND){
         let stage=state.stages.iter().find(|stage|stage.hwnd==hwnd)?;
         let ready=stage.items.iter().map(|item|(stage.preview_hwnd.is_null()||stage.preview_visible)&&stage.previews.includes(item.hwnd)).collect::<Vec<_>>();
         let dpi=state.screens.iter().find(|s|s.id==stage.display).map_or(96,|s|s.dpi);
-        let dark=state.material.is_none_or(|m|m.dark);
+        let dark=stage.dark;
         let switch=stage.group_switch.as_ref().and_then(|swap|
             stage.items.iter().position(|item|item.hwnd as usize==swap.source).map(|i|(i,swap.ink)));
         Some((stage.items.clone(),ready,stage.groups.clone(),stage.members.clone(),stage.layout?,stage.page,stage.pages,state.foreground,dpi,dark,stage.emphasis.highlight(stage.keyboard),stage.hover,stage.layered,stage.opacity,state.prefs.appearance.reduced_motion,switch))
@@ -2329,7 +2333,11 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     let cmd=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,hwnd,ptr::null()) as usize;
     DestroyMenu(menu);
     match cmd {
-        MENU_TASKBAR=>set_taskbar_hidden(!taskbar_active()),
+        MENU_TASKBAR=>{
+            let hidden=!taskbar_active();
+            set_taskbar_hidden(hidden);
+            emit(Event::Edit(Edit::TaskbarDefault(hidden)));
+        },
         MENU_ADD_APP=>pin_from_file(hwnd),
         MENU_MORE_APPS=>more_apps(hwnd),
         MENU_APP_ICON|MENU_APP_ICON_RESET=>if let Some(item)=selected.as_ref(){change_app_icon(hwnd,&item.path,cmd==MENU_APP_ICON_RESET);},
@@ -3036,7 +3044,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER if w==WORKSPACE_TIMER=>{update_state(|state|{state.workspaces.advance();});0},
         WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}else{refresh_dock_clock();sync_win_key();request_dock_status();}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
         WM_TIMECHANGE=>{refresh_dock_clock();0},
-        WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_DPICHANGED=>{
+        WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_THEMECHANGED|WM_DPICHANGED=>{
             if msg==WM_DISPLAYCHANGE&&taskbar_active(){show_taskbar(taskbar_guard::Exit::ExplorerChanged,"Đã hiện lại thanh tác vụ khi thay đổi màn hình.");}
             DISPLAY_DIRTY.with(|d|d.set(true));queue_refresh();0
         },
@@ -3402,6 +3410,7 @@ unsafe fn drain_commands() {
     for command in commands {
         match command {
             Command::Configure(options)=>{
+                let enable_default=STATE.with(|s|!s.borrow().prefs.enabled&&options.enabled&&options.taskbar_default);
                 let shortcut_changed=STATE.with(|s|s.borrow().prefs.start_shortcut!=options.start_shortcut);
                 if shortcut_changed&&taskbar_hidden(){sync_start_hotkey(CONTROL.with(Cell::get),options.start_shortcut);}
                 if !options.enabled&&taskbar_active(){show_taskbar(taskbar_guard::Exit::Requested,"Đã hiện lại thanh tác vụ khi tắt Dock.");}
@@ -3419,7 +3428,9 @@ unsafe fn drain_commands() {
                 state.prefs=options;refresh(state,false);
                 if repaint||icons_changed{for b in &state.bars{InvalidateRect(b.hwnd,ptr::null(),0);}}
                 if icons_changed{for stage in &state.stages{InvalidateRect(stage.hwnd,ptr::null(),0);}}
-            });sync_win_key();},
+            });sync_win_key();
+                if enable_default&&!cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active(){set_taskbar_hidden(true);}
+            },
             Command::Suspend(on)=>{
                 if on&&taskbar_active(){show_taskbar(taskbar_guard::Exit::Requested,"Đã hiện lại thanh tác vụ khi khóa màn hình.");}
                 update_state(|state|{if state.suspended!=on{state.suspended=on;refresh(state,!on);}});
@@ -3528,6 +3539,10 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         // WinEvent messages. Unchanged windows do not invalidate any pixels.
         SetTimer(control,1,5000,None);
         if ready.send(Ok(control as usize)).is_err(){PostQuitMessage(0);}
+        else if !cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active()
+            && STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.taskbar_default}) {
+            set_taskbar_hidden(true);
+        }
         let mut msg:MSG=mem::zeroed();
         while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0{
             if !utilities::route_panel_keyboard(&msg){TranslateMessage(&msg);DispatchMessageW(&msg);}

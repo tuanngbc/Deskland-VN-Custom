@@ -115,13 +115,27 @@ test('stage layout changes one display and leaves saved disconnected layouts unt
   assert.equal($('stageStyle_side').value,'right');
   assert.equal($('stageStyle_scale').value,'115');
   $('stageStyle_spacing').value='16';$('stageStyle_spacing').listeners.change();
-  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'stageStyle',display:'portrait',style:{cardHeight:0,side:'right',scale:115,spacing:16,groupLimit:5,opacity:76,groupPresentation:'stacked'}});
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'stageStyle',display:'portrait',style:{cardHeight:0,theme:'auto',side:'right',scale:115,spacing:16,groupLimit:5,opacity:76,groupPresentation:'stacked'}});
   $('stageStyle_groupLimit').value='8';$('stageStyle_groupLimit').listeners.change();
   assert.equal(messages.pop().style.groupLimit,8);
   $('stageStyle_opacity').value='55';$('stageStyle_opacity').listeners.change();
-  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop().style)),{cardHeight:0,side:'right',scale:115,spacing:16,groupLimit:8,opacity:55,groupPresentation:'stacked'});
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop().style)),{cardHeight:0,theme:'auto',side:'right',scale:115,spacing:16,groupLimit:8,opacity:55,groupPresentation:'stacked'});
   $('stageStyle_groupPresentation').value='flat';$('stageStyle_groupPresentation').listeners.change();
   assert.equal(messages.pop().style.groupPresentation,'flat');
+});
+test('stage theme changes only its display and leaves Dock colors alone',()=>{
+  const d={id:'main',name:'Main',w:1920,h:1080,dpi:96,primary:true};
+  context.syncDockSettings({dockDisplays:[d,{...d,id:'portrait',primary:false}],
+    dock:{appearance:{theme:'dark'},stageStyles:{main:{theme:'light'},portrait:{theme:'dark'}}}});
+  $('stageStyleDisplay').listeners.change({target:{value:'main'}});
+  assert.equal($('dockLook_theme').value,'dark');
+  assert.equal($('stageStyle_theme').value,'light');
+  $('stageStyle_theme').value='auto';
+  $('stageStyle_theme').listeners.change();
+  const msg=messages.pop();
+  assert.equal(msg.t,'stageStyle');assert.equal(msg.display,'main');assert.equal(msg.style.theme,'auto');
+  $('stageStyleDisplay').listeners.change({target:{value:'portrait'}});
+  assert.equal($('stageStyle_theme').value,'dark');assert.equal($('dockLook_theme').value,'dark');
 });
 test('stage presentation and each height scope send distinct canonical edits',()=>{
   const group='exe:c:/apps/paint.exe';
@@ -157,7 +171,7 @@ test('utility order, visibility and reset are isolated to the selected monitor',
   $('utilityDisplay').listeners.change({target:{value:'main'}});
   assert.equal($('utilityEnabled').checked,false);
 });
-test('taskbar hide is an explicit session command separate from saved Dock settings',()=>{
+test('taskbar selector reports verified state while sending the chosen startup mode',()=>{
   context.syncDockSettings({dock:{enabled:true},dockTaskbarHidden:false});
   const control=$('dockShellMode');
   assert.equal(control.value,'windows');

@@ -10,13 +10,12 @@ use super::{FeedbackKind,UtilityWidget};
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Material { pub dark:bool, pub transparency:u32, pub reduced_motion:bool }
 impl Material {
-    pub fn system(theme:Theme,transparency:u32,reduced_motion:bool)->Self{
-        let dark=match theme {
-            Theme::Light=>false,Theme::Dark=>true,
-            Theme::Auto=>crate::lock::reg_get_dword(windows_sys::Win32::System::Registry::HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize","AppsUseLightTheme").unwrap_or(0)==0,
-        };
-        Self{dark,transparency,reduced_motion}
+    pub fn system_dark()->bool{
+        crate::lock::reg_get_dword(windows_sys::Win32::System::Registry::HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize","AppsUseLightTheme").unwrap_or(0)==0
+    }
+    pub fn themed(theme:Theme,system_dark:bool,transparency:u32,reduced_motion:bool)->Self{
+        Self{dark:theme.dark(system_dark),transparency,reduced_motion}
     }
 }
 
@@ -31,8 +30,8 @@ pub(crate) struct Palette {
 }
 impl Palette {
     pub fn new(dark:bool)->Self{
-        if dark{Self{panel:[51,39,31],ink:[252,248,241],muted:[216,198,182],accent:[255,198,124],edge:[149,125,107]}}
-        else{Self{panel:[255,251,247],ink:[52,38,26],muted:[100,79,65],accent:[184,99,37],edge:[220,199,181]}}
+        if dark{Self{panel:[50,45,42],ink:[249,247,244],muted:[200,193,186],accent:[255,199,124],edge:[142,127,119]}}
+        else{Self{panel:[255,251,248],ink:[48,41,36],muted:[111,94,84],accent:[185,106,42],edge:[223,204,193]}}
     }
 }
 pub(super) fn control_backing(base: f32) -> f32 {
@@ -43,7 +42,7 @@ pub(super) fn control_backing(base: f32) -> f32 {
 
 pub type Atlas = HashMap<String, Option<Arc<crate::launcher::IconPixels>>>;
 pub struct Surface {
-    layer:Layer,glass:Rect,material:Material,static_pixels:Vec<u8>,icons:IconRasters,metric:Option<MetricInk>,clock:Option<ClockInk>,
+    layer:Layer,glass:Rect,material:Material,static_pixels:Vec<u8>,motion_pixels:Vec<u8>,icons:IconRasters,metric:Option<MetricInk>,clock:Option<ClockInk>,
 }
 struct MetricInk{size:(i32,i32),fonts:[HFONT;3],mask:Layer,pixels:Vec<u8>,key:Option<(usize,MetricOptions,bool,bool)>,painted_at:Option<Instant>}
 impl Drop for MetricInk{fn drop(&mut self){unsafe{for &font in &self.fonts{if !font.is_null(){DeleteObject(font);}}}}}
@@ -155,7 +154,7 @@ impl ClockInk{
 impl Surface {
     pub unsafe fn new(w:i32,h:i32,glass:Rect,material:Material)->Option<Self>{
         let layer=Layer::new(w,h)?;
-        Some(Self{layer,glass,material,static_pixels:Vec::new(),icons:IconRasters::default(),metric:None,clock:None})
+        Some(Self{layer,glass,material,static_pixels:Vec::new(),motion_pixels:Vec::new(),icons:IconRasters::default(),metric:None,clock:None})
     }
     pub fn size(&self)->(i32,i32){self.layer.size}
     pub fn set_material(&mut self,value:Material){
@@ -163,6 +162,7 @@ impl Surface {
     }
     pub unsafe fn rail(&mut self,hwnd:HWND,layout:&Layout,rail_face:usize,rail_opacity:f32)->bool{
         let (w,h)=self.layer.size;
+        if !self.motion_pixels.is_empty(){self.motion_pixels=Vec::new();}
         let data=self.layer.pixels();data.fill(0);
         paint_rail(data,w,h,layout,rail_face,rail_opacity);
         self.layer.present(hwnd)
@@ -308,11 +308,54 @@ impl Surface {
             rounded(data,w,h,marker,scale,ink,242);
         }
         if openness<1.0 {
-            let alpha=(openness.clamp(0.0,1.0)*255.0).round() as u16;
-            for value in data.iter_mut(){*value=((*value as u16*alpha+127)/255) as u8;}
-            paint_rail(data,w,h,layout,rail_face,rail_opacity*(1.0-openness));
+            self.motion_pixels.resize(data.len(),0);
+            self.motion_pixels.copy_from_slice(data);
+            collapse_pixels(data,&self.motion_pixels,w,h,layout.glass,layout.side,openness);
+            let rail=((0.24-openness)/0.24).clamp(0.0,1.0);
+            if rail>0.0{paint_rail(data,w,h,layout,rail_face,rail_opacity*rail*rail);}
+        }else if !self.motion_pixels.is_empty(){
+            self.motion_pixels=Vec::new();
         }
         self.layer.present(hwnd)
+    }
+}
+
+/// The whole surface contracts toward its own edge; the rail only appears
+/// near the end. Premultiplied channels are filtered together.
+fn collapse_pixels(dst:&mut[u8],src:&[u8],w:i32,h:i32,glass:Rect,side:super::DockSide,openness:f32){
+    use super::DockSide::*;
+    let t=openness.clamp(0.0,1.0);
+    let along=0.49+0.51*t;
+    let depth=0.17+0.83*t;
+    let opacity=(t/0.45).clamp(0.0,1.0);
+    let (cx,cy,sx,sy)=match side{
+        Bottom=>(glass.x+glass.w/2.0,glass.y+glass.h,along,depth),
+        Left=>(glass.x,glass.y+glass.h/2.0,depth,along),
+        Right=>(glass.x+glass.w,glass.y+glass.h/2.0,depth,along),
+    };
+    dst.fill(0);
+    let x0=(cx-cx*sx).floor().max(0.0) as i32;
+    let x1=(cx+(w as f32-cx)*sx).ceil().min(w as f32) as i32;
+    let y0=(cy-cy*sy).floor().max(0.0) as i32;
+    let y1=(cy+(h as f32-cy)*sy).ceil().min(h as f32) as i32;
+    let sample=|x:i32,y:i32,c:usize|{
+        if x<0||y<0||x>=w||y>=h{0.0}else{f32::from(src[((y*w+x)*4) as usize+c])}
+    };
+    for y in y0..y1{
+        let py=cy+(y as f32+0.5-cy)/sy-0.5;
+        let iy=py.floor() as i32;
+        let fy=py-iy as f32;
+        for x in x0..x1{
+            let px=cx+(x as f32+0.5-cx)/sx-0.5;
+            let ix=px.floor() as i32;
+            let fx=px-ix as f32;
+            let at=((y*w+x)*4) as usize;
+            for c in 0..4{
+                let a=sample(ix,iy,c)*(1.0-fx)+sample(ix+1,iy,c)*fx;
+                let b=sample(ix,iy+1,c)*(1.0-fx)+sample(ix+1,iy+1,c)*fx;
+                dst[at+c]=((a*(1.0-fy)+b*fy)*opacity).round() as u8;
+            }
+        }
     }
 }
 

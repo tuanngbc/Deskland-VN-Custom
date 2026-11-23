@@ -602,6 +602,7 @@ struct Config {
     widget_scale: f32,
     widget_opacity: f32,
     widget_lines: [widget::Line; 3],
+    second_clock:widget::SecondClock,
     saver_mods: u32,
     saver_vk: u32,
     launcher_mods: u32,
@@ -661,6 +662,7 @@ fn load_config(cli_theme: Option<String>) -> Config {
         lock_sync: root.get("lockSyncWin").and_then(|v| v.as_bool()).unwrap_or(true),
         lang,
         interactions_enabled,
+        second_clock:widget::SecondClock::from_json(&root["widget"]["second"]),
         widget_enabled: widget.and_then(|v| v.get("enabled")).and_then(|v| v.as_bool()).unwrap_or(true),
         widget_locked: widget.and_then(|v| v.get("locked")).and_then(|v| v.as_bool()).unwrap_or(true),
         widget_x: widget.and_then(|v| v.get("x")).and_then(|v| v.as_i64()).map(|v| v as i32).unwrap_or(-1),
@@ -734,6 +736,7 @@ fn save_config(cfg: &Config) {
             "x": cfg.widget_x,
             "y": cfg.widget_y,
             "scale": cfg.widget_scale,
+            "second":cfg.second_clock.json(),
             "opacity": cfg.widget_opacity,
             "time": { "x": cfg.widget_lines[0].x, "y": cfg.widget_lines[0].y, "opacity": cfg.widget_lines[0].opacity, "size": cfg.widget_lines[0].size },
             "weekday": { "x": cfg.widget_lines[1].x, "y": cfg.widget_lines[1].y, "opacity": cfg.widget_lines[1].opacity, "size": cfg.widget_lines[1].size },
@@ -828,6 +831,7 @@ fn web_init(app: &App) -> serde_json::Value {
             "x": app.cfg.widget_x,
             "y": app.cfg.widget_y,
             "scale": app.cfg.widget_scale,
+            "second":app.cfg.second_clock.json(),
             "opacity": app.cfg.widget_opacity,
             "time": { "x": app.cfg.widget_lines[0].x, "y": app.cfg.widget_lines[0].y, "opacity": app.cfg.widget_lines[0].opacity, "size": app.cfg.widget_lines[0].size },
             "weekday": { "x": app.cfg.widget_lines[1].x, "y": app.cfg.widget_lines[1].y, "opacity": app.cfg.widget_lines[1].opacity, "size": app.cfg.widget_lines[1].size },
@@ -993,6 +997,7 @@ struct App {
     weather_fetch_at: f64,
     environment_update_at: f64,
     widget: Option<widget::Widget>,
+    second_widget:Option<(dock::Display,widget::Widget)>,
     system_monitor: Option<system_monitor::Monitor>,
     dock_runtime: Option<dock::Runtime>,
     dock_error: Option<String>,
@@ -1084,11 +1089,64 @@ impl App {
     fn init_widget(&mut self) {
         if self.saver || self.headless || !self.cfg.widget_enabled { return; }
         let Some(screen) = primary_wall(self).map(|w| w.screen).or_else(||monitors().first().map(|m|m.rect)) else { return };
-        let lang_vi = self.cfg.lang == "vi" || (self.cfg.lang == "auto" && lang_eff("auto").0 == "vi");
         match widget::Widget::new(screen, self.cfg.widget_x, self.cfg.widget_y, self.cfg.widget_locked, self.cfg.widget_scale, self.cfg.widget_lines, self.cfg.widget_opacity) {
             Ok(w) => { self.widget = Some(w); }
             Err(e) => log!("Không tạo được đồng hồ native: {e}"),
         }
+    }
+
+    fn update_second_clock(&mut self){
+        if self.saver||self.headless||!self.cfg.second_clock.enabled{
+            self.second_widget=None;
+            return;
+        }
+        let displays=dock::displays();
+        let first=self.widget.as_ref().map(|w|{let p=w.rect();(p.left,p.top)})
+            .unwrap_or((self.cfg.widget_x,self.cfg.widget_y));
+        let Some(display)=self.cfg.second_clock.display(&displays,first).cloned()else{
+            self.second_widget=None;
+            return;
+        };
+        let (x,y)=self.cfg.second_clock.position(display.bounds);
+        if let Some((old,w))=self.second_widget.as_mut(){
+            if old.id==display.id{
+                w.set_locked(self.cfg.second_clock.locked);
+                w.set_scale(self.cfg.second_clock.scale);
+                if (w.rect().left,w.rect().top)!=(x,y){w.move_to(x,y);}
+                *old=display;
+                return;
+            }
+        }
+        self.second_widget=None;
+        // Pass exact positions via move_to as -1 can be a physical coordinate.
+        match widget::Widget::new(display.bounds,x,y,self.cfg.second_clock.locked,self.cfg.second_clock.scale,
+            self.cfg.widget_lines,self.cfg.widget_opacity){
+            Ok(mut w)=>{
+                if (w.rect().left,w.rect().top)!=(x,y){w.move_to(x,y);}
+                self.second_widget=Some((display,w));
+            }
+            Err(e)=>log!("Không tạo được đồng hồ thứ hai: {e}"),
+        }
+    }
+
+    fn capture_second_clock_position(&mut self)->bool{
+        let Some((display,w))=self.second_widget.as_mut()else{return false;};
+        let r=w.rect();
+        let expected=self.cfg.second_clock.position(display.bounds);
+        if expected==(r.left,r.top){return false;}
+        self.cfg.second_clock.offset=Some((r.left.saturating_sub(display.bounds.left),r.top.saturating_sub(display.bounds.top)));
+        let (x,y)=self.cfg.second_clock.position(display.bounds);
+        self.cfg.second_clock.offset=Some((x-display.bounds.left,y-display.bounds.top));
+        if (x,y)!=(r.left,r.top){w.move_to(x,y);}
+        true
+    }
+
+    fn set_dock_taskbar_mode(&mut self,hidden:bool){
+        self.cfg.dock.taskbar_default=hidden;
+        if let Some(runtime)=&self.dock_runtime{
+            runtime.configure(self.cfg.dock.clone());
+            runtime.set_taskbar_hidden(hidden);
+        }else{self.set_taskbar_status(dock::current_taskbar_status("Bật Dock để dùng chế độ ẩn thanh tác vụ."));}
     }
 
     fn set_widget_enabled(&mut self, on: bool) {
@@ -1706,9 +1764,8 @@ impl App {
                 log!("Màn hình [{},{}] {}", wp.screen.left, wp.screen.top, if p { "tạm dừng (bị che)" } else { "tiếp tục phát" });
             }
         }
-        if let Some(w) = self.widget.as_ref() {
-            w.sync_z_order();
-        }
+        if let Some(w) = self.widget.as_ref() {w.sync_z_order();}
+        if let Some((_,w))=&self.second_widget{w.sync_z_order();}
     }
 
     fn post_process_texture(gl: &glow::Context, shared: &mut Shared, source: PostSource, target: Option<glow::Framebuffer>, width: i32, height: i32, now: f64, flip_y: bool) {
@@ -2028,9 +2085,8 @@ impl App {
                 desktop::ensure_z_order(wp.hwnd, a);
             }
         }
-        if let Some(w) = self.widget.as_ref() {
-            w.sync_z_order();
-        }
+        if let Some(w) = self.widget.as_ref() {w.sync_z_order();}
+        if let Some((_,w))=&self.second_widget{w.sync_z_order();}
     }
 
     fn any_interacting(&self, now: f64) -> bool {
@@ -2412,6 +2468,7 @@ fn main() {
         weather_fetch_at: 0.0,
         environment_update_at: 0.0,
         widget: None,
+        second_widget:None,
         system_monitor: None,
         dock_runtime:None,
         dock_error:None,
@@ -2450,6 +2507,7 @@ fn main() {
         if saver || headless {return;}
     }
     app.init_widget();
+    app.update_second_clock();
     app.configure_system_monitor(msg_hwnd);
     app.configure_dock();
     if !saver && !headless {save_config(&app.cfg);}
@@ -2713,7 +2771,7 @@ fn main() {
                 }
                 Action::Autostart(on) => settings::set_autostart(on),
                 Action::Wallpaper(on)=>{if let Err(error)=app.set_wallpaper_enabled(on){log!("Hình nền: {error}");}app.post_dock_state();}
-                Action::DockTaskbar(hide)=>{if let Some(runtime)=&app.dock_runtime{runtime.set_taskbar_hidden(hide);}}
+                Action::DockTaskbar(hide)=>app.set_dock_taskbar_mode(hide),
                 Action::Dock(on)=>{app.cfg.dock.enabled=on;app.configure_dock();}
                 Action::Stage(on)=>{app.cfg.dock.stage_enabled=on;app.configure_dock();}
                 Action::DockDisplay(stage,target)=>{
@@ -3056,8 +3114,8 @@ fn main() {
                 }
                 "dockTaskbar" => {
                     if let Some(hidden)=m["hidden"].as_bool(){
-                        if let Some(runtime)=app.dock_runtime.as_ref(){runtime.set_taskbar_hidden(hidden);}
-                        else{app.set_taskbar_status(dock::current_taskbar_status("Bật Dock để dùng chế độ ẩn thanh tác vụ."));}
+                        app.set_dock_taskbar_mode(hidden);
+                        web_changed=true;
                     }
                 }
                 "dockWindowPolicy" => {
@@ -3133,6 +3191,11 @@ fn main() {
                     web::post(&serde_json::json!({ "t": "interactions", "v": on }).to_string());
                     web_changed = true;
                 }
+                "secondClock" => {
+                    app.cfg.second_clock.patch(&m);
+                    app.update_second_clock();
+                    web_changed=true;
+                }
                 "widget" => {
                     if let Some(v) = m.get("enabled").and_then(|v| v.as_bool()) { app.set_widget_enabled(v); }
                     if let Some(v) = m.get("locked").and_then(|v| v.as_bool()) {
@@ -3141,12 +3204,13 @@ fn main() {
                         if let Some(w) = app.widget.as_mut() { w.set_locked(v); }
                     }
                     if let Some(v) = m.get("scale").and_then(|v| v.as_f64()).map(|v| v as f32).filter(|v| v.is_finite()) {
-                        app.cfg.widget_scale = v.clamp(0.5, 2.0);
+                        app.cfg.widget_scale = v.clamp(0.7, 1.6);
                         if let Some(w) = app.widget.as_mut() { w.set_scale(app.cfg.widget_scale); }
                     }
                     if let Some(v) = m.get("opacity").and_then(|v| v.as_f64()).map(|v| v as f32).filter(|v| v.is_finite()) {
                         app.cfg.widget_opacity = v.clamp(0.05, 1.0);
                         if let Some(w) = app.widget.as_mut() { w.set_opacity(app.cfg.widget_opacity); }
+                        if let Some((_,w))=app.second_widget.as_mut(){w.set_opacity(app.cfg.widget_opacity);}
                     }
                     if let Some(v) = m.get("x").and_then(|v| v.as_i64()) { app.cfg.widget_x = v as i32; }
                     if let Some(v) = m.get("y").and_then(|v| v.as_i64()) { app.cfg.widget_y = v as i32; }
@@ -3159,6 +3223,7 @@ fn main() {
                         }
                     }
                     if let Some(w) = app.widget.as_mut() { w.set_lines(app.cfg.widget_lines); }
+                    if let Some((_,w))=app.second_widget.as_mut(){w.set_lines(app.cfg.widget_lines);}
                     if m.get("reset").and_then(|v| v.as_bool()).unwrap_or(false) {
                         app.cfg.widget_x = -1;
                         app.cfg.widget_y = -1;
@@ -3324,11 +3389,13 @@ fn main() {
             log!("Cấu hình màn hình thay đổi, dựng lại cửa sổ hình nền");
             if let Some(mut w) = app.widget.take() { w.destroy(); }
             app.destroy_walls();
-            if let Err(e) = app.create_walls() {
-                log!("Dựng lại thất bại: {e}");
-                break;
+            if app.cfg.wallpaper_enabled {
+                if let Err(e) = app.create_walls() {
+                    log!("Dựng lại hình nền thất bại: {e}; tiếp tục các tiện ích desktop");
+                }
             }
             app.init_widget();
+            app.update_second_clock();
             if web::is_open() { app.post_dock_state(); }
             if settings::hwnd().is_some() { settings::sync(&app.settings_state()); }
         }
@@ -3378,16 +3445,23 @@ fn main() {
             next_fg = now + 500.0;
             app.release_hidden_outputs(now,hidden);
             if let Some(monitor) = app.system_monitor.as_mut() { monitor.tick(hidden); }
+            let mut primary_moved=false;
             if let Some(w) = app.widget.as_mut() {
                 w.set_visible(!hidden && app.cfg.widget_enabled);
                 if !hidden && app.cfg.widget_enabled {
                     w.tick();
                     let r=w.rect();
                     if app.cfg.widget_x!=r.left || app.cfg.widget_y!=r.top {
-                        app.cfg.widget_x=r.left;app.cfg.widget_y=r.top;widget_save_at=Some(now+350.0);
+                        app.cfg.widget_x=r.left;app.cfg.widget_y=r.top;widget_save_at=Some(now+350.0);primary_moved=true;
                     }
                 }
             }
+            if let Some((_,w))=app.second_widget.as_mut(){
+                w.set_visible(!hidden);
+                if !hidden{w.tick();}
+            }
+            if !hidden&&app.capture_second_clock_position(){widget_save_at=Some(now+350.0);}
+            if primary_moved&&app.cfg.second_clock.enabled{app.update_second_clock();}
         }
         let scene_visible=app.walls.iter().any(|w|!w.paused);
         let animate=!hidden && scene_visible;
@@ -3457,7 +3531,8 @@ fn main() {
     if !hook.is_null() {
         unsafe { UnhookWinEvent(hook) };
     }
-    if let Some(mut w) = app.widget.take() { w.destroy(); }
+    app.widget=None;
+    app.second_widget=None;
     app.system_monitor = None;
     app.destroy_walls();
     app.drop_shared();

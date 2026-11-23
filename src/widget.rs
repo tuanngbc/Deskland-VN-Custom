@@ -33,6 +33,61 @@ pub struct Line {
     pub size: f32,
 }
 
+#[derive(Clone,Debug,PartialEq)]
+pub struct SecondClock {
+    pub enabled:bool,
+    pub locked:bool,
+    pub scale:f32,
+    pub monitor: Option<String>,
+    pub offset: Option<(i32,i32)>,
+}
+impl Default for SecondClock {
+    fn default()->Self{Self{enabled:false,locked:true,scale:1.0,monitor:None,offset:None}}
+}
+impl SecondClock {
+    pub fn from_json(v:&serde_json::Value)->Self{
+        let mut clock=Self::default();
+        clock.patch(v);
+        clock.offset=v["offset"].as_array().and_then(|a|{
+            let coord=|i:usize|a.get(i)?.as_i64().and_then(|n|i32::try_from(n).ok()).filter(|n|n.abs_diff(0)<=32768);
+            Some((coord(0)?,coord(1)?))
+        });
+        clock
+    }
+    pub fn patch(&mut self,v:&serde_json::Value){
+        if let Some(on)=v["enabled"].as_bool(){self.enabled=on;}
+        if let Some(on)=v["locked"].as_bool(){self.locked=on;}
+        if let Some(scale)=v["scale"].as_f64().map(|n|n as f32).filter(|n|n.is_finite()){self.scale=scale.clamp(0.7,1.6);}
+        if let Some(id)=v["monitor"].as_str().filter(|id|id.len()<=1024&&!id.chars().any(char::is_control)){
+            let id=(!id.is_empty()).then(||id.to_owned());
+            if id!=self.monitor{self.monitor=id;self.offset=None;}
+        }
+        if v["reset"].as_bool()==Some(true){self.offset=None;}
+    }
+    pub fn json(&self)->serde_json::Value{
+        serde_json::json!({"enabled":self.enabled,"locked":self.locked,"scale":self.scale,
+            "monitor":self.monitor.as_deref().unwrap_or(""),"offset":self.offset})
+    }
+    pub fn display<'a>(&self,displays:&'a [crate::dock::Display],first:(i32,i32))->Option<&'a crate::dock::Display>{
+        let center=(first.0.saturating_add(WIDTH/2),first.1.saturating_add(HEIGHT/2));
+        let first_id=displays.iter().find(|d|center.0>=d.bounds.left&&center.0<d.bounds.right
+            &&center.1>=d.bounds.top&&center.1<d.bounds.bottom).or_else(||displays.first()).map(|d|d.id.as_str());
+        let other=|d:&crate::dock::Display|Some(d.id.as_str())!=first_id;
+        match &self.monitor{
+            Some(id)=>displays.iter().find(|d|&d.id==id&&other(d)),
+            None=>displays.iter().find(|d|other(d)),
+        }
+    }
+    pub fn position(&self,screen:RECT)->(i32,i32){
+        let width=(WIDTH as f32*self.scale) as i32;
+        let height=(HEIGHT as f32*self.scale) as i32;
+        let max_x=(screen.right-screen.left-width).max(0);
+        let max_y=(screen.bottom-screen.top-height).max(0);
+        let (x,y)=self.offset.unwrap_or((max_x/2,70));
+        (screen.left+x.clamp(0,max_x),screen.top+y.clamp(0,max_y))
+    }
+}
+
 pub struct Widget {
     hwnd: HWND,
     state: Box<State>,
@@ -276,7 +331,10 @@ impl Widget {
     }
     pub fn set_visible(&mut self, on: bool) { if self.visible != on { self.visible = on; unsafe { ShowWindow(self.hwnd, if on { SW_SHOWNOACTIVATE } else { SW_HIDE }); } if on { self.sync_z_order(); } } }
     pub fn set_locked(&mut self, locked: bool) { self.state.locked = locked; unsafe { let mut ex = GetWindowLongW(self.hwnd, GWL_EXSTYLE); if locked { ex |= WS_EX_TRANSPARENT as i32; } else { ex &= !(WS_EX_TRANSPARENT as i32); } SetWindowLongW(self.hwnd, GWL_EXSTYLE, ex); } }
-    pub fn set_scale(&mut self, scale: f32) { self.read_position(); self.state.scale = scale.clamp(0.7, 1.6); self.redraw(true); }
+    pub fn set_scale(&mut self, scale: f32) {
+        let scale=scale.clamp(0.7,1.6);
+        if self.state.scale!=scale{self.read_position();self.state.scale=scale;self.redraw(true);}
+    }
     pub fn set_opacity(&mut self, opacity: f32) { self.opacity = (opacity.clamp(0.05, 1.0) * 255.0) as u8; self.redraw(true); }
     pub fn set_lines(&mut self, lines: [Line; 3]) { self.state.time = lines[0]; self.state.weekday = lines[1]; self.state.date = lines[2]; self.redraw(true); }
     pub fn locked(&self) -> bool { self.state.locked }
@@ -290,8 +348,15 @@ impl Widget {
             order_above_desktop(self.hwnd, desktop);
         }
     }
+    pub fn move_to(&mut self,x:i32,y:i32){
+        unsafe{SetWindowPos(self.hwnd,std::ptr::null_mut(),x+self.surface.left,y+self.surface.top,0,0,SWP_NOSIZE|SWP_NOACTIVATE|SWP_NOZORDER);}
+        self.read_position();
+        self.sync_z_order();
+    }
     pub fn reset(&mut self, screen: RECT) { let w = self.rect.right - self.rect.left; let x = screen.left + ((screen.right - screen.left) - w) / 2; let y = screen.top + 70; unsafe { SetWindowPos(self.hwnd, std::ptr::null_mut(), x + self.surface.left, y + self.surface.top, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER); } self.read_position(); self.sync_z_order(); }
-    pub fn destroy(&mut self) { unsafe { DestroyWindow(self.hwnd); } }
+    pub fn destroy(&mut self) {
+        if !self.hwnd.is_null(){unsafe{DestroyWindow(self.hwnd);}self.hwnd=std::ptr::null_mut();}
+    }
 
     fn read_position(&mut self) {
         let mut actual: RECT = unsafe { std::mem::zeroed() };
@@ -348,9 +413,32 @@ impl Widget {
     }
 }
 
+impl Drop for Widget {
+    fn drop(&mut self){self.destroy();}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn second_clock_round_trips_and_waits_for_its_selected_output(){
+        let display=|id:&str,left,right,primary|crate::dock::Display{id:id.into(),name:id.into(),
+            bounds:RECT{left,top:0,right,bottom:1080},work:RECT{left,top:0,right,bottom:1040},primary,dpi:96};
+        let displays=[display("main",0,1920,true),display("left",-1080,0,false)];
+        let mut second=SecondClock::from_json(&serde_json::json!({"enabled":true,"scale":1.4,"locked":false,"monitor":"left","offset":[40,120]}));
+        assert!(second.enabled&&!second.locked);
+        assert_eq!(SecondClock::from_json(&second.json()),second);
+        assert_eq!(second.display(&displays,(700,80)).unwrap().id,"left");
+        assert_eq!(second.position(displays[1].bounds),(-1040,120));
+        assert!(second.display(&displays[..1],(700,80)).is_none());
+        assert!(second.display(&displays,(-950,80)).is_none());
+        second.patch(&serde_json::json!({"monitor":"","scale":0.2}));
+        assert_eq!(second.scale,0.7);
+        assert_eq!(second.offset,None);
+        assert_eq!(second.display(&displays,(-950,80)).unwrap().id,"main");
+        assert!(!SecondClock::from_json(&serde_json::Value::Null).enabled);
+    }
 
     struct Bitmap {
         dc: HDC,
@@ -492,6 +580,13 @@ mod tests {
         let line = Line { x: 125, y: 0, size: 1.0, opacity: 1.0 };
         let screen = RECT { left: -1080, top: -731, right: 0, bottom: 1189 };
         let mut clock = Widget::new(screen, -687, -367, true, 1.4, [line; 3], 1.0).unwrap();
+        let mut second = Widget::new(screen, -520, -170, false, 0.8, [line; 3], 0.8).unwrap();
+        assert_ne!(clock.hwnd,second.hwnd);
+        let original=second.rect();
+        assert!(!second.locked());
+        second.set_scale(1.2);
+        assert!(second.rect().right-second.rect().left>original.right-original.left);
+        assert_eq!((second.rect().left,second.rect().top),(original.left,original.top));
         for size in [0.5, 2.0, 1.0] {
             clock.set_lines([Line { size, ..line }; 3]);
             clock.set_scale(size.clamp(0.7, 1.6));
@@ -505,6 +600,10 @@ mod tests {
         assert_eq!((clock.rect().left, clock.rect().top), (-800, -500));
         clock.set_opacity(0.5);
         assert_eq!((clock.rect().left, clock.rect().top), (-800, -500));
+        assert_eq!(second.rect().right-second.rect().left,(WIDTH as f32*1.2) as i32);
         clock.destroy();
+        let handle=second.hwnd;
+        drop(second);
+        assert_eq!(unsafe{IsWindow(handle)},0);
     }
 }

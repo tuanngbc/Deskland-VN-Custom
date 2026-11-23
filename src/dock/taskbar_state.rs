@@ -1,4 +1,4 @@
-//! Runtime-only taskbar state. No shell mode is persisted or automatically re-armed.
+//! Observed taskbar state for this session; startup preference lives in Options.
 #[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
 pub enum Mode {
     #[default] Compatibility,

@@ -754,6 +754,11 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
                         500+edits.len()-1, wide(title).as_ptr());
                 }
                 AppendMenuW(submenu, MF_SEPARATOR, 0, std::ptr::null());
+                for (theme,title) in [(DockTheme::Auto,"Màu Stage: Theo hệ thống"),(DockTheme::Light,"Màu Stage: Sáng"),(DockTheme::Dark,"Màu Stage: Tối")]{
+                    edits.push((d.id.clone(),StageStyle{theme,..base}));
+                    AppendMenuW(submenu,MF_STRING|if base.theme==theme{MF_CHECKED}else{0},500+edits.len()-1,wide(title).as_ptr());
+                }
+                AppendMenuW(submenu, MF_SEPARATOR, 0, std::ptr::null());
                 for scale in [75,100,125,140] {
                     edits.push((d.id.clone(), StageStyle {scale,..base}));
                     AppendMenuW(submenu, MF_STRING | if base.scale == scale {MF_CHECKED} else {0},

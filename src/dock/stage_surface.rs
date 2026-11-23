@@ -43,7 +43,7 @@ impl PageStrip {
 pub(super) struct Layout {
     pub width:i32,pub height:i32,pub card_h:i32,pub inset:i32,pub gap:i32,
     pub radius:i32,pub caption:i32,pub rows:usize,pub count:usize,pub paged:bool,
-    pub stack:u8,pub nav_h:i32,pub right:bool,
+    pub stack:u8,pub nav_h:i32,pub right:bool,pub active:Option<usize>,
     pub layers:[u8;8],heights:[i32;8],pub stack_design:bool,pub landscape:bool,stack_step:i32,
 }
 impl Layout {
@@ -62,7 +62,7 @@ impl Layout {
         let available=(height-2*inset-reserve-(shown-1)*gap)/shown;
         let ideal=((width-4*inset)*3/5+px(42)).clamp(min_h,px(160));
         let card_h=available.min(ideal).max(1);
-        Self{width,height,card_h,inset,gap,radius:px(18),caption:px(37),rows,count:0,paged,stack:0,nav_h,right,layers:[0;8],heights:[0;8],stack_design:false,landscape:false,stack_step:(inset*4/5).max(3)}
+        Self{width,height,card_h,inset,gap,radius:px(18),caption:px(37),rows,count:0,paged,stack:0,nav_h,right,active:None,layers:[0;8],heights:[0;8],stack_design:false,landscape:false,stack_step:(inset*4/5).max(3)}
     }
     pub fn landscape(width:i32,height:i32,dpi:u32,gap:i32,limit:usize,total:usize,right:bool,stacked:bool)->Self{
         let px=|n:i32|super::panel_chrome::scale(dpi,n);
@@ -110,7 +110,12 @@ impl Layout {
         // own side of the screen. This preserves the perspective silhouette.
         let w=if self.landscape{full.min((h*18/10).max(1))}else{full};
         let x=self.inset+if self.right{room+full-w}else{icon_room};
-        Box2{x,y:self.inset+(0..i).map(|n|height(n)+self.gap).sum::<i32>(),w,h}
+        let y=self.inset+(0..i).map(|n|height(n)+self.gap).sum::<i32>();
+        if self.active==Some(i){
+            let dx=((w+12)/25).min(self.inset/2).max(0);
+            let dy=((h+16)/28).min(self.gap/3).min(self.inset/2).max(0);
+            Box2{x:x-dx,y:y-dy,w:w+dx*2,h:h+dy*2}
+        }else{Box2{x,y,w,h}}
     }
     pub fn page_ranges(self,total:usize)->Vec<std::ops::Range<usize>>{
         if total==0{return vec![0..0];}
@@ -252,7 +257,7 @@ impl Layout {
     }
     pub fn nav(self)->Option<Box2>{
         if !self.paged||self.count==0{return None;}
-        let c=self.card(self.count-1);
+        let c=Self{active:None,..self}.card(self.count-1);
         let w=(c.w*5/6).max(1);
         let y=c.y+c.h+self.gap;
         (y+self.nav_h<=self.height).then_some(Box2{x:c.x+(c.w-w)/2,y,w,h:self.nav_h})
@@ -300,7 +305,7 @@ fn paint_group_arrow(data:&mut[u8],w:i32,h:i32,box_:Box2,right:bool,hot:bool){
     let cx=r.x+r.w*0.5;
     let cy=r.y+side*0.5;
     let plate=Rect{x:cx-dim*0.5,y:cy-dim*0.5,w:dim,h:dim};
-    rounded(data,w,h,plate,dim*0.5,[24,25,30],if hot{210}else{170});
+    rounded(data,w,h,plate,dim*0.5,[24,25,30],if hot{211}else{50});
     let sign=if right{1.0}else{-1.0};
     let tip=(cx+sign*side*0.16,cy);
     let tail=cx-sign*side*0.13;
@@ -313,7 +318,7 @@ fn paint_group_arrow(data:&mut[u8],w:i32,h:i32,box_:Box2,right:bool,hot:bool){
     };
     draw(data,w,h,r,|x,y|{
         let d=distance_to(x,y,cy-dy).min(distance_to(x,y,cy+dy));
-        Some(([248,249,253],(stroke+0.5-d).clamp(0.0,1.0)*255.0))
+        Some(([248,249,253],(stroke+0.5-d).clamp(0.0,1.0)*if hot{255.0}else{100.0}))
     });
 }
 
@@ -362,7 +367,7 @@ impl Panel {
                 if look.projected[i]&1!=0{continue;}
                 let active=look.active&(1<<i)!=0;
                 let edge=if active{palette.accent}else if look.dark{[102,92,82]}else{[224,215,208]};
-                let tint=if look.dark{[50,43,37]}else{[253,249,246]};
+                let tint=palette.panel;
                 draw(data,w,h,b,|x,y|{
                     let d=distance(b,radius,x,y);
                     let coverage=(0.5-d).clamp(0.0,1.0);
@@ -411,8 +416,11 @@ impl Panel {
             let strength=emphasis.filter(|&(i,_)|i==view.target.index).map_or(0,|(_,a)|a);
             let ink=switch.filter(|&(i,_)|i==view.target.index).map_or(255,|(_,ink)|ink);
             view.blend_with_ink(data,w,h,strength,ink);
-            if look.active&(1<<view.target.index)!=0 && view.mask&1!=0{
-                view.target.front_shape(view.mask,strength).highlight(data,w,h,palette.accent,(self.dpi as f32/96.0)*2.4);
+            if view.mask&1!=0{
+                let active=look.active&(1<<view.target.index)!=0;
+                let edge=if active{palette.accent}else if look.dark{[88,81,75]}else{[248,243,235]};
+                let stroke=if active{2.4}else{1.0};
+                view.target.front_shape(view.mask,strength).highlight(data,w,h,edge,(self.dpi as f32/96.0)*stroke);
             }
 
         }
@@ -663,8 +671,11 @@ mod tests {
         let box_=Box2{x:0,y:0,w:N,h:N};
         let mut left=vec![0;N as usize*N as usize*4];
         let mut right=left.clone();
-        paint_group_arrow(&mut left,N,N,box_,false,false);
-        paint_group_arrow(&mut right,N,N,box_,true,false);
+        paint_group_arrow(&mut left,N,N,box_,false,true);
+        paint_group_arrow(&mut right,N,N,box_,true,true);
+        let mut idle=vec![0;left.len()];
+        paint_group_arrow(&mut idle,N,N,box_,false,false);
+        assert!(idle.chunks_exact(4).all(|p|p[0]<160&&p[3]<160));
         let bright=|p:&[u8]|p[0]>220&&p[1]>220&&p[2]>220&&p[3]>220;
         assert!(left.chunks_exact(4).filter(|p|bright(p)).count()>30);
         let at=|x,y|((y*N+x)*4) as usize;
@@ -672,6 +683,24 @@ mod tests {
             assert_eq!(bright(&left[at(x,y)..][..4]),bright(&right[at(N-1-x,y)..][..4]));
         }}
         assert!(bright(&left[at(11,15)..][..4])&&!bright(&left[at(20,15)..][..4]));
+    }
+    #[test]
+    fn foreground_card_grows_without_moving_neighbors_or_hitting_pagination(){
+        let mut l=Layout::landscape(300,620,144,14,6,8,false,true);
+        l.count=l.rows;
+        let middle=l.count-2;
+        let normal=l.card(middle);
+        let before=l.card(middle-1);
+        let after=l.card(middle+1);
+        let nav=l.nav().expect("paged");
+        l.active=Some(middle);
+        let active=l.card(middle);
+        assert!(active.w>normal.w&&active.h>normal.h);
+        assert_eq!(active.center(),normal.center());
+        assert_eq!(l.card(middle-1),before);
+        assert_eq!(l.card(middle+1),after);
+        assert_eq!(l.nav(),Some(nav));
+        assert!(active.y>=before.y+before.h&&active.y+active.h<=after.y);
     }
     #[test]
     fn mixed_heights_page_and_keep_hit_targets_within_portrait_rail(){
