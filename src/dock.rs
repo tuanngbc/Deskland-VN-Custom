@@ -17,6 +17,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent,TRACKMOUSE
 mod options;
 mod runtime;
 mod glass_probe;
+mod calendar;
 mod appearance;
 mod geometry;
 mod motion;
@@ -1973,7 +1974,7 @@ unsafe fn activate_shell(owner:HWND,target:shell_access::Target,context:bool){
         Route::Launcher=>if let Some(anchor)=dock_start_anchor(owner){open_dock_launcher(anchor);},
         Route::Calendar=>if let Some(anchor)=anchor{
             UTILITY_ANCHOR.with(|a|a.set(None));
-            utilities::show_calendar(owner,anchor);
+            calendar::show(owner,anchor);
         },
         Route::Hub=>if let Some(anchor)=anchor{
             open_dock_hub(owner,anchor,taskbar_active());

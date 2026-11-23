@@ -22,7 +22,7 @@ impl Target {
     pub const ALL:[Self;3]=[Self::Start,Self::Tray,Self::Clock];
     pub fn title(self,dock_mode:bool)->&'static str {
         if dock_mode {return match self{Self::Start=>"Start · Tìm kiếm Deskland",Self::Tray=>"Trung tâm điều khiển Deskland",Self::Clock=>"Ngày giờ · Lịch Deskland"};}
-        match self {Self::Start=>"Start · Windows",Self::Tray=>"Biểu tượng ẩn · Windows",Self::Clock=>"Ngày giờ · Lịch Windows"}
+        match self {Self::Start=>"Start · Windows",Self::Tray=>"Biểu tượng ẩn · Windows",Self::Clock=>"Ngày giờ · Lịch Deskland"}
     }
 }
 
@@ -35,7 +35,7 @@ pub(super) fn route(dock_mode:bool,target:Target,context:bool)->Route{
     match (dock_mode,target,context){
         (true,Target::Start,false)=>Route::Launcher,
         (true,Target::Start,true)|(true,Target::Tray,_)=>Route::Hub,
-        (true,Target::Clock,_)=>Route::Calendar,
+        (_,Target::Clock,_)=>Route::Calendar,
         _=>Route::Native,
     }
 }
@@ -46,7 +46,7 @@ pub(super) unsafe fn activate(target:Target, context:bool,anchor:Option<Anchor>,
     match (target,context){
         (Target::Start,true)=>{win_chord(b'X' as u16);}
         (Target::Start,false)|(Target::Tray,_)=>open_native(target,anchor,owner,control),
-        (Target::Clock,_)=>{win_chord(b'N' as u16);}
+        (Target::Clock,_)=>{}
     }
 }
 
@@ -249,7 +249,7 @@ mod tests{
     fn dock_mode_never_routes_mouse_or_keyboard_shell_buttons_to_explorer(){
         for target in Target::ALL{
             for context in [true,false]{
-                assert_eq!(route(false,target,context),Route::Native);
+                assert_eq!(route(false,target,context),if target==Target::Clock{Route::Calendar}else{Route::Native});
                 assert_ne!(route(true,target,context),Route::Native);
             }
         }

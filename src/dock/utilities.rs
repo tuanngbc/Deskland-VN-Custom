@@ -520,36 +520,6 @@ pub(super) unsafe fn show_view(owner:HWND,point:POINT,snapshot:&Snapshot,profile
     }else{return;};
     if !cards.is_empty(){control_center::show(owner,anchor,View{title,hint,cards,metrics:None});}
 }
-fn week_dates(mut year:u16,mut month:u16,mut day:u16, weekday:u16)->Vec<(u16,u16,u16)>{
-    fn days(year:u16,month:u16)->u16{
-        match month{2 if year%4==0&&(year%100!=0||year%400==0)=>29,2=>28,4|6|9|11=>30,_=>31}
-    }
-    for _ in 0..((weekday+6)%7){
-        if day>1{day-=1;}else{
-            if month==1{month=12;year-=1;}else{month-=1;}
-            day=days(year,month);
-        }
-    }
-    (0..7).map(|_|{
-        let entry=(year,month,day);
-        if day<days(year,month){day+=1;}else{
-            day=1;
-            if month==12{month=1;year+=1;}else{month+=1;}
-        }
-        entry
-    }).collect()
-}
-pub(super) unsafe fn show_calendar(owner:HWND,anchor:chrome::Anchor){
-    let mut t:SYSTEMTIME=mem::zeroed();
-    windows_sys::Win32::System::SystemInformation::GetLocalTime(&mut t);
-    let days=["Thứ Hai","Thứ Ba","Thứ Tư","Thứ Năm","Thứ Sáu","Thứ Bảy","Chủ Nhật"];
-    let cards=week_dates(t.wYear,t.wMonth,t.wDay,t.wDayOfWeek).into_iter().zip(days).map(|((_,m,d),name)|Card{
-        title:format!("{name}  ·  {d:02}/{m:02}"),
-        hint:if (m,d)==(t.wMonth,t.wDay){"Hôm nay".into()}else{String::new()},icon:None,action:None
-    }).collect();
-    control_center::show_list(owner,anchor,View{title:format!("{:02}:{:02}  ·  {:02}/{:02}/{}",t.wHour,t.wMinute,t.wDay,t.wMonth,t.wYear),
-        hint:"Lịch Deskland · Tuần này".into(),cards,metrics:None});
-}
 pub(super) unsafe fn show_metrics(owner:HWND,anchor:chrome::Anchor,cfg:MetricOptions){
     control_center::show(owner,anchor,View{title:"Chỉ số máy".into(),hint:format!("Làm mới mỗi {} giây",cfg.interval),cards:Vec::new(),metrics:Some(cfg)});
 }
@@ -582,7 +552,7 @@ thread_local! {
 }
 
 pub(super) unsafe fn panel_open_for(owner:HWND)->bool{
-    control_center::open_for(owner)||[AUDIO_WINDOW.with(Cell::get)]
+    super::calendar::open_for(owner)||control_center::open_for(owner)||[AUDIO_WINDOW.with(Cell::get)]
         .into_iter().any(|h|!h.is_null()&&GetWindow(h,GW_OWNER)==owner)
 }
 unsafe fn paint_shell(hwnd:HWND,dark:bool,title:&str,hint:&str){
@@ -656,6 +626,7 @@ pub(super) unsafe fn close_panels(){
         if !hwnd.is_null(){DestroyWindow(hwnd);}
     }
     control_center::close_for(ptr::null_mut());
+    super::calendar::close_for(ptr::null_mut());
 }
 pub(super) unsafe fn audio_from_snapshot(owner:HWND,point:POINT,snapshot:&Snapshot)->bool{
     let Some(audio)=snapshot.status.audio.as_ref() else{return false;};
@@ -714,6 +685,7 @@ pub(super) unsafe fn close_panels_for(owner:HWND){
         if !hwnd.is_null()&&GetWindow(hwnd,GW_OWNER)==owner{DestroyWindow(hwnd);}
     }
     control_center::close_for(owner);
+    super::calendar::close_for(owner);
 }
 
 pub(super) unsafe fn route_panel_keyboard(message:&MSG)->bool{
@@ -882,12 +854,5 @@ mod dock_mode_tests{
                 assert!(widget.simple().is_none_or(local_action),"{:?}",widget);
             }
         }
-    }
-    #[test]
-    fn calendar_week_crosses_leap_month_and_year_boundaries(){
-        let leap=week_dates(2024,3,1,5);
-        assert_eq!(leap[0],(2024,2,26));assert_eq!(leap[3],(2024,2,29));assert_eq!(leap[6],(2024,3,3));
-        let new_year=week_dates(2026,1,1,4);
-        assert_eq!(new_year[0],(2025,12,29));assert_eq!(new_year[6],(2026,1,4));
     }
 }

@@ -63,6 +63,11 @@ jobs:
           Remove-Item Env:TUANPC_DESK_STAGE_COMPOSITION_LAB
           cargo test --release dock::control_center::tests::native_popup_has_its_first_layer_before_pumping_input -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release web::tests::coordinator_enumerates_one_settings_hwnd_across_failure_and_reopen -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:TUANPC_DESK_CALENDAR_EVIDENCE = Join-Path $env:RUNNER_TEMP "calendar-evidence"
+          cargo test --release dock::calendar::tests::native_calendar_navigates_and_presents_light_dark_months -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::taskbar_guard::tests::native_visibility_request_hides_a_window_without_moving_it -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:TUANPC_DESK_START_EVIDENCE = Join-Path $env:RUNNER_TEMP "start-native.png"
@@ -158,5 +163,6 @@ jobs:
             ${{ runner.temp }}/stage-fixture-evidence/stage-external-fixture-result.txt
             ${{ runner.temp }}/start-native*.png
             ${{ runner.temp }}/typography-evidence/*.png
+            ${{ runner.temp }}/calendar-evidence/*.png
           if-no-files-found: error
           retention-days: 14

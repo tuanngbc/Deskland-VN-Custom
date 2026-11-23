@@ -445,6 +445,59 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "uses real top-level Windows fixtures"]
+    fn coordinator_enumerates_one_settings_hwnd_across_failure_and_reopen(){
+        use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+        unsafe extern "system" fn enumerate(hwnd:F::HWND,arg:F::LPARAM)->F::BOOL{
+            let mut cls=[0;96];
+            let len=GetClassNameW(hwnd,cls.as_mut_ptr(),cls.len() as i32);
+            if len>0{
+                let name=String::from_utf16_lossy(&cls[..len as usize]);
+                if name==CLASS||name=="TuanpcDeskSettings"{
+                    (*(arg as *mut Vec<(F::HWND,bool)>)).push((hwnd,IsWindowVisible(hwnd)!=0));
+                }
+            }
+            1
+        }
+        let hosts=||unsafe{
+            let mut result=Vec::<(F::HWND,bool)>::new();
+            EnumThreadWindows(GetCurrentThreadId(),Some(enumerate),&mut result as *mut _ as F::LPARAM);
+            result
+        };
+        let state=||crate::settings::State{
+            theme:"beach".into(),params:serde_json::json!({}),saver:false,idle:300,
+            sync:false,autostart:false,hotkey:false,interaction:false,
+            wallpaper_enabled:true,dock:Default::default(),taskbar:Default::default(),displays:vec![],
+        };
+        let start_pending=|ticket|{
+            let hwnd=unsafe{create_host()}.expect("hidden WebView Settings HWND");
+            OPENING.with(|p|p.replace(Some(Opening{ticket,hwnd,started:Instant::now(),error:None})));
+            hwnd
+        };
+        let first=start_pending(31);
+        for _ in 0..10{crate::settings::request(&state(),false);}
+        assert_eq!(hosts(),[(first,false)]);
+        process_failed(31,COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED);
+        crate::settings::reconcile(state);
+        let fallback=crate::settings::hwnd().expect("Win32 recovery");
+        assert_eq!(unsafe{IsWindow(first)},0);
+        queue_page_message(31,"late ready".into());
+        assert!(take_inbox().is_empty());
+        unsafe{ShowWindow(fallback,SW_MINIMIZE);}
+        for _ in 0..10{crate::settings::request(&state(),false);}
+        assert_eq!(hosts(),[(fallback,true)]);
+        assert_eq!(unsafe{IsIconic(fallback)},0);
+        unsafe{DestroyWindow(fallback);}
+        assert!(hosts().is_empty());
+        let next=start_pending(32);
+        crate::settings::request(&state(),false);
+        assert_eq!(hosts(),[(next,false)]);
+        assert!(close());
+        assert!(hosts().is_empty());
+        println!("SETTINGS_OWNED_HWND_TEST hidden=1 fallback=1 restored=1 after_close=0");
+    }
+
+    #[test]
     fn native_close_reopen_rejects_stale_callbacks_and_timeout_destroys_hidden_host(){
         let first=unsafe{create_host()}.expect("first Settings HWND");
         OPENING.with(|p|p.replace(Some(Opening{ticket:7,hwnd:first,started:Instant::now(),error:None})));

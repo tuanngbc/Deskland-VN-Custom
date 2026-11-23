@@ -121,7 +121,7 @@ impl ClockInk{
     unsafe fn new(w:i32,h:i32,scale:f32)->Option<Self>{
         let dpi=(scale*96.0).round() as u32;
         Some(Self{mask:Layer::new(w*2,h*2)?,pixels:vec![0;w as usize*h as usize*4],size:(w,h),
-            fonts:[super::panel_chrome::choose_font(dpi,26,510),super::panel_chrome::choose_font(dpi,23,510)],stamp:None})
+            fonts:[super::panel_chrome::choose_font(dpi,30,560),super::panel_chrome::choose_font(dpi,23,510)],stamp:None})
     }
     unsafe fn paint(&mut self,data:&mut[u8],w:i32,h:i32,x:i32,y:i32,scale:f32,p:Palette,dark:bool,vertical:bool){
         use windows_sys::Win32::{Foundation::SYSTEMTIME,System::SystemInformation::GetLocalTime};
@@ -131,12 +131,12 @@ impl ClockInk{
         let stamp=Some((t.wYear,t.wMonth,t.wDay,t.wHour,t.wMinute,dark,vertical));
         if self.stamp!=stamp{
             self.pixels.fill(0);
-            let line=(16.0*scale).round() as i32;
-            let top=(ch-2*line)/2;
+            let lines=[(19.0*scale).round() as i32,(15.0*scale).round() as i32];
+            let top=(ch-lines[0]-lines[1])/2;
             let time=format!("{:02}:{:02}",t.wHour,t.wMinute);
             let date=if vertical{format!("{:02}/{:02}",t.wDay,t.wMonth)}else{format!("{:02}/{:02}/{}",t.wDay,t.wMonth,t.wYear)};
             for (i,(value,ink)) in [(&time,p.ink),(&date,p.muted)].into_iter().enumerate(){
-                let b=Box2{x:0,y:top+i as i32*line,w:cw,h:line};
+                let b=Box2{x:0,y:top+if i==0{0}else{lines[0]},w:cw,h:lines[i]};
                 draw_mask_scaled(&mut self.pixels,cw,ch,&mut self.mask,self.fonts[i],b,value,true,ink,2);
             }
             self.stamp=stamp;
