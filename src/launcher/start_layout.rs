@@ -17,7 +17,7 @@ pub(super) const POWER_GAP: i32 = 12;
 pub(super) const MAX_WIDTH: i32 = 544;
 pub(super) const MAX_HEIGHT: i32 = 528;
 const RECENT_H: i32 = 65;
-const ERROR_H: i32 = 24;
+pub(super) const ERROR_H: i32 = 20;
 
 #[derive(Clone, Copy)]
 pub(super) struct Frame {

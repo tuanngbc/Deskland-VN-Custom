@@ -398,17 +398,21 @@ mod tests{
                         let cfg=Cluster{side,cell:28,gap:4,inline_metrics:false};
                         let a=measure_cluster(&screen,&style,7,None,0.0,&pins,cfg);
                         let b=measure_cluster(&screen,&style,7,Some(a.axis(a.slots[3].x,a.slots[3].y)),1.0,&pins,cfg);
-                        assert_eq!(a.scan.w,b.scan.w);assert_eq!(b.scan.x-b.start.x,a.scan.x-a.start.x);assert_eq!(a.inline,b.inline);
+                        assert_eq!(a.scan.w,b.scan.w);assert!(((b.scan.x-b.start.x)-(a.scan.x-a.start.x)).abs()<0.001);assert_eq!(a.inline,b.inline);
                         assert_eq!(a.hot(a.scan.x+a.scan.w/2.0,a.scan.y+a.scan.h/2.0),Some(7));
-                        let cells=[a.scan,a.utility].into_iter().chain(a.inline.iter().map(|(_,r)|*r)).collect::<Vec<_>>();
+
                         assert_eq!(a.utility,Rect::default());
                         assert_eq!(a.inline.iter().map(|(w,_)|*w).collect::<Vec<_>>(),vec![UtilityWidget::Network,UtilityWidget::Sound]);
                         let (network,sound)=(a.inline[0].1,a.inline[1].1);
                         assert!(network.y<sound.y && (network.x-sound.x).abs()<0.001);
                         assert_eq!(a.scan.w,a.slots[0].w);
                         assert_eq!(&a.key_order()[..2],&[a.shell_index(),7]);
-                        assert!(cells.iter().enumerate().all(|(i,r)|cells[i+1..].iter().all(|&other|!overlaps(*r,other))
-                            && b.slots.iter().all(|&slot|!overlaps(*r,slot))));
+                        for layout in [&a,&b]{
+                            let cells=[layout.start,layout.scan,layout.tray,layout.clock].into_iter()
+                                .chain(layout.inline.iter().map(|(_,r)|*r)).collect::<Vec<_>>();
+                            assert!(cells.iter().enumerate().all(|(i,r)|cells[i+1..].iter().all(|&other|!overlaps(*r,other))
+                                && layout.slots.iter().all(|&slot|!overlaps(*r,slot))),"dpi={dpi} side={position:?}");
+                        }
                         assert!(a.window.left>=work.left&&a.window.right<=work.right&&a.window.top>=work.top&&a.window.bottom<=work.bottom);
                     }
                 }

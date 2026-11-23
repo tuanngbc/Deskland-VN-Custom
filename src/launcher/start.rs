@@ -395,7 +395,7 @@ unsafe fn paint_start(hwnd:HWND){
             if let Some(y)=flow.recent_y{
                 label(dc,"Đã mở gần đây",rr(INSET,y,frame.inner(),24,s),heading,sub);
             }
-            if !error.is_empty(){label(dc,&error,rr(INSET,flow.footer_y-24,frame.inner(),24,s),small,fg);}
+            if !error.is_empty(){label(dc,&error,rr(INSET,flow.footer_y-ERROR_H,frame.inner(),ERROR_H,s),small,fg);}
             fill(dc,&rr(INSET,flow.footer_y,frame.inner(),1,s),color(tile_ink));
             if let Some(tile)=tiles.iter().find(|t|hover.as_ref()==Some(&t.hit)&&
                 matches!(t.hit,Hit::Explorer|Hit::Windows|Hit::TaskManager|Hit::Settings|Hit::Power|Hit::Account)){
