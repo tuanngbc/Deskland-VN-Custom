@@ -277,9 +277,18 @@ mod tests {
         let off=Options::default();
         let on=Options{enabled:true,stage_enabled:true,..Default::default()};
         let runtime=Runtime::new(on.clone(),0).unwrap();
-        runtime.inspect();
+        // Paint the real overlays and let Windows finish asynchronous graphics
+        // initialization before the OFF-only control measurement. On the cold
+        // runner that one-time allocation can land in either the control loop
+        // or the Stage warm-up, depending on scheduling.
+        let cold=handles();
+        assert!(!runtime.inspect_with_paint(true).is_empty());
+        std::thread::sleep(Duration::from_secs(1));
+        assert!(!runtime.inspect_with_paint(true).is_empty());
         runtime.configure(off.clone());
         assert!(runtime.inspect().is_empty());
+        std::thread::sleep(Duration::from_millis(750));
+        eprintln!("Cold native paint/capture calibration: {cold} -> {} handles",handles());
         let measure=|interval:u32| {
             let deadline=Instant::now()+Duration::from_secs(2);
             while handles()>interval+8 && Instant::now()<deadline {

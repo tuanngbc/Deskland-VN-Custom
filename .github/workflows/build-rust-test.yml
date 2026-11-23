@@ -32,6 +32,9 @@ jobs:
           # This is CI integration evidence, not Windows 11 dual-monitor acceptance.
           cargo test --release dock::runtime::tests::native_integrated_modules_toggle_suspend_and_cleanup -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP "stage-fixture-evidence"
+          cargo test --release dock::stage_capture_lab::native_stage_worker_keeps_independent_frames_through_minimize -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::runtime::tests::native_100_toggles_release_overlays_and_process_handles -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::runtime::tests::native_appbar_fatal_exit_restores_work_area -- --ignored --exact --nocapture --test-threads=1
@@ -48,12 +51,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_surface::tests::native_stage_surface_submits_premultiplied_cards_with_desktop_gaps -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP "stage-fixture-evidence"
           cargo test --release dock::stage_surface::perspective_lab::native_fixture_dibs_are_projected_into_stage_stack -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_capture_lab::native_wgc_projects_one_owned_hwnd_or_reports_blocked -- --ignored --exact --nocapture --test-threads=1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --release dock::stage_capture_lab::native_stage_worker_keeps_independent_frames_through_minimize -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_surface::tests::native_slide_keeps_live_preview_host_aligned_without_activating_either_window -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
