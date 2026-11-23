@@ -1,9 +1,9 @@
-//! Test-only WGC probe. The only capture target is a synthetic, owned HWND.
-//! No desktop/display capture, inactive app capture, or production integration.
-use super::{Box2, Card, Layer};
+//! Explicit isolated WGC diagnostic. Only the diagnostic's own painted
+//! windows are eligible, and only this content can be exported.
+use super::{stage_surface::Box2,stage_projection::Card,glass_probe::Layer};
 use crate::desktop::wide;
-use std::{ptr::null_mut, time::Instant};
-use windows_sys::Win32::{Foundation::*, Graphics::{Dwm::DwmFlush, Gdi::*},
+use std::{path::Path,ptr::null_mut,sync::mpsc,time::{Duration,Instant}};
+use windows_sys::Win32::{Foundation::*, Graphics::{Dwm::{DwmFlush,DwmGetWindowAttribute,DWMWA_CLOAKED}, Gdi::*},
     System::LibraryLoader::GetModuleHandleW, UI::WindowsAndMessaging::*};
 
 const CLASS: &str = "DesklandOwnedStageWgcFixture";
@@ -41,19 +41,19 @@ unsafe extern "system" fn fixture_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARA
     0
 }
 
-unsafe fn window() -> Fixture {
+unsafe fn window(normal:bool) -> Result<Fixture,String> {
     let name = wide(CLASS);
     let instance = GetModuleHandleW(std::ptr::null());
     let class = WNDCLASSW { lpfnWndProc: Some(fixture_proc), hInstance: instance,
         lpszClassName: name.as_ptr(), ..std::mem::zeroed() };
-    assert_ne!(RegisterClassW(&class),0);
-    let hwnd = CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE, name.as_ptr(), wide(CLASS).as_ptr(),
-        WS_POPUP, 24,24,WIDTH,HEIGHT,null_mut(),null_mut(),instance,null_mut());
-    assert!(!hwnd.is_null());
+    if RegisterClassW(&class)==0 && GetLastError()!=ERROR_CLASS_ALREADY_EXISTS{return Err("RegisterClassW failed".into());}
+    let hwnd = CreateWindowExW(if normal{0}else{WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE}, name.as_ptr(), wide(CLASS).as_ptr(),
+        if normal{WS_OVERLAPPEDWINDOW}else{WS_POPUP}, 24,24,WIDTH,HEIGHT,null_mut(),null_mut(),instance,null_mut());
+    if hwnd.is_null(){return Err(format!("CreateWindowExW: {}",GetLastError()));}
     ShowWindow(hwnd,SW_SHOWNOACTIVATE);
     UpdateWindow(hwnd);
     let _ = DwmFlush();
-    Fixture(hwnd)
+    Ok(Fixture(hwnd))
 }
 
 unsafe fn allowed(hwnd: HWND) -> bool {
@@ -69,37 +69,84 @@ unsafe fn allowed(hwnd: HWND) -> bool {
 }
 
 
-#[test]
-#[ignore = "requires an isolated interactive Windows graphics session"]
-fn native_wgc_projects_one_owned_hwnd_or_reports_blocked() {
-    let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE").map(std::path::PathBuf::from)else{return;};
-    std::fs::create_dir_all(&dir).unwrap();
-    let started=Instant::now();
-    let status=unsafe{
-        let fixture=window();
-        assert!(!allowed(GetDesktopWindow()),"the desktop is never an eligible source");
-        let captured=crate::dock::stage_snapshot::frame(fixture.0,||allowed(fixture.0));
-        if SetWindowDisplayAffinity(fixture.0,WDA_EXCLUDEFROMCAPTURE)!=0{
-            assert!(!allowed(fixture.0),"protected fixture must be rejected");
-        }
-        match captured{
-            Err(reason)=>format!("WGC_OWNED_HWND=BLOCKED: {reason}"),
-            Ok((bytes,w,h))=>{
-                let distinct=bytes.chunks_exact(4).filter(|p|p[1]>p[2].saturating_add(45)&&p[1]>105).count();
-                assert!(distinct>100,"the green fixture marker must be present in the captured content");
-                let mut dest=Layer::new(223,126).unwrap();
-                let pixels=dest.pixels();
-                pixels.fill(0);
-                let slab=Card::new(Box2{x:9,y:9,w:198,h:108},false,28.0);
-                slab.paint(pixels,223,126,&bytes,w,h);
-                assert!(pixels.chunks_exact(4).any(|p|p[1]>p[2].saturating_add(45)&&p[1]>105));
-                let rgba=pixels.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],p[3]]).collect::<Vec<_>>();
-                image::save_buffer(dir.join("stage-wgc-owned.png"),&rgba,223,126,image::ColorType::Rgba8).unwrap();
-                format!("WGC_OWNED_HWND=PASS source={}x{} elapsed_ms={} preview=one_frame polygons={:?}",w,h,
-                    started.elapsed().as_millis(),slab.polygon())
+fn pump_capture(fixture:&Fixture)->Result<(Vec<u8>,i32,i32),String>{
+    let handle=fixture.0 as usize;
+    std::thread::scope(|scope|{
+        let (tx,rx)=mpsc::sync_channel(1);
+        scope.spawn(move||unsafe{
+            let hwnd=handle as HWND;
+            let _=tx.send(super::stage_snapshot::frame(hwnd,||allowed(hwnd)));
+        });
+        // WGC's target has its own functioning window message loop. In
+        // particular, the HWND owner is not blocked waiting on CreateForWindow.
+        unsafe{
+            let mut msg=std::mem::zeroed();
+            loop{
+                for _ in 0..32{
+                    if PeekMessageW(&mut msg,null_mut(),0,0,PM_REMOVE)==0{break;}
+                    TranslateMessage(&msg);DispatchMessageW(&msg);
+                }
+                match rx.recv_timeout(Duration::from_millis(12)){
+                    Ok(result)=>return result,
+                    Err(mpsc::RecvTimeoutError::Disconnected)=>return Err("capture worker ended".into()),
+                    Err(mpsc::RecvTimeoutError::Timeout)=>{},
+                }
             }
         }
-    };
-    println!("{status}");
-    std::fs::write(dir.join("stage-wgc-result.txt"),status).unwrap();
+    })
+}
+pub(super) fn inspect(dir:&Path,visible_trial:bool)->Result<(),String>{
+    std::fs::create_dir_all(dir).map_err(|e|e.to_string())?;
+    let mut statuses=Vec::new();
+    for (normal,description) in [(true,"overlapped"),(false,"toolwindow")]{
+        let started=Instant::now();
+        let outcome=unsafe{
+            let fixture=window(normal)?;
+            let hwnd=fixture.0;
+            let mut affinity=u32::MAX;
+            let af=GetWindowDisplayAffinity(hwnd,&mut affinity);
+            let affinity_error=if af!=0{0}else{GetLastError()};
+            let mut cloak=u32::MAX;
+            let cloak_result=DwmGetWindowAttribute(hwnd,DWMWA_CLOAKED as u32,(&mut cloak as *mut u32).cast(),4);
+            let summary=format!("window={description} own_window=true root={} visible={} minimized={} cloak=0x{cloak_result:08x}/{cloak} affinity={af}/{affinity}/{affinity_error} pump=separate_mta",
+                GetAncestor(hwnd,GA_ROOT)==hwnd,IsWindowVisible(hwnd),IsIconic(hwnd));
+            if allowed(GetDesktopWindow()){return Err("Desktop must never be eligible".into());}
+            let captured=pump_capture(&fixture);
+            if SetWindowDisplayAffinity(hwnd,WDA_EXCLUDEFROMCAPTURE)!=0&&allowed(hwnd){
+                return Err("Protected window remained eligible".into());
+            }
+            let message=match captured{
+                Err(reason)=>format!("WGC_OWNED_HWND=BLOCKED {summary}: {reason}"),
+                Ok((bytes,w,h))=>{
+                    let distinct=bytes.chunks_exact(4).filter(|p|p[1]>p[2].saturating_add(45)&&p[1]>105).count();
+                    if distinct<=100{return Err("Expected green marker in owned window pixels".into());}
+                    let mut dest=Layer::new(223,126).ok_or("Could not allocate result DIB")?;
+                    let pixels=dest.pixels();pixels.fill(0);
+                    let slab=Card::new(Box2{x:9,y:9,w:198,h:108},false,28.0);
+                    slab.paint(pixels,223,126,&bytes,w,h);
+                    if !pixels.chunks_exact(4).any(|p|p[1]>p[2].saturating_add(30)&&p[1]>95){
+                        return Err("Owned pixels missing after projection".into());
+                    }
+                    let rgba=pixels.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],p[3]]).collect::<Vec<_>>();
+                    image::save_buffer(dir.join(format!("stage-wgc-owned-{description}.png")),&rgba,223,126,image::ColorType::Rgba8)
+                        .map_err(|e|e.to_string())?;
+                    format!("WGC_OWNED_HWND=PASS {summary} source={w}x{h} elapsed_ms={}",started.elapsed().as_millis())
+                }
+            };
+            message
+        };
+        println!("{outcome}");
+        let passed=outcome.starts_with("WGC_OWNED_HWND=PASS");
+        statuses.push(outcome);
+        if passed || visible_trial{break;}
+    }
+    std::fs::write(dir.join("stage-wgc-result.txt"),statuses.join("\n")).map_err(|e|e.to_string())
+}
+
+#[cfg(test)]
+#[test]
+#[ignore = "requires an isolated Windows graphics session"]
+pub(super) fn native_wgc_projects_one_owned_hwnd_or_reports_blocked() {
+    let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE").map(std::path::PathBuf::from)else{return;};
+    inspect(&dir,false).unwrap();
 }

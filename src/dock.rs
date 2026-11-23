@@ -29,6 +29,8 @@ mod perf;
 mod stage_surface;
 mod stage_projection;
 mod stage_snapshot;
+mod stage_capture_lab;
+pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>{stage_capture_lab::inspect(path,true)}
 mod utilities;
 mod wifi;
 mod control_center;
@@ -247,21 +249,27 @@ struct Stage { hwnd:HWND, rail:HWND, collapsed:bool, auto_hide:bool, preview_hwn
 enum StageTarget { Group(u64), AppGroup(usize,u32,u32), Window(usize,u32,u32), Close(usize,u32,u32), Page(usize) }
 impl Stage {
     fn member_hit(&self,layout:stage_surface::Layout,index:usize,x:i32,y:i32)->Option<usize>{
-        let front=stage_snapshot::view(self.hwnd as usize).filter(|v|v.target.index==index).map(|v|{
-            let yaw=if self.hover==Some(index)&&!v.target.reduced{19.0}else{28.0};
-            stage_projection::Card::new(layout.card(index),layout.right,yaw).contains(x as f32+0.5,y as f32+0.5)
-        });
-        layout.member_hit_custom(index,x,y,front)
+        if let Some(view)=stage_snapshot::view(self.hwnd as usize).filter(|v|v.target.index==index){
+            if layout.icon_hit(index,x,y){return Some(0);}
+            return (0..layout.depth(index)).find(|&layer|view.target.contains(layer,x,y,self.hover==Some(index)));
+        }
+        layout.member_hit(index,x,y)
+    }
+    fn close_hit(&self,layout:stage_surface::Layout,index:usize,x:i32,y:i32)->bool{
+        if stage_snapshot::view(self.hwnd as usize).is_some_and(|v|v.target.index==index){
+            return layout.projected_close(index).is_some_and(|b|b.hit(x,y));
+        }
+        layout.close_hit(index,x,y)
     }
     fn hit(&self,layout:stage_surface::Layout,x:i32,y:i32)->Option<usize>{
         (0..layout.count).find(|&i|self.member_hit(layout,i,x,y).is_some()
-            ||self.hover==Some(i)&&layout.close_hit(i,x,y))
+            ||self.hover==Some(i)&&self.close_hit(layout,i,x,y))
     }
     unsafe fn target(&self,x:i32,y:i32)->Option<StageTarget>{
         if self.hidden{return None;}
         let layout=self.layout?;
         if let Some(i)=self.hit(layout,x,y) {
-            if self.hover==Some(i)&&layout.close_hit(i,x,y){
+            if self.hover==Some(i)&&self.close_hit(layout,i,x,y){
                 let hwnd=self.items.get(i)?.hwnd;
                 let (pid,tid)=window_owner(hwnd)?;
                 return Some(StageTarget::Close(hwnd as usize,pid,tid));
@@ -926,9 +934,9 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             let projected=stage_snapshot::view(stage.hwnd as usize).and_then(|view|{
                 let valid=layout==view.target.layout&&style.stack_groups&&automatic&&stage.layered
                     && state.prefs.appearance.reduced_motion==view.target.reduced
-                    &&stage.items.get(view.target.index).is_some_and(|it|it.hwnd as usize==view.target.source.hwnd)
+                    &&view.target.matches_members(stage.members.get(view.target.index))
                     &&stage_snapshot::still_valid(&view);
-                if valid{Some(view.target.source.hwnd)}else{changed|=stage_snapshot::hide(stage.hwnd as usize);None}
+                if valid{Some(view.target.index)}else{changed|=stage_snapshot::hide(stage.hwnd as usize);None}
             });
             let host=if stage.preview_hwnd.is_null(){stage.hwnd}else{stage.preview_hwnd};
             changed|=if stage.preview_hwnd.is_null()||!automatic||!style.stack_groups{
@@ -1051,7 +1059,7 @@ unsafe fn show_status_tip(owner:HWND){
             let index=stage.hover?;
             let item=stage.items.get(index)?;
             if let Some(layout)=stage.layout.filter(|layout|on_client&&layout.stack_design){
-                if layout.close_hit(index,cursor.x,cursor.y){return Some("Đóng cửa sổ phía trước".into());}
+                if stage.close_hit(layout,index,cursor.x,cursor.y){return Some("Đóng cửa sổ phía trước".into());}
                 if !layout.icon_hit(index,cursor.x,cursor.y){
                     if let Some(member)=stage.member_hit(layout,index,cursor.x,cursor.y).and_then(|i|stage.members.get(index)?.get(i)){
                         if let Some(w)=state.windows.iter().find(|w|w.hwnd as usize==*member){
@@ -1399,12 +1407,37 @@ fn refresh_dock_clock(){
 unsafe fn panel_closed(owner:HWND){
     if !owner.is_null()&&IsWindow(owner)!=0{SetTimer(owner,HIDE_TIMER,650,None);}
 }
+unsafe fn show_background_apps(owner:HWND){
+    use control_center::{Card,Command,View};
+    let Some(anchor)=shell_anchor(owner,shell_access::Target::Tray)else{return;};
+    let in_takeover=taskbar_active();
+    let mut cards=vec![Card{icon:None,title:"Biểu tượng trong notification area".into(),
+        hint:if in_takeover{"Cần hiện lại thanh tác vụ để dùng icon và menu gốc"}
+            else{"Mở khay ứng dụng do Explorer quản lý"}.into(),
+        action:Some(Command::WindowsTray)}];
+    let minimized=STATE.with(|s|{
+        let s=s.borrow();s.windows.iter().filter(|w|IsIconic(w.hwnd)!=0)
+            .filter_map(|w|{
+                let id=WindowIdentity::read(w.hwnd)?;
+                Some(Card{icon:Some(UtilityWidget::Windows),
+                    title:if w.title.trim().is_empty(){basename(&w.path)}else{w.title.clone()},
+                    hint:format!("Đã thu nhỏ · {}",basename(&w.path)),
+                    action:Some(Command::Window{hwnd:id.hwnd,pid:id.pid,tid:id.tid})})
+            }).take(64).collect::<Vec<_>>()
+    });
+    if minimized.is_empty(){
+        cards.push(Card{icon:None,title:"Không có cửa sổ thu nhỏ".into(),hint:String::new(),action:None});
+    }else{cards.extend(minimized);}
+    control_center::show_list(owner,anchor,View{title:"Ứng dụng chạy nền / Khay ứng dụng".into(),
+        hint:"Cửa sổ thu nhỏ và biểu tượng khay là hai loại riêng".into(),cards,metrics:None});
+}
 unsafe fn perform_control(owner:HWND,command:control_center::Command){
     use control_center::Command;
     match command{
         Command::Widget(widget)=>request_utilities(owner,Some(widget)),
         Command::App{path,operation}=>perform_app_action(owner,&path,operation),
         Command::AddApp=>pin_from_file(owner),
+        Command::BackgroundApps=>show_background_apps(owner),
         Command::WindowsTray=>{
             if taskbar_active(){
                 show_taskbar("Đã về chế độ tương thích. Mở lại ^ và chọn Khay ứng dụng Windows.");
@@ -2032,7 +2065,7 @@ fn finish_stage_snapshot(){
             let target=view.target;
             let accepted=STATE.with(|s|{
                 s.borrow().stages.iter().any(|p|p.hwnd as usize==target.owner&&!p.hidden&&p.layered
-                    &&p.layout==Some(target.layout)&&p.items.get(target.index).is_some_and(|it|it.hwnd as usize==target.source.hwnd))
+                    &&p.layout==Some(target.layout)&&target.matches_members(p.members.get(target.index)))
             })&&stage_snapshot::still_valid(&view);
             if accepted{
                 stage_snapshot::install(view);
@@ -2096,12 +2129,19 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
     add(CLOSE,"Đóng cửa sổ",true);
     let snapshot_target=STATE.with(|s|{
         let s=s.borrow();let p=s.stages.iter().find(|p|p.hwnd==hwnd&&!p.hidden&&p.layered&&!p.preview_hwnd.is_null())?;
-        let layout=p.layout?;let index=p.items.iter().position(|it|it.hwnd==item)?;
+        let layout=p.layout?;
+        let index=p.members.iter().position(|members|members.contains(&identity.hwnd))?;
+        let mut sources=[None;5];
+        for (layer,&hwnd) in p.members.get(index)?.iter().take(5).enumerate(){
+            sources[layer]=Some(WindowIdentity::read(hwnd as HWND)?);
+        }
         (layout.stack_design&&!crate::trial::benchmark_active()&&!crate::trial::demo_active()).then_some(stage_snapshot::Target{
-            owner:hwnd as usize,source:identity,layout,index,reduced:s.prefs.appearance.reduced_motion,
+            owner:hwnd as usize,sources,layout,index,reduced:s.prefs.appearance.reduced_motion,
         })
     });
-    if snapshot_target.is_some(){add(SNAPSHOT,"Ảnh phối cảnh · chụp cửa sổ này một lần",IsIconic(item)==0);}
+    if let Some(target)=snapshot_target{
+        add(SNAPSHOT,"Ảnh phối cảnh · chụp nhóm một lần",target.sources.iter().flatten().all(|w|IsIconic(w.hwnd as HWND)==0));
+    }
     if stage_snapshot::view(hwnd as usize).is_some(){add(FORGET,"Xóa ảnh phối cảnh · trở về xem trực tiếp",true);}
     if !targets.is_empty()&&IsIconic(item)==0&&IsZoomed(item)==0{
         let submenu=CreatePopupMenu();

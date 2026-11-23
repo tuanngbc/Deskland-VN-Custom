@@ -13,7 +13,7 @@ pub(super) struct Box2 { pub x:i32,pub y:i32,pub w:i32,pub h:i32 }
 impl Box2 {
     pub(super) fn rect(self)->Rect{Rect{x:self.x as f32,y:self.y as f32,w:self.w as f32,h:self.h as f32}}
     pub fn win(self)->RECT{RECT{left:self.x,top:self.y,right:self.x+self.w,bottom:self.y+self.h}}
-    fn hit(self,x:i32,y:i32)->bool{x>=self.x&&x<self.x+self.w&&y>=self.y&&y<self.y+self.h}
+    pub(super) fn hit(self,x:i32,y:i32)->bool{x>=self.x&&x<self.x+self.w&&y>=self.y&&y<self.y+self.h}
     pub fn center(self)->(i32,i32){(self.x+self.w/2,self.y+self.h/2)}
 }
 
@@ -70,9 +70,10 @@ impl Layout {
         l.landscape=true;l.stack_design=stacked;
         l.inset=px(9).min((width/10).max(1));
         l.radius=px(9);
-        l.stack_step=(width/21).clamp(px(3).max(1),px(12).max(1));
+        // Keep rear layers distinct without sacrificing the front silhouette.
+        l.stack_step=(width/17).clamp(px(5).max(1),px(15).max(1));
         l.caption=px(20);
-        l.gap=gap.max(px(18));
+        l.gap=gap.max(px(21));
         let row_height=(l.card(0).w*10/18).max(1);
         let row_space=|nav:i32|(height-2*l.inset-nav+l.gap).max(0)/(row_height+l.gap);
         let limit=limit.clamp(1,8);
@@ -97,19 +98,21 @@ impl Layout {
         if self.stack_design{self.layers.get(i).copied().unwrap_or(0).max(1) as usize}
         else if self.stack&(1<<i)!=0{3}else{1}
     }
-    fn rear(self,i:usize,depth:i32)->Box2{
+    pub(super) fn rear(self,i:usize,depth:i32)->Box2{
         let mut c=self.card(i);
         if depth==0{return c;}
         let d=if self.stack_design{self.step()*depth}else{(self.inset*(depth+1)/2).max(1)};
         c.x+=if self.right{-d}else{d};
-        if self.landscape{c.y+=(d/6).min(self.inset);c.h=(c.h-d/4).max(1);}
+        if self.landscape{
+            c.y+=(d/5).min(self.inset+2);c.h=(c.h-d/3).max(1);
+        }
         else{c.y+=d/3;c.h=(c.h-d/2).max(1);}
         c
     }
     fn detached_icon(self,i:usize)->Box2{
         let card=self.card(i);let size=self.icon_size();
         if self.landscape{
-            let over=(size/4).max(1).min(self.inset);
+            let over=(size/3).max(1).min(self.inset);
             return Box2{x:if self.right{card.x+card.w-size+over}else{card.x-over},
                 y:card.y+card.h-size+over,w:size,h:size};
         }
@@ -134,6 +137,11 @@ impl Layout {
         }
         Some(Box2{x:c.x+c.w-self.inset-size,y:c.y+c.h-(self.caption+size)/2,w:size,h:size})
     }
+    pub(super) fn projected_close(self,i:usize)->Option<Box2>{
+        let mut button=self.close_button(i)?;
+        button.y-=(self.card(i).h/7).max(2);
+        Some(button)
+    }
     pub fn close_hit(self,i:usize,x:i32,y:i32)->bool{
         self.close_button(i).is_some_and(|b|b.hit(x,y))
     }
@@ -141,9 +149,10 @@ impl Layout {
     pub fn portrait_preview(self,i:usize)->RECT{
         let c=self.card(i);let mut slot=self.preview(i);
         if self.landscape&&self.stack_design{
-            slot.top=c.y+(self.inset/3).max(2);
+            slot.top=c.y+(self.inset/4).max(2);
+            slot.bottom=(slot.bottom+self.caption/5).min(c.y+c.h-2);
             // Shift inward from the detached app icon, mirrored on the right.
-            let shift=(c.w/14).min(self.inset*2);
+            let shift=(c.w/18).min(self.inset);
             if self.right{slot.right-=2*shift;}else{slot.left+=2*shift;}
         }
         slot
@@ -248,6 +257,7 @@ impl Panel {
                         Some(([6,5,4],58.0*(1.0-d.max(0.0)/k).clamp(0.0,1.0).powi(2)))
                     });
                 }
+                if look.projected==Some(i){continue;}
                 for layer in (1..layout.depth(i)).rev(){
                     let v=(layout.depth(i)-layer) as u8*5;
                     let c=if look.dark{[78+v,69+v,61+v]}else{[208+v,202+v,197+v]};
@@ -257,7 +267,6 @@ impl Panel {
                     }
                     rounded(data,w,h,r,radius,c,alpha.max(205));
                 }
-                if look.projected==Some(i){continue;}
                 let active=look.active&(1<<i)!=0;
                 let edge=if active{palette.accent}else if look.dark{[102,92,82]}else{[224,215,208]};
                 let tint=if look.dark{[50,43,37]}else{[253,249,246]};
@@ -326,9 +335,13 @@ impl Panel {
             let small=if layout.stack_design{layout.detached_icon(i).rect()}
                 else{Rect{x:(c.x+layout.inset) as f32,y:(c.y+c.h) as f32-(layout.caption as f32+size)/2.0,w:size,h:size}};
             if layout.landscape&&layout.stack_design{
-                let shadow=Rect{x:small.x-2.0,y:small.y,w:small.w+4.0,h:small.h+3.0};
-                rounded(data,w,h,shadow,small.w*0.26,[12,14,19],52);
-                rounded(data,w,h,small,small.w*0.23,if look.dark{[51,53,60]}else{[247,248,252]},228);
+                let k=(small.w*0.16).max(2.0);
+                let shadow=Rect{x:small.x-k,y:small.y-k,w:small.w+2.0*k,h:small.h+2.0*k};
+                draw(data,w,h,shadow,|x,y|{
+                    let d=distance(small,small.w*0.24,x,y-k*0.46);
+                    Some(([8,9,13],112.0*(1.0-d.max(0.0)/k).clamp(0.0,1.0).powi(2)))
+                });
+                rounded(data,w,h,small,small.w*0.23,if look.dark{[51,53,60]}else{[247,248,252]},229);
             }
             if let Some(Some(icon))=atlas.get(&item.path){self.icons.paint(data,w,h,small,icon);}
             else{fallback_icon(data,w,h,small,tint);}
@@ -352,9 +365,19 @@ impl Panel {
                     if look.projected==Some(i){
                         // No text over the sampled scene. The popup, tooltip
                         // and context menu continue to expose its title.
-                        if let Some(button)=hover.filter(|&n|n==i).and_then(|_|layout.close_button(i)){
+                        if let Some(button)=hover.filter(|&n|n==i).and_then(|_|layout.projected_close(i)){
                             rounded(data,w,h,button.rect(),button.w as f32/2.0,[110,66,62],255);
                             draw_mask_scaled(data,w,h,mask,self.large_fonts[0],button,"×",true,[255,242,239],2);
+                        }
+                        let extras=items[i].count.saturating_sub(5);
+                        if extras>0{
+                            let card=layout.card(i);
+                            let bw=(layout.inset*4).min(card.w/3).max(1);
+                            let bh=(layout.caption-2).max(1);
+                            let badge=Box2{x:if layout.right{card.x+card.w-layout.inset-bw}else{card.x+layout.inset},
+                                y:card.y+layout.inset,w:bw,h:bh};
+                            rounded(data,w,h,badge.rect(),bh as f32/2.0,[29,25,23],225);
+                            draw_mask_scaled(data,w,h,mask,self.large_fonts[1],badge,&format!("+{extras}"),true,[252,248,245],2);
                         }
                         continue;
                     }

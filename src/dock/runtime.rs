@@ -303,16 +303,24 @@ mod tests {
         for (label,dock,stage) in [("control",false,false),("stage-only",false,true),
             ("dock-only",true,false),("both",true,true)] {
             let on=Options{enabled:dock,stage_enabled:stage,..Default::default()};
-            let start=handles();
-            let t=Instant::now();
-            for _ in 0..100 {
+            let toggle=||{
                 runtime.configure(on.clone());
                 let active=runtime.inspect_with_paint(dock||stage);
                 assert_eq!(active.is_empty(),!(dock||stage));
                 runtime.configure(off.clone());
                 assert!(runtime.inspect().is_empty());
                 assert!(active.iter().all(|h| unsafe{IsWindow(*h as _)}==0));
-            }
+            };
+            // Rendering a stage with real windows initializes system-wide
+            // font/compositor caches lazily; warm the same path, not just
+            // the idle controller. Keep the cold delta in the log and the
+            // original <=8 growth bound for the subsequent 100 toggles.
+            let cold=handles();
+            for _ in 0..12{toggle();}
+            let start=measure(cold);
+            eprintln!("{label} active-path warm-up: {cold} -> {start} handles");
+            let t=Instant::now();
+            for _ in 0..100{toggle();}
             let after=measure(start);
             eprintln!("100 {label} toggles in {:?}; process handles {start} -> {after}",t.elapsed());
             results.push((label,start,after));

@@ -2123,6 +2123,13 @@ fn main() {
         eprintln!("Trial initialization refused: {error}");
         std::process::exit(2);
     }
+    if args.iter().any(|a|a=="--trial-stage-capture-diagnostic"){
+        let Some(dir)=trial::data_dir()else{std::process::exit(2);};
+        if trial::verify_guards().is_err(){std::process::exit(2);}
+        unsafe{SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);}
+        if dock::stage_capture_diagnostic(dir).is_err(){std::process::exit(3);}
+        return;
+    }
     if let Some(code)=dock::tray_poc::dispatch(&args){std::process::exit(code);}
     if args.iter().any(|a|a=="--trial-fixture-pids") {
         let Some(raw)=arg_value(&args,"--trial-fixture-pids") else {std::process::exit(2);};

@@ -5,8 +5,6 @@ use super::{Box2,Layout};
 use crate::dock::{glass_probe::Layer,surface::{draw,rounded},geometry::Rect};
 use windows_sys::Win32::{Foundation::*,Graphics::Gdi::*,UI::WindowsAndMessaging::*};
 use std::ptr::null_mut;
-#[path = "stage_capture_lab.rs"]
-mod capture;
 
 use crate::dock::stage_projection::Card;
 

@@ -40,12 +40,13 @@ impl Previews {
         self.update_targets(dst,items.iter().enumerate().map(|(i,item)|(item.hwnd,layout.preview(i),layout.portrait_preview(i),None)),steps.as_deref_mut())
     }
     pub unsafe fn update_stacks(&mut self,dst:HWND,groups:&[Vec<usize>],layout:Layout,projected:Option<usize>)->bool{
-        let targets=groups.iter().enumerate().flat_map(|(group,members)|members.iter().take(layout.depth(group))
+        let targets=groups.iter().enumerate().filter(|(group,_)|Some(*group)!=projected)
+            .flat_map(|(group,members)|members.iter().take(layout.depth(group))
             .enumerate().map(move |(depth,&handle)|{
                 let (area,clip)=layout.preview_layer(group,depth);
                 (handle as HWND,area,if depth==0{layout.portrait_preview(group)}else{area},clip)
             }));
-        self.update_targets(dst,targets.filter(|(hwnd,_,_,_)|Some(*hwnd as usize)!=projected),None)
+        self.update_targets(dst,targets,None)
     }
     unsafe fn update_targets(&mut self,dst:HWND,targets:impl Iterator<Item=(HWND,RECT,RECT,Option<RECT>)>,mut steps:Option<&mut [PreviewStep]>)->bool{
         // A thumbnail is bound to its original DWM destination. Changing

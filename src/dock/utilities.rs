@@ -448,11 +448,11 @@ pub(super) fn hub_view(snapshot:&Snapshot,profile:&Profile,dock_mode:bool,live:b
             }
         }
     }
-    cards.push(Card{title:"Khay ứng dụng Windows".into(),
-        hint:if dock_mode{"Về chế độ tương thích để dùng icon và menu gốc"}else{"Mở khay tràn Explorer"}.into(),
-        icon:None,action:Some(Command::WindowsTray)});
+    cards.insert(0,Card{title:"Ứng dụng chạy nền / Khay ứng dụng".into(),
+        hint:"Cửa sổ đã thu nhỏ và khay thông báo Windows".into(),
+        icon:Some(Widget::Windows),action:Some(Command::BackgroundApps)});
     View{title:"Trung tâm điều khiển".into(),
-        hint:if dock_mode{"Tiện ích Deskland · Icon ứng dụng bên thứ ba ở khay Windows"}else{"Tiện ích Dock · Chọn một mục để mở"}.into(),
+        hint:"Tiện ích Dock · Chọn một mục để mở".into(),
         cards,metrics:None}
 }
 pub(super) unsafe fn show_view(owner:HWND,point:POINT,snapshot:&Snapshot,profile:&Profile,widget:Option<Widget>,dock_mode:bool){
