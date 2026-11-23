@@ -70,6 +70,11 @@ struct Snapshot {id:WindowId,visible:bool}
 unsafe fn snapshot()->Option<Vec<Snapshot>>{
     taskbars().map(|ids|ids.into_iter().map(|id|Snapshot{id,visible:IsWindowVisible(id.hwnd())!=0}).collect())
 }
+unsafe fn request_hide(hwnd:HWND)->bool{
+    // Queue a visibility-only change without activating or moving Explorer.
+    SetWindowPos(hwnd,ptr::null_mut(),0,0,0,0,
+        SWP_HIDEWINDOW|SWP_NOACTIVATE|SWP_NOZORDER|SWP_NOOWNERZORDER|SWP_NOMOVE|SWP_NOSIZE|SWP_ASYNCWINDOWPOS)!=0
+}
 unsafe fn restore(ids:&[WindowId]){
     for &id in ids{if id.matches()&&IsWindowVisible(id.hwnd())==0{ShowWindowAsync(id.hwnd(),SW_SHOWNA);}}
 }
@@ -77,12 +82,12 @@ unsafe fn restore(ids:&[WindowId]){
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 #[repr(i32)]
 pub(super) enum Exit { Requested=0, Emergency=20, ExplorerChanged=21, ShellRevealed=22,
-    DockLost=23, HotkeyUnavailable=24, HideFailed=25, LinkLost=26 }
+    DockLost=23, HotkeyUnavailable=24, HideFailed=25, LinkLost=26, HideRejected=27, ReadyTimeout=28 }
 impl Exit{
     fn from_code(code:Option<i32>)->Self{
         match code{Some(0)=>Self::Requested,Some(20)=>Self::Emergency,Some(21)=>Self::ExplorerChanged,
             Some(22)=>Self::ShellRevealed,Some(23)=>Self::DockLost,Some(24)=>Self::HotkeyUnavailable,
-            Some(25)=>Self::HideFailed,_=>Self::LinkLost}
+            Some(25)=>Self::HideFailed,Some(27)=>Self::HideRejected,Some(28)=>Self::ReadyTimeout,_=>Self::LinkLost}
     }
     pub(super) fn message(self)->&'static str{
         match self{
@@ -92,7 +97,9 @@ impl Exit{
             Self::ShellRevealed=>"Windows đã tự hiện thanh tác vụ. Đã về chế độ tương thích.",
             Self::DockLost=>"Dock không còn phản hồi. Đã khôi phục thanh tác vụ Windows.",
             Self::HotkeyUnavailable=>"Không đăng ký được Ctrl+Alt+Shift+F12. Giữ thanh tác vụ Windows.",
-            Self::HideFailed=>"Không ẩn được thanh tác vụ Windows an toàn.",
+            Self::HideFailed=>"Explorer vẫn giữ ít nhất một thanh tác vụ hiện. Đã trả về chế độ tương thích.",
+            Self::HideRejected=>"Windows từ chối yêu cầu ẩn thanh tác vụ.",
+            Self::ReadyTimeout=>"Bộ khôi phục không xác nhận kịp. Đã giữ lại thanh tác vụ.",
             Self::LinkLost=>"Mất liên lạc với bộ khôi phục. Đã trả thanh tác vụ cho Windows.",
         }
     }
@@ -128,7 +135,7 @@ impl Watch {
         }
         if unsafe{SetEvent(self.pulse.0)}==0{return Err(Exit::LinkLost);}
         if self.ready.fired(){return Ok(true);}
-        if self.started.elapsed()>Duration::from_secs(3){return Err(Exit::HideFailed);}
+        if self.started.elapsed()>Duration::from_secs(4){return Err(Exit::ReadyTimeout);}
         Ok(false)
     }
 }
@@ -195,10 +202,10 @@ unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle
     for &id in &hidden{
         if parent.fired()||stop.fired(){return Exit::Requested;}
         if !id.matches(){return Exit::ExplorerChanged;}
-        if ShowWindowAsync(id.hwnd(),SW_HIDE)==0{return Exit::HideFailed;}
+        if !request_hide(id.hwnd()){return Exit::HideRejected;}
         rollback.0.push(id);
     }
-    for _ in 0..25{
+    for _ in 0..60{
         if parent.fired()||stop.fired(){return Exit::Requested;}
         match health(expected,snapshot().as_deref()){
             None=>break,
@@ -250,6 +257,13 @@ mod tests{
                 assert_eq!(wait_for_restore(&handles,1,Duration::from_millis(8),||None),reason);
             }
         }
+    }
+    #[test]
+    fn startup_reports_api_rejection_visibility_failure_and_readiness_timeout_separately(){
+        for reason in [Exit::HideRejected,Exit::HideFailed,Exit::ReadyTimeout]{
+            assert_eq!(Exit::from_code(Some(reason as i32)),reason);
+        }
+        assert_ne!(Exit::HideFailed.message(),Exit::ReadyTimeout.message());
     }
     #[test]
     fn both_bars_and_previously_hidden_bars_are_checked_without_adopting_new_windows(){

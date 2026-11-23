@@ -3018,6 +3018,20 @@ fn main() {
                     }
                     app.cfg.dock=dock::Options::from_json(&value);app.configure_dock();web_changed=true;
                 }
+                "dockPinCommand" => {
+                    let (ok,message)=match dock::create_command_pin(&s_("command"),&s_("label")){
+                        Ok(pin) if app.cfg.dock.pinned.iter().any(|p|p==&pin)=>(false,"Lệnh này đã được ghim."),
+                        Ok(_) if app.cfg.dock.pinned.len()>=32=>(false,"Dock đã đủ 32 mục ghim."),
+                        Ok(pin)=>{
+                            dock::Edit::Pin(pin).apply(&mut app.cfg.dock);
+                            app.configure_dock();
+                            web_changed=true;
+                            (true,"Đã ghim lệnh vào Dock.")
+                        }
+                        Err(message)=>(false,message),
+                    };
+                    web::post(&serde_json::json!({"t":"dockPinResult","ok":ok,"message":message}).to_string());
+                }
                 "dockTaskbar" => {
                     if let Some(hidden)=m["hidden"].as_bool(){
                         if let Some(runtime)=app.dock_runtime.as_ref(){runtime.set_taskbar_hidden(hidden);}

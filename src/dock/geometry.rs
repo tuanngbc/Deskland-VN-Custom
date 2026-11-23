@@ -53,6 +53,20 @@ impl Layout {
     pub fn hit(&self,x:f32,y:f32)->Option<usize>{
         self.slots.iter().position(|r|r.contains(x,y))
     }
+    pub fn magnification_target(&self,x:f32,y:f32)->Option<f32>{
+        let point=self.axis(x,y);
+        let vertical=self.side!=DockSide::Bottom;
+        let across=if vertical{x}else{y};
+        let first=self.slots.first()?;
+        let last=self.slots.last()?;
+        let (start,end)=if vertical{(first.y,last.y+last.h)}else{(first.x,last.x+last.w)};
+        let (min,max)=self.slots.iter().fold((f32::INFINITY,f32::NEG_INFINITY),|(min,max),slot|{
+            let (a,b)=if vertical{(slot.x,slot.x+slot.w)}else{(slot.y,slot.y+slot.h)};
+            (min.min(a),max.max(b))
+        });
+        // One band for hover motion, separate from per-icon click hit tests.
+        (point>=start&&point<end&&across>=min&&across<max).then_some(point)
+    }
     pub fn hot(&self,x:f32,y:f32)->Option<usize>{
         self.hit(x,y).or_else(||{
             if self.is_launch_button(x,y){Some(self.slots.len())}
@@ -323,6 +337,22 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn magnification_crosses_the_gap_without_stealing_clicks(){
+        let bounds=RECT{left:-1080,top:-700,right:0,bottom:1220};
+        let screen=Display{id:"portrait".into(),name:String::new(),bounds,work:bounds,dpi:144,primary:false};
+        for position in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
+            let style=Appearance{position,..Default::default()};
+            let layout=measure_widgets(&screen,&style,5,None,0.0,Some(false),&[],28);
+            let (a,b)=(layout.slots[0],layout.slots[1]);
+            let (x,y)=if position==DockSide::Bottom{((a.x+a.w+b.x)*0.5,a.y+a.h*0.5)}
+                else{(a.x+a.w*0.5,(a.y+a.h+b.y)*0.5)};
+            assert!(layout.hit(x,y).is_none());
+            assert_eq!(layout.magnification_target(x,y),Some(layout.axis(x,y)));
+            let start=layout.start;
+            assert!(layout.magnification_target(start.x+start.w*0.5,start.y+start.h*0.5).is_none());
+        }
+    }
     #[test]
     fn windows_controls_bookend_the_dock_without_overlapping_apps_or_utilities(){
         let bounds=RECT{left:-1080,top:-700,right:0,bottom:1220};

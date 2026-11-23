@@ -40,17 +40,23 @@ pub(super) fn scale(dpi:u32,n:i32)->i32{
     (n*dpi.clamp(72,288) as i32+48)/96
 }
 pub(super) unsafe fn register(name:&[u16],proc:WNDPROC)->bool{
-    let wc=WNDCLASSW{style:CS_DROPSHADOW,lpfnWndProc:proc,
+    register_with_style(name,proc,CS_DROPSHADOW)
+}
+pub(super) unsafe fn register_with_style(name:&[u16],proc:WNDPROC,style:u32)->bool{
+    let wc=WNDCLASSW{style,lpfnWndProc:proc,
         hInstance:GetModuleHandleW(ptr::null()),hCursor:LoadCursorW(ptr::null_mut(),IDC_ARROW),
         lpszClassName:name.as_ptr(),..mem::zeroed()};
     RegisterClassW(&wc)!=0||GetLastError()==ERROR_CLASS_ALREADY_EXISTS
 }
 pub(super) unsafe fn frame(hwnd:HWND,width:i32,height:i32,dpi:u32,anchor:Anchor){
     disable_system_border(hwnd);
+    clip_corners(hwnd,width,height,dpi);
+    SetLayeredWindowAttributes(hwnd,0,anchor.alpha(),LWA_ALPHA);
+}
+pub(super) unsafe fn clip_corners(hwnd:HWND,width:i32,height:i32,dpi:u32){
     let r=scale(dpi,32).max(2);
     let region=CreateRoundRectRgn(0,0,width+1,height+1,r,r);
     if !region.is_null()&&SetWindowRgn(hwnd,region,0)==0{DeleteObject(region);}
-    SetLayeredWindowAttributes(hwnd,0,anchor.alpha(),LWA_ALPHA);
 }
 pub(super) unsafe fn disable_system_border(hwnd:HWND){
     let no_round=1u32; // DWMWCP_DONOTROUND: this window supplies its own corners.

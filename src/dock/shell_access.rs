@@ -7,10 +7,11 @@ use windows_sys::Win32::{
     System::Threading::{OpenProcess,QueryFullProcessImageNameW,PROCESS_QUERY_LIMITED_INFORMATION},
     UI::{Input::KeyboardAndMouse::*,WindowsAndMessaging::*},
 };
+use windows::core::Interface;
 use windows::Win32::{
     Foundation::HWND as AutomationHwnd,
     System::Com::{CoCreateInstance,CoInitializeEx,CoUninitialize,CLSCTX_INPROC_SERVER,COINIT_MULTITHREADED},
-    UI::Accessibility::{CUIAutomation,IUIAutomation,IUIAutomationInvokePattern,IUIAutomationTogglePattern,
+    UI::Accessibility::{CUIAutomation,IUIAutomation,IUIAutomation2,IUIAutomationInvokePattern,IUIAutomationTogglePattern,
         TreeScope_Descendants,UIA_InvokePatternId,UIA_TogglePatternId},
 };
 
@@ -35,13 +36,13 @@ pub(super) fn route(dock_mode:bool,target:Target,context:bool)->Route{
         _=>Route::Native,
     }
 }
-pub(super) fn native_busy()->bool{OPENING.load(Ordering::Acquire)}
+pub(super) fn native_busy()->bool{[&OPENING_START,&OPENING_TRAY].into_iter().any(|v|v.load(Ordering::Acquire))}
 
-pub(super) unsafe fn activate(target:Target, context:bool,anchor:Option<Anchor>){
+pub(super) unsafe fn activate(target:Target, context:bool,anchor:Option<Anchor>,owner:HWND,control:HWND){
     super::utilities::close_panels();
     match (target,context){
         (Target::Start,true)=>{win_chord(b'X' as u16);}
-        (Target::Start,false)|(Target::Tray,_)=>open_native(target,anchor),
+        (Target::Start,false)|(Target::Tray,_)=>open_native(target,anchor,owner,control),
         (Target::Clock,_)=>{win_chord(b'N' as u16);}
     }
 }
@@ -66,7 +67,8 @@ unsafe fn send_win(key:Option<u16>)->bool{
     count==len
 }
 
-static OPENING:AtomicBool=AtomicBool::new(false);
+static OPENING_START:AtomicBool=AtomicBool::new(false);
+static OPENING_TRAY:AtomicBool=AtomicBool::new(false);
 
 fn is_overflow(class:&str,id:&str,name:&str)->bool{
     matches!(class,"SystemTray.ChevronIconView"|"SystemTray.OverflowButton")
@@ -98,11 +100,14 @@ unsafe fn invoke_taskbar(automation:&IUIAutomation,target:Target,shell:u32,ancho
     let monitor=anchor.map(|a|MonitorFromPoint(a.point,MONITOR_DEFAULTTONEAREST));
     let mut bars=top_windows().into_iter().filter(|&h|pid(h)==shell&&matches!(class(h).as_str(),"Shell_TrayWnd"|"Shell_SecondaryTrayWnd")).collect::<Vec<_>>();
     bars.sort_by_key(|&h|u8::from(monitor!=Some(MonitorFromWindow(h,MONITOR_DEFAULTTONEAREST))));
-    let Ok(condition)=automation.CreateTrueCondition()else{return false;};
+    let Ok(condition)=automation.ControlViewCondition()else{return false;};
+    let started=std::time::Instant::now();
     for bar in bars {
+        if started.elapsed()>=Duration::from_millis(650){return false;}
         let Ok(root)=automation.ElementFromHandle(AutomationHwnd(bar))else{continue;};
         let Ok(children)=root.FindAll(TreeScope_Descendants,&condition)else{continue;};
         for index in 0..children.Length().unwrap_or(0).min(300){
+            if started.elapsed()>=Duration::from_millis(650){return false;}
             let Ok(item)=children.GetElement(index)else{continue;};
             if item.CurrentProcessId().ok()!=Some(shell as i32){continue;}
             let id=item.CurrentAutomationId().map(|x|x.to_string()).unwrap_or_default();
@@ -154,16 +159,16 @@ unsafe fn native_popup(target:Target,shell:u32)->Option<(HWND,RECT)>{
     let first=matches.next()?;
     matches.next().is_none().then_some(first)
 }
-unsafe fn place_popup(target:Target,shell:u32,anchor:Anchor){
+unsafe fn place_popup(target:Target,shell:u32,anchor:Anchor)->bool{
     let mut last=None;
     for _ in 0..24{
         thread::sleep(Duration::from_millis(25));
         let Some((hwnd,r))=native_popup(target,shell)else{last=None;continue;};
         let stamp=(hwnd,r.left,r.top,r.right,r.bottom);
         if last!=Some(stamp){last=Some(stamp);continue;}
-        let Some(work)=anchor.work()else{return;};
+        let Some(work)=anchor.work()else{return true;};
         let (w,h)=(r.right-r.left,r.bottom-r.top);
-        if w>work.right-work.left||h>work.bottom-work.top{return;}
+        if w>work.right-work.left||h>work.bottom-work.top{return true;}
         let (x,y)=panel_chrome::placement(work,anchor,w,h,12);
         if (x,y)!=(r.left,r.top){
             // Move only the recognized flyout that just opened. Keep the
@@ -171,36 +176,52 @@ unsafe fn place_popup(target:Target,shell:u32,anchor:Anchor){
             let moved=SetWindowPos(hwnd,ptr::null_mut(),x,y,0,0,SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_ASYNCWINDOWPOS)!=0;
             crate::log!("DOCK_SHELL {target:?} anchor requested={moved}");
         }
-        return;
+        return true;
     }
     crate::log!("DOCK_SHELL {target:?} native flyout not recognized for positioning");
+    false
 }
 
-unsafe fn open_native(target:Target,anchor:Option<Anchor>){
-    if OPENING.swap(true,Ordering::AcqRel){return;}
+unsafe fn open_native(target:Target,anchor:Option<Anchor>,owner:HWND,control:HWND){
+    let opening=if target==Target::Start{&OPENING_START}else{&OPENING_TRAY};
+    if opening.swap(true,Ordering::AcqRel){return;}
+    let (owner,control)=(owner as usize,control as usize);
+    let before=GetForegroundWindow() as usize;
+    let fallback=move||{
+        PostMessageW(control as HWND,super::WM_SHELL_FALLBACK,owner,if target==Target::Start{0}else{1});
+    };
     if thread::Builder::new().name("deskland-shell-flyout".into()).spawn(move||{
-        struct Finish;
-        impl Drop for Finish{fn drop(&mut self){OPENING.store(false,Ordering::Release);}}
-        let _finish=Finish;
+        struct Finish(&'static AtomicBool);
+        impl Drop for Finish{fn drop(&mut self){self.0.store(false,Ordering::Release);}}
+        let _finish=Finish(opening);
         unsafe{
             let shell=pid(GetShellWindow());
             let was_open=native_popup(target,shell).is_some();
-            let mut invoked=false;
-            if CoInitializeEx(None,COINIT_MULTITHREADED).is_ok(){
+            // The Win key uses the Windows Start experience without a slow
+            // taskbar accessibility traversal or depending on XAML IDs.
+            let mut invoked=target==Target::Start&&send_win(None);
+            if !invoked&&CoInitializeEx(None,COINIT_MULTITHREADED).is_ok(){
                 {
                     let uia:windows::core::Result<IUIAutomation>=CoCreateInstance(&CUIAutomation,None,CLSCTX_INPROC_SERVER);
-                    if let Ok(uia)=uia{invoked=invoke_taskbar(&uia,target,shell,anchor);}
+                    if let Ok(uia)=uia{
+                        if let Ok(tuning)=uia.cast::<IUIAutomation2>(){
+                            let _=tuning.SetConnectionTimeout(250);
+                            let _=tuning.SetTransactionTimeout(350);
+                        }
+                        invoked=invoke_taskbar(&uia,target,shell,anchor);
+                    }
                 }
                 CoUninitialize();
             }
-            if !invoked&&target==Target::Start{invoked=send_win(None);}
-            if !invoked{
-                crate::log!("DOCK_SHELL {target:?} native control unavailable");
-            }else if !was_open{
-                if let Some(anchor)=anchor{place_popup(target,shell,anchor);}
+            let claimed=invoked&&(was_open||anchor.is_none_or(|anchor|place_popup(target,shell,anchor)));
+            // Windows updates have changed the Start flyout class in the past.
+            // Don't open a second panel when the real host took the foreground.
+            if !claimed&&GetForegroundWindow() as usize==before{
+                crate::log!("DOCK_SHELL {target:?} native unavailable; using Deskland");
+                fallback();
             }
         }
-    }).is_err(){OPENING.store(false,Ordering::Release);}
+    }).is_err(){opening.store(false,Ordering::Release);fallback();}
 }
 
 #[cfg(test)]

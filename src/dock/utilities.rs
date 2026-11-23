@@ -69,6 +69,9 @@ impl Provider {
         true
     }
     pub fn read(&self,owner:HWND,network:bool,change:Option<wifi::Change>)->bool{
+        // An unread answer belongs to the previous panel; do not let a new
+        // request replace it before the Dock processes WM_UTILITY_READY.
+        if self.state.result.lock().map_or(true,|slot|slot.is_some()){return false;}
         self.submit(owner,ptr::null_mut(),JobKind::Read,network,change)
     }
     pub fn take(&self)->Option<Snapshot>{self.state.result.lock().ok()?.take()}
@@ -352,6 +355,31 @@ pub(super) fn available_in_dock_mode(widget:Option<Widget>)->bool{
 pub(super) fn local_action(action:Action)->bool{
     !matches!(action,Action::Notifications|Action::QuickSettings|Action::Desktop|Action::Windows|Action::Host(HostAction::SystemMonitor))
 }
+pub(super) unsafe fn show_hub(owner:HWND,point:POINT,profile:&Profile,dock_mode:bool){
+    // The overview is interactive immediately. Device-specific views request
+    // their readings on demand; this click never waits on WLan / COM.
+    let anchor=chrome::Anchor::for_owner(owner,point);
+    let initial=Snapshot{network:None,wlan:None,bluetooth:BluetoothState::Unknown,battery:battery(),audio:None};
+    control_center::show(owner,anchor,hub_view(&initial,profile,dock_mode,false));
+}
+pub(super) fn hub_view(snapshot:&Snapshot,profile:&Profile,dock_mode:bool,live:bool)->View{
+    let mut cards=profile.order.iter().copied().filter(|w|!dock_mode||available_in_dock_mode(Some(*w))).filter(|w|!profile.hidden.contains(w)
+        && (*w!=Widget::Metrics||profile.metrics.enabled)
+        && (*w!=Widget::Battery||matches!(snapshot.battery,BatteryState::Present{..})))
+        .map(|w|Card{title:w.title().into(),hint:if profile.details&&live{utility_hint(w,snapshot)}else{String::new()},
+            icon:Some(w),action:Some(Command::Widget(w))}).collect::<Vec<_>>();
+    if dock_mode{
+        for w in [Widget::Settings,Widget::Windows,Widget::Bluetooth,Widget::Sound,Widget::Network]{
+            if !profile.order.contains(&w)||profile.hidden.contains(&w){
+                cards.insert(0,Card{title:w.title().into(),hint:if live{utility_hint(w,snapshot)}else{String::new()},
+                    icon:Some(w),action:Some(Command::Widget(w))});
+            }
+        }
+    }
+    View{title:"Trung tâm điều khiển".into(),
+        hint:if dock_mode{"Tiện ích Deskland · Icon ứng dụng bên thứ ba ở khay Windows"}else{"Tiện ích Dock · Chọn một mục để mở"}.into(),
+        cards,metrics:None}
+}
 pub(super) unsafe fn show_view(owner:HWND,point:POINT,snapshot:&Snapshot,profile:&Profile,widget:Option<Widget>,dock_mode:bool){
     let anchor=chrome::Anchor::for_owner(owner,point);
     if let Some(w)=widget{
@@ -414,23 +442,7 @@ pub(super) unsafe fn show_view(owner:HWND,point:POINT,snapshot:&Snapshot,profile
             cards.push(make("Mở trong Windows".into(),hint.into(),Some(Widget::Settings),Some(Command::Run(action))));
         }
         (widget.title().to_owned(),label,cards)
-    }else{
-        let mut cards=profile.order.iter().copied().filter(|w|!dock_mode||available_in_dock_mode(Some(*w))).filter(|w|!profile.hidden.contains(w)
-            && (*w!=Widget::Metrics||profile.metrics.enabled)
-            && (*w!=Widget::Battery||matches!(snapshot.battery,BatteryState::Present{..})))
-            .map(|w|{
-                let hint=if profile.details{utility_hint(w,snapshot)}else{String::new()};
-                make(w.title().into(),hint,Some(w),Some(Command::Widget(w)))
-            }).collect::<Vec<_>>();
-        if dock_mode{
-            for w in [Widget::Settings,Widget::Windows,Widget::Bluetooth,Widget::Sound,Widget::Network]{
-                if !profile.order.contains(&w)||profile.hidden.contains(&w){
-                    cards.insert(0,make(w.title().into(),utility_hint(w,snapshot),Some(w),Some(Command::Widget(w))));
-                }
-            }
-        }
-        ("Trung tâm điều khiển".into(),if dock_mode{"Tiện ích Deskland · Các biểu tượng ứng dụng bên thứ ba ở chế độ tương thích"}else{"Tiện ích Dock · Chọn một mục để mở"}.into(),cards)
-    };
+    }else{return;};
     if !cards.is_empty(){control_center::show(owner,anchor,View{title,hint,cards,metrics:None});}
 }
 fn week_dates(mut year:u16,mut month:u16,mut day:u16, weekday:u16)->Vec<(u16,u16,u16)>{

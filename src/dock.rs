@@ -33,6 +33,8 @@ mod panel_chrome;
 mod appbar;
 mod shell_access;
 mod taskbar_guard;
+mod command_pin;
+pub(crate) fn create_command_pin(line:&str,label:&str)->Result<String,&'static str>{command_pin::encode(line,label)}
 pub(crate) use taskbar_guard::watchdog as taskbar_watchdog;
 pub use utilities::{HostAction,Profile as UtilityProfile,Widget as UtilityWidget};
 pub use control_center::MetricOptions;
@@ -49,6 +51,7 @@ const WM_TICK:u32=WM_APP+50;
 const WM_CONFIG:u32=WM_APP+51;
 const WM_ICON_CHANGED:u32=WM_APP+52;
 const WM_UTILITY_READY:u32=WM_APP+53;
+const WM_SHELL_FALLBACK:u32=WM_APP+55;
 const MOTION_TIMER:usize=4;
 const HIDE_TIMER:usize=5;
 const WORKSPACE_TIMER:usize=6;
@@ -56,6 +59,7 @@ const STAGE_MOTION_TIMER:usize=7;
 const STATUS_TIP_TIMER:usize=8;
 const FEEDBACK_TIMER:usize=9;
 const TASKBAR_GUARD_TIMER:usize=12;
+const UTILITY_RETRY_TIMER:usize=13;
 const WM_DOCK_MOUSELEAVE:u32=0x02A3;
 // winuser.h macro: HSHELL_REDRAW | HSHELL_HIGHBIT.
 const HSHELL_FLASH:usize=6 | 0x8000;
@@ -135,13 +139,13 @@ struct Motion {
 impl Motion {
     fn focus_value(&self)->Option<f32>{self.focus.map(|f|f.value)}
     fn tick(&mut self, now:std::time::Instant, speed:u32, reveal:&mut motion::Spring, shown:bool)->bool{
-        let dt=self.at.replace(now).map_or(0.016,|t|now.duration_since(t).as_secs_f32().clamp(0.001,0.045));
+        let dt=self.at.replace(now).map_or(0.016,|t|now.duration_since(t).as_secs_f32().clamp(0.001,0.090));
         let speed=speed as f32/100.0;
         let goal=if self.target.is_some(){1.0}else{0.0};
         let mut unsettled=self.zoom.advance(goal,dt,25.0*speed,0.0025);
         if let Some(target)=self.target{
             let focus=self.focus.get_or_insert_with(||motion::Spring::rest(target));
-            unsettled|=focus.advance(target,dt,33.0*speed,0.28);
+            unsettled|=focus.advance(target,dt,23.0+20.0*speed,0.18);
         }
         if self.target.is_none() && self.zoom.value==0.0 { self.focus=None; }
         unsettled|=reveal.advance(if shown{1.0}else{0.0},dt,28.0*speed,0.003);
@@ -287,7 +291,9 @@ thread_local! {
     static SURFACES:RefCell<HashMap<usize,surface::Surface>>=RefCell::new(HashMap::new());
     static STAGE_SURFACES:RefCell<HashMap<usize,stage_surface::Panel>>=RefCell::new(HashMap::new());
     static UTILITIES:RefCell<Option<utilities::Provider>>=const{RefCell::new(None)};
-    static UTILITY_ANCHOR:Cell<Option<(usize,POINT,Option<UtilityWidget>,bool)>>=const{Cell::new(None)};
+    static UTILITY_RETRY:RefCell<Option<UtilityRequest>>=const{RefCell::new(None)};
+    static UTILITY_HUB:Cell<Option<(usize,usize,bool)>>=const{Cell::new(None)};
+    static UTILITY_ANCHOR:Cell<Option<(usize,POINT,UtilityWidget,bool,usize)>>=const{Cell::new(None)};
     static ATTENTION_MSG:Cell<u32>=const{Cell::new(0)};
     static ATTENTION:RefCell<HashMap<usize,(u32,u32)>>=RefCell::new(HashMap::new());
     static STATUS_TIP:RefCell<Option<StatusTip>>=const{RefCell::new(None)};
@@ -409,6 +415,7 @@ unsafe fn stage_window_is_local(hwnd:HWND,bounds:RECT)->bool {
     !hmon.is_null() && GetMonitorInfoW(hmon,&mut info)!=0 && same_rect(bounds,info.rcMonitor)
 }
 fn basename(path:&str)->String {
+    if let Some(command)=command_pin::decode(path){return command.label;}
     path.rsplit(['\\','/']).next().unwrap_or(path).trim_end_matches(".exe").to_string()
 }
 fn is_shell_class(class:&str)->bool {
@@ -550,6 +557,9 @@ fn stage_depth(screen:&Screen,style:StageStyle)->i32{
     stage_width(screen,style).min(((screen.bounds.right-screen.bounds.left)/5).max(62))+margin
 }
 unsafe fn sync_appbars(state:&mut State,topology:bool){
+    // Don't ask Explorer to renegotiate AppBars while the watchdog is
+    // waiting for it to hide the bars. Keep the existing reservations.
+    if taskbar_pending(){return;}
     let notify=APPBAR_DIRTY.with(|flag|flag.replace(false));
     let reset=SHELL_RESTARTED.with(|flag|flag.replace(false));
     let mut requests=Vec::new();
@@ -627,7 +637,7 @@ unsafe fn recreate(state:&mut State) {
         if dock_targets.contains(&i) && !state.bars.iter().any(|b|same_rect(b.bounds,screen.bounds)) {
         let items=item_list(&state.windows,screen.bounds,&state.prefs);
         let mut pinned_widgets=state.prefs.utility_profiles.get(&screen.id).map_or_else(Vec::new,UtilityProfile::pinned);
-        if taskbar_active(){pinned_widgets.retain(|w|utilities::available_in_dock_mode(Some(*w)));}
+        if taskbar_hidden(){pinned_widgets.retain(|w|utilities::available_in_dock_mode(Some(*w)));}
         let layout=geometry::measure_cluster(screen,&state.prefs.appearance,items.len(),None,0.0,&pinned_widgets,state.prefs.utility_cluster(&screen.id));
         let r=layout.window;
         let hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|WS_EX_LAYERED,
@@ -716,7 +726,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             }
             let r=if b.layout.is_some(){
                 b.pinned_widgets=state.prefs.utility_profiles.get(&screen.id).map_or_else(Vec::new,UtilityProfile::pinned);
-                if taskbar_active(){b.pinned_widgets.retain(|w|utilities::available_in_dock_mode(Some(*w)));}
+                if taskbar_hidden(){b.pinned_widgets.retain(|w|utilities::available_in_dock_mode(Some(*w)));}
                 let layout=geometry::measure_cluster(&placed,&state.prefs.appearance,b.items.len(),b.motion.focus_value(),b.motion.zoom.value,
                     &b.pinned_widgets,state.prefs.utility_cluster(&screen.id));
                 changed|=b.layout.as_ref().is_some_and(|old|old.glass!=layout.glass||old.slots!=layout.slots||old.utility!=layout.utility||old.inline!=layout.inline);
@@ -951,7 +961,7 @@ unsafe fn show_status_tip(owner:HWND){
             }else{item.title.chars().take(512).collect()});
         }
         let bar=state.bars.iter().find(|b|b.hwnd==owner&&!b.hidden&&!b.collapsed)?;
-        if let Some(target)=bar.pointer.and_then(|(x,y)|bar.shell_target(x,y)){return Some(target.title(taskbar_active()).to_owned());}
+        if let Some(target)=bar.pointer.and_then(|(x,y)|bar.shell_target(x,y)){return Some(target.title(taskbar_hidden()).to_owned());}
         let item=bar.status_hover?;
         Some(item.map_or("Bảng tiện ích",UtilityWidget::title).to_owned())
     });
@@ -1118,7 +1128,7 @@ unsafe fn request_utilities(hwnd:HWND,widget:Option<UtilityWidget>){
     request_utilities_with_change(hwnd,widget,None);
 }
 unsafe fn request_utilities_with_change(hwnd:HWND,widget:Option<UtilityWidget>,change:Option<wifi::Change>){
-    let dock_mode=taskbar_active();
+    let dock_mode=taskbar_hidden();
     if dock_mode&&widget==Some(UtilityWidget::Windows){
         let anchor=dock_app_anchor(hwnd,None);
         let cards=STATE.with(|s|{
@@ -1163,9 +1173,48 @@ unsafe fn request_utilities_with_change(hwnd:HWND,widget:Option<UtilityWidget>,c
         }
         return;
     }
-    let control=CONTROL.with(Cell::get);
-    let submitted=UTILITIES.with(|u|u.borrow_mut().get_or_insert_with(utilities::Provider::new).read(control,widget==Some(UtilityWidget::Network),change));
-    if submitted{UTILITY_ANCHOR.with(|a|a.set(Some((hwnd as usize,point,widget,dock_mode))));}
+    if widget.is_none(){
+        open_dock_hub(hwnd,panel_chrome::Anchor::for_owner(hwnd,point),dock_mode);
+        return;
+    }
+    let Some(widget)=widget else{return;};
+    let anchor=panel_chrome::Anchor::for_owner(hwnd,point);
+    use control_center::{Card,View};
+    control_center::show(hwnd,anchor,View{title:widget.title().into(),hint:"Đang đọc trạng thái từ Windows…".into(),
+        cards:vec![Card{title:"Đang tải…".into(),icon:Some(widget),hint:String::new(),action:None}],metrics:None});
+    let Some(ticket)=control_center::ticket(hwnd)else{return;};
+    let request=UtilityRequest{owner:hwnd as usize,point,widget,dock_mode,ticket,change,started:Instant::now()};
+    if !submit_utility(&request){
+        UTILITY_RETRY.with(|slot|slot.replace(Some(request)));
+        SetTimer(CONTROL.with(Cell::get),UTILITY_RETRY_TIMER,70,None);
+    }
+}
+struct UtilityRequest{
+    owner:usize,point:POINT,widget:UtilityWidget,dock_mode:bool,ticket:usize,change:Option<wifi::Change>,started:Instant,
+}
+fn submit_utility(request:&UtilityRequest)->bool{
+    if UTILITY_ANCHOR.with(|a|a.get().is_some())||UTILITY_HUB.with(|a|a.get().is_some()){return false;}
+    let submitted=UTILITIES.with(|u|u.borrow_mut().get_or_insert_with(utilities::Provider::new)
+        .read(CONTROL.with(Cell::get),request.widget==UtilityWidget::Network,request.change.clone()));
+    if submitted{UTILITY_ANCHOR.with(|a|a.set(Some((request.owner,request.point,request.widget,request.dock_mode,request.ticket))));}
+    submitted
+}
+unsafe fn retry_utility(control:HWND){
+    let request=UTILITY_RETRY.with(|r|r.borrow_mut().take());
+    if let Some(request)=request{
+        let hwnd=request.owner as HWND;
+        if control_center::ticket(hwnd)==Some(request.ticket)&&request.dock_mode==taskbar_hidden(){
+            if submit_utility(&request){KillTimer(control,UTILITY_RETRY_TIMER);return;}
+            if request.started.elapsed()<Duration::from_secs(3){
+                UTILITY_RETRY.with(|r|r.replace(Some(request)));
+                return;
+            }
+            control_center::update(hwnd,request.ticket,control_center::View{title:request.widget.title().into(),
+                hint:"Windows chưa trả trạng thái.".into(),metrics:None,cards:vec![control_center::Card{title:"Thử lại".into(),
+                icon:Some(request.widget),hint:String::new(),action:Some(control_center::Command::Widget(request.widget))}]});
+        }
+    }
+    KillTimer(control,UTILITY_RETRY_TIMER);
 }
 fn utility_profile(hwnd:HWND)->Option<UtilityProfile>{
     STATE.with(|s|{
@@ -1183,11 +1232,20 @@ unsafe fn show_utilities(){
     if let Some((panel,result))=result{utilities::reflect_audio(panel as HWND,result);}
     let Some(snapshot)=UTILITIES.with(|u|u.borrow().as_ref().and_then(utilities::Provider::take)) else{return;};
     let target=UTILITY_ANCHOR.with(|a|a.take());
-    let Some((bar,point,widget,dock_mode))=target else{return;};
-    if dock_mode!=taskbar_active(){return;}
+    let hub=UTILITY_HUB.with(|a|a.take());
+    let Some((bar,point,widget,dock_mode,ticket))=target else{
+        if let Some((bar,ticket,dock_mode))=hub{
+            let hwnd=bar as HWND;
+            if let Some(profile)=utility_profile(hwnd){
+                control_center::update(hwnd,ticket,utilities::hub_view(&snapshot,&profile,dock_mode,true));
+            }
+        }
+        return;
+    };
+    if dock_mode!=taskbar_hidden(){return;}
     let hwnd=bar as HWND;
     let Some(profile)=utility_profile(hwnd).filter(|p|p.enabled||dock_mode) else{return;};
-    utilities::show_view(hwnd,point,&snapshot,&profile,widget,dock_mode);
+    if control_center::ticket(hwnd)==Some(ticket){utilities::show_view(hwnd,point,&snapshot,&profile,Some(widget),dock_mode);}
 }
 fn queue_inline_refresh_if_needed(hwnd:HWND){
     let exists=STATE.with(|s|s.borrow().bars.iter().any(|b|b.hwnd==hwnd&&b.layout.as_ref().is_some_and(|l|l.metrics.is_some())));
@@ -1217,7 +1275,7 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::AddApp=>pin_from_file(owner),
         Command::Wifi(change)=>request_utilities_with_change(owner,Some(UtilityWidget::Network),Some(change)),
         Command::Run(utilities::Action::Host(action))=>emit(Event::Utility(action)),
-        Command::Run(action)=>if !taskbar_active()||utilities::local_action(action){utilities::delegated(action)},
+        Command::Run(action)=>if !taskbar_hidden()||utilities::local_action(action){utilities::delegated(action)},
         Command::Window{hwnd,pid,tid}=>{
             let hwnd=hwnd as HWND;
             if window_owner(hwnd)!=Some((pid,tid)){return;}
@@ -1253,7 +1311,7 @@ unsafe fn activate(hwnd:HWND,item:&Item) {
         }
         SetForegroundWindow(item.hwnd);
     } else {
-        let result=ShellExecuteW(ptr::null_mut(),wide("open").as_ptr(),wide(&item.path).as_ptr(),ptr::null(),ptr::null(),SW_SHOWNORMAL) as isize;
+        let result=command_pin::open(&item.path);
         show_feedback(hwnd,item,if result>32{FeedbackKind::Launch}else{FeedbackKind::Failed});
     }
 }
@@ -1424,6 +1482,8 @@ thread_local!{
     static TASKBAR_HIDDEN:Cell<bool>=const{Cell::new(false)};
 }
 fn taskbar_active()->bool{TASKBAR_WATCH.with(|w|w.borrow().is_some())}
+fn taskbar_hidden()->bool{TASKBAR_HIDDEN.with(Cell::get)}
+fn taskbar_pending()->bool{taskbar_active()&&!taskbar_hidden()}
 
 unsafe fn show_taskbar(message:&str){
     let old=TASKBAR_WATCH.with(|w|w.borrow_mut().take());
@@ -1460,7 +1520,6 @@ unsafe fn set_taskbar_hidden(hidden:bool){
                 return;
             }
             TASKBAR_WATCH.with(|slot|slot.replace(Some(watch)));
-            queue_refresh();
             emit(Event::Taskbar{hidden:false,pending:true,message:"Đang kiểm tra đường khôi phục…".into()});
         }
         Err(message)=>emit(Event::Taskbar{hidden:false,pending:false,message}),
@@ -1479,41 +1538,58 @@ unsafe fn poll_taskbar(hwnd:HWND){
             if SetTimer(hwnd,TASKBAR_GUARD_TIMER,1300,None)==0{
                 show_taskbar(taskbar_guard::Exit::LinkLost.message());return;
             }
+            queue_refresh();
             crate::log!("DOCK_TASKBAR dock mode active");
             emit(Event::Taskbar{hidden:true,pending:false,message:"Chế độ Dock đang bật cho phiên này. Ctrl+Alt+Shift+F12 để hiện thanh Windows.".into()});
         }
-        Some(Err(reason))=>show_taskbar(reason.message()),
+        Some(Err(reason))=>{
+            crate::log!("DOCK_TASKBAR watchdog exit={reason:?}");
+            show_taskbar(reason.message());
+        },
         None=>{KillTimer(hwnd,TASKBAR_GUARD_TIMER);}
         _=>{}
     }
 }
-unsafe fn open_dock_hub(owner:HWND,anchor:panel_chrome::Anchor){
-    let control=CONTROL.with(Cell::get);
-    let submitted=UTILITIES.with(|u|u.borrow_mut().get_or_insert_with(utilities::Provider::new).read(control,false,None));
-    if submitted{UTILITY_ANCHOR.with(|a|a.set(Some((owner as usize,anchor.point,None,true))));}
+unsafe fn open_dock_hub(owner:HWND,anchor:panel_chrome::Anchor,dock_mode:bool){
+    UTILITY_ANCHOR.with(|a|a.set(None));
+    if let Some(profile)=utility_profile(owner){
+        utilities::show_hub(owner,anchor.point,&profile,dock_mode);
+        if let Some(ticket)=control_center::ticket(owner).filter(|_|profile.details&&UTILITY_HUB.with(|a|a.get().is_none())){
+            let submitted=UTILITIES.with(|u|u.borrow_mut().get_or_insert_with(utilities::Provider::new)
+                .read(CONTROL.with(Cell::get),false,None));
+            if submitted{UTILITY_HUB.with(|h|h.set(Some((owner as usize,ticket,dock_mode))));}
+        }
+    }
 }
-unsafe fn activate_shell(owner:HWND,target:shell_access::Target,context:bool){
+unsafe fn shell_anchor(owner:HWND,target:shell_access::Target)->Option<panel_chrome::Anchor>{
     let slot=STATE.with(|s|{
         let state=s.borrow();
-        let bar=state.bars.iter().find(|b|b.hwnd==owner)?;
+        let bar=state.bars.iter().find(|b|b.hwnd==owner&&!b.hidden)?;
         let layout=bar.layout.as_ref()?;
         let rect=match target{shell_access::Target::Start=>layout.start,shell_access::Target::Tray=>layout.tray,shell_access::Target::Clock=>layout.clock};
         let mut point=POINT{x:(rect.x+rect.w*0.5).round() as i32,y:(rect.y+rect.h*0.5).round() as i32};
         (ClientToScreen(owner,&mut point)!=0).then_some(point)
     });
-    let anchor=slot.map(|point|panel_chrome::Anchor::for_owner(owner,point));
+    slot.map(|point|panel_chrome::Anchor::for_owner(owner,point))
+}
+unsafe fn open_dock_launcher(anchor:panel_chrome::Anchor){
+    utilities::close_panels();
+    UTILITY_ANCHOR.with(|a|a.set(None));
+    PostMessageW(OWNER.with(Cell::get),crate::WM_OPEN_DOCK_LAUNCHER,anchor.point.x as WPARAM,anchor.point.y as LPARAM);
+}
+unsafe fn activate_shell(owner:HWND,target:shell_access::Target,context:bool){
+    let anchor=shell_anchor(owner,target);
     use shell_access::Route;
+    // While hiding, keep native shell commands out of the handshake as well.
     match shell_access::route(taskbar_active(),target,context){
-        Route::Native=>shell_access::activate(target,context,anchor),
-        Route::Launcher=>{utilities::close_panels();UTILITY_ANCHOR.with(|a|a.set(None));
-            if let Some(anchor)=anchor{PostMessageW(OWNER.with(Cell::get),crate::WM_OPEN_DOCK_LAUNCHER,anchor.point.x as WPARAM,anchor.point.y as LPARAM);}
-        },
+        Route::Native=>shell_access::activate(target,context,anchor,owner,CONTROL.with(Cell::get)),
+        Route::Launcher=>if let Some(anchor)=anchor{open_dock_launcher(anchor);},
         Route::Calendar=>if let Some(anchor)=anchor{
             UTILITY_ANCHOR.with(|a|a.set(None));
             utilities::show_calendar(owner,anchor);
         },
         Route::Hub=>if let Some(anchor)=anchor{
-            open_dock_hub(owner,anchor);
+            open_dock_hub(owner,anchor,true);
         },
     }
 }
@@ -1564,7 +1640,7 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
         }
         AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
     }
-    AppendMenuW(menu,MF_STRING,MENU_ADD_APP,wide("Thêm ứng dụng…").as_ptr());
+    AppendMenuW(menu,MF_STRING,MENU_ADD_APP,wide("Ghim ứng dụng hoặc tệp .lnk…").as_ptr());
     if selected.is_none(){AppendMenuW(menu,MF_STRING,MENU_TASKBAR,wide(if taskbar_active(){"Chế độ tương thích Windows (hiện taskbar)"}else{"Chế độ Dock (ẩn taskbar cho phiên này)"}).as_ptr());}
     let extra=STATE.with(|s|{
         let state=s.borrow();
@@ -1844,6 +1920,16 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_CONFIG=>{drain_commands();0},
         WM_TICK=>{SetTimer(hwnd,2,60,None);0},
         WM_UTILITY_READY=>{show_utilities();0},
+        WM_SHELL_FALLBACK if hwnd==CONTROL.with(Cell::get)=>{
+            let owner=w as HWND;
+            if !taskbar_active()&&!control_center::open_for(owner){
+                let target=if l==0{shell_access::Target::Start}else{shell_access::Target::Tray};
+                if let Some(anchor)=shell_anchor(owner,target){
+                    if l==0{open_dock_launcher(anchor);}else{open_dock_hub(owner,anchor,true);}
+                }
+            }
+            0
+        },
         WM_ICON_CHANGED=>{
             let changed=ATLAS.with(|a|a.borrow_mut().as_mut().is_some_and(|worker|worker.receive()));
             if changed{for h in STATE.with(|s|{let state=s.borrow();state.bars.iter().filter(|b|!b.hidden).map(|b|b.hwnd)
@@ -1925,6 +2011,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         },
         WM_TIMER if w==STATUS_TIP_TIMER=>{KillTimer(hwnd,STATUS_TIP_TIMER);show_status_tip(hwnd);0},
         WM_TIMER if w==TASKBAR_GUARD_TIMER=>{poll_taskbar(hwnd);0},
+        WM_TIMER if w==UTILITY_RETRY_TIMER=>{retry_utility(hwnd);0},
         WM_TIMER if w==FEEDBACK_TIMER=>{
             KillTimer(hwnd,FEEDBACK_TIMER);
             STATE.with(|s|{if let Some(bar)=s.borrow_mut().bars.iter_mut().find(|b|b.hwnd==hwnd){bar.feedback=None;}});
@@ -2057,7 +2144,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let start_reveal=b.collapse(false,reduced);
                 if let Some(layout)=b.layout.as_ref(){
                     b.hovered=layout.hot(x as f32,y as f32).map_or(-1,|i|i as i32);
-                    let desired=if magnify&&layout.hit(x as f32,y as f32).is_some(){Some(layout.axis(x as f32,y as f32))}else{None};
+                    let desired=if magnify{layout.magnification_target(x as f32,y as f32)}else{None};
                     let changed=desired!=b.motion.target;
                     b.motion.target=desired;
                     let start=start_reveal||(changed&&b.schedule());

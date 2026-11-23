@@ -92,6 +92,7 @@ fn metric_cards(view:&Snapshot,cfg:MetricOptions)->Vec<Card>{
         }).collect()
 }
 struct Panel {
+    layered:bool,dirty:bool,
     hwnd:HWND,owner:HWND,tag:usize,anchor:chrome::Anchor,dpi:u32,layer:Layer,ink:Option<Layer>,
     fonts:[HFONT;4], view:View, metrics:Option<Metrics>, index:Option<usize>, pressed:Option<usize>, page:usize,
     cols:usize,per_page:usize, row_height:i32,list:bool,
@@ -271,8 +272,21 @@ impl Panel{
             let slot=Rect{x:badge.x+inset,y:badge.y+inset,w:badge.w-2.0*inset,h:badge.h-2.0*inset};
             surface::status_on(data,w,h,slot,scale,p.accent,Some(icon));
         }
-        chrome::mask_popup(self.layer.pixels(),w,h,px(16) as f32,self.anchor.alpha());
+        if self.layered{chrome::mask_popup(self.layer.pixels(),w,h,px(16) as f32,self.anchor.alpha());}
     }
+}
+pub(super) fn ticket(owner:HWND)->Option<usize>{
+    PANE.with(|s|s.borrow().as_ref().filter(|p|p.owner==owner).map(|p|p.tag))
+}
+pub(super) unsafe fn update(owner:HWND,ticket:usize,view:View){
+    let hwnd=PANE.with(|s|{
+        let mut slot=s.borrow_mut();
+        let panel=slot.as_mut().filter(|p|p.owner==owner&&p.tag==ticket)?;
+        panel.view=view;
+        panel.dirty=true;
+        Some(panel.hwnd)
+    });
+    if let Some(hwnd)=hwnd{InvalidateRect(hwnd,ptr::null(),0);}
 }
 pub(super) fn open_for(owner:HWND)->bool{
     PANE.with(|s|s.borrow().as_ref().is_some_and(|p|p.owner==owner))
@@ -307,7 +321,7 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool){
         SetViewportExtEx(dc,width*2,height*2,ptr::null_mut());
     });
     let class=wide(CLASS);
-    if !chrome::register(&class,Some(proc)){return;}
+    if !chrome::register_with_style(&class,Some(proc),0){return;}
     let (x,y)=chrome::placement(work,anchor,width,height,px(8));
     let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST|WS_EX_LAYERED,class.as_ptr(),wide(&view.title).as_ptr(),
         WS_POPUP,x,y,width,height,owner,ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
@@ -316,10 +330,22 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool){
     let tag=serial();
     let fonts=[chrome::choose_font(dpi,if list{18}else{21},550),chrome::choose_font(dpi,14,if list{455}else{530}),chrome::choose_font(dpi,12,420),chrome::choose_font(dpi,19,540)];
     let metrics=view.metrics.map(Metrics::new);
-    let p=Panel{hwnd,owner,tag,anchor,dpi,layer,ink,fonts,view,metrics,index:None,pressed:None,page:0,cols,per_page,row_height,list};
+    let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,fonts,view,metrics,index:None,pressed:None,page:0,cols,per_page,row_height,list};
+    let start=std::time::Instant::now();
+    // A hidden HWND can't be relied on to dispatch WM_PAINT. Submit the
+    // completed bitmap directly, then show the window with content.
+    p.paint();
+    if !p.layer.present(hwnd){
+        crate::log!("DOCK_PANEL layered submission failed: {}",GetLastError());
+        p.layered=false;
+        SetWindowLongPtrW(hwnd,GWL_EXSTYLE,GetWindowLongPtrW(hwnd,GWL_EXSTYLE)& !(WS_EX_LAYERED as isize));
+        chrome::clip_corners(hwnd,width,height,dpi);
+        p.paint();
+    }
     PANE.with(|s|s.replace(Some(p)));
-    InvalidateRect(hwnd,ptr::null(),0);UpdateWindow(hwnd);
-    ShowWindow(hwnd,SW_SHOW);SetForegroundWindow(hwnd);SetFocus(hwnd);
+    ShowWindow(hwnd,SW_SHOW);UpdateWindow(hwnd);
+    SetForegroundWindow(hwnd);SetFocus(hwnd);
+    crate::log!("DOCK_PANEL first frame {} in {} ms",if list{"list"}else{"cards"},start.elapsed().as_millis());
     PANE.with(|s|{if let Some(m)=s.borrow().as_ref().and_then(|p|p.metrics.as_ref()){
         if m.cfg.mask!=0{
             m.request(hwnd,tag,METRIC_UPDATE);
@@ -341,9 +367,26 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             DefWindowProcW(hwnd,msg,w,l)
         },
         WM_PAINT=>{
-            let mut ps:PAINTSTRUCT=mem::zeroed();BeginPaint(hwnd,&mut ps);
-            PANE.with(|s|{if let Some(p)=s.borrow_mut().as_mut().filter(|p|p.hwnd==hwnd){p.paint();let _=p.layer.present(hwnd);}});
-            EndPaint(hwnd,&ps);0
+            let mut ps:PAINTSTRUCT=mem::zeroed();let dc=BeginPaint(hwnd,&mut ps);
+            let panel=PANE.with(|s|{
+                let mut slot=s.borrow_mut();
+                if slot.as_ref().is_some_and(|p|p.hwnd==hwnd){slot.take()}else{None}
+            });
+            if let Some(mut p)=panel{
+                if p.dirty{p.paint();p.dirty=false;
+                    if p.layered{
+                        EndPaint(hwnd,&ps);
+                        let _=p.layer.present(hwnd);
+                    }else{p.layer.blit(dc);EndPaint(hwnd,&ps);}
+                }else{
+                    if !p.layered{p.layer.blit(dc);}
+                    EndPaint(hwnd,&ps);
+                }
+                if IsWindow(hwnd)!=0 {
+                    PANE.with(|s|{let mut slot=s.borrow_mut();if slot.is_none(){*slot=Some(p);}});
+                }else{super::panel_closed(p.owner);}
+            }else{EndPaint(hwnd,&ps);}
+            0
         },
         WM_TIMER if w==METRIC_TIMER=>{
             PANE.with(|s|{if let Some(p)=s.borrow().as_ref().filter(|p|p.hwnd==hwnd){
@@ -357,6 +400,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let Some(m)=&p.metrics else{return false;};
                 let Some(v)=m.stream.values.lock().ok().and_then(|mut s|s.take())else{return false;};
                 p.view.cards=metric_cards(&v,m.cfg);
+                p.dirty=true;
                 p.view.hint=if p.view.cards.is_empty(){"Windows chưa cung cấp số liệu."}else{"Cập nhật trực tiếp · Chỉ số khả dụng"}.into();
                 true
             });
@@ -403,7 +447,9 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                     }
                     _=>{}
                 }
-                (action.map(|a|(p.owner,a)),before!=(p.index,p.page),msg==WM_LBUTTONDOWN&&p.pressed.is_some())
+                let changed=before!=(p.index,p.page);
+                p.dirty|=changed;
+                (action.map(|a|(p.owner,a)),changed,msg==WM_LBUTTONDOWN&&p.pressed.is_some())
             });
             if msg==WM_MOUSEMOVE{
                 let mut event=TRACKMOUSEEVENT{cbSize:mem::size_of::<TRACKMOUSEEVENT>() as u32,dwFlags:TME_LEAVE,hwndTrack:hwnd,dwHoverTime:0};
@@ -422,6 +468,28 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
 }
 #[cfg(test)] mod tests{
     use super::*;
+    #[test]
+    #[ignore = "native layered popup presentation; run individually in CI"]
+    fn native_popup_has_its_first_layer_before_pumping_input(){
+        unsafe{
+            let owner=CreateWindowExW(WS_EX_TOOLWINDOW,wide("STATIC").as_ptr(),wide("Deskland popup test").as_ptr(),
+                WS_POPUP,20,20,300,80,ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
+            assert!(!owner.is_null());
+            show_list(owner,chrome::Anchor{point:POINT{x:220,y:550},side:super::super::DockSide::Bottom,dark:true,transparency:30},
+                View{title:"Menu test".into(),hint:"First frame".into(),
+                    cards:vec![Card{title:"Open".into(),hint:String::new(),icon:None,action:None}],metrics:None});
+            let (popup,alpha)=PANE.with(|p|{
+                let mut p=p.borrow_mut();
+                let p=p.as_mut().expect("popup should be ready before the loop pumps input");
+                assert!(p.layered&&!p.dirty);
+                let (w,h)=p.layer.size;
+                (p.hwnd,p.layer.pixels()[((h/2*w+w/2)*4+3) as usize])
+            });
+            assert!(IsWindowVisible(popup)!=0&&alpha>200);
+            close_for(owner);DestroyWindow(owner);
+            assert_eq!(IsWindow(popup),0);
+        }
+    }
     #[test] fn inline_readings_keep_slots_stable_when_an_engine_has_no_sample(){
         let mut sample=Snapshot::default();
         sample.cpu=Some(12.0);

@@ -48,7 +48,9 @@ unsafe extern "system" fn extract(_:PTP_CALLBACK_INSTANCE,raw:*mut c_void) {
     } else {
         let com=CoInitializeEx(None,COINIT_MULTITHREADED);
         if com.is_ok() {
-            let icon=shell_icon(Path::new(&path),source_size).map(Arc::new);
+            let command=super::command_pin::decode(&path);
+            let file=command.as_ref().map_or(path.as_str(),|c|c.exe.as_str());
+            let icon=shell_icon(Path::new(file),source_size).map(Arc::new);
             CoUninitialize();
             icon
         }else{None}

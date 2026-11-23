@@ -14,6 +14,13 @@ test('saved settings and tray updates use the same controls',()=>{
   assert.equal($('dockAllWindows').checked,true);assert.equal($('dockStageSide').value,'right');
   assert.equal($('dockWallpaperEnabled').checked,false);assert.equal($('dockRuntimeStatus').textContent,'Translated running');
 });
+test('command pin sends the full executable and argument string intact',()=>{
+  const command=String.raw`"E:\Panda Studio\venv\Scripts\pythonw.exe" "E:\Panda Studio\main.py" --title "A & B"`;
+  $('dockPinCommand').value=command;
+  $('dockPinLabel').value='PandaTV';
+  $('dockPinSubmit').onclick();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'dockPinCommand',command,label:'PandaTV'});
+});
 test('editing one module preserves the other module and scope',()=>{
   $('dockEnabled').checked=true;$('dockEnabled').listeners.change();
   const message=messages.pop();assert.equal(message.t,'dock');assert.equal(message.enabled,true);

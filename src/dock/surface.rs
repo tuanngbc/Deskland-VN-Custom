@@ -176,15 +176,7 @@ impl Surface {
         if self.glass!=layout.glass||self.static_pixels.is_empty() {
             self.glass=layout.glass;
             self.static_pixels.resize(w as usize*h as usize*4,0);
-            let rect=self.glass;
-            let tint=self.material;
-            let radius=rect.w.min(rect.h)*0.40;
-            for (i,p) in self.static_pixels.chunks_exact_mut(4).enumerate() {
-                let x=(i%w as usize) as f32+0.5;
-                let y=(i/w as usize) as f32+0.5;
-                let d=distance(rect,radius,x,y);
-                p.copy_from_slice(&glass_pixel(tint,rect,radius,x,y,scale,d));
-            }
+            render_glass(&mut self.static_pixels,w,h,layout.glass,self.material,scale);
         }
         let data=self.layer.pixels();
         data.copy_from_slice(&self.static_pixels);
@@ -406,6 +398,21 @@ mod material_tests {
     }
 
     #[test]
+    fn scanline_glass_matches_the_original_distance_field(){
+        let (w,h)=(262,162);
+        let mat=Material{dark:true,transparency:35,reduced_motion:false};
+        for rect in [Rect{x:8.35,y:19.8,w:180.1,h:48.3},Rect{x:18.1,y:10.3,w:44.4,h:143.9}]{
+            let mut data=vec![0;w as usize*h as usize*4];
+            render_glass(&mut data,w,h,rect,mat,1.0);
+            let radius=rect.w.min(rect.h)*0.4;
+            for (i,actual) in data.chunks_exact(4).enumerate(){
+                let (x,y)=((i%w as usize) as f32+0.5,(i/w as usize) as f32+0.5);
+                let expected=glass_pixel(mat,rect,radius,x,y,1.0,distance(rect,radius,x,y));
+                assert!(actual.iter().zip(expected).all(|(&a,b)|a.abs_diff(b)<=1), "at ({x}, {y}) {actual:?} != {expected:?}");
+            }
+        }
+    }
+    #[test]
     fn capsule_has_clear_corners_a_soft_shadow_and_premultiplied_edges_at_both_dpis() {
         for scale in [1.0,2.0] {
             let r=Rect{x:8.0*scale,y:8.0*scale,w:150.0*scale,h:58.0*scale};
@@ -431,10 +438,32 @@ fn segment_distance(x:f32,y:f32,ax:f32,ay:f32,bx:f32,by:f32)->f32{
     let t=(((x-ax)*dx+(y-ay)*dy)/(dx*dx+dy*dy).max(0.001)).clamp(0.0,1.0);
     (x-ax-dx*t).hypot(y-ay-dy*t)
 }
+// Only the shadow bounds need drawing. Along a horizontal capsule's
+// straight middle, glass color, rim and shadow depend on y alone.
+fn render_glass(data:&mut[u8],w:i32,h:i32,rect:Rect,tint:Material,scale:f32){
+    data.fill(0);
+    let radius=rect.w.min(rect.h)*0.40;
+    let margin=9.0*scale;
+    let start=((rect.x-margin).floor() as i32).clamp(0,w);
+    let end=((rect.x+rect.w+margin).ceil() as i32).clamp(start,w);
+    let left=((rect.x+rect.h*0.5).ceil() as i32).clamp(start,end);
+    let right=((rect.x+rect.w-rect.h*0.5).floor() as i32).clamp(left,end);
+    let top=((rect.y-margin).floor() as i32).clamp(0,h);
+    let bottom=((rect.y+rect.h+margin).ceil() as i32).clamp(top,h);
+    for y in top..bottom{
+        let yy=y as f32+0.5;
+        let at=|x|glass_pixel(tint,rect,radius,x,yy,scale,distance(rect,radius,x,yy));
+        let row=&mut data[(y*w*4) as usize..((y+1)*w*4) as usize];
+        let center=if left<right{at(rect.x+rect.w*0.5)}else{[0;4]};
+        for x in start..left{row[(x*4) as usize..(x*4+4) as usize].copy_from_slice(&at(x as f32+0.5));}
+        for pixel in row[(left*4) as usize..(right*4) as usize].chunks_exact_mut(4){pixel.copy_from_slice(&center);}
+        for x in right..end{row[(x*4) as usize..(x*4+4) as usize].copy_from_slice(&at(x as f32+0.5));}
+    }
+}
 pub(super) fn distance(rect:Rect,r:f32,x:f32,y:f32)->f32{
     let qx=(x-rect.x-rect.w*0.5).abs()-(rect.w*0.5-r);
     let qy=(y-rect.y-rect.h*0.5).abs()-(rect.h*0.5-r);
-    qx.max(0.0).hypot(qy.max(0.0))+qx.max(qy).min(0.0)-r
+    if qx>0.0&&qy>0.0 {qx.hypot(qy)-r}else{qx.max(qy)-r}
 }
 pub(super) fn draw(data:&mut [u8],w:i32,h:i32,r:Rect,f:impl Fn(f32,f32)->Option<([u8;3],f32)>){
     for y in (r.y.floor() as i32).clamp(0,h)..((r.y+r.h).ceil() as i32).clamp(0,h){

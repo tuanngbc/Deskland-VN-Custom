@@ -154,6 +154,14 @@
     <p class="monitor-detail">Chỉ áp dụng cho phiên này. Ctrl+Alt+Shift+F12 để hiện lại thanh Windows.</p>
     <p class="monitor-detail" id="taskbarTakeoverStatus" role="status" aria-live="polite"></p>
   </section>
+  <section class="setting-card">
+    <h3>Ghim lệnh vào Dock</h3>
+    <p class="dock-section-copy">Dán đường dẫn đến tệp .exe và tham số. Anh cũng có thể ghim tệp .lnk có sẵn từ menu chuột phải trên Dock.</p>
+    <label class="setting-row"><b>Lệnh</b><input id="dockPinCommand" type="text" maxlength="4096" spellcheck="false" placeholder="C:\Tools\pythonw.exe &quot;D:\Project\main.py&quot;"></label>
+    <label class="setting-row"><b>Tên hiển thị (tùy chọn)</b><input id="dockPinLabel" type="text" maxlength="80" placeholder="Ví dụ: PandaTV Studio"></label>
+    <button id="dockPinSubmit" type="button">Ghim lệnh</button>
+    <p id="dockPinStatus" class="monitor-detail" role="status" aria-live="polite"></p>
+  </section>
   <section class="setting-card dock-placement">
     <h3>Màn hình và tiện ích Dock</h3><p class="dock-section-copy">Chọn màn hình, sắp xếp tiện ích và chỉ số cho từng Dock.</p>
     <label class="setting-row"><b data-i18n="dockDisplayTarget">Màn hình hiển thị</b><select id="dockDisplayMode">
@@ -1070,6 +1078,13 @@ function renderDockPlacement(){
   }).join(''):'<p>'+esc(dockText('dockDisplayNone'))+'</p>';
 }
 let shellModePending=false;
+function submitDockPin(){
+  const command=$('dockPinCommand').value.trim();
+  if(!command){$('dockPinStatus').textContent='Nhập lệnh cần ghim.';return;}
+  send({t:'dockPinCommand',command,label:$('dockPinLabel').value.trim()});
+}
+$('dockPinSubmit').onclick=submitDockPin;
+$('dockPinCommand').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();submitDockPin();}};
 function syncDockTaskbar(m){
   const control=$('dockShellMode');
   if(typeof m.dockTaskbarPending==='boolean')shellModePending=m.dockTaskbarPending;
@@ -1383,6 +1398,9 @@ function onHost(m) {
     syncSystemMonitor(m);
   } else if (m.t === 'dockState') {
     syncDockSettings(m);
+  } else if (m.t === 'dockPinResult') {
+    $('dockPinStatus').textContent=m.message||'';
+    if(m.ok){$('dockPinCommand').value='';$('dockPinLabel').value='';}
   } else if (m.t === 'dockTaskbarState') {
     syncDockTaskbar(m);
   } else if (m.t === 'settingsSaveError') {
