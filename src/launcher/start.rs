@@ -5,13 +5,9 @@ use crate::dock::{PopupPalette,PopupPixels};
 use std::{collections::{HashMap,HashSet},ptr,rc::Rc,sync::mpsc::{self,Receiver,Sender},time::{Duration,Instant}};
 
 const CLASS:&str="TuanpcDeskStartPanel";
-const WIDTH:i32=490;
-const MAX_HEIGHT:i32=530;
-const COLS:usize=5;
-const GRID_PAGE:usize=15;
-const LIST_PAGE:usize=14;
-const INSET:i32=20;
-const CONTENT_Y:i32=148;
+#[path = "start_layout.rs"]
+mod layout;
+use layout::*;
 const EDIT_ID:usize=101;
 const APPLY:u32=WM_APP+115;
 const POLL:usize=1;
@@ -20,13 +16,13 @@ const SETTINGS:&str="deskland:settings";
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 enum Area { Home, Apps }
 #[derive(Clone,Debug,PartialEq,Eq)]
-enum Hit { Home, Apps, Settings, Power, Page(i32), Explorer, Windows, TaskManager, Entry(usize) }
+enum Hit { Home, Apps, Settings, Power, Page(i32), Explorer, Windows, TaskManager, Account, Index, Entry(usize) }
 #[derive(Clone)]
-struct Tile { rect:RECT, hit:Hit, text:String, entry:Option<Entry>, compact:bool }
+struct Tile { rect:RECT, hit:Hit, text:String, entry:Option<Entry>, compact:bool, pinned:bool }
 struct Model {
-    hwnd:HWND, edit:HWND, owner:HWND, anchor:DockAnchor, work:RECT, scale:f32, dark:bool, area:Area,
+    hwnd:HWND, edit:HWND, owner:HWND, anchor:DockAnchor, work:RECT, scale:f32, frame:Frame, dark:bool, area:Area,
     all:Vec<Entry>, pins:Vec<String>, recent:History, query:String, page:usize, selected:usize,
-    pressed:Option<(Hit,i32,i32)>, hover:Option<Hit>, keyboard:bool, view:StartView, error:String, glass:Rc<[u8]>, edit_font:HFONT,
+    pressed:Option<(Hit,i32,i32)>, hover:Option<Hit>, keyboard:bool, view:StartView, error:String, glass:Rc<[u8]>, glass_height:i32, edit_font:HFONT,
     icons:HashMap<(PathBuf,i32),Option<IconPixels>>, loading:HashSet<(PathBuf,i32)>,
     icon_tx:Sender<(PathBuf,i32)>,icon_rx:Receiver<((PathBuf,i32),Option<IconPixels>)>,
     catalog:Option<Receiver<Vec<Entry>>>, indexed_at:Option<Instant>,
@@ -88,65 +84,76 @@ fn entry_group(model:&Model,all:&[Entry])->(Vec<Entry>,bool){
         return (filter(all,&model.query,&History::default()).into_iter().map(|i|all[i].clone()).collect(),false);
     }
     match model.area {
-        Area::Apps=>(model.all.clone(),false),
+        Area::Apps=>(model.all.clone(),true),
         Area::Home=>(model.pins.iter().filter_map(|p|all.iter().find(|a|same_path(&a.path,Path::new(p))).cloned()).collect(),true),
     }
 }
-#[derive(Clone,Copy)]
-struct Flow{height:i32,heading_y:i32,recent_y:Option<i32>,footer_y:i32}
-struct StartView{tiles:Vec<Tile>,page:usize,pages:usize,count:usize,recent_empty:bool,flow:Flow}
-fn flow(grid:bool,visible:usize,recent_count:usize,error:bool)->Flow{
-    let row_count=visible.div_ceil(if grid{COLS}else{2});
-    let mut end=CONTENT_Y+if visible==0{38}else{row_count as i32*if grid{69}else{36}};
-    let recent_y=grid.then_some(end+9);
-    if let Some(y)=recent_y{end=y+26+if recent_count==0{27}else{recent_count.div_ceil(2) as i32*33};}
-    if error{end+=24;}
-    let footer_y=end+8;
-    Flow{height:footer_y+42,heading_y:115,recent_y,footer_y}
+struct StartView {
+    tiles:Vec<Tile>, page:usize, count:usize, flow:Flow,
+    columns:usize, index_label:String,
 }
-fn content(model:&Model)->(Vec<Entry>,bool,Vec<Entry>,usize,usize,Flow){
+
+fn is_home(model:&Model)->bool{model.area==Area::Home&&model.query.trim().is_empty()}
+
+fn content(model:&Model)->(Vec<Entry>,bool,Vec<Entry>,usize,usize,usize,Flow){
     let all=entries_for(model);
     let (entries,grid)=entry_group(model,&all);
-    let limit=if grid{GRID_PAGE}else{LIST_PAGE};
+    let frame=model.frame;
+    let error=!model.error.is_empty();
+    let mut recent=if is_home(model){filter(&all,"",&model.recent).into_iter().take(3)
+        .map(|i|all[i].clone()).collect::<Vec<_>>()}else{Vec::new()};
+    if !frame.show_recents(!recent.is_empty(),error){recent.clear();}
+    let limit=frame.capacity(grid,!recent.is_empty(),error);
     let pages=entries.len().div_ceil(limit).max(1);
     let page=model.page.min(pages-1);
-    let recent=if grid{filter(&all,"",&model.recent).into_iter().take(4).map(|i|all[i].clone()).collect()}else{Vec::new()};
-    let layout=flow(grid,entries.len().saturating_sub(page*limit).min(limit),recent.len(),!model.error.is_empty());
-    (entries,grid,recent,page,pages,layout)
+    let flow=frame.flow(grid,entries.len().saturating_sub(page*limit).min(limit),!recent.is_empty(),error);
+    (entries,grid,recent,page,pages,limit,flow)
+}
+fn initial(name:&str)->String{
+    name.chars().next().map(|c|if c.is_alphabetic(){c.to_uppercase().collect()}else{"#".into()})
+        .unwrap_or_else(||"#".into())
 }
 fn build_view(model:&Model)->StartView{
     let mut tiles=Vec::new();
     let s=model.scale;
-    let mut put=|hit,text:&str,r:(i32,i32,i32,i32),entry,compact|{
-        tiles.push(Tile{hit,text:text.into(),rect:rr(r.0,r.1,r.2,r.3,s),entry,compact});
+    let frame=model.frame;
+    let mut put=|hit,text:&str,r:(i32,i32,i32,i32),entry,compact,pinned|{
+        tiles.push(Tile{hit,text:text.into(),rect:rr(r.0,r.1,r.2,r.3,s),entry,compact,pinned});
     };
-    put(Hit::Settings,"Cài đặt",(404,17,30,30),None,true);
-    put(Hit::Power,"Nguồn",(440,17,30,30),None,true);
-    put(Hit::Home,"Tổng quan",(23,85,85,24),None,true);
-    put(Hit::Apps,"Tất cả ứng dụng",(110,85,111,24),None,true);
-    let (entries,grid,recent,page,pages,flow)=content(model);
-    let count=entries.len();let recent_empty=recent.is_empty();
-    let limit=if grid{GRID_PAGE}else{LIST_PAGE};
-    if pages>1{
-        if page>0{put(Hit::Page(-1),"‹",(351,114,29,27),None,true);}
-        if page+1<pages{put(Hit::Page(1),"›",(441,114,29,27),None,true);}
+    let controls=INSET+frame.search_width()+CONTROL_STEP-CONTROL;
+    for (i,hit,text) in [(0,Hit::Settings,"Cài đặt Deskland"),(1,Hit::Power,"Nguồn và phiên"),(2,Hit::Account,"Tài khoản") ]{
+        put(hit,text,(controls+i*CONTROL_STEP,HEADER_Y+2,CONTROL,CONTROL),None,true,false);
     }
-    let start=page*limit;
-    for (i,entry) in entries.iter().skip(start).take(limit).enumerate(){
-        let r=if grid{(INSET+(i%COLS) as i32*91,CONTENT_Y+(i/COLS) as i32*69,86,66)}
-            else{(INSET+(i%2) as i32*228,CONTENT_Y+(i/2) as i32*36,222,33)};
-        put(Hit::Entry(i),&entry.name,r,Some(entry.clone()),!grid);
+    put(Hit::Home,"Đã ghim",(INSET,TABS_Y,66,26),None,true,false);
+    put(Hit::Apps,"Tất cả ứng dụng",(INSET+72,TABS_Y,112,26),None,true,false);
+    let (entries,grid,recent,page,pages,limit,flow)=content(model);
+    let count=entries.len();
+    let y=flow.footer_y+7;
+    let edge=frame.width-INSET;
+    if page>0{put(Hit::Page(-1),"‹",(edge-106,y,25,30),None,true,false);}
+    if page+1<pages{put(Hit::Page(1),"›",(edge-25,y,25,30),None,true,false);}
+    let index_label=if model.area==Area::Apps&&grid&&count>0{
+        let first=initial(&entries[page*limit].name);
+        let last=initial(&entries[((page+1)*limit).min(count)-1].name);
+        let title=if first==last{first}else{format!("{first}–{last}")};
+        put(Hit::Index,&title,(edge-79,y,52,30),None,true,false);
+        String::new()
+    }else if pages>1{format!("{} / {pages}",page+1)}else{String::new()};
+    for (i,entry) in entries.iter().skip(page*limit).take(limit).enumerate(){
+        put(Hit::Entry(i),&entry.name,frame.app(i,grid),Some(entry.clone()),!grid,is_home(model));
     }
     if let Some(y)=flow.recent_y{
+        let cols=recent.len().max(1) as i32;
         for (i,entry) in recent.into_iter().enumerate(){
             let title=entry.name.clone();
-            put(Hit::Entry(GRID_PAGE+i),&title,(INSET+(i%2) as i32*228,y+26+(i/2) as i32*33,222,30),Some(entry),true);
+            let w=frame.inner()/cols;
+            put(Hit::Entry(limit+i),&title,(INSET+i as i32*w,y+24,w-4,34),Some(entry),true,false);
         }
     }
-    put(Hit::Explorer,"File Explorer",(INSET,flow.footer_y+7,91,24),None,true);
-    put(Hit::Windows,"Cài đặt Windows",(117,flow.footer_y+7,117,24),None,true);
-    put(Hit::TaskManager,"Task Manager",(240,flow.footer_y+7,98,24),None,true);
-    StartView{tiles,page,pages,count,recent_empty,flow}
+    for (i,hit,label) in [(0,Hit::Explorer,"File Explorer"),(1,Hit::Windows,"Cài đặt Windows"),(2,Hit::TaskManager,"Task Manager")]{
+        put(hit,label,(INSET+i*32,y,28,30),None,true,false);
+    }
+    StartView{tiles,page,count,flow,columns:frame.columns(grid),index_label}
 }
 
 fn selected(model:&Model)->Option<Tile>{
@@ -158,7 +165,7 @@ unsafe fn relayout(hwnd:HWND){
         let mut b=s.borrow_mut();let m=b.as_mut()?;
         m.view=build_view(m);
         let height=px(m.view.flow.height,m.scale);
-        let width=px(WIDTH,m.scale);
+        let width=px(m.frame.width,m.scale);
         let (x,y)=m.anchor.position(m.work,width,height,px(10,m.scale));
         Some((x,y,width,height))
     });
@@ -181,7 +188,7 @@ unsafe fn fill(dc:HDC,r:&RECT,color:u32){
 fn color(bgr:[u8;3])->u32{u32::from(bgr[2])|u32::from(bgr[1])<<8|u32::from(bgr[0])<<16}
 fn search_ink(dark:bool)->[u8;3]{if dark{[58,57,54]}else{[235,232,228]}}
 #[derive(Clone,Copy)]
-enum Glyph{Search,Sliders,Power}
+enum Glyph{Search,Sliders,Power,Folder,Window,Activity}
 unsafe fn glyph(surface:&mut PopupPixels,r:RECT,glyph:Glyph,ink:[u8;3],s:f32){
     let cx=(r.left+r.right) as f32*0.5;let cy=(r.top+r.bottom) as f32*0.5;
     let s=s.max(0.5);
@@ -195,6 +202,16 @@ unsafe fn glyph(surface:&mut PopupPixels,r:RECT,glyph:Glyph,ink:[u8;3],s:f32){
         let d=match glyph{
             Glyph::Search=>((x+1.5).hypot(y+1.5)-4.1).abs().min(line(1.6,1.8,5.5,5.7)),
             Glyph::Power=>{let ring=if y<0.0&&x.abs()<2.5{20.0}else{(x.hypot(y-0.7)-5.7).abs()};ring.min(line(0.0,-7.1,0.0,-0.3))},
+            Glyph::Folder=>line(-6.5,-2.5,-6.5,4.0).min(line(-6.5,4.0,6.5,4.0))
+                .min(line(6.5,4.0,6.5,-3.0)).min(line(6.5,-3.0,-0.3,-3.0))
+                .min(line(-0.3,-3.0,-2.1,-5.0)).min(line(-2.1,-5.0,-6.5,-5.0))
+                .min(line(-6.5,-5.0,-6.5,-2.5)),
+            Glyph::Window=>line(-6.0,-5.0,6.0,-5.0).min(line(-6.0,5.0,6.0,5.0))
+                .min(line(-6.0,-5.0,-6.0,5.0)).min(line(6.0,-5.0,6.0,5.0))
+                .min(line(-6.0,-1.8,6.0,-1.8)),
+            Glyph::Activity=>line(-6.0,1.5,-3.0,1.5).min(line(-3.0,1.5,-1.0,-3.8))
+                .min(line(-1.0,-3.8,2.0,4.5)).min(line(2.0,4.5,4.0,0.0))
+                .min(line(4.0,0.0,6.0,0.0)),
             Glyph::Sliders=>{
                 let mut d=20.0f32;
                 for (ty,tx) in [(-4.5,-2.0),(0.0,2.7),(4.5,-0.5)]{
@@ -240,7 +257,7 @@ unsafe fn paint_start(hwnd:HWND){
         let mut icons=Vec::<TileIcon>::new();
         for tile in &tiles{
             let entry=tile.entry.as_ref();
-            let key=entry.map(|e|(e.path.clone(),px(if tile.compact{22}else{42},m.scale).max(16)));
+            let key=entry.map(|e|(e.path.clone(),px(if tile.compact{LIST_ICON}else{GRID_ICON},m.scale).max(16)));
             let pixels=key.as_ref().and_then(|key|m.icons.get(key)).cloned().flatten();
             if let Some(key)=key{
                 if key.0!=Path::new(SETTINGS)&&!m.icons.contains_key(&key)&&m.loading.len()<24&&m.loading.insert(key.clone()){
@@ -249,95 +266,116 @@ unsafe fn paint_start(hwnd:HWND){
             }
             icons.push(pixels);
         }
-        let StartView{page,pages,count,recent_empty,flow,..}=m.view;
         let selected=selected.filter(|_|m.keyboard||!m.query.is_empty());
-        Some((m.scale,m.dark,m.glass.clone(),tiles,icons,selected,m.hover.clone(),m.area,m.query.is_empty(),
-            recent_empty,m.error.clone(),page,pages,count,m.catalog.is_some()||!m.loading.is_empty(),flow,m.anchor,m.work))
+        Some((m.scale,m.frame,m.dark,m.glass.clone(),tiles,icons,selected,m.hover.clone(),m.area,m.query.trim().is_empty(),
+            m.error.clone(),m.view.count,m.catalog.is_some()||!m.loading.is_empty(),m.view.flow,m.view.index_label.clone(),m.anchor,m.work))
     });
-    if let Some((s,dark,glass,tiles,icons,selected,hover,area,empty_query,empty_recent,error,page,pages,count,pending,flow,anchor,work))=view{
-        let width=px(WIDTH,s);let height=px(flow.height,s);
+    if let Some((s,frame,dark,glass,tiles,icons,selected,hover,area,empty_query,error,count,pending,flow,index_label,anchor,work))=view{
+        let width=px(frame.width,s);let height=px(flow.height,s);
         if let Some(mut surface)=PopupPixels::new(width,height){
             let dc=surface.dc();
             let palette=PopupPalette::new(dark);
-            let neutral=if dark{[38,37,37]}else{[250,249,247]};
-            let (bg,fg,sub,accent)=(color(neutral),color(palette.ink),color(palette.muted),
-                if dark{color(palette.ink)}else{0x00433024});
-            let tile_ink=if dark{[78,77,74]}else{[224,221,215]};
-            let select_ink=if dark{[111,107,102]}else{[255,255,255]};
-            fill(dc,&rr(0,0,WIDTH,flow.height,s),bg);
+            let neutral=if dark{[43,39,37]}else{[248,244,241]};
+            let (bg,fg,sub)=(color(neutral),color(palette.ink),color(palette.muted));
+            let tile_ink=if dark{[83,76,70]}else{[224,217,211]};
+            let select_ink=if dark{[105,97,83]}else{[218,231,224]};
+            fill(dc,&rr(0,0,frame.width,flow.height,s),bg);
             if !glass.is_empty(){
-                let full_height=px(MAX_HEIGHT,s);
-                let (_,start)=anchor.position(work,width,full_height,px(10,s));
+                // The sample dimensions stay fixed for this opening so search
+                // contractions do not displace the material behind the panel.
+                let full_height=glass.len()/4/(width/4).max(1) as usize;
+                let envelope=START.with(|slot|slot.borrow().as_ref().map(|m|m.glass_height)).unwrap_or(height);
+                let (_,start)=anchor.position(work,width,envelope,px(10,s));
                 let (_,current)=anchor.position(work,width,height,px(10,s));
-                let crop=((current-start)/4).max(0);
-                let sample_height=(full_height/4).max(1);
+                let crop=((current-start)/4).max(0).min(full_height.saturating_sub(1) as i32);
                 let mut info:BITMAPINFO=std::mem::zeroed();
                 info.bmiHeader.biSize=std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-                info.bmiHeader.biWidth=(width/4).max(1);info.bmiHeader.biHeight=-sample_height;
+                info.bmiHeader.biWidth=(width/4).max(1);info.bmiHeader.biHeight=-(full_height as i32);
                 info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;
                 SetStretchBltMode(dc,HALFTONE);
-                StretchDIBits(dc,0,0,width,height,0,crop,info.bmiHeader.biWidth,(height/4).max(1).min(sample_height-crop),
+                StretchDIBits(dc,0,0,width,height,0,crop,info.bmiHeader.biWidth,(height/4).max(1).min(full_height as i32-crop),
                     glass.as_ptr().cast(),&info,DIB_RGB_COLORS,SRCCOPY);
+            }else{
+                GdiFlush();
+                for (y,row) in surface.pixels().chunks_exact_mut(width as usize*4).enumerate(){
+                    let t=y as f32/height as f32;
+                    let lift=if dark{(1.0-t)*14.0}else{(1.0-t)*11.0-3.0};
+                    let shade=neutral.map(|channel|(channel as f32+lift).clamp(0.0,255.0).round() as u8);
+                    for p in row.chunks_exact_mut(4){p.copy_from_slice(&[shade[0],shade[1],shade[2],255]);}
+                }
             }
-            let body=font(px(13,s),500);let small=font(px(11,s),400);
-            let heading=font(px(18,s),600);let detail=font(px(14,s),600);
-            surface.shape(rr(20,15,32,32,s),16.0*s,tile_ink,154);
-            let user=std::env::var("USERNAME").unwrap_or_else(|_|"Deskland".into());
-            center_label(dc,&user.chars().next().unwrap_or('D').to_uppercase().to_string(),rr(20,15,32,32,s),detail,accent);
-            label(dc,"Ứng dụng",rr(62,9,235,25,s),heading,fg);
-            label(dc,&user,rr(63,34,220,14,s),small,sub);
-            let action_hint=match hover.as_ref(){Some(Hit::Settings)=>"Cài đặt Deskland",Some(Hit::Power)=>"Nguồn và phiên",_=>""};
-            label(dc,action_hint,rr(300,17,101,30,s),small,sub);
-            surface.shape(rr(20,53,450,28,s),13.0*s,search_ink(dark),255);
-            glyph(&mut surface,rr(22,53,30,28,s),Glyph::Search,palette.muted,s);
+            let body=font(px(14,s),400);
+            let small=font(px(12,s),400);
+            let heading=font(px(12,s),600);
+            surface.shape(rr(INSET,HEADER_Y,frame.search_width(),HEADER_H,s),13.0*s,search_ink(dark),255);
+            glyph(&mut surface,rr(INSET+2,HEADER_Y,30,HEADER_H,s),Glyph::Search,palette.muted,s);
             #[cfg(test)]
             if CAPTURE.with(|c|c.borrow().is_some()){
                 let query=START.with(|s|s.borrow().as_ref().map(|m|m.query.clone()).unwrap_or_default());
-                label(dc,if empty_query{"Tìm ứng dụng…"}else{&query},rr(54,53,400,28,s),body,if empty_query{sub}else{fg});
+                label(dc,if empty_query{"Tìm ứng dụng…"}else{&query},
+                    rr(INSET+34,HEADER_Y,frame.search_width()-45,HEADER_H,s),body,if empty_query{sub}else{fg});
             }
-            surface.shape(rr(20,82,204,29,s),14.0*s,tile_ink,127);
-            fill(dc,&rr(20,113,450,1,s),color(tile_ink));
-            label(dc,if !empty_query{"Kết quả tìm kiếm"}else if area==Area::Home{"Ứng dụng đã ghim"}else{"Tất cả ứng dụng"},
-                rr(20,flow.heading_y,300,26,s),detail,fg);
-            if pages>1{center_label(dc,&format!("{} / {pages}",page+1),rr(382,114,56,27,s),small,sub);}
+            if !empty_query{label(dc,"Kết quả tìm kiếm",rr(INSET,TABS_Y,frame.inner(),26,s),heading,sub);}
+            if !index_label.is_empty(){
+                center_label(dc,&index_label,rr(frame.width-INSET-79,flow.footer_y+7,52,30,s),small,sub);
+            }
             for (tile,img) in tiles.iter().zip(icons.iter()){
-                let picked=selected.as_ref()==Some(&tile.hit)
-                    || (empty_query&&matches!((&tile.hit,area),(Hit::Home,Area::Home)|(Hit::Apps,Area::Apps)));
+                let tab=matches!(tile.hit,Hit::Home|Hit::Apps);
+                if tab&&!empty_query{continue;}
+                let selected_tab=empty_query&&matches!((&tile.hit,area),(Hit::Home,Area::Home)|(Hit::Apps,Area::Apps));
+                let picked=selected.as_ref()==Some(&tile.hit);
                 let hovered=hover.as_ref()==Some(&tile.hit);
-                if picked||hovered{
-                    surface.shape(tile.rect,if tile.compact{10.0*s}else{15.0*s},if picked{select_ink}else{tile_ink},if picked{190}else{162});
+                if selected_tab{
+                    let r=tile.rect;
+                    surface.shape(RECT{left:r.left+px(5,s),right:r.right-px(5,s),top:r.bottom-px(3,s),bottom:r.bottom-px(1,s)},
+                        s,if dark{[200,215,147]}else{[137,110,56]},255);
                 }
-                if matches!(tile.hit,Hit::Settings|Hit::Power){
-                    glyph(&mut surface,tile.rect,if tile.hit==Hit::Settings{Glyph::Sliders}else{Glyph::Power},palette.ink,s);
+                let symbol=match tile.hit{
+                    Hit::Settings=>Some(Glyph::Sliders),Hit::Power=>Some(Glyph::Power),
+                    Hit::Explorer=>Some(Glyph::Folder),Hit::Windows=>Some(Glyph::Window),
+                    Hit::TaskManager=>Some(Glyph::Activity),_=>None,
+                };
+                let header=matches!(tile.hit,Hit::Settings|Hit::Power|Hit::Account);
+                if picked||hovered||header{
+                    surface.shape(tile.rect,if header{16.0*s}else{12.0*s},if picked{select_ink}else{tile_ink},if picked||hovered{188}else{110});
+                }
+                if let Some(symbol)=symbol{glyph(&mut surface,tile.rect,symbol,palette.ink,s);continue;}
+                if tile.hit==Hit::Account{
+                    let user=std::env::var("USERNAME").unwrap_or_else(|_|"Deskland".into());
+                    center_label(dc,&initial(&user),tile.rect,heading,fg);
                     continue;
                 }
                 let mut r=tile.rect;
                 r.left+=px(8,s);r.right-=px(5,s);
                 if let Some(entry)=&tile.entry{
-                    let size=px(if tile.compact{22}else{42},s);
+                    let size=px(if tile.compact{LIST_ICON}else{GRID_ICON},s);
                     let x=if tile.compact{r.left}else{(r.left+r.right-size)/2};
                     let y=if tile.compact{(r.top+r.bottom-size)/2}else{r.top+px(6,s)};
                     if let Some(img)=img{icon(dc,img,x+(size-img.width)/2,y+(size-img.height)/2);}
                     else if entry.path==Path::new(SETTINGS){DrawIconEx(dc,x,y,crate::app_icon(size,size),size,size,0,ptr::null_mut(),DI_NORMAL);}
                     else{label(dc,"◇",RECT{left:x,top:y,right:x+size,bottom:y+size},body,sub);}
-                    if tile.compact{r.left+=size+px(8,s);}else{r=tile.rect;r.top+=px(48,s);}
+                    if tile.compact{r.left+=size+px(8,s);}else{r=tile.rect;r.top+=px(51,s);}
                 }
                 if tile.entry.is_some()&&tile.compact{
                     label(dc,&tile.text,r,body,fg);
-                }else{center_label(dc,&tile.text,if tile.entry.is_some(){r}else{tile.rect},small,if picked{accent}else{fg});}
+                }else{center_label(dc,&tile.text,if tile.entry.is_some(){r}else{tile.rect},small,fg);}
             }
             if count==0{
                 let prompt=if !empty_query{"Không tìm thấy ứng dụng"}else if area==Area::Home{"Chưa có ứng dụng ghim. Mở Tất cả ứng dụng để ghim."}
                     else if pending{"Đang lấy danh sách ứng dụng…"}else{"Không có ứng dụng"};
-                label(dc,prompt,rr(20,CONTENT_Y,450,36,s),body,sub);
+                label(dc,prompt,rr(INSET,CONTENT_Y,frame.inner(),36,s),body,sub);
             }
             if let Some(y)=flow.recent_y{
-                fill(dc,&rr(20,y-2,450,1,s),color(tile_ink));
-                label(dc,"Đã mở gần đây",rr(20,y,450,24,s),detail,fg);
-                if empty_recent{label(dc,"Ứng dụng mở từ Start sẽ xuất hiện ở đây.",rr(20,y+26,450,27,s),small,sub);}
+                label(dc,"Đã mở gần đây",rr(INSET,y,frame.inner(),24,s),heading,sub);
             }
-            if !error.is_empty(){label(dc,&error,rr(20,flow.footer_y-25,450,24,s),small,fg);}
-            fill(dc,&rr(20,flow.footer_y,450,1,s),color(tile_ink));
+            if !error.is_empty(){label(dc,&error,rr(INSET,flow.footer_y-24,frame.inner(),24,s),small,fg);}
+            fill(dc,&rr(INSET,flow.footer_y,frame.inner(),1,s),color(tile_ink));
+            if let Some(tile)=tiles.iter().find(|t|hover.as_ref()==Some(&t.hit)&&
+                matches!(t.hit,Hit::Explorer|Hit::Windows|Hit::TaskManager|Hit::Settings|Hit::Power|Hit::Account)){
+                let hint=if tile.hit==Hit::Account{std::env::var("USERNAME").unwrap_or_else(|_|"Tài khoản".into())}else{tile.text.clone()};
+                let hint_width=(frame.inner()-210).max(0);
+                if hint_width>=60{label(dc,&hint,rr(INSET+102,flow.footer_y+7,hint_width,30,s),small,sub);}
+            }
             #[cfg(test)]
             CAPTURE.with(|c|{
                 if let Some(path)=c.borrow_mut().take(){capture_render(dc,width,height,&path).expect("native Start fixture ink");}
@@ -352,7 +390,7 @@ unsafe fn paint_start(hwnd:HWND){
 
 unsafe fn hide(hwnd:HWND){KillTimer(hwnd,POLL);ShowWindow(hwnd,SW_HIDE);}
 fn hit_at(m:&Model,x:i32,y:i32)->Option<Tile>{
-    m.view.tiles.iter().find(|t|x>=t.rect.left&&x<t.rect.right&&y>=t.rect.top&&y<t.rect.bottom).cloned()
+    m.view.tiles.iter().filter(|t|m.query.trim().is_empty()||!matches!(t.hit,Hit::Home|Hit::Apps)).find(|t|x>=t.rect.left&&x<t.rect.right&&y>=t.rect.top&&y<t.rect.bottom).cloned()
 }
 fn coords(l:LPARAM)->(i32,i32){(l as i16 as i32,(l>>16) as i16 as i32)}
 unsafe fn edit_value(edit:HWND)->String{
@@ -433,12 +471,31 @@ unsafe fn activate(hwnd:HWND,tile:Tile){
         Hit::Windows=>open("Cài đặt Windows","ms-settings:"),
         Hit::TaskManager=>open("Task Manager","Taskmgr.exe"),
         Hit::Power=>power(hwnd,tile.rect),
+        Hit::Account=>open("Tài khoản","ms-settings:yourinfo"),
+        Hit::Index=>{
+            let choices=START.with(|slot|{
+                let state=slot.borrow();let Some(m)=state.as_ref()else{return Vec::new();};
+                let (entries,_,_,_,_,limit,_)=content(m);
+                let mut seen=HashSet::new();
+                entries.iter().enumerate().filter_map(|(i,e)|{
+                    let letter=initial(&e.name);
+                    seen.insert(letter.clone()).then_some((letter,i/limit))
+                }).collect::<Vec<_>>()
+            });
+            let labels=choices.iter().map(|(letter,_)|letter.as_str()).collect::<Vec<_>>();
+            let mut point=POINT{x:tile.rect.left,y:tile.rect.bottom};ClientToScreen(hwnd,&mut point);
+            let choice=action_menu(hwnd,point,&labels);
+            if let Some((_,page))=choice.checked_sub(1).and_then(|i|choices.get(i as usize)){
+                START.with(|slot|if let Some(m)=slot.borrow_mut().as_mut(){m.page=*page;m.selected=0;m.hover=None;});
+                relayout(hwnd);
+            }
+        }
         Hit::Home|Hit::Apps|Hit::Page(_)=>{
             let edit=START.with(|s|{
                 let mut b=s.borrow_mut();let m=b.as_mut()?;
                 match tile.hit{
                     Hit::Home|Hit::Apps=>{m.area=if tile.hit==Hit::Home{Area::Home}else{Area::Apps};m.page=0;m.query.clear();}
-                    Hit::Page(delta)=>{m.page=m.page.saturating_add_signed(delta as isize);}
+                    Hit::Page(delta)=>{m.page=m.view.page.saturating_add_signed(delta as isize);}
                     _=>{}
                 }
                 m.selected=0;m.hover=None;Some(m.edit)
@@ -468,6 +525,11 @@ unsafe fn entry_menu(hwnd:HWND,tile:Tile,mut at:POINT){
 }
 
 unsafe extern "system" fn edit_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
+    // Keep Left/Right available for the native edit caret while searching.
+    if msg==WM_KEYDOWN&&matches!(w as u16,VK_LEFT|VK_RIGHT)&&
+        START.with(|s|s.borrow().as_ref().is_some_and(|m|m.query.trim().is_empty())){
+        PostMessageW(GetParent(hwnd),APPLY,w,0);return 0;
+    }
     if msg==WM_KEYDOWN&&matches!(w as u16,VK_UP|VK_DOWN|VK_RETURN|VK_ESCAPE|VK_PRIOR|VK_NEXT|VK_TAB|VK_APPS){
         PostMessageW(GetParent(hwnd),APPLY,w,0);return 0;
     }
@@ -503,11 +565,13 @@ unsafe extern "system" fn proc_start(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
                     let tile=START.with(|s|{let b=s.borrow();let m=b.as_ref()?;m.view.tiles.iter().find(|t|t.hit==(if m.area==Area::Home{Hit::Apps}else{Hit::Home})).cloned()});
                     if let Some(tile)=tile{activate(hwnd,tile);}
                 }
-                VK_UP|VK_DOWN=>{
+                VK_LEFT|VK_RIGHT|VK_UP|VK_DOWN=>{
                     START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){
                         let count=m.view.tiles.iter().filter(|t|t.entry.is_some()).count();
                         m.keyboard=true;
-                        m.selected=m.selected.saturating_add_signed(if w as u16==VK_UP{-1}else{1}).min(count.saturating_sub(1));
+                        let columns=m.view.tiles.iter().filter(|t|t.entry.is_some()&&!t.compact).count().min(m.view.columns).max(1);
+                        let step=match w as u16{VK_LEFT=>-1,VK_RIGHT=>1,VK_UP=>-(columns as isize),_=>columns as isize};
+                        m.selected=m.selected.saturating_add_signed(step).min(count.saturating_sub(1));
                     });repaint(hwnd);
                 }
                 VK_PRIOR|VK_NEXT=>{
@@ -566,7 +630,7 @@ unsafe extern "system" fn proc_start(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
                 let far=(x-sx).abs().max((y-sy).abs())>px(6,m.scale);
                 if press==tile.hit&&!far{return Some(tile);}
                 if far&&m.area==Area::Home&&m.query.is_empty()
-                    && matches!(press,Hit::Entry(i) if i<GRID_PAGE)&&matches!(tile.hit,Hit::Entry(i) if i<GRID_PAGE){
+                    && tile.pinned&&m.view.tiles.iter().any(|t|t.hit==press&&t.pinned){
                     let src=m.view.tiles.iter().find(|t|t.hit==press)?.entry.clone()?;
                     let dst=tile.entry.take()?;
                     if !same_path(&src.path,&dst.path){
@@ -630,10 +694,10 @@ pub(crate) fn toggle(owner:HWND,anchor:DockAnchor){
             SendMessageW(edit,0x00c5,128,0); // EM_LIMITTEXT
             SendMessageW(edit,0x1501,1,wide("Tìm ứng dụng…").as_ptr() as LPARAM); // EM_SETCUEBANNER
             let (icon_tx,icon_rx)=icon_worker();
-            START.with(|s|s.replace(Some(Model{hwnd,edit,owner,anchor,work:std::mem::zeroed(),scale:1.0,dark:false,area:Area::Home,all:Vec::new(),
+            START.with(|s|s.replace(Some(Model{hwnd,edit,owner,anchor,work:std::mem::zeroed(),scale:1.0,frame:Frame::new(MAX_WIDTH,MAX_HEIGHT),dark:false,area:Area::Home,all:Vec::new(),
                 pins:Vec::new(),recent:recent_load(),query:String::new(),page:0,selected:0,pressed:None,hover:None,keyboard:false,
-                view:StartView{tiles:Vec::new(),page:0,pages:1,count:0,recent_empty:true,flow:flow(true,0,0,false)},
-                error:String::new(),glass:Rc::from([]),
+                view:StartView{tiles:Vec::new(),page:0,count:0,columns:1,index_label:String::new(),flow:Frame::new(MAX_WIDTH,MAX_HEIGHT).flow(true,0,false,false)},
+                error:String::new(),glass:Rc::from([]),glass_height:0,
                 edit_font:ptr::null_mut(),icons:HashMap::new(),loading:HashSet::new(),icon_tx,icon_rx,catalog:None,indexed_at:None})));
         }
         let Some((hwnd,edit))=START.with(|s|s.borrow().as_ref().map(|m|(m.hwnd,m.edit)))else{return;};
@@ -643,18 +707,23 @@ pub(crate) fn toggle(owner:HWND,anchor:DockAnchor){
         let work=info.rcWork;
         let _=SetWindowPos(hwnd,ptr::null_mut(),work.left,work.top,1,1,SWP_NOACTIVATE|SWP_NOZORDER);
         let s=(windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd).clamp(72,288) as f32/96.0)
-            .min((work.right-work.left) as f32/WIDTH as f32).min((work.bottom-work.top) as f32/MAX_HEIGHT as f32).min(2.75);
+            .min((work.right-work.left) as f32/272.0).min((work.bottom-work.top) as f32/248.0).min(2.75);
         if s<=0.0{return;}
-        let (width,height)=(px(WIDTH,s),px(MAX_HEIGHT,s));
+        let logical=|n:i32|(n as f32/s).floor() as i32;
+        let frame=Frame::new(logical(work.right-work.left)-16,logical(work.bottom-work.top)-16);
+        let (width,height)=(px(frame.width,s),px(frame.max_height(),s));
         let (x,y)=anchor.position(work,width,height,px(10,s));
         let prefs=PREFS.with(|p|p.borrow().clone());
         let dark=prefs.theme=="dark";
+        #[cfg(not(test))]
         let glass=frost(&capture_glass(x,y,width,height),width,height,s,&prefs);
+        #[cfg(test)]
+        let glass=Vec::<u8>::new();
         let font=font(px(14,s),400);
         let pins=DOCK_PINS.with(|p|p.borrow().clone());
         let old_font=START.with(|sref|{
             let mut b=sref.borrow_mut();let m=b.as_mut().unwrap();
-            m.scale=s;m.anchor=anchor;m.work=work;m.owner=owner;m.dark=dark;m.pins=pins;m.area=Area::Home;m.query.clear();
+            m.scale=s;m.frame=frame;m.glass_height=height;m.anchor=anchor;m.work=work;m.owner=owner;m.dark=dark;m.pins=pins;m.area=Area::Home;m.query.clear();
             m.page=0;m.selected=0;m.pressed=None;m.hover=None;m.keyboard=false;m.error.clear();m.glass=glass.into();m.recent=recent_load();
             if m.catalog.is_none()&&m.indexed_at.is_none_or(|t|t.elapsed()>Duration::from_secs(180)){m.catalog=catalog_worker();}
             std::mem::replace(&mut m.edit_font,font)
@@ -662,7 +731,7 @@ pub(crate) fn toggle(owner:HWND,anchor:DockAnchor){
         SendMessageW(edit,WM_SETFONT,font as usize,1);
         if !old_font.is_null(){DeleteObject(old_font);}
         SetWindowTextW(edit,wide("").as_ptr());
-        MoveWindow(edit,px(55,s),px(57,s),px(398,s),px(20,s),0);
+        MoveWindow(edit,px(INSET+34,s),px(HEADER_Y+8,s),px(frame.search_width()-45,s),px(20,s),0);
         use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
         let round=2i32;let border=0xffff_fffeu32;let mode=i32::from(dark);
         DwmSetWindowAttribute(hwnd,33,(&round as *const i32).cast(),4);
@@ -703,21 +772,6 @@ unsafe fn capture_render(dc:HDC,width:i32,height:i32,path:&Path)->Result<(),Stri
 mod tests {
     use super::*;
     #[test]
-    fn start_panel_height_tracks_content_and_keeps_the_footer_inside_its_envelope(){
-        let sparse=flow(true,2,0,false);
-        let filled=flow(true,GRID_PAGE,4,false);
-        assert!(sparse.height+100<filled.height);
-        assert!(flow(false,1,0,false).height<flow(false,LIST_PAGE,0,false).height);
-        for grid in [true,false]{
-            for visible in 0..=if grid{GRID_PAGE}else{LIST_PAGE}{
-                for recent in 0..=4{
-                    let f=flow(grid,visible,recent,true);
-                    assert!(f.footer_y+31<=f.height&&f.height<=MAX_HEIGHT);
-                }
-            }
-        }
-    }
-    #[test]
     #[ignore = "real isolated Start popup, edit control and Win32 keyboard dispatch"]
     fn native_panel_search_keyboard_and_anchor_are_independent_of_spotlight(){
         unsafe {
@@ -746,12 +800,19 @@ mod tests {
                     CAPTURE.with(|c|{c.replace(Some(path.clone()));});
                     relayout(host);UpdateWindow(host);
                     assert!(path.is_file(),"native Start render evidence is required: {}",path.display());
+                    START.with(|s|if let Some(m)=s.borrow().as_ref(){
+                        let (_,grid,_,_,_,_,flow)=content(m);
+                        println!("start geometry: file={} dpi_scale={:.2} logical={}x{} content={} columns={} icon={} row={} h_gap={} header={} footer={} entries={}/{} font=Segoe_UI_Variable text_dp=12,14 dark={}",
+                            path.file_name().unwrap().to_string_lossy(),m.scale,m.frame.width,flow.height,flow.footer_y-CONTENT_Y,
+                            m.view.columns,if grid{GRID_ICON}else{LIST_ICON},if grid{GRID_ROW}else{LIST_ROW},GRID_GAP,HEADER_H,FOOTER_H,
+                            m.view.tiles.iter().filter(|t|t.entry.is_some()).count(),m.view.count,m.dark);
+                    });
                 };
                 START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){
                     m.glass=Rc::from([]);m.pins=fixtures.iter().map(|(_,p)|p.to_string_lossy().into_owned()).chain([SETTINGS.into()]).collect();
                     m.all=fixtures.iter().map(|(name,path)|Entry{name:(*name).into(),path:path.clone(),kind:"Application",detail:String::new()}).collect();
                     for (_,path) in &fixtures{
-                        for size in [px(42,m.scale).max(16),px(22,m.scale).max(16)]{
+                        for size in [px(GRID_ICON,m.scale).max(16),px(LIST_ICON,m.scale).max(16)]{
                             m.icons.insert((path.clone(),size),extract_icon(path,size));
                         }
                     }
@@ -782,7 +843,7 @@ mod tests {
             SetWindowTextW(edit,wide("paint").as_ptr());
             START.with(|s|assert_eq!(selected(s.borrow().as_ref().unwrap()).unwrap().text,"Paint"));
             let mut search:RECT=std::mem::zeroed();GetWindowRect(host,&mut search);
-            assert!(search.bottom-search.top < rc.bottom-rc.top);
+            assert!(search.bottom-search.top <= rc.bottom-rc.top);
             SendMessageW(host,APPLY,VK_RETURN as usize,0);
             assert_eq!(IsWindowVisible(host),0);
             START.with(|s|assert_eq!(s.borrow().as_ref().unwrap().recent.paths,vec![PathBuf::from("mspaint.exe")]));
