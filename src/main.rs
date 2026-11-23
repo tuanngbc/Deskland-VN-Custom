@@ -2142,6 +2142,10 @@ fn main() {
         }
         return;
     }
+    if args.iter().any(|a| a == "--trial-taskbar-observation") {
+        if dock::taskbar_observation().is_err(){std::process::exit(3);}
+        return;
+    }
     if args.iter().any(|a| a == "--trial-dock-glass-probe") {
         let Some(dir) = trial::data_dir() else { std::process::exit(2); };
         // Share the production singleton even though this read-only renderer

@@ -281,7 +281,7 @@ impl Workspaces{
                 ids.push(Some(g.id));
             }
         }
-        for w in windows.iter().filter(|w|!known.contains(&(w.hwnd as usize))&&(global||rect_intersects(w.rect,bounds))){
+        for w in windows.iter().filter(|w|w.path!=super::internal_app::KEY).filter(|w|!known.contains(&(w.hwnd as usize))&&(global||rect_intersects(w.rect,bounds))){
             items.push(Item{path:w.path.clone(),title:w.title.clone(),hwnd:w.hwnd,count:1,pinned:false});
             ids.push(None);
         }

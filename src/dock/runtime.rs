@@ -8,6 +8,7 @@ pub(super) enum Command {
     Stop,
     Focus,
     Taskbar(bool),
+    #[cfg(test)] InspectSettings { reply:Sender<Vec<(String,usize,bool,bool)>> },
     #[cfg(test)] Inspect { reply:Sender<Vec<usize>>, paint:bool },
 }
 #[derive(Debug)]
@@ -94,6 +95,52 @@ mod tests {
             DestroyWindow(hwnd);worker.join().unwrap();drop(runtime);
             assert_eq!(REQUESTS.load(Ordering::Relaxed),0,"Dock must exclude its Settings before cross-thread WM_GETTEXT");
             UnregisterClassW(name.as_ptr(),wc.hInstance);
+        }
+    }
+    #[test]
+    #[ignore = "native Settings registry, minimize and recreate with real HWNDs"]
+    fn native_registered_settings_identity_state_and_pins(){
+        use crate::dock::internal_app::{self,KEY};
+        use windows_sys::Win32::{Foundation::*,System::LibraryLoader::GetModuleHandleW,UI::WindowsAndMessaging::*};
+        use std::ptr::null_mut;
+        unsafe {
+            let screens=super::super::displays();
+            let display=screens.first().unwrap();
+            let create=|x,y|{
+                let hwnd=CreateWindowExW(0,crate::wide("STATIC").as_ptr(),crate::wide("Different native title").as_ptr(),
+                    WS_OVERLAPPEDWINDOW,x,y,160,120,null_mut(),null_mut(),GetModuleHandleW(null_mut()),null_mut());
+                assert!(!hwnd.is_null());SetWindowPos(hwnd,null_mut(),0,0,0,0,
+                    SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_SHOWWINDOW);
+                hwnd
+            };
+            let first=create(display.bounds.left+10,display.bounds.top+10);
+            let other=create(display.bounds.left+24,display.bounds.top+24);
+            let mut options=Options{enabled:true,all_windows:false,..Default::default()};
+            let rt=Runtime::new(options.clone(),0).unwrap();
+            let inspect=||{
+                let (tx,rx)=mpsc::channel();rt.send(Command::InspectSettings{reply:tx});
+                rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap()
+            };
+            assert!(inspect().is_empty(),"all unregistered internal windows must stay excluded");
+            internal_app::register(first);
+            assert_eq!(inspect(),vec![(display.id.clone(),first as usize,false,false)]);
+            ShowWindow(first,SW_MINIMIZE);
+            assert_eq!(inspect(),vec![(display.id.clone(),first as usize,true,false)]);
+            assert!(crate::desktop::show_settings_window(first));
+            assert_eq!(inspect(),vec![(display.id.clone(),first as usize,false,false)]);
+            internal_app::register(other);
+            internal_app::unregister(first);DestroyWindow(first);
+            assert_eq!(inspect(),vec![(display.id.clone(),other as usize,false,false)]);
+            if let Some(second)=screens.get(1){
+                SetWindowPos(other,null_mut(),second.bounds.left+10,second.bounds.top+10,0,0,SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);
+                assert_eq!(inspect(),vec![(second.id.clone(),other as usize,false,false)]);
+            }
+            internal_app::unregister(other);DestroyWindow(other);
+            assert!(inspect().is_empty());
+            options.pinned=vec![KEY.into()];rt.configure(options);
+            let pinned=inspect();
+            assert_eq!(pinned.len(),screens.len());
+            assert!(pinned.iter().all(|(_,handle,min,pin)|*handle==0&&!*min&&*pin));
         }
     }
     #[test]

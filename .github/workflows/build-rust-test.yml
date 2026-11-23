@@ -42,6 +42,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::runtime::tests::native_startup_never_synchronously_reads_own_settings_title -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::runtime::tests::native_registered_settings_identity_state_and_pins -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_surface::tests::native_region_clips_desktop_gaps_and_preserves_thumbnail_slots -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_surface::tests::native_stage_surface_submits_premultiplied_cards_with_desktop_gaps -- --ignored --exact --nocapture --test-threads=1

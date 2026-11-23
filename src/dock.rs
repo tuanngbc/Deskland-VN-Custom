@@ -22,6 +22,7 @@ mod geometry;
 mod motion;
 mod surface;
 mod icon_atlas;
+pub(crate) mod internal_app;
 mod previews;
 mod workspaces;
 mod perf;
@@ -36,7 +37,7 @@ mod taskbar_guard;
 pub(crate) mod tray_poc;
 pub(crate) mod command_pin;
 pub(crate) fn create_command_pin(line:&str,label:&str)->Result<String,command_pin::PinError>{command_pin::encode(line,label)}
-pub(crate) use taskbar_guard::watchdog as taskbar_watchdog;
+pub(crate) use taskbar_guard::{watchdog as taskbar_watchdog,report_trial_observation as taskbar_observation};
 pub use utilities::{HostAction,Profile as UtilityProfile,Widget as UtilityWidget};
 pub use control_center::MetricOptions;
 pub use glass_probe::probe as glass_probe;
@@ -53,6 +54,7 @@ const WM_CONFIG:u32=WM_APP+51;
 const WM_ICON_CHANGED:u32=WM_APP+52;
 const WM_UTILITY_READY:u32=WM_APP+53;
 const WM_SHELL_FALLBACK:u32=WM_APP+55;
+const WM_INTERNAL_APP:u32=WM_APP+56;
 const MOTION_TIMER:usize=4;
 const HIDE_TIMER:usize=5;
 const WORKSPACE_TIMER:usize=6;
@@ -416,6 +418,7 @@ unsafe fn stage_window_is_local(hwnd:HWND,bounds:RECT)->bool {
     !hmon.is_null() && GetMonitorInfoW(hmon,&mut info)!=0 && same_rect(bounds,info.rcMonitor)
 }
 fn basename(path:&str)->String {
+    if path==internal_app::KEY{return internal_app::LABEL.into();}
     if let Some(command)=command_pin::decode(path){return command.label;}
     path.rsplit(['\\','/']).next().unwrap_or(path).trim_end_matches(".exe").to_string()
 }
@@ -514,7 +517,9 @@ unsafe extern "system" fn enumerate(hwnd:HWND,param:LPARAM)->i32 {
     1
 }
 fn windows()->Vec<AppWindow>{
-    let mut v=Vec::new();unsafe {EnumWindows(Some(enumerate),&mut v as *mut _ as LPARAM)};v
+    let mut v=Vec::new();unsafe {EnumWindows(Some(enumerate),&mut v as *mut _ as LPARAM)};
+    if let Some(settings)=internal_app::window(){v.insert(0,settings);}
+    v
 }
 // Prefer a window on this monitor for pinned apps, and keep counts consistent with
 // the selected local/all-monitors scope. An off-screen pinned app stays launchable.
@@ -1305,6 +1310,10 @@ unsafe fn show_feedback(hwnd:HWND,item:&Item,kind:FeedbackKind){
     InvalidateRect(hwnd,ptr::null(),0);
 }
 unsafe fn activate(hwnd:HWND,item:&Item) {
+    if item.path==internal_app::KEY{
+        PostMessageW(OWNER.with(Cell::get),crate::WM_OPEN_SETTINGS,0,0);
+        return;
+    }
     if !item.hwnd.is_null() && IsWindow(item.hwnd)!=0 {
         if IsIconic(item.hwnd)!=0{
             let restored=ShowWindowAsync(item.hwnd,SW_RESTORE)!=0;
@@ -1408,6 +1417,8 @@ unsafe fn app_menu(owner:HWND,path:&str,picker:bool){
             action:Some(Command::App{path:item.path.clone(),operation})});
         if windows.is_empty(){
             add("Mở ứng dụng",AppOperation::Open);
+        }else if item.path==internal_app::KEY{
+            add("Hiện cài đặt",AppOperation::Open);
         }else{
             add("Mở thêm",AppOperation::NewWindow);
         }
@@ -1464,7 +1475,9 @@ unsafe fn perform_app_action(owner:HWND,path:&str,operation:AppOperation){
                     (state.prefs.all_windows||rect_intersects(w.rect,bar.bounds))&&ids.iter().any(|id|id.matches(w.hwnd)))
                     .map(|w|w.hwnd).collect::<Vec<_>>()
             });
-            for hwnd in safe{PostMessageW(hwnd,WM_CLOSE,0,0);}
+            for hwnd in safe{
+                if path!=internal_app::KEY||internal_app::current()==hwnd{PostMessageW(hwnd,WM_CLOSE,0,0);}
+            }
         },
         AppOperation::Advanced=>{if let Some(index)=index{native_menu(owner,bar,index);}},
     }
@@ -1931,6 +1944,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     match msg {
         appbar::CALLBACK=>{if w as u32==ABN_POSCHANGED{APPBAR_DIRTY.with(|f|f.set(true));queue_refresh();}0},
         WM_CONFIG=>{drain_commands();0},
+        WM_INTERNAL_APP if hwnd==CONTROL.with(Cell::get)=>{queue_refresh();0},
         WM_TICK=>{SetTimer(hwnd,2,60,None);0},
         WM_UTILITY_READY=>{show_utilities();0},
         WM_SHELL_FALLBACK if hwnd==CONTROL.with(Cell::get)=>{
@@ -2454,6 +2468,17 @@ unsafe fn drain_commands() {
             Command::Taskbar(hidden)=>set_taskbar_hidden(hidden),
             Command::Stop=>{control_center::inline_config(CONTROL.with(Cell::get),None);EndMenu();PostQuitMessage(0);},
             Command::Focus=>focus_dock(),
+            #[cfg(test)] Command::InspectSettings{reply}=>{
+                let all=windows();
+                let items=STATE.with(|s|{
+                    let s=s.borrow();
+                    s.screens.iter().flat_map(|screen|{
+                        item_list(&all,screen.bounds,&s.prefs).into_iter().filter(|i|i.path==internal_app::KEY)
+                            .map(|i|(screen.id.clone(),i.hwnd as usize,!i.hwnd.is_null()&&IsIconic(i.hwnd)!=0,i.pinned))
+                    }).collect()
+                });
+                let _=reply.send(items);
+            },
             #[cfg(test)] Command::Inspect{reply,paint}=>{
                 let handles:Vec<usize>=STATE.with(|s|{let s=s.borrow();s.bars.iter().map(|b|b.hwnd as usize)
                     .chain(s.stages.iter().map(|s|s.hwnd as usize)).collect()});
@@ -2513,6 +2538,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         let control=CreateWindowExW(WS_EX_TOOLWINDOW,class.as_ptr(),wide("Deskland Dock controller").as_ptr(),WS_POPUP,0,0,0,0,ptr::null_mut(),ptr::null_mut(),wc.hInstance,ptr::null());
         if control.is_null(){let _=ready.send(Err(format!("Create Dock controller: {}",GetLastError())));if com.is_ok(){CoUninitialize();}return;}
         CONTROL.with(|c|c.set(control));DIRTY.with(|c|c.set(false));
+        internal_app::listen(control);
         let shell_hook=RegisterWindowMessageW(wide("SHELLHOOK").as_ptr());
         if shell_hook!=0&&RegisterShellHookWindow(control)!=0{
             ATTENTION_MSG.with(|id|id.set(shell_hook));
@@ -2542,6 +2568,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         utilities::close_panels();UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));
         if ATTENTION_MSG.with(|id|id.replace(0))!=0{DeregisterShellHookWindow(control);}
         ATTENTION.with(|queue|queue.borrow_mut().clear());
+        internal_app::unlisten(control);
         CONTROL.with(|c|c.set(ptr::null_mut()));DestroyWindow(control);
         OWNER.with(|o|o.set(ptr::null_mut()));
         COMMANDS.with(|c|{c.take();});EVENTS.with(|e|{e.take();});STATE.with(|s|{s.take();});

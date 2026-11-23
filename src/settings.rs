@@ -529,6 +529,7 @@ pub fn open(state: &State) {
         UI.with(|u| *u.borrow_mut() = Some(ui));
         sync(state);
         crate::desktop::show_settings_window(hwnd);
+        crate::dock::internal_app::register(hwnd);
         crate::log!("Mở cửa sổ cài đặt");
     }
 }
@@ -812,6 +813,7 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
 }
 
 unsafe extern "system" fn proc_(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if matches!(m,WM_WINDOWPOSCHANGED|WM_ACTIVATE|WM_SHOWWINDOW){crate::dock::internal_app::changed(h);}
     match m {
         WM_COMMAND => {
             let (id, code) = (w & 0xFFFF, (w >> 16) & 0xFFFF);
@@ -878,6 +880,7 @@ unsafe extern "system" fn proc_(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESUL
             0
         }
         WM_DESTROY => {
+            crate::dock::internal_app::unregister(h);
             if let Some(ui) = UI.with(|u| u.borrow_mut().take()) {
                 DeleteObject(ui.font as HGDIOBJ);
                 DeleteObject(ui.bold as HGDIOBJ);

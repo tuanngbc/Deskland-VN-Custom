@@ -131,6 +131,7 @@ fn resize(hwnd: F::HWND) {
 }
 
 unsafe extern "system" fn proc_(h: F::HWND, m: u32, wp: F::WPARAM, lp: F::LPARAM) -> F::LRESULT {
+    if matches!(m,WM_WINDOWPOSCHANGED|WM_ACTIVATE|WM_SHOWWINDOW){crate::dock::internal_app::changed(h);}
     match m {
         WM_SIZE => {
             resize(h);
@@ -156,6 +157,7 @@ unsafe extern "system" fn proc_(h: F::HWND, m: u32, wp: F::WPARAM, lp: F::LPARAM
             0
         }
         WM_DESTROY => {
+            crate::dock::internal_app::unregister(h);
             // Invalidate this request before calling COM: Close may dispatch a
             // final callback. Never close anything belonging to a newer host.
             let pending = OPENING.with(|p| {
@@ -298,6 +300,7 @@ pub fn ready() -> Result<(),String> {
             close();
             return Err("WebView2 đã sẵn sàng nhưng không hiện được cửa sổ".into());
         }
+        crate::dock::internal_app::register(hwnd);
         OPENING.with(|p| p.borrow_mut().take());
         TRIAL_CRASH.with(|f|if f.get()==Some((ticket,None)) {f.set(Some((ticket,Some(Instant::now()+Duration::from_secs(3)))));});
         crate::log!("Mở cửa sổ cài đặt WebView2 sau {:.0} ms",started.elapsed().as_secs_f64()*1000.0);

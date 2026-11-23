@@ -1,16 +1,18 @@
 use crate::desktop::wide;
 use std::{
     env, mem, ptr, thread,
-    io,
+    io::{self,Write},
+    path::PathBuf,
     os::windows::process::CommandExt,
     process::{Child,Command,Stdio},
     time::{Duration,Instant,SystemTime,UNIX_EPOCH},
 };
 use windows_sys::Win32::{
     Foundation::*,
+    Graphics::Gdi::{GetMonitorInfoW,MonitorFromWindow,MONITORINFO,MONITOR_DEFAULTTONULL},
     System::Threading::{CreateEventW,OpenEventW,OpenProcess,QueryFullProcessImageNameW,SetEvent,WaitForSingleObject,PROCESS_QUERY_LIMITED_INFORMATION},
     UI::{Input::KeyboardAndMouse::{RegisterHotKey,UnregisterHotKey,MOD_ALT,MOD_CONTROL,MOD_NOREPEAT,MOD_SHIFT,VK_F12},
-        WindowsAndMessaging::*},
+        Shell::{SHAppBarMessage,APPBARDATA,ABM_GETSTATE,ABS_AUTOHIDE},WindowsAndMessaging::*},
 };
 
 pub(crate) const ARG:&str="--dock-taskbar-guard";
@@ -70,6 +72,46 @@ struct Snapshot {id:WindowId,visible:bool}
 unsafe fn snapshot()->Option<Vec<Snapshot>>{
     taskbars().map(|ids|ids.into_iter().map(|id|Snapshot{id,visible:IsWindowVisible(id.hwnd())!=0}).collect())
 }
+unsafe fn observation(snapshot:Option<&[Snapshot]>)->serde_json::Value{
+    let mut bar:APPBARDATA=mem::zeroed();
+    bar.cbSize=mem::size_of::<APPBARDATA>() as u32;
+    let state=SHAppBarMessage(ABM_GETSTATE,&mut bar) as u32;
+    let mut cursor:POINT=mem::zeroed();
+    let point=(GetCursorPos(&mut cursor)!=0).then(||[cursor.x,cursor.y]);
+    let foreground=WindowId::read(GetForegroundWindow());
+    let foreground_class=foreground.and_then(|id|{
+        let mut buf=[0u16;96];let len=GetClassNameW(id.hwnd(),buf.as_mut_ptr(),buf.len() as i32);
+        (len>0).then(||String::from_utf16_lossy(&buf[..len as usize]))
+    });
+    let windows=snapshot.map(|rows|rows.iter().map(|row|{
+        let mut rect:RECT=mem::zeroed();
+        let bounds=(GetWindowRect(row.id.hwnd(),&mut rect)!=0).then(||[rect.left,rect.top,rect.right,rect.bottom]);
+        let monitor=MonitorFromWindow(row.id.hwnd(),MONITOR_DEFAULTTONULL);
+        let mut info:MONITORINFO=mem::zeroed();info.cbSize=mem::size_of::<MONITORINFO>() as u32;
+        let output=(GetMonitorInfoW(monitor,&mut info)!=0).then(||[info.rcMonitor.left,info.rcMonitor.top,info.rcMonitor.right,info.rcMonitor.bottom]);
+        serde_json::json!({"hwnd":row.id.handle,"pid":row.id.pid,"tid":row.id.thread,"visible":row.visible,"rect":bounds,"display":output})
+    }).collect::<Vec<_>>());
+    serde_json::json!({"autoHide":state&ABS_AUTOHIDE!=0,"rawAppBarState":state,"cursor":point,
+        "foregroundPid":foreground.map(|id|id.pid),"foregroundClass":foreground_class,"taskbars":windows})
+}
+fn trace_path()->Option<PathBuf>{
+    let root=PathBuf::from(env::var_os("TUANPC_DESK_TASKBAR_TRIAL_TRACE")?);
+    if !root.is_absolute()||std::fs::read(root.join(".tuanpc-desk-trial")).ok()?.as_slice()!=b"tuanpc-desk isolated native smoke profile v1\n"{return None;}
+    Some(root.join("taskbar-watchdog.jsonl"))
+}
+unsafe fn trace(path:Option<&std::path::Path>,event:&str,started:Instant,snapshot:Option<&[Snapshot]>){
+    let Some(path)=path else{return;};
+    let value=serde_json::json!({"event":event,"elapsedMs":started.elapsed().as_millis() as u64,
+        "utcMs":SystemTime::now().duration_since(UNIX_EPOCH).map_or(0,|t|t.as_millis() as u64),
+        "observation":observation(snapshot)});
+    if let Ok(mut file)=std::fs::OpenOptions::new().create(true).append(true).open(path){let _=writeln!(file,"{value}");}
+}
+pub(crate) fn report_trial_observation()->std::io::Result<()>{
+    let profile=crate::trial::data_dir().ok_or_else(||io::Error::other("A marked trial profile is required"))?;
+    let report=unsafe{let current=snapshot();observation(current.as_deref())};
+    std::fs::write(profile.join("taskbar-observation.json"),report.to_string())
+}
+
 unsafe fn request_hide(hwnd:HWND)->bool{
     // Queue a visibility-only change without activating or moving Explorer.
     SetWindowPos(hwnd,ptr::null_mut(),0,0,0,0,
@@ -122,9 +164,12 @@ impl Watch {
         let pulse=event("Pulse",0)?;
         let expected=all.iter().map(|v|format!("{}:{}:{}:{}",v.id.handle,v.id.pid,v.id.thread,u8::from(v.visible))).collect::<Vec<_>>().join(",");
         let exe=env::current_exe().map_err(|e|e.to_string())?;
-        let child=Command::new(exe).arg(ARG).arg(pid.to_string()).arg(format!("{token:032x}")).arg(expected)
+        let mut command=Command::new(exe);
+        command.arg(ARG).arg(pid.to_string()).arg(format!("{token:032x}")).arg(expected)
             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).creation_flags(QUIET_PROCESS)
-            .spawn().map_err(|e|e.to_string())?;
+            .env_remove("TUANPC_DESK_TASKBAR_TRIAL_TRACE");
+        if let Some(profile)=crate::trial::data_dir(){command.env("TUANPC_DESK_TASKBAR_TRIAL_TRACE",profile);}
+        let child=command.spawn().map_err(|e|e.to_string())?;
         Ok(Self{child,stop,ready,armed,pulse,hidden,started:Instant::now()})
     }
     pub(super) fn poll(&mut self)->Result<bool,Exit>{
@@ -173,7 +218,10 @@ pub(crate) fn watchdog(args:&[String])->bool{
         let event=|role,access|Handle::from_raw(OpenEventW(access,0,name(pid,token,role).as_ptr()));
         let (Ok(stop),Ok(ready),Ok(armed),Ok(pulse))=(event("Stop",SYNC),event("Ready",SIGNAL),
             event("Armed",SIGNAL),event("Pulse",SYNC))else{return true;};
-        let reason=watch(parent,stop,ready,armed,pulse,&expected);
+        let started=Instant::now();
+        let proof=trace_path();
+        let reason=watch(parent,stop,ready,armed,pulse,&expected,proof.as_deref(),started);
+        if proof.is_some(){let current=snapshot();trace(proof.as_deref(),&format!("exit:{reason:?}"),started,current.as_deref());}
         std::process::exit(reason as i32);
     }
 }
@@ -185,9 +233,10 @@ fn health(expected:&[Snapshot],current:Option<&[Snapshot]>)->Option<Exit>{
     else{None}
 }
 
-unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle,expected:&[Snapshot])->Exit{
+unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle,expected:&[Snapshot],proof:Option<&std::path::Path>,started:Instant)->Exit{
     let Some(starting)=snapshot()else{return Exit::ExplorerChanged;};
     if starting!=expected{return Exit::ExplorerChanged;}
+    trace(proof,"before-hide",started,Some(&starting));
     let hidden=starting.iter().filter(|item|item.visible).map(|item|item.id).collect::<Vec<_>>();
     if hidden.is_empty()||parent.fired()||stop.fired(){return Exit::Requested;}
     let mut msg:MSG=mem::zeroed();
@@ -216,9 +265,15 @@ unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle
     if let Some(reason)=health(expected,snapshot().as_deref()){
         return if reason==Exit::ShellRevealed{Exit::HideFailed}else{reason};
     }
+    if proof.is_some(){let current=snapshot();trace(proof,"hidden-confirmed",started,current.as_deref());}
     if SetEvent(ready.0)==0{return Exit::LinkLost;}
     let signals=[parent.0,stop.0,pulse.0];
-    wait_for_restore(&signals,1000,Duration::from_secs(6),||health(expected,snapshot().as_deref()))
+    wait_for_restore(&signals,1000,Duration::from_secs(6),||{
+        let current=snapshot();
+        let status=health(expected,current.as_deref());
+        if let Some(reason)=status{trace(proof,&format!("before-restore:{reason:?}"),started,current.as_deref());}
+        status
+    })
 }
 
 unsafe fn wait_for_restore(signals:&[HANDLE;3],interval:u32,lease:Duration,mut health:impl FnMut()->Option<Exit>)->Exit{
