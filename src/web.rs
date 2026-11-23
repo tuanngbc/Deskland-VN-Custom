@@ -72,6 +72,13 @@ pub fn find_prototype() -> Option<PathBuf> {
     None
 }
 
+pub(crate) fn host()->Option<F::HWND>{
+    OPENING.with(|p|p.borrow().as_ref().map(|p|p.hwnd))
+        .or_else(||WEB.with(|w|w.borrow().as_ref().map(|w|w.hwnd)))
+        .filter(|&hwnd|unsafe{IsWindow(hwnd)!=0})
+}
+pub(crate) fn waiting()->bool{OPENING.with(|p|p.borrow().is_some())}
+
 pub fn is_open() -> bool {
     WEB.with(|w| w.try_borrow().map(|w| w.is_some()).unwrap_or(true))
 }
@@ -307,13 +314,14 @@ pub fn ready() -> Result<(),String> {
     }
     Ok(())
 }
-pub fn close() {
+pub fn close() -> bool {
     let pending=OPENING.with(|p|p.borrow().as_ref().map(|p|p.hwnd));
     let hwnd=pending.or_else(||WEB.with(|w|w.borrow().as_ref().map(|w|w.hwnd)));
-    if let Some(hwnd)=hwnd{unsafe{DestroyWindow(hwnd);}}
+    if let Some(hwnd)=hwnd{unsafe{if IsWindow(hwnd)!=0&&DestroyWindow(hwnd)==0{return false;}}}
     OPENING.with(|p|p.borrow_mut().take());
     RUNTIME_ERROR.with(|e|e.borrow_mut().take());
     INBOX.with(|i|i.borrow_mut().clear());
+    true
 }
 
 pub fn poll_trial_fault() {

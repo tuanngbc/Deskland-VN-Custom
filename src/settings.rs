@@ -51,7 +51,7 @@ pub struct State {
     pub interaction: bool,
     pub wallpaper_enabled:bool,
     pub dock:crate::dock::Options,
-    pub taskbar_hidden:bool,
+    pub taskbar:crate::dock::TaskbarStatus,
     pub displays:Vec<Display>,
 }
 
@@ -299,7 +299,7 @@ struct Ui {
     wallpaper:HWND,
     dock:HWND,
     dock_enabled:bool,
-    taskbar_hidden:bool,
+    taskbar:crate::dock::TaskbarStatus,
     stage:HWND,
     dock_target:DisplayTarget,
     stage_target:DisplayTarget,
@@ -403,7 +403,53 @@ fn row_value(d: &ParamDef, pos: isize) -> f64 {
 }
 
 /// Mở (hoặc đưa lên trước) cửa sổ cài đặt.
-pub fn open(state: &State) {
+// The application owns one logical Settings window. A slow hidden WebView
+// host occupies the slot until it acknowledges readiness or is destroyed.
+thread_local! {
+    static SETTINGS_TRANSITION:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};
+}
+fn transition(action:impl FnOnce()){
+    struct Reset;
+    impl Drop for Reset{fn drop(&mut self){SETTINGS_TRANSITION.with(|v|v.set(false));}}
+    if SETTINGS_TRANSITION.with(|v|v.replace(true)){return;}
+    let _reset=Reset;
+    action();
+}
+fn native_fallback(state:impl FnOnce()->State,error:&str){
+    crate::log!("Cài đặt: {error} → dùng Win32");
+    if crate::web::close()&&crate::web::host().is_none(){open_fallback(&state());}
+}
+pub(crate) fn request(state:&State,force_win32:bool){
+    transition(||{
+        if let Some(hwnd)=hwnd(){
+            // Also repair ownership if recovering a host from a failed backend.
+            if crate::web::close(){unsafe{crate::desktop::show_settings_window(hwnd);}}
+            return;
+        }
+        if let Some(host)=crate::web::host(){
+            if !crate::web::waiting(){unsafe{crate::desktop::show_settings_window(host);}}
+            return;
+        }
+        let result=if force_win32{Err("chế độ Win32".into())}
+            else{crate::web::find_prototype().ok_or_else(||"không thấy thư mục prototype".to_string())
+                .and_then(|path|crate::web::open(&path))};
+        if let Err(error)=result{
+            crate::log!("Cài đặt: {error} → dùng Win32");
+            if crate::web::close()&&crate::web::host().is_none(){open_fallback(state);}
+        }
+    });
+}
+pub(crate) fn reconcile(state:impl FnOnce()->State){
+    transition(||if let Some(error)=crate::web::take_open_error(){native_fallback(state,&error);});
+}
+pub(crate) fn web_ready(state:impl FnOnce()->State){
+    transition(||{
+        if hwnd().is_some(){crate::web::close();return;}
+        if let Err(error)=crate::web::ready(){native_fallback(state,&error);}
+    });
+}
+
+fn open_fallback(state: &State) {
     if let Some(h) = hwnd() {
         unsafe {crate::desktop::show_settings_window(h);}
         return;
@@ -471,7 +517,7 @@ pub fn open(state: &State) {
             wallpaper:std::ptr::null_mut(),
             dock:std::ptr::null_mut(),
             dock_enabled:false,
-            taskbar_hidden:false,
+            taskbar:crate::dock::TaskbarStatus::default(),
             stage:std::ptr::null_mut(),
             dock_target:DisplayTarget::default(),
             stage_target:DisplayTarget::default(),
@@ -566,7 +612,7 @@ pub fn sync(state: &State) {
             set_check(ui.wallpaper,state.wallpaper_enabled);
             set_check(ui.dock,state.dock.enabled);
             ui.dock_enabled=state.dock.enabled;
-            ui.taskbar_hidden=state.taskbar_hidden;
+            ui.taskbar=state.taskbar.clone();
             set_check(ui.stage,state.dock.stage_enabled);
             ui.dock_target=state.dock.dock_display.clone();
             ui.stage_target=state.dock.stage_display.clone();
@@ -616,10 +662,21 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
     let mut utility_edits=Vec::new();
     let mut policy_edits=Vec::new();
     if !stage {
-        let taskbar=UI.with(|u|u.borrow().as_ref().map(|ui|(ui.dock_enabled,ui.taskbar_hidden)));
-        if let Some((true,hidden))=taskbar{
-            let label=if hidden{"Chế độ tương thích Windows (hiện taskbar)"}else{"Chế độ Dock (ẩn taskbar cho phiên này)"};
-            AppendMenuW(menu,MF_STRING,2998,wide(label).as_ptr());
+        let taskbar=UI.with(|u|u.borrow().as_ref().map(|ui|(ui.dock_enabled,ui.taskbar.clone())));
+        if let Some((true,status))=taskbar{
+            use crate::dock::TaskbarMode;
+            let label=match status.effective{
+                TaskbarMode::Hidden=>"Hiện thanh tác vụ Windows",
+                TaskbarMode::HidePending=>"Hủy yêu cầu ẩn thanh tác vụ",
+                TaskbarMode::Restoring=>"Đang xác minh thanh tác vụ đã hiện lại…",
+                _=>"Ẩn thanh tác vụ cho phiên này",
+            };
+            AppendMenuW(menu,MF_STRING|if status.effective==TaskbarMode::Restoring{MF_GRAYED}else{0},2998,wide(label).as_ptr());
+            let summary=format!("{} · Windows: {}",status.effective.label(),status.actual.label());
+            AppendMenuW(menu,MF_STRING|MF_GRAYED,0,wide(&summary).as_ptr());
+            if !status.message.is_empty(){
+                AppendMenuW(menu,MF_STRING|MF_GRAYED,0,wide(&status.message).as_ptr());
+            }
         }
     }
     let mut appearance_edits=Vec::new();
@@ -805,8 +862,12 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
         push(Action::StageCardHeight(height));return;
     }
     if command==2998 {
-        let hide=UI.with(|u|u.borrow().as_ref().is_some_and(|ui|!ui.taskbar_hidden));
-        push(Action::DockTaskbar(hide));return;
+        let hide=UI.with(|u|u.borrow().as_ref().and_then(|ui|{
+            let mode=ui.taskbar.effective;
+            (mode!=crate::dock::TaskbarMode::Restoring).then_some(!mode.hidden()&&!mode.pending())
+        }));
+        if let Some(hide)=hide{push(Action::DockTaskbar(hide));}
+        return;
     }
     if let Some(appearance)=command.checked_sub(3000).and_then(|i|appearance_edits.get(i)){
         push(Action::DockAppearance(appearance.clone()));return;

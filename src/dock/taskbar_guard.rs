@@ -101,6 +101,12 @@ unsafe fn visual_snapshot(raw:&[Snapshot],auto_hide:bool)->Vec<Snapshot>{
         row
     }).collect()
 }
+pub(super) unsafe fn current()->super::taskbar_state::Observation{
+    let Some(rows)=snapshot()else{return Default::default();};
+    let visible=visual_snapshot(&rows,appbar_state()&ABS_AUTOHIDE!=0).iter().filter(|row|row.visible).count();
+    super::taskbar_state::Observation{known:true,total:rows.len(),visible,
+        parked:rows.iter().filter(|row|row.visible).count().saturating_sub(visible)}
+}
 unsafe fn observation(snapshot:Option<&[Snapshot]>)->serde_json::Value{
     let state=appbar_state();
     let mut cursor:POINT=mem::zeroed();
@@ -177,6 +183,7 @@ pub(super) struct Watch {
     child:Child, stop:Handle, ready:Handle, armed:Handle, pulse:Handle, hidden:Vec<WindowId>, started:Instant,
 }
 impl Watch {
+    pub(super) fn restore_count(&self)->usize{self.hidden.len()}
     pub(super) unsafe fn start()->Result<Self,String>{
         let all=snapshot().ok_or("Thanh tác vụ Windows chưa sẵn sàng.")?;
         let hidden=all.iter().filter(|item|item.visible).map(|item|item.id).collect::<Vec<_>>();

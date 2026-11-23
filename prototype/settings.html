@@ -1122,7 +1122,7 @@ function renderDockPlacement(){
       '</div><b>'+esc(displayLabel(d))+'</b><small>'+esc([app?'Dock':'',stage?'Stage Manager':''].filter(Boolean).join(' · ')||dockText('dockDisplayOff'))+'</small></div>';
   }).join(''):'<p>'+esc(dockText('dockDisplayNone'))+'</p>';
 }
-let shellModePending=false;
+let taskbarSnapshot={mode:'COMPATIBILITY_ACTIVE',message:''},typedTaskbar=false;
 function setDockPinResult(result){
   $('dockPinStatus').textContent=result.message||'';
   const correction=$('dockPinCorrection');
@@ -1147,12 +1147,30 @@ $('dockShellButtons').onchange=e=>send({t:'dock',nativeShellButtons:e.target.val
 $('dockPinCommand').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();submitDockPin();}};
 function syncDockTaskbar(m){
   const control=$('dockShellMode');
-  if(typeof m.dockTaskbarPending==='boolean')shellModePending=m.dockTaskbarPending;
-  if(typeof m.dockTaskbarHidden==='boolean')control.value=m.dockTaskbarHidden||shellModePending?'dock':'windows';
-  control.disabled=!dockOptions.enabled||shellModePending;
-  if(typeof m.dockTaskbarMessage==='string')$('taskbarTakeoverStatus').textContent=m.dockTaskbarMessage;
+  if(typeof m.dockTaskbarEffective==='string'){
+    typedTaskbar=true;
+    const windows=m.dockTaskbarWindows;
+    const visible=windows?.total&&m.dockTaskbarActual!=='UNKNOWN'
+      ? ' ('+windows.visible+'/'+windows.total+' đang hiện'+(windows.parked?', '+windows.parked+' tự ẩn':'')+')' : '';
+    taskbarSnapshot={mode:m.dockTaskbarEffective,
+      message:[m.dockTaskbarEffectiveLabel,'Windows: '+(m.dockTaskbarActualLabel||'Chưa xác minh')+visible,
+        m.dockTaskbarDesired==='dock'&&m.dockTaskbarEffective!=='DOCK_HIDDEN_ACTIVE'?'Yêu cầu: ẩn thanh tác vụ':'',
+        m.dockTaskbarMessage].filter(Boolean).join(' · ')};
+  }else if(!typedTaskbar){
+    if(typeof m.dockTaskbarHidden==='boolean'||typeof m.dockTaskbarPending==='boolean'){
+      taskbarSnapshot.mode=m.dockTaskbarHidden?'DOCK_HIDDEN_ACTIVE':m.dockTaskbarPending?'DOCK_HIDE_PENDING':'COMPATIBILITY_ACTIVE';
+    }
+    if(typeof m.dockTaskbarMessage==='string')taskbarSnapshot.message=m.dockTaskbarMessage;
+  }
+  control.value=taskbarSnapshot.mode==='DOCK_HIDDEN_ACTIVE'?'dock':'windows';
+  control.disabled=!dockOptions.enabled||['DOCK_HIDE_PENDING','RESTORING'].includes(taskbarSnapshot.mode);
+  $('taskbarTakeoverStatus').textContent=taskbarSnapshot.message;
 }
-$('dockShellMode').addEventListener('change',e=>send({t:'dockTaskbar',hidden:e.target.value==='dock'}));
+$('dockShellMode').addEventListener('change',e=>{
+  const hidden=e.target.value==='dock';
+  syncDockTaskbar({});
+  send({t:'dockTaskbar',hidden});
+});
 function syncDockSettings(m) {
   dockOptions=Object.assign({},dockOptions,m.dock||{});
   if(Array.isArray(m.dockDisplays))dockDisplays=m.dockDisplays;

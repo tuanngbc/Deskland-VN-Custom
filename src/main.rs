@@ -867,10 +867,8 @@ fn web_init(app: &App) -> serde_json::Value {
             "force": { "showBoy": 0, "showCat": 0 },
         },
     });
-    init["dockTaskbarHidden"]=serde_json::Value::Bool(app.dock_taskbar_hidden);
+    app.dock_taskbar.add_fields(&mut init);
     init["dockWinKeyStatus"]=serde_json::json!(app.dock_win_key_status);
-    init["dockTaskbarPending"]=serde_json::Value::Bool(app.dock_taskbar_pending);
-    init["dockTaskbarMessage"]=serde_json::Value::String(app.dock_taskbar_message.clone());
     init
 }
 
@@ -998,9 +996,7 @@ struct App {
     dock_runtime: Option<dock::Runtime>,
     dock_error: Option<String>,
     dock_win_key_status: String,
-    dock_taskbar_hidden:bool,
-    dock_taskbar_pending:bool,
-    dock_taskbar_message:String,
+    dock_taskbar:dock::TaskbarStatus,
     // One cached CPU buffer shared by all outputs, never scaled while GPU-mapped.
     staging: RefCell<Vec<u8>>,
     benchmark_gdi: bool,
@@ -1016,8 +1012,10 @@ impl App {
         launcher::dock_pins(&self.cfg.dock.pinned);
         self.dock_error=None;
         if self.saver || self.headless || !self.cfg.dock.any_enabled() {self.dock_runtime=None;
-            if self.dock_taskbar_hidden||self.dock_taskbar_pending {self.dock_taskbar_message="Đã hiện lại thanh Windows khi tắt Dock.".into();}
-            self.dock_taskbar_hidden=false;self.dock_taskbar_pending=false;self.dock_win_key_status="off".into();}
+            if self.dock_taskbar.effective.hidden()||self.dock_taskbar.effective.pending(){
+                self.dock_taskbar=dock::current_taskbar_status("Đã trả thanh tác vụ cho Windows khi tắt Dock.");
+            }
+            self.dock_win_key_status="off".into();}
         else if let Some(runtime)=self.dock_runtime.as_ref() {runtime.configure(self.cfg.dock.clone());}
         else {match dock::Runtime::new(self.cfg.dock.clone(),self.owner as usize) {
             Ok(runtime)=>self.dock_runtime=Some(runtime),
@@ -1027,9 +1025,18 @@ impl App {
     }
     fn post_dock_state(&self) {
         if !web::is_open() { return; }
-        web::post(&serde_json::json!({"t":"dockState","dock":self.cfg.dock.json(),"dockDisplays":dock::display_json(),"wallpaperEnabled":self.cfg.wallpaper_enabled,
-            "dockRunning":self.dock_runtime.as_ref().is_some_and(|r|!r.finished()),"dockError":self.dock_error,"dockTaskbarHidden":self.dock_taskbar_hidden,
-            "dockWinKeyStatus":self.dock_win_key_status,"dockTaskbarPending":self.dock_taskbar_pending,"dockTaskbarMessage":self.dock_taskbar_message}).to_string());
+        let mut value=serde_json::json!({"t":"dockState","dock":self.cfg.dock.json(),"dockDisplays":dock::display_json(),"wallpaperEnabled":self.cfg.wallpaper_enabled,
+            "dockRunning":self.dock_runtime.as_ref().is_some_and(|r|!r.finished()),"dockError":self.dock_error,
+            "dockWinKeyStatus":self.dock_win_key_status});
+        self.dock_taskbar.add_fields(&mut value);
+        web::post(&value.to_string());
+    }
+    fn set_taskbar_status(&mut self,status:dock::TaskbarStatus){
+        self.dock_taskbar=status;
+        if settings::hwnd().is_some(){settings::sync(&self.settings_state());}
+        let mut payload=serde_json::json!({"t":"dockTaskbarState"});
+        self.dock_taskbar.add_fields(&mut payload);
+        web::post(&payload.to_string());
     }
     fn set_wallpaper_enabled(&mut self,on:bool)->Result<(),String> {
         if self.cfg.wallpaper_enabled==on{return Ok(());}
@@ -1571,7 +1578,7 @@ impl App {
             interaction: self.interactions_enabled,
             wallpaper_enabled:self.cfg.wallpaper_enabled,
             dock:self.cfg.dock.clone(),
-            taskbar_hidden:self.dock_taskbar_hidden,
+            taskbar:self.dock_taskbar.clone(),
             displays:dock::displays(),
         }
     }
@@ -2398,9 +2405,7 @@ fn main() {
         dock_runtime:None,
         dock_error:None,
         dock_win_key_status:"off".into(),
-        dock_taskbar_hidden:false,
-        dock_taskbar_pending:false,
-        dock_taskbar_message:String::new(),
+        dock_taskbar:dock::TaskbarStatus::default(),
         staging:RefCell::new(Vec::new()),
         benchmark_gdi:headless && args.iter().any(|a|a=="--benchmark-gdi"),
         benchmark_direct_readback:headless && args.iter().any(|a|a=="--benchmark-direct-readback"),
@@ -2618,13 +2623,7 @@ fn main() {
                 };
                 PENDING_CMD.with(|c|c.set(command));
             }
-            dock::Event::Taskbar{hidden,pending,message}=>{
-                app.dock_taskbar_hidden=hidden;
-                app.dock_taskbar_pending=pending;
-                app.dock_taskbar_message=message.clone();
-                if settings::hwnd().is_some(){settings::sync(&app.settings_state());}
-                web::post(&serde_json::json!({"t":"dockTaskbarState","dockTaskbarHidden":hidden,"dockTaskbarPending":pending,"dockTaskbarMessage":message}).to_string());
-            }
+            dock::Event::Taskbar(status)=>app.set_taskbar_status(status),
             dock::Event::WinKey(status)=>{app.dock_win_key_status=status;app.post_dock_state();}
             dock::Event::Error(error)=>{log!("Dock & Stage: {error}");app.dock_error=Some(error);app.post_dock_state();}
         }}
@@ -2735,18 +2734,10 @@ fn main() {
             }
         }
         if cmd == CMD_SETTINGS {
-            // Giống bản gốc: trang settings.html trong WebView2. Không được thì dùng cửa sổ Win32 dự phòng.
-            let r = if force_win32 || settings::hwnd().is_some() { Err("dùng cài đặt Win32".to_string()) } else { web::find_prototype().ok_or_else(|| "không thấy thư mục prototype (settings.html)".to_string()).and_then(|p| web::open(&p)) };
-            if let Err(e) = r {
-                log!("Không mở được cài đặt WebView2 ({e}) -> dùng cửa sổ Win32");
-                settings::open(&app.settings_state());
-            }
+            settings::request(&app.settings_state(),force_win32);
         }
         if trial::active() { web::poll_trial_fault(); }
-        if let Some(error)=web::take_open_error() {
-            log!("Không mở được hoặc mất kết nối cài đặt WebView2 ({error}) -> dùng cửa sổ Win32");
-            settings::open(&app.settings_state());
-        }
+        settings::reconcile(||app.settings_state());
         // Thông điệp từ trang cài đặt WebView2
         if shortcut_capture_started.is_some_and(|started| started.elapsed() > Duration::from_secs(120) || !web::is_open()) {
             SHORTCUT_RECORDING.with(|c| c.set(false));
@@ -2761,10 +2752,7 @@ fn main() {
                 "hello" => {
                     web::post(&web_init(&app).to_string());
                     web::post(&away_state(&app, "").to_string());
-                    if let Err(error)=web::ready() {
-                        log!("{error} -> dùng cửa sổ Win32");
-                        settings::open(&app.settings_state());
-                    }
+                    settings::web_ready(||app.settings_state());
                     last_icons_json.clear();
                 }
                 "set" => {
@@ -3058,8 +3046,7 @@ fn main() {
                 "dockTaskbar" => {
                     if let Some(hidden)=m["hidden"].as_bool(){
                         if let Some(runtime)=app.dock_runtime.as_ref(){runtime.set_taskbar_hidden(hidden);}
-                        else{web::post(&serde_json::json!({"t":"dockTaskbarState","dockTaskbarHidden":false,
-                            "dockTaskbarPending":false,"dockTaskbarMessage":"Bật Dock để dùng chế độ ẩn thanh tác vụ."}).to_string());}
+                        else{app.set_taskbar_status(dock::current_taskbar_status("Bật Dock để dùng chế độ ẩn thanh tác vụ."));}
                     }
                 }
                 "dockWindowPolicy" => {

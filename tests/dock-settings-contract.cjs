@@ -166,11 +166,18 @@ test('taskbar hide is an explicit session command separate from saved Dock setti
   assert.equal(control.disabled,false);
   control.listeners.change({target:{value:"dock"}});
   assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'dockTaskbar',hidden:true});
-  context.syncDockTaskbar({dockTaskbarHidden:false,dockTaskbarPending:true});
-  assert.equal(control.value,'dock');assert.equal(control.disabled,true);
-  context.syncDockTaskbar({dockTaskbarHidden:false,dockTaskbarPending:false,dockTaskbarMessage:'Restored'});
+  context.syncDockTaskbar({dockTaskbarEffective:'DOCK_HIDE_PENDING',dockTaskbarDesired:'dock',dockTaskbarActual:'VISIBLE',dockTaskbarPending:true});
+  assert.equal(control.value,'windows');assert.equal(control.disabled,true);
+  assert.match($('taskbarTakeoverStatus').textContent,/Yêu cầu:/);
+  context.syncDockTaskbar({dockTaskbarEffective:'DOCK_HIDDEN_ACTIVE',dockTaskbarDesired:'dock',dockTaskbarActual:'HIDDEN'});
+  assert.equal(control.value,'dock');assert.equal(control.disabled,false);
+  context.syncDockTaskbar({dockTaskbarEffective:'RESTORING',dockTaskbarActual:'VISIBLE'});
+  assert.equal(control.value,'windows');assert.equal(control.disabled,true);
+  context.syncDockSettings({dockTaskbarEffective:'RESTORED_BY_WINDOWS',dockTaskbarActual:'VISIBLE',
+    dockTaskbarActualLabel:'Đang hiện',dockTaskbarWindows:{visible:2,total:2,parked:0},dockTaskbarMessage:'Restored'});
+  context.syncDockTaskbar({dockTaskbarHidden:true,dockTaskbarPending:true}); // stale legacy fields
   assert.equal(control.value,'windows');assert.equal(control.disabled,false);
-  assert.equal($('taskbarTakeoverStatus').textContent,'Restored');
+  assert.match($('taskbarTakeoverStatus').textContent,/2\/2.*Restored/);
   context.syncDockSettings({dock:{enabled:false},dockTaskbarHidden:false});
   assert.equal(control.disabled,true);
 });
