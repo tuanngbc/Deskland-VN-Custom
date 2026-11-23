@@ -4,8 +4,10 @@ const html=fs.readFileSync(require('node:path').join(__dirname,'../prototype/set
 const start=html.indexOf('let dockOptions='),end=html.indexOf("for(const id of ['systemMonitorEnabled'",start);
 assert(start>0&&end>start,'integrated settings handlers must exist');
 const controls=new Map(),messages=[];
-const $=id=>{if(!controls.has(id))controls.set(id,{checked:false,value:'',textContent:'',listeners:{},classList:{toggle(){}},addEventListener(name,handler){this.listeners[name]=handler;}});return controls.get(id);};
-const context=vm.createContext({$,send:m=>messages.push(m),t:key=>key==='dockRunning'?'Translated running':key,esc:value=>String(value).replace(/&/g,'&amp;').replace(/"/g,'&quot;')});
+class Option {constructor(text,value){this.text=text;this.value=value;this.dataset={};}}
+
+const $=id=>{if(!controls.has(id))controls.set(id,{checked:false,value:'',textContent:'',listeners:{},options:[],add(option){option.remove=()=>{this.options=this.options.filter(x=>x!==option);};this.options.push(option);},replaceChildren(...options){this.options=options;this.value=options[0]?.value||'';},checkValidity(){return true;},classList:{toggle(){}},addEventListener(name,handler){this.listeners[name]=handler;}});return controls.get(id);};
+const context=vm.createContext({$,Option,send:m=>messages.push(m),t:key=>key==='dockRunning'?'Translated running':key,esc:value=>String(value).replace(/&/g,'&amp;').replace(/"/g,'&quot;')});
 vm.runInContext(html.slice(start,end),context);
 let count=0;function test(name,fn){fn();count++;console.log('PASS '+name);}
 test('saved settings and tray updates use the same controls',()=>{
@@ -113,13 +115,30 @@ test('stage layout changes one display and leaves saved disconnected layouts unt
   assert.equal($('stageStyle_side').value,'right');
   assert.equal($('stageStyle_scale').value,'115');
   $('stageStyle_spacing').value='16';$('stageStyle_spacing').listeners.change();
-  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'stageStyle',display:'portrait',style:{side:'right',scale:115,spacing:16,groupLimit:5,opacity:76,groupPresentation:'stacked'}});
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'stageStyle',display:'portrait',style:{cardHeight:0,side:'right',scale:115,spacing:16,groupLimit:5,opacity:76,groupPresentation:'stacked'}});
   $('stageStyle_groupLimit').value='8';$('stageStyle_groupLimit').listeners.change();
   assert.equal(messages.pop().style.groupLimit,8);
   $('stageStyle_opacity').value='55';$('stageStyle_opacity').listeners.change();
-  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop().style)),{side:'right',scale:115,spacing:16,groupLimit:8,opacity:55,groupPresentation:'stacked'});
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop().style)),{cardHeight:0,side:'right',scale:115,spacing:16,groupLimit:8,opacity:55,groupPresentation:'stacked'});
   $('stageStyle_groupPresentation').value='flat';$('stageStyle_groupPresentation').listeners.change();
   assert.equal(messages.pop().style.groupPresentation,'flat');
+});
+test('stage presentation and each height scope send distinct canonical edits',()=>{
+  const group='exe:c:/apps/paint.exe';
+  context.syncDockSettings({dockDisplays:[{id:'main',name:'Main',w:1920,h:1080,dpi:96,primary:true}],
+    dock:{stagePresentation:'dwm',stageCardHeight:120,stageCardOverrides:{[group]:101},stageStyles:{main:{cardHeight:144}}}});
+  assert.equal($('stagePreviewMode').value,'dwm');
+  assert.equal($('stageDefaultHeight').value,'120');
+  assert.equal($('stageStyle_cardHeight').value,'144');
+  assert.equal($('stageOverrideHeight').value,101);
+  $('stagePreviewMode').listeners.change({target:{value:'perspective'}});
+  assert.equal(messages.pop().mode,'perspective');
+  $('stageDefaultHeight').listeners.change({target:{value:'126'}});
+  assert.equal(messages.pop().height,126);
+  $('stageStyle_cardHeight').value='90';$('stageStyle_cardHeight').listeners.change();
+  assert.equal(messages.pop().style.cardHeight,90);
+  $('stageOverrideReset').listeners.click();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'stageGroupHeight',group,height:0});
 });
 test('utility order, visibility and reset are isolated to the selected monitor',()=>{
   const d={id:'main',name:'Main',w:2560,h:1080,dpi:96,primary:true};

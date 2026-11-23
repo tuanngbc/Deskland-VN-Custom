@@ -44,7 +44,7 @@ pub(super) struct Layout {
     pub width:i32,pub height:i32,pub card_h:i32,pub inset:i32,pub gap:i32,
     pub radius:i32,pub caption:i32,pub rows:usize,pub count:usize,pub paged:bool,
     pub stack:u8,pub nav_h:i32,pub right:bool,
-    pub layers:[u8;8],pub stack_design:bool,pub landscape:bool,stack_step:i32,
+    pub layers:[u8;8],heights:[i32;8],pub stack_design:bool,pub landscape:bool,stack_step:i32,
 }
 impl Layout {
     pub fn new(width:i32,height:i32,dpi:u32,gap:i32,limit:usize,total:usize,right:bool)->Self{
@@ -62,7 +62,7 @@ impl Layout {
         let available=(height-2*inset-reserve-(shown-1)*gap)/shown;
         let ideal=((width-4*inset)*3/5+px(42)).clamp(min_h,px(160));
         let card_h=available.min(ideal).max(1);
-        Self{width,height,card_h,inset,gap,radius:px(18),caption:px(37),rows,count:0,paged,stack:0,nav_h,right,layers:[0;8],stack_design:false,landscape:false,stack_step:(inset*4/5).max(3)}
+        Self{width,height,card_h,inset,gap,radius:px(18),caption:px(37),rows,count:0,paged,stack:0,nav_h,right,layers:[0;8],heights:[0;8],stack_design:false,landscape:false,stack_step:(inset*4/5).max(3)}
     }
     pub fn landscape(width:i32,height:i32,dpi:u32,gap:i32,limit:usize,total:usize,right:bool,stacked:bool)->Self{
         let px=|n:i32|super::panel_chrome::scale(dpi,n);
@@ -90,7 +90,37 @@ impl Layout {
         let room=if self.stack_design{self.step()*4}else if self.landscape{0}else{(self.inset*2).min((self.width-12).max(0)/3)};
         let icon_room=if self.stack_design&&!self.landscape{self.icon_size()+self.inset}else{0};
         let x=self.inset+if self.right{room}else{icon_room};
-        Box2{x,y:self.inset+i as i32*(self.card_h+self.gap),w:(self.width-2*self.inset-room-icon_room).max(1),h:self.card_h}
+        let height=|n:usize|self.heights.get(n).copied().filter(|&h|h>0).unwrap_or(self.card_h);
+        Box2{x,y:self.inset+(0..i).map(|n|height(n)+self.gap).sum::<i32>(),w:(self.width-2*self.inset-room-icon_room).max(1),h:height(i)}
+    }
+    pub fn fit_pages(&mut self,dpi:u32,limit:usize,requested:&[u32])->Vec<std::ops::Range<usize>>{
+        let px=|n:u32|super::panel_chrome::scale(dpi,n as i32);
+        let desired=|i|if requested[i]==0{self.card_h}else{px(requested[i])};
+        let group=|space:i32|{
+            let mut pages=Vec::new();
+            let mut first=0;let mut used=0;
+            for i in 0..requested.len(){
+                let h=desired(i).min(space);
+                if i>first&&(i-first>=limit||used+self.gap+h>space){
+                    pages.push(first..i);first=i;used=0;
+                }
+                used+=if i==first{h}else{h+self.gap};
+            }
+            pages.push(first..requested.len());
+            pages
+        };
+        let free=(self.height-self.inset*2).max(1);
+        let pages=group(free);
+        self.paged=pages.len()>1;
+        if self.paged{group((free-self.nav_h-self.gap).max(1))}else{pages}
+    }
+    pub fn apply_heights(&mut self,dpi:u32,requested:&[u32]){
+        let space=(self.height-2*self.inset-if self.paged{self.nav_h+self.gap}else{0}).max(1);
+        for (i,&height) in requested.iter().take(8).enumerate(){
+            self.heights[i]=if height==0{self.card_h}else{super::panel_chrome::scale(dpi,height as i32)}.min(space);
+        }
+        let h=self.heights.iter().copied().filter(|&h|h>0).min().unwrap_or(self.card_h);
+        self.caption=self.caption.min((h/4).max(1));
     }
     fn step(self)->i32{self.stack_step}
     fn icon_size(self)->i32{(if self.landscape{self.inset*7/2}else{self.inset*5}).min(self.card_h/2).max(1)}
@@ -110,7 +140,7 @@ impl Layout {
         c
     }
     fn detached_icon(self,i:usize)->Box2{
-        let card=self.card(i);let size=self.icon_size();
+        let card=self.card(i);let size=self.icon_size().min((card.h/2).max(1));
         if self.landscape{
             let over=(size/3).max(1).min(self.inset);
             return Box2{x:if self.right{card.x+card.w-size+over}else{card.x-over},
@@ -181,8 +211,11 @@ impl Layout {
     pub fn member_hit_custom(self,i:usize,x:i32,y:i32,front:Option<bool>)->Option<usize>{
         if i>=self.count{return None;}
         if self.stack_design&&self.detached_icon(i).hit(x,y){return Some(0);}
-        let inside=|b:Box2|b.hit(x,y)&&distance(b.rect(),self.radius.min(b.h/2) as f32,x as f32+0.5,y as f32+0.5)<=0.0;
-        (0..self.depth(i)).find(|&layer|if layer==0{front.unwrap_or_else(||inside(self.card(i)))}else{inside(self.rear(i,layer as i32))})
+        (0..self.depth(i)).find(|&layer|if layer==0{front.unwrap_or_else(||self.layer_hit(i,layer,x,y))}else{self.layer_hit(i,layer,x,y)})
+    }
+    pub fn layer_hit(self,i:usize,layer:usize,x:i32,y:i32)->bool{
+        let b=self.rear(i,layer as i32);
+        b.hit(x,y)&&distance(b.rect(),self.radius.min(b.h/2) as f32,x as f32+0.5,y as f32+0.5)<=0.0
     }
     pub fn nav(self)->Option<Box2>{
         if !self.paged||self.count==0{return None;}
@@ -226,7 +259,7 @@ impl Layout {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Look {pub dark:bool,pub layout:Layout,pub active:u8,pub alpha:Option<u8>,pub projected:Option<usize>}
+pub(super) struct Look {pub dark:bool,pub layout:Layout,pub active:u8,pub alpha:Option<u8>,pub projected:[u8;8]}
 
 pub(super) struct Panel {layer:Layer,look:Option<Look>,static_pixels:Vec<u8>,mask:Option<Layer>,font:HFONT,large_fonts:[HFONT;2],dpi:u32,icons:IconRasters}
 impl Panel {
@@ -237,7 +270,7 @@ impl Panel {
     }
     pub fn geometry(&self)->(i32,i32,u32){(self.layer.size.0,self.layer.size.1,self.dpi)}
     pub fn font(&self)->HFONT{self.font}
-    pub unsafe fn paint(&mut self,target:HDC,look:Look,items:&[Item],atlas:&Atlas,ready:&[bool],emphasis:Option<(usize,u8)>,layered:Option<(HWND,&[String],usize,usize,Option<usize>)>,snapshot:Option<&super::stage_snapshot::Preview>)->bool {
+    pub unsafe fn paint(&mut self,target:HDC,look:Look,items:&[Item],atlas:&Atlas,ready:&[bool],emphasis:Option<(usize,u8)>,layered:Option<(HWND,&[String],usize,usize,Option<usize>)>,snapshots:&[super::stage_snapshot::Preview])->bool {
         let (w,h)=self.layer.size;
         let layout=look.layout;
         let palette=Palette::new(look.dark);
@@ -249,7 +282,7 @@ impl Panel {
             for i in 0..layout.count {
                 let b=layout.card(i).rect();
                 let radius=(layout.radius as f32).min(b.h/2.0);
-                if look.alpha.is_some()&&look.projected!=Some(i){
+                if look.alpha.is_some()&&look.projected[i]&1==0{
                     let k=(layout.inset as f32*0.82).max(2.0);
                     let spread=Rect{x:b.x-k,y:b.y-k,w:b.w+2.0*k,h:b.h+2.0*k};
                     draw(data,w,h,spread,|x,y|{
@@ -257,8 +290,8 @@ impl Panel {
                         Some(([6,5,4],58.0*(1.0-d.max(0.0)/k).clamp(0.0,1.0).powi(2)))
                     });
                 }
-                if look.projected==Some(i){continue;}
                 for layer in (1..layout.depth(i)).rev(){
+                    if look.projected[i]&(1<<layer)!=0{continue;}
                     let v=(layout.depth(i)-layer) as u8*5;
                     let c=if look.dark{[78+v,69+v,61+v]}else{[208+v,202+v,197+v]};
                     let r=layout.rear(i,layer as i32).rect();
@@ -267,6 +300,7 @@ impl Panel {
                     }
                     rounded(data,w,h,r,radius,c,alpha.max(205));
                 }
+                if look.projected[i]&1!=0{continue;}
                 let active=look.active&(1<<i)!=0;
                 let edge=if active{palette.accent}else if look.dark{[102,92,82]}else{[224,215,208]};
                 let tint=if look.dark{[50,43,37]}else{[253,249,246]};
@@ -314,11 +348,11 @@ impl Panel {
         }
         let data=self.layer.pixels();
         data.copy_from_slice(&self.static_pixels);
-        if let Some(view)=snapshot{
+        for view in snapshots{
             let hovered=layered.and_then(|(_,_,_,_,h)|h)==Some(view.target.index);
             view.blend(data,w,h,hovered);
         }
-        if let Some((i,strength))=emphasis.filter(|&(i,a)|i<layout.count&&a>0&&look.projected!=Some(i)){
+        if let Some((i,strength))=emphasis.filter(|&(i,a)|i<layout.count&&a>0&&look.projected[i]&1==0){
             let b=layout.card(i).rect();
             let radius=(layout.radius as f32).min(b.h/2.0);
             let tint=palette.accent;
@@ -346,7 +380,7 @@ impl Panel {
             if let Some(Some(icon))=atlas.get(&item.path){self.icons.paint(data,w,h,small,icon);}
             else{fallback_icon(data,w,h,small,tint);}
             let slot=layout.preview(i);
-            if !layout.stack_design&&!ready[i]&&slot.bottom-slot.top>6 {
+            if look.projected[i]&1==0&&!ready[i]&&slot.bottom-slot.top>6 {
                 let s=((slot.bottom-slot.top-5) as f32/1.4).min(size*1.7);
                 let tile=Rect{x:(slot.left+slot.right) as f32/2.0-s*0.69,y:(slot.top+slot.bottom) as f32/2.0-s*0.69,w:s*1.38,h:s*1.38};
                 rounded(data,w,h,tile,tile.w*0.31,palette.accent,if look.dark{42}else{33});
@@ -362,7 +396,7 @@ impl Panel {
                 let ink=palette.ink;
                 for (i,title) in labels.iter().enumerate(){
                     let mut r=caption_box(layout,i);
-                    if look.projected==Some(i){
+                    if look.projected[i]&1!=0{
                         // No text over the sampled scene. The popup, tooltip
                         // and context menu continue to expose its title.
                         if let Some(button)=hover.filter(|&n|n==i).and_then(|_|layout.projected_close(i)){
@@ -519,6 +553,30 @@ pub(super) unsafe fn nav_label(dc:HDC,b:Box2,label:&str,ink:u32){
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mixed_heights_page_and_keep_hit_targets_within_portrait_rail(){
+        let requests=[180,72,162,0,90,144,108];
+        for right in [true,false]{
+            let mut layout=Layout::landscape(300,590,144,16,5,requests.len(),right,true);
+            let pages=layout.fit_pages(144,5,&requests);
+            assert!(pages.len()>1);
+            assert_eq!(pages.iter().cloned().flatten().collect::<Vec<_>>(),(0..requests.len()).collect::<Vec<_>>());
+            for range in pages{
+                let mut page=layout;
+                page.count=range.len();
+                page.apply_heights(144,&requests[range]);
+                for i in 0..page.count{
+                    let card=page.card(i);
+                    let (x,y)=card.center();
+                    assert_eq!(page.hit(x,y),Some(i));
+                    if i+1<page.count{assert!(card.y+card.h<page.card(i+1).y);}
+                }
+                assert!(page.nav().is_some());
+                assert!(page.content_height()<=layout.height);
+            }
+        }
+    }
+
     #[test]
     fn measured_caption_keeps_a_vietnamese_suffix_and_short_titles(){
         assert_eq!(fit_caption("Lịch",|t|t.chars().count()<=8),"Lịch");
@@ -679,8 +737,8 @@ mod tests {
             let items=(0..3).map(|_|Item{path:String::new(),title:"Fixture".into(),hwnd:null_mut(),count:1,pinned:false}).collect::<Vec<_>>();
             let labels=vec!["Fixture".to_owned();3];
             let mut panel=Panel::new(w,h,96).unwrap();
-            let layer=Look{dark:true,layout:l,active:1,alpha:Some(155),projected:None};
-            let presented=panel.paint(null_mut(),layer,&items,&Atlas::new(),&[false,true,false],Some((0,200)),Some((hwnd,&labels,0,3,None)),None);
+            let layer=Look{dark:true,layout:l,active:1,alpha:Some(155),projected:[0;8]};
+            let presented=panel.paint(null_mut(),layer,&items,&Atlas::new(),&[false,true,false],Some((0,200)),Some((hwnd,&labels,0,3,None)),&[]);
             DestroyWindow(hwnd);
             assert!(presented,"the isolated layered Stage surface must submit pixels successfully");
             let pixels=panel.layer.pixels();

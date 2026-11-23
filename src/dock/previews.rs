@@ -39,10 +39,10 @@ impl Previews {
     pub unsafe fn update_traced(&mut self,dst:HWND,items:&[Item],layout:Layout,mut steps:Option<&mut [PreviewStep]>)->bool{
         self.update_targets(dst,items.iter().enumerate().map(|(i,item)|(item.hwnd,layout.preview(i),layout.portrait_preview(i),None)),steps.as_deref_mut())
     }
-    pub unsafe fn update_stacks(&mut self,dst:HWND,groups:&[Vec<usize>],layout:Layout,projected:Option<usize>)->bool{
-        let targets=groups.iter().enumerate().filter(|(group,_)|Some(*group)!=projected)
+    pub unsafe fn update_stacks(&mut self,dst:HWND,groups:&[Vec<usize>],layout:Layout,projected:[u8;8])->bool{
+        let targets=groups.iter().enumerate()
             .flat_map(|(group,members)|members.iter().take(layout.depth(group))
-            .enumerate().map(move |(depth,&handle)|{
+            .enumerate().filter(move |(depth,_)|projected[group]&(1<<depth)==0).map(move |(depth,&handle)|{
                 let (area,clip)=layout.preview_layer(group,depth);
                 (handle as HWND,area,if depth==0{layout.portrait_preview(group)}else{area},clip)
             }));
@@ -101,9 +101,14 @@ impl Previews {
 }
 
 pub(super) unsafe fn preview_pid(window:HWND)->Result<u32,PreviewStep>{
-    if window.is_null()||IsWindow(window)==0{return Err(PreviewStep::Gone);}
+    let pid=permitted_pid(window)?;
     if IsWindowVisible(window)==0{return Err(PreviewStep::Hidden);}
     if IsIconic(window)!=0{return Err(PreviewStep::Minimized);}
+    Ok(pid)
+}
+
+pub(super) unsafe fn permitted_pid(window:HWND)->Result<u32,PreviewStep>{
+    if window.is_null()||IsWindow(window)==0{return Err(PreviewStep::Gone);}
     let mut pid=0;
     GetWindowThreadProcessId(window,&mut pid);
     if pid==0||pid==std::process::id(){return Err(PreviewStep::ForeignIdentity);}

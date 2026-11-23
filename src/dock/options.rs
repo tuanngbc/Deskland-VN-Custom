@@ -29,6 +29,7 @@ impl WindowPolicy {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StageStyle {
+    pub card_height: u32,
     pub right: Option<bool>,
     pub scale: u32,
     pub spacing: u32,
@@ -37,12 +38,13 @@ pub struct StageStyle {
     pub stack_groups: bool,
 }
 impl Default for StageStyle {
-    fn default() -> Self { Self { right: None, scale: 100, spacing: 6, group_limit: 5, opacity: 76, stack_groups: true } }
+    fn default() -> Self { Self { card_height:0,right: None, scale: 100, spacing: 6, group_limit: 5, opacity: 76, stack_groups: true } }
 }
 impl StageStyle {
     pub fn from_json(v: &Value) -> Self {
         let size = |key: &str, base, min, max| v[key].as_u64().map_or(base, |x| x.clamp(min, max) as u32);
         Self {
+            card_height:card_height(&v["cardHeight"]),
             right: match v["side"].as_str() { Some("left") => Some(false), Some("right") => Some(true), _ => None },
             scale: size("scale", 100, 75, 140),
             spacing: size("spacing", 6, 2, 20),
@@ -52,10 +54,18 @@ impl StageStyle {
         }
     }
     fn json(self) -> Value {
-        json!({"side":match self.right{Some(false)=>"left",Some(true)=>"right",None=>"default"},
+        json!({"cardHeight":self.card_height,"side":match self.right{Some(false)=>"left",Some(true)=>"right",None=>"default"},
             "scale":self.scale,"spacing":self.spacing,"groupLimit":self.group_limit,"opacity":self.opacity,
             "groupPresentation":if self.stack_groups{"stacked"}else{"flat"}})
     }
+}
+
+fn card_height(v:&Value)->u32{
+    v.as_u64().filter(|&n|n!=0).map_or(0,|n|n.clamp(72,180) as u32)
+}
+fn persistent_group(key:&str)->bool{
+    key.len()<=2048 && !key.chars().any(char::is_control)
+        && ["exe:","aumid:"].iter().any(|prefix|key.strip_prefix(*prefix).is_some_and(|s|!s.is_empty()))
 }
 
 /// Output placement is independent of the application model's window scope.
@@ -120,6 +130,9 @@ pub struct Options {
     pub stage_side: String,
     pub dock_display: DisplayTarget,
     pub stage_display: DisplayTarget,
+    pub stage_perspective:bool,
+    pub stage_card_height:u32,
+    pub stage_card_overrides:BTreeMap<String,u32>,
     pub stage_styles: BTreeMap<String, StageStyle>,
     pub appearance: Appearance,
     pub window_policies:BTreeMap<String,WindowPolicy>,
@@ -129,6 +142,7 @@ pub struct Options {
 pub enum Edit {
     Pin(String), Unpin(String), MovePin { path:String, anchor:String, after:bool }, AllWindows(bool), StageSide(String), DockEnabled(bool), StageEnabled(bool),
     StageStyle(String, StageStyle),
+    StagePresentation(bool), StageCardHeight(u32), StageGroupHeight(String,u32),
     UtilityProfile(String, Profile),
     WindowPolicy(String, WindowPolicy),
 }
@@ -149,6 +163,16 @@ impl Edit {
             }
             Self::AllWindows(on)=>options.all_windows=on,
             Self::StageSide(side)=>{if side=="left"||side=="right" {options.stage_side=side;options.stage_enabled=true;}}
+            Self::StagePresentation(on)=>options.stage_perspective=on,
+            Self::StageCardHeight(h)=>options.stage_card_height=card_height(&json!(h)),
+            Self::StageGroupHeight(key,h)=>{
+                if persistent_group(&key){
+                    if h==0{options.stage_card_overrides.remove(&key);}
+                    else if options.stage_card_overrides.len()<128||options.stage_card_overrides.contains_key(&key){
+                        options.stage_card_overrides.insert(key,card_height(&json!(h)));
+                    }
+                }
+            }
             Self::StageStyle(id, style)=> {
                 if let Some(id) = display_id(&id) {
                     if style == StageStyle::default() { options.stage_styles.remove(&id); }
@@ -180,7 +204,7 @@ impl Edit {
 }
 impl Default for Options {
     fn default() -> Self {
-        Self { enabled: false, stage_enabled: false, pinned: Vec::new(), all_windows: false, native_shell_buttons:false, start_shortcut:false, win_key_start:false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), appearance: Appearance::default(),utility_profiles:BTreeMap::new(),window_policies:BTreeMap::new() }
+        Self { enabled: false, stage_enabled: false, pinned: Vec::new(), all_windows: false, native_shell_buttons:false, start_shortcut:false, win_key_start:false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), stage_perspective:true,stage_card_height:0,stage_card_overrides:BTreeMap::new(),appearance: Appearance::default(),utility_profiles:BTreeMap::new(),window_policies:BTreeMap::new() }
     }
 }
 impl Options {
@@ -198,6 +222,12 @@ impl Options {
             win_key_start:v["winKeyStart"].as_bool().unwrap_or(false),
             dock_display: DisplayTarget::from_json(&v["dockDisplay"]),
             stage_display: DisplayTarget::from_json(&v["stageDisplay"]),
+            stage_perspective:v["stagePresentation"].as_str()!=Some("dwm"),
+            stage_card_height:card_height(&v["stageCardHeight"]),
+            stage_card_overrides:v["stageCardOverrides"].as_object().into_iter().flatten().filter_map(|(key,v)|{
+                let h=card_height(v);
+                (h!=0&&persistent_group(key)).then(||(key.clone(),h))
+            }).take(128).collect(),
             stage_styles: v["stageStyles"].as_object().into_iter().flatten().filter_map(|(id,value)|{
                 let style=StageStyle::from_json(value);
                 (style!=StageStyle::default()).then(|| (display_id(id),style))
@@ -243,6 +273,7 @@ impl Options {
     pub fn utility_position(&self,id:&str)->Option<bool>{
         match self.utility_profiles.get(id){Some(p) if !p.enabled||p.hidden.len()==super::utilities::Widget::ALL.len()=>None,Some(p)=>Some(p.leading),None=>Some(false)}
     }
+    pub fn stable_stage_key(key:&str)->bool{persistent_group(key)}
     pub fn stage_style(&self, id: &str) -> StageStyle {
         let mut settings = self.stage_styles.get(id).copied().unwrap_or_default();
         settings.right = Some(settings.right.unwrap_or(self.stage_side == "right"));
@@ -251,6 +282,7 @@ impl Options {
     pub fn json(&self) -> Value {
         json!({"version":2,"enabled":self.enabled,"stageEnabled":self.stage_enabled,
             "pinned":self.pinned,"allWindows":self.all_windows,"nativeShellButtons":self.native_shell_buttons,"startShortcut":self.start_shortcut,"winKeyStart":self.win_key_start,"stageSide":self.stage_side,
+            "stagePresentation":if self.stage_perspective{"perspective"}else{"dwm"},"stageCardHeight":self.stage_card_height,"stageCardOverrides":self.stage_card_overrides,
             "dockDisplay":self.dock_display.json(),"stageDisplay":self.stage_display.json(),"appearance":self.appearance.json(),
             "windowPolicies":self.window_policies.iter().map(|(id,p)|(id.clone(),p.json())).collect::<serde_json::Map<_,_>>(),
             "utilityProfiles":self.utility_profiles.iter().map(|(id,p)|(id.clone(),p.json())).collect::<serde_json::Map<_,_>>(),
@@ -261,6 +293,27 @@ impl Options {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stage_preview_and_height_migration_preserve_existing_choices(){
+        let legacy=json!({"stageEnabled":true,"stageStyles":{"vertical":{"side":"right"}}});
+        let mut p=Options::from_json(&legacy);
+        assert!(p.stage_perspective);
+        assert_eq!(p.stage_card_height,0);
+        assert_eq!(p.stage_style("vertical").right,Some(true));
+        Edit::StagePresentation(false).apply(&mut p);
+        Edit::StageCardHeight(120).apply(&mut p);
+        let style=p.stage_styles["vertical"];
+        Edit::StageStyle("vertical".into(),StageStyle{card_height:72,..style}).apply(&mut p);
+        Edit::StageGroupHeight("hwnd:123".into(),100).apply(&mut p);
+        Edit::StageGroupHeight("manual:5".into(),100).apply(&mut p);
+        Edit::StageGroupHeight("exe:c:/paint.exe".into(),500).apply(&mut p);
+        assert_eq!(p.stage_card_overrides.len(),1);
+        assert_eq!(p.stage_card_overrides["exe:c:/paint.exe"],180);
+        assert_eq!(Options::from_json(&p.json()),p);
+        Edit::StageGroupHeight("exe:c:/paint.exe".into(),0).apply(&mut p);
+        assert!(p.stage_card_overrides.is_empty());
+    }
+
     #[test]
     fn legacy_migration_is_once_only_and_does_not_enable_modules() {
         let legacy = json!({"pinned":["C:\\Apps\\one.exe"],"allWindows":true,"stageSide":"right","enabled":true,"stageEnabled":true});

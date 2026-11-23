@@ -32,6 +32,7 @@ pub enum Action {
     Stage(bool),
     DockDisplay(bool, DisplayTarget),
     StageStyle(String, StageStyle),
+    StagePresentation(bool), StageCardHeight(u32),
     DockAppearance(Appearance),
     UtilityProfile(String, UtilityProfile),
     WindowPolicy(String,WindowPolicy),
@@ -303,6 +304,8 @@ struct Ui {
     dock_target:DisplayTarget,
     stage_target:DisplayTarget,
     stage_styles:BTreeMap<String,StageStyle>,
+    stage_perspective:bool,
+    stage_card_height:u32,
     dock_appearance:Appearance,
     window_policies:BTreeMap<String,WindowPolicy>,
     utility_profiles:BTreeMap<String,UtilityProfile>,
@@ -473,6 +476,8 @@ pub fn open(state: &State) {
             dock_target:DisplayTarget::default(),
             stage_target:DisplayTarget::default(),
             stage_styles:BTreeMap::new(),
+            stage_perspective:true,
+            stage_card_height:0,
             dock_appearance:Appearance::default(),
             window_policies:BTreeMap::new(),
             utility_profiles:BTreeMap::new(),
@@ -566,6 +571,8 @@ pub fn sync(state: &State) {
             ui.dock_target=state.dock.dock_display.clone();
             ui.stage_target=state.dock.stage_display.clone();
             ui.stage_styles=state.dock.stage_styles.clone();
+            ui.stage_perspective=state.dock.stage_perspective;
+            ui.stage_card_height=state.dock.stage_card_height;
             ui.dock_appearance=state.dock.appearance.clone();
             ui.window_policies=state.dock.window_policies.clone();
             ui.utility_profiles=state.dock.utility_profiles.clone();
@@ -661,6 +668,22 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
         }
         if AppendMenuW(menu,MF_POPUP,policies as usize,wide("Hành vi cửa sổ theo màn hình").as_ptr())==0{DestroyMenu(policies);}
     }
+    let heights=[0,72,90,108,126,144,162,180];
+    if stage{
+        let preferences=UI.with(|u|u.borrow().as_ref().map(|ui|(ui.stage_perspective,ui.stage_card_height)));
+        if let Some((perspective,height))=preferences{
+            add(150,"Phối cảnh 3D",perspective);
+            add(151,"Phẳng (DWM)",!perspective);
+            let sizing=CreatePopupMenu();
+            if !sizing.is_null(){
+                for (index,&value) in heights.iter().enumerate(){
+                    let title=if value==0{"Tự động".into()}else{format!("{value} px")};
+                    AppendMenuW(sizing,MF_STRING|if value==height{MF_CHECKED}else{0},160+index,wide(&title).as_ptr());
+                }
+                if AppendMenuW(menu,MF_POPUP,sizing as usize,wide("Chiều cao thẻ mặc định").as_ptr())==0{DestroyMenu(sizing);}
+            }
+        }
+    }
     if stage && !displays.is_empty() {
         let layouts = CreatePopupMenu();
         if !layouts.is_null() {
@@ -680,6 +703,15 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
                         500+edits.len()-1, wide(&format!("Kích thước {scale}%")).as_ptr());
                 }
                 AppendMenuW(submenu, MF_SEPARATOR, 0, std::ptr::null());
+                let size_menu=CreatePopupMenu();
+                if !size_menu.is_null(){
+                    for card_height in heights{
+                        edits.push((d.id.clone(),StageStyle{card_height,..base}));
+                        let title=if card_height==0{"Dùng chiều cao chung".into()}else{format!("{card_height} px")};
+                        AppendMenuW(size_menu,MF_STRING|if base.card_height==card_height{MF_CHECKED}else{0},500+edits.len()-1,wide(&title).as_ptr());
+                    }
+                    if AppendMenuW(submenu,MF_POPUP,size_menu as usize,wide("Chiều cao thẻ").as_ptr())==0{DestroyMenu(size_menu);}
+                }
                 for spacing in [2,6,12,20] {
                     edits.push((d.id.clone(), StageStyle {spacing,..base}));
                     AppendMenuW(submenu, MF_STRING | if base.spacing == spacing {MF_CHECKED} else {0},
@@ -768,6 +800,10 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
     GetWindowRect(button,&mut rect);
     let command = TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,rect.left,rect.bottom,0,owner,std::ptr::null()) as usize;
     DestroyMenu(menu);
+    if stage&&(command==150||command==151){push(Action::StagePresentation(command==150));return;}
+    if let Some(&height)=command.checked_sub(160).and_then(|i|heights.get(i)).filter(|_|stage){
+        push(Action::StageCardHeight(height));return;
+    }
     if command==2998 {
         let hide=UI.with(|u|u.borrow().as_ref().is_some_and(|ui|!ui.taskbar_hidden));
         push(Action::DockTaskbar(hide));return;

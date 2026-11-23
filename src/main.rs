@@ -2716,6 +2716,12 @@ fn main() {
                 Action::WindowPolicy(id,policy)=>{
                     dock::Edit::WindowPolicy(id,policy).apply(&mut app.cfg.dock);app.configure_dock();
                 }
+                Action::StagePresentation(on)=>{
+                    dock::Edit::StagePresentation(on).apply(&mut app.cfg.dock);app.configure_dock();
+                }
+                Action::StageCardHeight(h)=>{
+                    dock::Edit::StageCardHeight(h).apply(&mut app.cfg.dock);app.configure_dock();
+                }
                 Action::StageStyle(id,style)=>{
                     dock::Edit::StageStyle(id,style).apply(&mut app.cfg.dock);app.configure_dock();
                 }
@@ -3068,6 +3074,19 @@ fn main() {
                     if dock::displays().iter().any(|display|display.id==id){
                         dock::Edit::UtilityProfile(id,dock::UtilityProfile::from_json(&m["profile"])).apply(&mut app.cfg.dock);
                         app.configure_dock();web_changed=true;
+                    }
+                }
+                "stagePresentation" => {
+                    if let Some(mode @ ("perspective"|"dwm"))=m["mode"].as_str(){
+                        dock::Edit::StagePresentation(mode=="perspective").apply(&mut app.cfg.dock);
+                        app.configure_dock();web_changed=true;
+                    }
+                }
+                "stageCardHeight" | "stageGroupHeight" => {
+                    if let Some(h)=m["height"].as_u64().and_then(|h|u32::try_from(h).ok()){
+                        let change=if m["t"]=="stageCardHeight"{dock::Edit::StageCardHeight(h)}
+                            else{dock::Edit::StageGroupHeight(s_("group"),h)};
+                        change.apply(&mut app.cfg.dock);app.configure_dock();web_changed=true;
                     }
                 }
                 "stageStyle" => {
