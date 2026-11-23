@@ -871,9 +871,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let heights=keys.iter().map(|key|stage.session_heights.get(key).or_else(||state.prefs.stage_card_overrides.get(key))
             .copied().unwrap_or(default)).collect::<Vec<_>>();
         let variable=automatic&&heights.iter().any(|&h|h!=0);
-        let pages=if variable{layout.fit_pages(screen.dpi,style.group_limit as usize,&heights)}
-            else if items.is_empty(){vec![0..0]}
-            else{(0..items.len()).step_by(rows).map(|start|start..(start+rows).min(items.len())).collect()};
+        let pages=layout.page_ranges(items.len());
         let selected=state.workspaces.active(&stage.display);
         let old_pages=stage.pages;
         stage.pages=pages.len();

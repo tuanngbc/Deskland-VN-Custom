@@ -320,7 +320,9 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     let mid=panel_base+(panel_cross-control_cross)*0.5;
     let start=bar(content_start-controls_span+(start_span-start_size)*0.5,panel_base+(panel_cross-start_size)*0.5,start_size,start_size);
     let scan=bar(content_start-start_span+(start_span-start_size)*0.5,panel_base+(panel_cross-start_size)*0.5,start_size,start_size);
-    let tray=bar(content_end+2.0*chrome_scale,mid,tray_span-2.0*chrome_scale,control_cross);
+    // A real gutter keeps the adjacent hit boxes separate even when their
+    // edges are rounded independently at a fractional display scale.
+    let tray=bar(content_end+2.0*chrome_scale,mid,tray_span-4.0*chrome_scale,control_cross);
     let clock=bar(content_end+tray_span,mid,clock_span,control_cross);
     let glass=bar(glass_left,panel_base,(glass_right-glass_left).max(1.0),panel_cross);
     Layout{window:RECT{left:x,top:y,right:x+w as i32,bottom:y+h as i32},glass,slots,scan,start,tray,clock,utility,utility_leading:leading,
@@ -410,8 +412,12 @@ mod tests{
                         for layout in [&a,&b]{
                             let cells=[layout.start,layout.scan,layout.tray,layout.clock].into_iter()
                                 .chain(layout.inline.iter().map(|(_,r)|*r)).collect::<Vec<_>>();
-                            assert!(cells.iter().enumerate().all(|(i,r)|cells[i+1..].iter().all(|&other|!overlaps(*r,other))
-                                && layout.slots.iter().all(|&slot|!overlaps(*r,slot))),"dpi={dpi} side={position:?}");
+                            for (i,&cell) in cells.iter().enumerate(){
+                                for &other in cells[i+1..].iter().chain(&layout.slots){
+                                    assert!(!overlaps(cell,other),
+                                        "{width}×{height} dpi={dpi} side={position:?} cluster={side:?}: {cell:?} overlaps {other:?}");
+                                }
+                            }
                         }
                         assert!(a.window.left>=work.left&&a.window.right<=work.right&&a.window.top>=work.top&&a.window.bottom<=work.bottom);
                     }

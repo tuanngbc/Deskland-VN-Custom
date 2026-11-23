@@ -13,6 +13,32 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 pub(crate) mod start;
 
+/// Start and Spotlight share this UI thread. Carry the actual input method
+/// across the focus handoff, rather than reusing a layout left on our thread
+/// by an earlier popup. Never change the source app or the user's preferences.
+struct InputHandoff(HKL);
+impl InputHandoff {
+    unsafe fn capture() -> Self {
+        let hwnd=GetForegroundWindow();
+        let thread=if hwnd.is_null(){0}else{GetWindowThreadProcessId(hwnd,std::ptr::null_mut())};
+        Self(if thread==0{std::ptr::null_mut()}else{GetKeyboardLayout(thread)})
+    }
+
+    unsafe fn finish(self, popup:HWND, name:&str) {
+        if self.0.is_null() || GetForegroundWindow()!=popup{return;}
+        let current=GetKeyboardLayout(0);
+        if current!=self.0 {
+            // One transfer at entry, with no layout loading, process-wide
+            // flags, or override of a later user-initiated language switch.
+            let applied=!ActivateKeyboardLayout(self.0,0).is_null();
+            if crate::trial::active(){
+                crate::log!("POPUP_INPUT {name}: source={:04x} popup={:04x} carried={applied}",
+                    self.0 as usize&0xffff,current as usize&0xffff);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Appearance { pub theme: String, pub transparency: f32, pub blur: f32 }
 impl Default for Appearance {
@@ -815,7 +841,9 @@ pub(crate) fn toggle_at(dock:Option<DockAnchor>) {
         SetWindowPos(hwnd, HWND_TOP, x, y, width+2*pad, height+2*pad, SWP_NOACTIVATE);
         paint(hwnd);
         SetTimer(hwnd,7,60,None);
+        let input=InputHandoff::capture();
         ShowWindow(hwnd, SW_SHOW); SetForegroundWindow(hwnd); SetFocus(hwnd);
+        input.finish(hwnd,"Spotlight");
     }
 }
 

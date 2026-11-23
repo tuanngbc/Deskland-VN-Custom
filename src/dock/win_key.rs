@@ -1,5 +1,5 @@
-//! Opt-in Win tap detection. Chords pass through as physical input. Only a
-//! confirmed standalone Win release can be replaced by a masked release.
+//! Opt-in Win tap detection. Both Win edges and all physical chords pass
+//! through unchanged. An inert mask at keydown prevents native Start.
 use std::{cell::Cell, mem::{size_of, zeroed}, ptr::null_mut, sync::{Arc,mpsc}, thread::JoinHandle};
 use windows_sys::Win32::{Foundation::*, System::{LibraryLoader::GetModuleHandleW,Threading::{CreateEventW,SetEvent,INFINITE}},
     UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*}};
@@ -24,36 +24,38 @@ pub(super) fn decode_tap(message:LPARAM)->Result<Option<POINT>,()>{
     }
 }
 const MENU_MASK:u16=0xe8;
+const MASK_TAG:usize=0x44534b48;
 
-fn masked_release(key:u16,scan:u16,extended:bool)->[INPUT;3]{
-    let keyboard=|vk,scan,flags|INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{
-        ki:KEYBDINPUT{wVk:vk,wScan:scan,dwFlags:flags,time:0,dwExtraInfo:0},
+fn menu_mask()->[INPUT;2]{
+    let keyboard=|flags|INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{
+        ki:KEYBDINPUT{wVk:MENU_MASK,wScan:0,dwFlags:flags,time:0,dwExtraInfo:MASK_TAG},
     }};
-    [keyboard(MENU_MASK,0,0),keyboard(MENU_MASK,0,KEYEVENTF_KEYUP),
-        keyboard(key,scan,KEYEVENTF_KEYUP|if extended{KEYEVENTF_EXTENDEDKEY}else{0})]
+    [keyboard(0),keyboard(KEYEVENTF_KEYUP)]
 }
+
+#[derive(Debug,PartialEq,Eq)]
+enum Edge{Pass,Mask,Tap}
 
 #[derive(Clone,Copy,Default)]
 struct Keys {
-    down:[u64;4],
     candidate:Option<(u32,usize)>,
 }
 
 impl Keys {
-    fn edge(&mut self,key:u32,down:bool,injected:bool,foreground:usize)->bool{
-        if injected||key>=256{return false;}
-        let index=(key/64) as usize;
-        let bit=1u64<<(key%64);
-        let repeated=self.down[index]&bit!=0;
+    fn edge(&mut self,key:u32,down:bool,own_mask:bool,foreground:usize,repeat:bool,modifier_held:bool,injected:bool)->Edge{
+        if own_mask{return Edge::Pass;}
         let win=key==u32::from(VK_LWIN)||key==u32::from(VK_RWIN);
+        // A key from another IME or accessibility tool can form a chord, but
+        // can never arm Deskland Start.
+        if !win||injected{self.cancel();return Edge::Pass;}
         if down {
-            if repeated{return false;}
-            self.candidate=(win&&self.down.iter().all(|&slot|slot==0)).then_some((key,foreground));
-            self.down[index]|=bit;
-            false
+            if repeat{return Edge::Pass;}
+            self.candidate=(!modifier_held).then_some((key,foreground));
+            if self.candidate.is_some(){Edge::Mask}else{Edge::Pass}
+        }else if self.candidate.take()==Some((key,foreground)){
+            Edge::Tap
         }else{
-            self.down[index]&=!bit;
-            win&&self.candidate.take()==Some((key,foreground))&&repeated
+            Edge::Pass
         }
     }
     fn cancel(&mut self){self.candidate=None;}
@@ -87,11 +89,7 @@ impl Hook {
                 let error=GetLastError();UnhookWindowsHookEx(keyboard);
                 let _=ready.send(Err(format!("WH_MOUSE_LL: {error}")));return;
             }
-            let mut keys=Keys::default();
-            for vk in 8..256{
-                if !matches!(vk,0x10..=0x12)&&GetAsyncKeyState(vk)<0{keys.edge(vk as u32,true,false,0);}
-            }
-            keys.cancel();KEYS.set(keys);TARGET.set((target,ticket));
+            KEYS.set(Keys::default());TARGET.set((target,ticket));
             if ready.send(Ok(())).is_ok(){
                 let quit=thread_quit.0 as HANDLE;
                 'messages:loop{
@@ -124,27 +122,36 @@ unsafe extern "system" fn keyboard(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
         let e=&*(l as *const KBDLLHOOKSTRUCT);
         let injected=e.flags&LLKHF_INJECTED!=0;
         let win=e.vkCode==u32::from(VK_LWIN)||e.vkCode==u32::from(VK_RWIN);
-        let foreground=if win&&!injected{GetForegroundWindow() as usize}else{0};
-        let mut keys=KEYS.get();
-        let tap=keys.edge(e.vkCode,matches!(w as u32,WM_KEYDOWN|WM_SYSKEYDOWN),injected,foreground);
-        KEYS.set(keys);
         let (target,ticket)=TARGET.get();
-        if tap&&target!=0&&!MASK_FAILED.get()&&IsWindow(target as HWND)!=0{
-            let tap_message=encode_tap(cursor_now());
-            // Letting the physical release through let Explorer react before
-            // the old separate mask arrived. Queue mask + equivalent release
-            // in one ordered batch and consume only this physical release.
-            let keys=masked_release(e.vkCode as u16,e.scanCode as u16,e.flags&LLKHF_EXTENDED!=0);
-            let sent=SendInput(keys.len() as u32,keys.as_ptr(),size_of::<INPUT>() as i32);
-            if sent==keys.len() as u32{
-                PostMessageW(target as HWND,NOTICE,ticket,tap_message);
-                return 1;
-            }else{
-                // Try to release the unassigned mask key if only down made
-                // it through. Forward the physical Win-up on any failure.
-                if sent==1{SendInput(1,keys[1..].as_ptr(),size_of::<INPUT>() as i32);}
-                MASK_FAILED.set(true);
-                PostMessageW(target as HWND,NOTICE,ticket,MASK_ERROR);
+        if target!=0&&!MASK_FAILED.get(){
+            let own_mask=injected&&e.vkCode==u32::from(MENU_MASK)&&e.dwExtraInfo==MASK_TAG;
+            let down=matches!(w as u32,WM_KEYDOWN|WM_SYSKEYDOWN);
+            let physical_win=win&&!injected;
+            let foreground=if physical_win{GetForegroundWindow() as usize}else{0};
+            // LL runs before Windows updates async state for this event. At
+            // Win-down the old state distinguishes repeat from the first edge.
+            let repeat=physical_win&&down&&GetAsyncKeyState(e.vkCode as i32)<0;
+            let modifier_held=physical_win&&down&&!repeat&&
+                [VK_LWIN,VK_RWIN,VK_MENU,VK_CONTROL,VK_SHIFT,VK_LBUTTON,VK_RBUTTON,VK_MBUTTON,VK_XBUTTON1,VK_XBUTTON2]
+                    .into_iter().any(|vk|u32::from(vk)!=e.vkCode&&GetAsyncKeyState(i32::from(vk))<0);
+            let mut keys=KEYS.get();
+            let edge=keys.edge(e.vkCode,down,own_mask,foreground,repeat,modifier_held,injected);
+            KEYS.set(keys);
+            if edge==Edge::Tap{
+                PostMessageW(target as HWND,NOTICE,ticket,encode_tap(cursor_now()));
+            }else if edge==Edge::Mask{
+                // Queue the mask while processing physical down rather than
+                // racing the release. The keyboard stack still owns Win-up,
+                // even if this hook or a third-party hook stops mid-gesture.
+                let mask=menu_mask();
+                let size=size_of::<INPUT>() as i32;
+                let sent=SendInput(mask.len() as u32,mask.as_ptr(),size);
+                if sent!=mask.len() as u32{
+                    if sent==1{SendInput(1,mask[1..].as_ptr(),size);}
+                    keys.cancel();KEYS.set(keys);
+                    MASK_FAILED.set(true);
+                    PostMessageW(target as HWND,NOTICE,ticket,MASK_ERROR);
+                }
             }
         }
     }
@@ -163,16 +170,12 @@ unsafe extern "system" fn mouse(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
 #[cfg(test)]
 mod tests{
     use super::*;
-    #[test] fn replacement_orders_the_mask_before_the_matching_win_release(){
-        for (key,scan) in [(VK_LWIN,0x5b),(VK_RWIN,0x5c)]{
-            let keys=masked_release(key,scan,true);
-            let sequence=keys.map(|e|unsafe{
-                let k=e.Anonymous.ki;(e.r#type,k.wVk,k.wScan,k.dwFlags)
-            });
-            assert_eq!(sequence,[(INPUT_KEYBOARD,MENU_MASK,0,0),
-                (INPUT_KEYBOARD,MENU_MASK,0,KEYEVENTF_KEYUP),
-                (INPUT_KEYBOARD,key,scan,KEYEVENTF_KEYUP|KEYEVENTF_EXTENDEDKEY)]);
-        }
+    #[test] fn mask_never_synthesizes_a_modifier_or_a_language_switch(){
+        let sequence=menu_mask().map(|e|unsafe{
+            let k=e.Anonymous.ki;(e.r#type,k.wVk,k.wScan,k.dwFlags,k.dwExtraInfo)
+        });
+        assert_eq!(sequence,[(INPUT_KEYBOARD,MENU_MASK,0,0,MASK_TAG),
+            (INPUT_KEYBOARD,MENU_MASK,0,KEYEVENTF_KEYUP,MASK_TAG)]);
     }
     #[test] fn captured_pointer_keeps_signed_monitor_coordinates(){
         for point in [POINT{x:-815,y:400},POINT{x:2570,y:-1180},POINT{x:-1,y:-1},POINT{x:0,y:0}]{
@@ -198,13 +201,14 @@ mod tests{
         assert!(!hook.finished());
         drop(hook);
     }
-    fn key(k:&mut Keys,v:u16,d:bool)->bool{k.edge(u32::from(v),d,false,11)}
+    fn key(k:&mut Keys,v:u16,d:bool)->Edge{k.edge(u32::from(v),d,false,11,false,false,false)}
     #[test] fn either_win_and_repeats_toggle_once_per_release(){
         let mut keys=Keys::default();
         for win in [VK_LWIN,VK_RWIN,VK_LWIN]{
-            for _ in 0..20{assert!(!key(&mut keys,win,true));}
-            assert!(key(&mut keys,win,false));
-            assert!(!key(&mut keys,win,false));
+            assert_eq!(key(&mut keys,win,true),Edge::Mask);
+            for _ in 0..20{assert_eq!(keys.edge(u32::from(win),true,false,11,true,false,false),Edge::Pass);}
+            assert_eq!(key(&mut keys,win,false),Edge::Tap);
+            assert_eq!(key(&mut keys,win,false),Edge::Pass);
         }
     }
     #[test] fn all_shell_chords_cancel_tap(){
@@ -215,28 +219,35 @@ mod tests{
             (None,VK_UP),(None,VK_DOWN),(Some(VK_LSHIFT),VK_LEFT),(Some(VK_LSHIFT),VK_RIGHT),(None,VK_SPACE),
         ]{
             let mut keys=Keys::default();
-            assert!(!key(&mut keys,VK_LWIN,true));
-            if let Some(m)=mods{assert!(!key(&mut keys,m,true));}
-            assert!(!key(&mut keys,other,true));
-            assert!(!key(&mut keys,other,false));
-            assert!(!key(&mut keys,VK_LWIN,false));
+            assert_eq!(key(&mut keys,VK_LWIN,true),Edge::Mask);
+            if let Some(m)=mods{assert_eq!(key(&mut keys,m,true),Edge::Pass);}
+            assert_eq!(key(&mut keys,other,true),Edge::Pass);
+            assert_eq!(key(&mut keys,other,false),Edge::Pass);
+            assert_eq!(key(&mut keys,VK_LWIN,false),Edge::Pass);
         }
     }
     #[test] fn modifiers_overlap_mouse_focus_and_lifecycle_do_not_create_taps(){
-        let mut k=Keys::default();key(&mut k,VK_LCONTROL,true);
-        key(&mut k,VK_LWIN,true);key(&mut k,VK_LCONTROL,false);assert!(!key(&mut k,VK_LWIN,false));
-        key(&mut k,VK_LWIN,true);key(&mut k,VK_RWIN,true);
-        assert!(!key(&mut k,VK_LWIN,false));assert!(!key(&mut k,VK_RWIN,false));
-        key(&mut k,VK_RWIN,true);k.cancel();assert!(!key(&mut k,VK_RWIN,false));
-        key(&mut k,VK_RWIN,true);assert!(!k.edge(u32::from(VK_RWIN),false,false,88));
-        key(&mut k,VK_LWIN,true);k=Keys::default();assert!(!key(&mut k,VK_LWIN,false));
-        key(&mut k,VK_LWIN,true);k.cancel();assert!(!key(&mut k,VK_LWIN,false));
-    }
-    #[test] fn injected_keys_never_arm_or_clear_physical_state(){
         let mut k=Keys::default();
-        assert!(!k.edge(0x5b,true,true,11));assert!(!k.edge(0x5b,false,true,11));
+        assert_eq!(k.edge(u32::from(VK_LWIN),true,false,11,false,true,false),Edge::Pass);
+        key(&mut k,VK_LCONTROL,false);assert_eq!(key(&mut k,VK_LWIN,false),Edge::Pass);
         key(&mut k,VK_LWIN,true);
-        assert!(!k.edge(0xe8,true,true,11));assert!(!k.edge(0x5b,false,true,11));
-        assert!(key(&mut k,VK_LWIN,false));
+        assert_eq!(k.edge(u32::from(VK_RWIN),true,false,11,false,true,false),Edge::Pass);
+        assert_eq!(key(&mut k,VK_LWIN,false),Edge::Pass);assert_eq!(key(&mut k,VK_RWIN,false),Edge::Pass);
+        assert_eq!(key(&mut k,VK_RWIN,true),Edge::Mask);
+        k.cancel();assert_eq!(key(&mut k,VK_RWIN,false),Edge::Pass);
+        assert_eq!(key(&mut k,VK_RWIN,true),Edge::Mask);
+        assert_eq!(k.edge(u32::from(VK_RWIN),false,false,88,false,false,false),Edge::Pass);
+        key(&mut k,VK_LWIN,true);k=Keys::default();assert_eq!(key(&mut k,VK_LWIN,false),Edge::Pass);
+    }
+    #[test] fn own_mask_keeps_the_tap_but_other_injected_keys_cannot_arm_one(){
+        let mut k=Keys::default();
+        assert_eq!(k.edge(0x5b,true,false,11,false,false,true),Edge::Pass);
+        assert_eq!(k.edge(0x5b,false,false,11,false,false,true),Edge::Pass);
+        key(&mut k,VK_LWIN,true);
+        assert_eq!(k.edge(0xe8,true,true,11,false,false,true),Edge::Pass);
+        assert_eq!(key(&mut k,VK_LWIN,false),Edge::Tap);
+        key(&mut k,VK_LWIN,true);
+        assert_eq!(k.edge(u32::from(VK_SPACE),true,false,11,false,false,true),Edge::Pass);
+        assert_eq!(key(&mut k,VK_LWIN,false),Edge::Pass);
     }
 }

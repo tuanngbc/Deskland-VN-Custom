@@ -765,8 +765,11 @@ pub(crate) fn toggle(owner:HWND,anchor:DockAnchor){
         DwmSetWindowAttribute(hwnd,34,(&border as *const u32).cast(),4);
         DwmSetWindowAttribute(hwnd,20,(&mode as *const i32).cast(),4);
         relayout(hwnd);
-        SetWindowPos(hwnd,ptr::null_mut(),0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_SHOWWINDOW);
-        SetForegroundWindow(hwnd);SetFocus(edit);repaint(hwnd);
+        let input=super::InputHandoff::capture();
+        SetWindowPos(hwnd,ptr::null_mut(),0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_SHOWWINDOW|SWP_NOACTIVATE);
+        SetForegroundWindow(hwnd);SetFocus(edit);
+        input.finish(hwnd,"Start");
+        repaint(hwnd);
         crate::log!("DOCK_START opened separate panel at ({x},{y}) scale={s:.2}");
     }
 }

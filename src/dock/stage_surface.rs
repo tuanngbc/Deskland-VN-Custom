@@ -73,51 +73,65 @@ impl Layout {
         // Keep rear layers distinct without sacrificing the front silhouette.
         l.stack_step=(width/17).clamp(px(5).max(1),px(15).max(1));
         l.caption=px(20);
-        l.gap=gap.max(px(21));
-        let row_height=(l.card(0).w*10/18).max(1);
-        let row_space=|nav:i32|(height-2*l.inset-nav+l.gap).max(0)/(row_height+l.gap);
         let limit=limit.clamp(1,8);
-        l.paged=total>row_space(0).max(1).min(limit as i32) as usize;
+        let wanted=total.min(limit).max(1) as i32;
+        let row_height=(l.card_width()*10/18).max(1);
+        let min_h=row_height.min(px(60)).max(1);
+        let roomy_gap=gap.max(px(21));
+        let need_nav=if total>limit{l.nav_h+roomy_gap}else{0};
+        l.gap=if height-2*l.inset-need_nav>=wanted*min_h+(wanted-1)*roomy_gap{
+            roomy_gap
+        }else{gap.max(px(10))};
+        let row_space=|nav:i32|((height-2*l.inset-nav+l.gap)/(min_h+l.gap)).max(1) as usize;
+        l.paged=total>row_space(0).min(limit);
         let nav=if l.paged{l.nav_h+l.gap}else{0};
-        l.rows=(row_space(nav).max(1) as usize).min(limit);
-        l.card_h=row_height.min((height-2*l.inset-nav).max(1));
+        l.rows=row_space(nav).min(limit);
+        let visible=total.min(l.rows).max(1) as i32;
+        let available=(height-2*l.inset-nav-(visible-1)*l.gap)/visible;
+        l.card_h=row_height.min(available.max(1));
         l.caption=l.caption.min((l.card_h/4).max(1));
         l
     }
-    pub fn card(self,i:usize)->Box2 {
-        // Reserve the same margin for the stack on every card so thumbnails
-        // do not jump sideways when a window joins a group.
+    fn card_room(self)->(i32,i32){
         let room=if self.stack_design{self.step()*4}else if self.landscape{0}else{(self.inset*2).min((self.width-12).max(0)/3)};
         let icon_room=if self.stack_design&&!self.landscape{self.icon_size()+self.inset}else{0};
-        let x=self.inset+if self.right{room}else{icon_room};
-        let height=|n:usize|self.heights.get(n).copied().filter(|&h|h>0).unwrap_or(self.card_h);
-        Box2{x,y:self.inset+(0..i).map(|n|height(n)+self.gap).sum::<i32>(),w:(self.width-2*self.inset-room-icon_room).max(1),h:height(i)}
+        (room,icon_room)
     }
-    pub fn fit_pages(&mut self,dpi:u32,limit:usize,requested:&[u32])->Vec<std::ops::Range<usize>>{
-        let px=|n:u32|super::panel_chrome::scale(dpi,n as i32);
-        let desired=|i|if requested[i]==0{self.card_h}else{px(requested[i])};
-        let group=|space:i32|{
-            let mut pages=Vec::new();
-            let mut first=0;let mut used=0;
-            for i in 0..requested.len(){
-                let h=desired(i).min(space);
-                if i>first&&(i-first>=limit||used+self.gap+h>space){
-                    pages.push(first..i);first=i;used=0;
-                }
-                used+=if i==first{h}else{h+self.gap};
-            }
-            pages.push(first..requested.len());
-            pages
-        };
-        let free=(self.height-self.inset*2).max(1);
-        let pages=group(free);
-        self.paged=pages.len()>1;
-        if self.paged{group((free-self.nav_h-self.gap).max(1))}else{pages}
+    fn card_width(self)->i32{
+        let (room,icon_room)=self.card_room();
+        (self.width-2*self.inset-room-icon_room).max(1)
+    }
+    pub fn card(self,i:usize)->Box2 {
+        let (room,icon_room)=self.card_room();
+        let height=|n:usize|self.heights.get(n).copied().filter(|&h|h>0).unwrap_or(self.card_h);
+        let h=height(i);
+        let full=self.card_width();
+        // Reduce the width with the height, and keep the card against its
+        // own side of the screen. This preserves the perspective silhouette.
+        let w=if self.landscape{full.min((h*18/10).max(1))}else{full};
+        let x=self.inset+if self.right{room+full-w}else{icon_room};
+        Box2{x,y:self.inset+(0..i).map(|n|height(n)+self.gap).sum::<i32>(),w,h}
+    }
+    pub fn page_ranges(self,total:usize)->Vec<std::ops::Range<usize>>{
+        if total==0{return vec![0..0];}
+        (0..total).step_by(self.rows).map(|start|start..(start+self.rows).min(total)).collect()
     }
     pub fn apply_heights(&mut self,dpi:u32,requested:&[u32]){
-        let space=(self.height-2*self.inset-if self.paged{self.nav_h+self.gap}else{0}).max(1);
-        for (i,&height) in requested.iter().take(8).enumerate(){
-            self.heights[i]=if height==0{self.card_h}else{super::panel_chrome::scale(dpi,height as i32)}.min(space);
+        let n=requested.len().min(self.heights.len());
+        if n==0{return;}
+        let px=|h:i32|super::panel_chrome::scale(dpi,h);
+        let budget=(self.height-2*self.inset-if self.paged{self.nav_h+self.gap}else{0}-(n as i32-1)*self.gap).max(n as i32);
+        let floor=self.card_h.min(px(60)).min(budget/n as i32).max(1);
+        let desired=|h:u32|if h==0{self.card_h}else{px(h as i32)}.max(floor);
+        let excess=requested[..n].iter().map(|&h|desired(h)-floor).sum::<i32>();
+        let spare=(budget-n as i32*floor).min(excess);
+        let mut accumulated=0;
+        let mut previous=0;
+        for (i,&height) in requested[..n].iter().enumerate(){
+            accumulated+=desired(height)-floor;
+            let scaled=accumulated*spare/excess.max(1);
+            self.heights[i]=floor+scaled-previous;
+            previous=scaled;
         }
         let h=self.heights.iter().copied().filter(|&h|h>0).min().unwrap_or(self.card_h);
         self.caption=self.caption.min((h/4).max(1));
@@ -573,8 +587,8 @@ mod tests {
     fn mixed_heights_page_and_keep_hit_targets_within_portrait_rail(){
         let requests=[180,72,162,0,90,144,108];
         for right in [true,false]{
-            let mut layout=Layout::landscape(300,590,144,16,5,requests.len(),right,true);
-            let pages=layout.fit_pages(144,5,&requests);
+            let layout=Layout::landscape(300,590,144,16,5,requests.len(),right,true);
+            let pages=layout.page_ranges(requests.len());
             assert!(pages.len()>1);
             assert_eq!(pages.iter().cloned().flatten().collect::<Vec<_>>(),(0..requests.len()).collect::<Vec<_>>());
             for range in pages{
@@ -591,6 +605,34 @@ mod tests {
                 assert!(page.content_height()<=layout.height);
             }
         }
+    }
+
+    #[test]
+    fn six_cards_fit_with_automatic_and_custom_heights_at_mixed_dpi(){
+        for dpi in [96,144,192]{for right in [true,false]{
+            let px=|n|super::super::panel_chrome::scale(dpi,n);
+            let layout=Layout::landscape(px(266),px(505),dpi,px(6),6,9,right,true);
+            let pages=layout.page_ranges(9);
+            assert_eq!(pages,vec![0..6,6..9]);
+            for explicit in [false,true]{
+                let mut page=layout;
+                page.count=6;
+                if explicit{page.apply_heights(dpi,&[180,120,100,0,90,110]);}
+                let nav=page.nav().expect("page controls below six cards");
+                assert!(nav.y+nav.h<=page.height);
+                for i in 0..page.count{
+                    let card=page.card(i);
+                    assert!(card.h>=px(60)&&card.x>=0&&card.x+card.w<=page.width);
+                    let (x,y)=card.center();
+                    assert_eq!(page.hit(x,y),Some(i));
+                    if i+1<page.count{assert!(card.y+card.h<page.card(i+1).y);}
+                }
+                if explicit{assert!(page.card(0).h>page.card(4).h);}
+            }
+            let short=Layout::landscape(px(266),px(300),dpi,px(6),6,9,right,true);
+            assert!(short.rows<6);
+            assert_eq!(short.page_ranges(9).into_iter().flatten().count(),9);
+        }}
     }
 
     #[test]
