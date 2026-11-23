@@ -66,3 +66,7 @@ strip = true
 
 [build-dependencies]
 embed-manifest = "1"
+
+[dev-dependencies.windows]
+version = "0.62"
+features = ["Graphics_Capture", "Graphics_DirectX_Direct3D11", "Win32_System_WinRT_Direct3D11", "Win32_System_WinRT_Graphics_Capture"]

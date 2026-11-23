@@ -5,10 +5,26 @@ use super::{Box2,Layout};
 use crate::dock::{glass_probe::Layer,surface::{draw,rounded},geometry::Rect};
 use windows_sys::Win32::{Foundation::*,Graphics::Gdi::*,UI::WindowsAndMessaging::*};
 use std::ptr::null_mut;
+#[path = "stage_capture_lab.rs"]
+mod capture;
 
 #[derive(Clone,Copy)]
 struct Card{rect:Box2,right:bool,depth:f32}
 impl Card{
+    /// Normalized pinhole projection. Translate the near corner to the
+    /// start of the slot; keep the midpoint of the vertical edges fixed.
+    fn new(rect:Box2,right:bool,yaw:f32)->Self{
+        let half_depth=yaw.to_radians().sin().abs()*0.5;
+        let camera=1.75;
+        Self{rect,right,depth:2.0*half_depth/(camera-half_depth)}
+    }
+    fn polygon(self)->[(f32,f32);4]{
+        let r=self.rect;
+        let (x,y,w,h)=(r.x as f32,r.y as f32,r.w as f32,r.h as f32);
+        let pad=h*0.5*(1.0-1.0/(1.0+self.depth));
+        if self.right{[(x,y+pad),(x+w,y),(x+w,y+h),(x,y+h-pad)]}
+        else{[(x,y),(x+w,y+pad),(x+w,y+h-pad),(x,y+h)]}
+    }
     fn uv(self,x:f32,y:f32)->(f32,f32){
         let mut t=(x-self.rect.x as f32)/self.rect.w as f32;
         if self.right{t=1.0-t;}
@@ -22,7 +38,11 @@ impl Card{
         let r=self.rect;
         if x<r.x as f32||x>(r.x+r.w) as f32||y<r.y as f32||y>(r.y+r.h) as f32{return false;}
         let (u,v)=self.uv(x,y);
-        (0.0..=1.0).contains(&u)&&(0.0..=1.0).contains(&v)
+        let (w,h)=(r.w as f32,r.h as f32);
+        let radius=9.0_f32.min(h/4.0).min(w/4.0);
+        let qx=(u*w-w/2.0).abs()-(w/2.0-radius);
+        let qy=(v*h-h/2.0).abs()-(h/2.0-radius);
+        qx.max(0.0).hypot(qy.max(0.0))+qx.max(qy).min(0.0)<=radius
     }
     fn paint(self,pixels:&mut [u8],w:i32,h:i32,src:&[u8],sw:i32,sh:i32){
         draw(pixels,w,h,self.rect.rect(),|x,y|{
@@ -30,6 +50,15 @@ impl Card{
                 .into_iter().filter(|&(dx,dy)|self.contains(x+dx,y+dy)).count();
             if passed==0{return None;}
             let (u,v)=self.uv(x,y);
+            // Preserve the source aspect inside the canonical unwarped UV
+            // card, including portrait windows. Empty space is letterboxed.
+            let source=sw as f32/sh as f32;
+            let slot=self.rect.w as f32/self.rect.h as f32;
+            let fit_u=(source/slot).min(1.0);
+            let fit_v=(slot/source).min(1.0);
+            let (u,v)=(0.5+(u-0.5)/fit_u,0.5+(v-0.5)/fit_v);
+            let opacity=255.0*passed as f32/4.0;
+            if !(0.0..=1.0).contains(&u)||!(0.0..=1.0).contains(&v){return Some(([48,43,39],opacity));}
             // Bilinear sampling after projective inverse maps all content,
             // rather than just tapering or rotating the thumbnail container.
             let fx=u.clamp(0.0,1.0)*(sw-1) as f32;
@@ -43,7 +72,7 @@ impl Card{
                 let end=at(ix,jy,k)*(1.0-a)+at(jx,jy,k)*a;
                 (t*(1.0-b)+end*b).round() as u8
             });
-            Some((tone,255.0*passed as f32/4.0))
+            Some((tone,opacity))
         });
     }
 }
@@ -59,13 +88,16 @@ fn polygon_stack_respects_front_mask_rear_hit_and_mirror(){
     for dpi in [96,120,144]{for right in [false,true]{
         let mut l=Layout::landscape(252*dpi/96,600,dpi as u32,8,5,1,right,true);
         l.count=1;l.layers[0]=5;
-        let cards=(0..5).map(|i|Card{rect:l.rear(0,i),right,depth:0.34}).collect::<Vec<_>>();
+        let cards=(0..5).map(|i|Card::new(l.rear(0,i),right,28.0)).collect::<Vec<_>>();
         let r=l.card(0);
         let near=if right{r.x+r.w-2}else{r.x+2};
         let far=if right{r.x+2}else{r.x+r.w-2};
         let icon=l.detached_icon(0);
-        assert!(cards[0].contains(near as f32,(r.y+3) as f32));
-        assert!(!cards[0].contains(far as f32,(r.y+3) as f32));
+        assert!(cards[0].contains(near as f32,(r.y+8) as f32));
+        assert!(!cards[0].contains(far as f32,(r.y+8) as f32));
+        let hover=Card::new(r,right,19.0);
+        assert!(hover.depth>0.0&&hover.depth<cards[0].depth);
+        assert_eq!(Card::new(r,right,0.0).depth,0.0);
         let (x,y)=icon.center();
         assert_eq!(hit(&cards,icon,None,x as f32,y as f32),Some(0));
         let close=l.close_button(0).unwrap();
@@ -105,7 +137,7 @@ unsafe fn source(index:usize)->Layer{
 
 #[test]
 #[ignore = "native Windows layered renderer with owned fixture textures only"]
-fn native_owned_window_pixels_are_projected_into_stage_stack(){
+fn native_fixture_dibs_are_projected_into_stage_stack(){
     unsafe{
         use crate::desktop::wide;
         let output=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE").map(std::path::PathBuf::from);
@@ -127,12 +159,12 @@ fn native_owned_window_pixels_are_projected_into_stage_stack(){
             let data=target.pixels();data.fill(0);
             let started=std::time::Instant::now();
             for i in (0..l.depth(0)).rev(){
-                let mut card=Card{rect:l.rear(0,i as i32),right,depth:0.34};
-                card.rect.y+=2;
-                draw(data,l.width,l.height,card.rect.rect(),|x,y|{
-                    card.contains(x,y).then_some(([12,14,20],134.0))
-                });
-                card.rect.y-=2;
+                let card=Card::new(l.rear(0,i as i32),right,28.0);
+                for (dy,alpha) in [(5,24.0),(3,36.0),(1,48.0)]{
+                    let shadow=Card{rect:Box2{y:card.rect.y+dy,..card.rect},..card};
+                    draw(data,l.width,l.height,shadow.rect.rect(),|x,y|
+                        shadow.contains(x,y).then_some(([12,14,20],alpha)));
+                }
                 let src=&mut textures[i];
                 let (w,h)=src.size;
                 card.paint(data,l.width,l.height,src.pixels(),w,h);
@@ -150,7 +182,12 @@ fn native_owned_window_pixels_are_projected_into_stage_stack(){
                 DeleteObject(font);
             }
             assert!(data.chunks_exact(4).any(|p|p[3]==0)&&data.chunks_exact(4).any(|p|p[3]==255));
-            println!("stage projection lab: windows={n} side={} dpi={dpi} cpu_draw_us={}",if right{"right"}else{"left"},started.elapsed().as_micros());
+            let front=Card::new(l.card(0),right,28.0);
+            let stack=(0..l.depth(0)).map(|depth|Card::new(l.rear(0,depth as i32),right,28.0).polygon()).collect::<Vec<_>>();
+            let next=l.rear(0,1);
+            println!("stage projection fixture: members={n} side={} dpi={dpi} front={:?} near={} far={:.1} ratio={:.3} yaw=28 stack_dx={} stack_dy={} icon={icon:?} polygons={stack:?} cpu_draw_us={}",
+                if right{"right"}else{"left"},front.rect,front.rect.h,front.rect.h as f32/(1.0+front.depth),1.0+front.depth,
+                next.x-front.rect.x,next.y-front.rect.y,started.elapsed().as_micros());
             assert!(target.present(hwnd));
             if let Some(dir)=&output{
                 let rgba=target.pixels().chunks_exact(4).flat_map(|p|{

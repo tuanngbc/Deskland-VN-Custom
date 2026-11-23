@@ -49,7 +49,9 @@ jobs:
           cargo test --release dock::stage_surface::tests::native_stage_surface_submits_premultiplied_cards_with_desktop_gaps -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP "stage-fixture-evidence"
-          cargo test --release dock::stage_surface::perspective_lab::native_owned_window_pixels_are_projected_into_stage_stack -- --ignored --exact --nocapture --test-threads=1
+          cargo test --release dock::stage_surface::perspective_lab::native_fixture_dibs_are_projected_into_stage_stack -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::stage_surface::perspective_lab::capture::native_wgc_projects_one_owned_hwnd_or_reports_blocked -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_surface::tests::native_slide_keeps_live_preview_host_aligned_without_activating_either_window -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -145,6 +147,7 @@ jobs:
           name: native-visual-fixtures
           path: |
             ${{ runner.temp }}/stage-fixture-evidence/*.png
+            ${{ runner.temp }}/stage-fixture-evidence/stage-wgc-result.txt
             ${{ runner.temp }}/start-native*.png
           if-no-files-found: error
           retention-days: 14

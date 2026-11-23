@@ -1,0 +1,7 @@
+# Stage perspective renderer
+
+The test renderer maps a normalized card through a pinhole camera about its Y axis. For half-depth `a = sin(yaw)/2`, camera distance `d = 1.75` and `k = 2*a/(d-a)`, the inverse samples `u = t/(1+k-k*t)` and `v = .5+(y-.5)*(1+k*u)`. The far edge is `1/(1+k)` as tall as the near edge. Right Stage mirrors the camera, not the source text. Source aspect is preserved inside the unwarped UV card with letterboxing, including portrait sources.
+
+The isolated render uses a rounded UV mask, bilinear sampling, fractional edge coverage, a layered shadow, rear-to-front drawing and an upright corner icon. Its hit test examines the icon before visible polygons and finds the foremost containing layer. Tests exercise 1–5 rendered cards and 8 members represented as five cards plus an overflow badge. At 96 DPI the nominal front is 186 × 103 px, near 103 px / far about 79 px at 28°, stack pitch 12 × 2 px and the 31 px icon overlaps the outer bottom corner. The workflow logs actual geometry for every fixture. The 19° hover and 0° reduced motion cases are geometry tests; there is no product hover transition or Stage fold driven by this renderer.
+
+The product still uses rectangular DWM thumbnails with the existing Workspace backend. The test renderer does not prove production capture, lifetime handling or native interaction. See the preview source comparison for the experiment and fallback.

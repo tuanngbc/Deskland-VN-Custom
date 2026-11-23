@@ -381,7 +381,7 @@ unsafe fn paint_start(hwnd:HWND){
                 if let Some(path)=c.borrow_mut().take(){capture_render(dc,width,height,&path).expect("native Start fixture ink");}
             });
             surface.blit(target);
-            for f in [body,small,heading,detail]{DeleteObject(f);}
+            for f in [body,small,heading]{DeleteObject(f);}
         }
         if pending{SetTimer(hwnd,POLL,70,None);}
     }
