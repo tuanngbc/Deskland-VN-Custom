@@ -49,11 +49,11 @@ fn glass_pixel(x: f32, y: f32, width: f32, height: f32, density: f32) -> [u8;4] 
     [(tone*1.18*alpha).round() as u8,(tone*1.07*alpha).round() as u8,(tone*alpha).round() as u8,(alpha*255.0).round() as u8]
 }
 
-pub(super) struct Layer {
+pub(crate) struct Layer {
     dc: HDC, bitmap: HBITMAP, previous: HGDIOBJ, bits: *mut u8, pub(super) size: (i32,i32),
 }
 impl Layer {
-    pub(super) unsafe fn new(width:i32,height:i32) -> Option<Self> {
+    pub(crate) unsafe fn new(width:i32,height:i32) -> Option<Self> {
         if width<1||height<1||width as i64*height as i64>2_000_000 {return None;}
         let dc=CreateCompatibleDC(ptr::null_mut());
         if dc.is_null() {return None;}
@@ -72,17 +72,29 @@ impl Layer {
         }
         Some(Self{dc,bitmap,previous,bits:bits.cast(),size:(width,height)})
     }
-    pub(super) fn pixels(&mut self) -> &mut [u8] {
+    pub(crate) fn pixels(&mut self) -> &mut [u8] {
         unsafe {std::slice::from_raw_parts_mut(self.bits,self.size.0 as usize*self.size.1 as usize*4)}
     }
-    pub(super) fn dc(&self)->HDC{self.dc}
+    pub(crate) fn dc(&self)->HDC{self.dc}
+    pub(crate) unsafe fn shape(&mut self,r:RECT,radius:f32,ink:[u8;3],opacity:u8){
+        self.shape_ink(r,ink,|x,y|{
+            let rect=super::geometry::Rect{x:r.left as f32,y:r.top as f32,w:(r.right-r.left) as f32,h:(r.bottom-r.top) as f32};
+            (0.5-super::surface::distance(rect,radius,x,y)).clamp(0.0,1.0)*opacity as f32
+        });
+    }
+    pub(crate) unsafe fn shape_ink(&mut self,r:RECT,ink:[u8;3],coverage:impl Fn(f32,f32)->f32){
+        GdiFlush();
+        let (w,h)=self.size;
+        let rect=super::geometry::Rect{x:r.left as f32,y:r.top as f32,w:(r.right-r.left) as f32,h:(r.bottom-r.top) as f32};
+        super::surface::draw(self.pixels(),w,h,rect,|x,y|Some((ink,coverage(x,y))));
+    }
     pub(super) unsafe fn present(&self, hwnd:HWND) -> bool {
         let size=SIZE{cx:self.size.0,cy:self.size.1};
         let origin=POINT{x:0,y:0};
         let blend=BLENDFUNCTION{BlendOp:AC_SRC_OVER as u8,BlendFlags:0,SourceConstantAlpha:255,AlphaFormat:AC_SRC_ALPHA as u8};
         UpdateLayeredWindow(hwnd,ptr::null_mut(),ptr::null(),&size,self.dc,&origin,0,&blend,ULW_ALPHA)!=0
     }
-    pub(super) unsafe fn blit(&self, target:HDC)->bool {
+    pub(crate) unsafe fn blit(&self, target:HDC)->bool {
         BitBlt(target,0,0,self.size.0,self.size.1,self.dc,0,0,SRCCOPY)!=0
     }
 }

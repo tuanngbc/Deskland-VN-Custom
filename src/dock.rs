@@ -41,6 +41,8 @@ pub(crate) use taskbar_guard::{watchdog as taskbar_watchdog,report_trial_observa
 pub use utilities::{HostAction,Profile as UtilityProfile,Widget as UtilityWidget};
 pub use control_center::MetricOptions;
 pub use glass_probe::probe as glass_probe;
+pub(crate) use glass_probe::Layer as PopupPixels;
+pub(crate) use surface::Palette as PopupPalette;
 pub use appearance::{Appearance,DockSide,StartIcon,Theme};
 pub use options::{Options,Edit,DisplayMode,DisplayTarget,StageStyle,WindowMode,WindowPolicy};
 pub use runtime::{Runtime,Event};

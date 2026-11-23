@@ -1,6 +1,7 @@
 //! Dock Start has a separate window, layout and launch history. Only the
 //! app catalog, Shell launching and icon extraction are shared with Spotlight.
 use super::*;
+use crate::dock::{PopupPalette,PopupPixels};
 use std::{collections::{HashMap,HashSet},ptr,rc::Rc,sync::mpsc::{self,Receiver,Sender},time::{Duration,Instant}};
 
 const CLASS:&str="TuanpcDeskStartPanel";
@@ -34,7 +35,7 @@ thread_local!{
     static START:RefCell<Option<Model>>=const{RefCell::new(None)};
     static EDIT_PROC:Cell<WNDPROC>=const{Cell::new(None)};
     static MENU:Cell<bool>=const{Cell::new(false)};
-    #[cfg(test)] static CAPTURE:Cell<bool>=const{Cell::new(false)};
+    #[cfg(test)] static CAPTURE:RefCell<Option<PathBuf>>=const{RefCell::new(None)};
 }
 
 #[cfg(test)]
@@ -119,10 +120,10 @@ fn build_view(model:&Model)->StartView{
     let mut put=|hit,text:&str,r:(i32,i32,i32,i32),entry,compact|{
         tiles.push(Tile{hit,text:text.into(),rect:rr(r.0,r.1,r.2,r.3,s),entry,compact});
     };
-    put(Hit::Settings,"Cài đặt",(338,16,69,30),None,true);
-    put(Hit::Power,"Nguồn",(412,16,58,30),None,true);
-    put(Hit::Home,"Trang chính",(20,82,91,27),None,true);
-    put(Hit::Apps,"Tất cả ứng dụng",(116,82,115,27),None,true);
+    put(Hit::Settings,"Cài đặt",(404,17,30,30),None,true);
+    put(Hit::Power,"Nguồn",(440,17,30,30),None,true);
+    put(Hit::Home,"Tổng quan",(23,85,85,24),None,true);
+    put(Hit::Apps,"Tất cả ứng dụng",(110,85,111,24),None,true);
     let (entries,grid,recent,page,pages,flow)=content(model);
     let count=entries.len();let recent_empty=recent.is_empty();
     let limit=if grid{GRID_PAGE}else{LIST_PAGE};
@@ -177,11 +178,33 @@ pub(super) fn pins_changed(){
 unsafe fn fill(dc:HDC,r:&RECT,color:u32){
     let brush=CreateSolidBrush(color);FillRect(dc,r,brush);DeleteObject(brush);
 }
-unsafe fn pill(dc:HDC,r:RECT,radius:i32,color:u32){
-    let brush=CreateSolidBrush(color);if brush.is_null(){return;}
-    let old_brush=SelectObject(dc,brush);let old_pen=SelectObject(dc,GetStockObject(NULL_PEN));
-    RoundRect(dc,r.left,r.top,r.right,r.bottom,radius,radius);
-    SelectObject(dc,old_pen);SelectObject(dc,old_brush);DeleteObject(brush);
+fn color(bgr:[u8;3])->u32{u32::from(bgr[2])|u32::from(bgr[1])<<8|u32::from(bgr[0])<<16}
+fn search_ink(dark:bool)->[u8;3]{if dark{[58,57,54]}else{[235,232,228]}}
+#[derive(Clone,Copy)]
+enum Glyph{Search,Sliders,Power}
+unsafe fn glyph(surface:&mut PopupPixels,r:RECT,glyph:Glyph,ink:[u8;3],s:f32){
+    let cx=(r.left+r.right) as f32*0.5;let cy=(r.top+r.bottom) as f32*0.5;
+    let s=s.max(0.5);
+    surface.shape_ink(r,ink,|x,y|{
+        let (x,y)=((x-cx)/s,(y-cy)/s);
+        let line=|ax:f32,ay:f32,bx:f32,by:f32|{
+            let (dx,dy)=(bx-ax,by-ay);
+            let t=(((x-ax)*dx+(y-ay)*dy)/(dx*dx+dy*dy)).clamp(0.0,1.0);
+            (x-ax-t*dx).hypot(y-ay-t*dy)
+        };
+        let d=match glyph{
+            Glyph::Search=>((x+1.5).hypot(y+1.5)-4.1).abs().min(line(1.6,1.8,5.5,5.7)),
+            Glyph::Power=>{let ring=if y<0.0&&x.abs()<2.5{20.0}else{(x.hypot(y-0.7)-5.7).abs()};ring.min(line(0.0,-7.1,0.0,-0.3))},
+            Glyph::Sliders=>{
+                let mut d=20.0f32;
+                for (ty,tx) in [(-4.5,-2.0),(0.0,2.7),(4.5,-0.5)]{
+                    d=d.min(line(-6.3,ty,tx-1.8,ty)).min(line(tx+1.8,ty,6.3,ty)).min(((x-tx).hypot(y-ty)-1.65).abs());
+                }
+                d
+            }
+        };
+        ((0.85-d)*s+0.5).clamp(0.0,1.0)*255.0
+    });
 }
 unsafe fn center_label(dc:HDC,text:&str,mut rect:RECT,font:HFONT,color:u32){
     let old=SelectObject(dc,font);SetTextColor(dc,color);SetBkMode(dc,TRANSPARENT as i32);
@@ -233,11 +256,14 @@ unsafe fn paint_start(hwnd:HWND){
     });
     if let Some((s,dark,glass,tiles,icons,selected,hover,area,empty_query,empty_recent,error,page,pages,count,pending,flow,anchor,work))=view{
         let width=px(WIDTH,s);let height=px(flow.height,s);
-        let dc=CreateCompatibleDC(target);let bm=CreateCompatibleBitmap(target,width,height);
-        if !dc.is_null()&&!bm.is_null(){
-            let old=SelectObject(dc,bm);
-            let (bg,fg,sub,card,active,accent) = if dark{(0x00242120,0x00FAF8F6,0x00C2BCB8,0x003B3734,0x00514A3F,0x00FFCA86)}
-                else{(0x00F9F8F7,0x00292623,0x006C6560,0x00EDEAE7,0x00F1DFC9,0x008C4B16)};
+        if let Some(mut surface)=PopupPixels::new(width,height){
+            let dc=surface.dc();
+            let palette=PopupPalette::new(dark);
+            let neutral=if dark{[38,37,37]}else{[250,249,247]};
+            let (bg,fg,sub,accent)=(color(neutral),color(palette.ink),color(palette.muted),
+                if dark{color(palette.ink)}else{0x00433024});
+            let tile_ink=if dark{[78,77,74]}else{[224,221,215]};
+            let select_ink=if dark{[111,107,102]}else{[255,255,255]};
             fill(dc,&rr(0,0,WIDTH,flow.height,s),bg);
             if !glass.is_empty(){
                 let full_height=px(MAX_HEIGHT,s);
@@ -253,16 +279,24 @@ unsafe fn paint_start(hwnd:HWND){
                 StretchDIBits(dc,0,0,width,height,0,crop,info.bmiHeader.biWidth,(height/4).max(1).min(sample_height-crop),
                     glass.as_ptr().cast(),&info,DIB_RGB_COLORS,SRCCOPY);
             }
-            let body=font(px(13,s),500);let small=font(px(12,s),400);
-            let heading=font(px(16,s),600);let detail=font(px(14,s),600);
-            pill(dc,rr(20,13,34,34,s),px(34,s),card);
+            let body=font(px(13,s),500);let small=font(px(11,s),400);
+            let heading=font(px(18,s),600);let detail=font(px(14,s),600);
+            surface.shape(rr(20,15,32,32,s),16.0*s,tile_ink,154);
             let user=std::env::var("USERNAME").unwrap_or_else(|_|"Deskland".into());
-            center_label(dc,&user.chars().next().unwrap_or('D').to_uppercase().to_string(),rr(20,13,34,34,s),heading,accent);
-            label(dc,&user,rr(64,11,263,24,s),heading,fg);
-            label(dc,"Ứng dụng",rr(64,33,260,15,s),small,sub);
-            pill(dc,rr(20,49,450,28,s),px(14,s),card);
-            center_label(dc,"⌕",rr(22,49,30,27,s),heading,sub);
-            fill(dc,&rr(20,112,450,1,s),card);
+            center_label(dc,&user.chars().next().unwrap_or('D').to_uppercase().to_string(),rr(20,15,32,32,s),detail,accent);
+            label(dc,"Ứng dụng",rr(62,9,235,25,s),heading,fg);
+            label(dc,&user,rr(63,34,220,14,s),small,sub);
+            let action_hint=match hover.as_ref(){Some(Hit::Settings)=>"Cài đặt Deskland",Some(Hit::Power)=>"Nguồn và phiên",_=>""};
+            label(dc,action_hint,rr(300,17,101,30,s),small,sub);
+            surface.shape(rr(20,53,450,28,s),13.0*s,search_ink(dark),255);
+            glyph(&mut surface,rr(22,53,30,28,s),Glyph::Search,palette.muted,s);
+            #[cfg(test)]
+            if CAPTURE.with(|c|c.borrow().is_some()){
+                let query=START.with(|s|s.borrow().as_ref().map(|m|m.query.clone()).unwrap_or_default());
+                label(dc,if empty_query{"Tìm ứng dụng…"}else{&query},rr(54,53,400,28,s),body,if empty_query{sub}else{fg});
+            }
+            surface.shape(rr(20,82,204,29,s),14.0*s,tile_ink,127);
+            fill(dc,&rr(20,113,450,1,s),color(tile_ink));
             label(dc,if !empty_query{"Kết quả tìm kiếm"}else if area==Area::Home{"Ứng dụng đã ghim"}else{"Tất cả ứng dụng"},
                 rr(20,flow.heading_y,300,26,s),detail,fg);
             if pages>1{center_label(dc,&format!("{} / {pages}",page+1),rr(382,114,56,27,s),small,sub);}
@@ -270,8 +304,12 @@ unsafe fn paint_start(hwnd:HWND){
                 let picked=selected.as_ref()==Some(&tile.hit)
                     || (empty_query&&matches!((&tile.hit,area),(Hit::Home,Area::Home)|(Hit::Apps,Area::Apps)));
                 let hovered=hover.as_ref()==Some(&tile.hit);
-                if picked||hovered||matches!(tile.hit,Hit::Power|Hit::Settings){
-                    pill(dc,tile.rect,px(if tile.compact{12}else{18},s),if picked{active}else{card});
+                if picked||hovered{
+                    surface.shape(tile.rect,if tile.compact{10.0*s}else{15.0*s},if picked{select_ink}else{tile_ink},if picked{190}else{162});
+                }
+                if matches!(tile.hit,Hit::Settings|Hit::Power){
+                    glyph(&mut surface,tile.rect,if tile.hit==Hit::Settings{Glyph::Sliders}else{Glyph::Power},palette.ink,s);
+                    continue;
                 }
                 let mut r=tile.rect;
                 r.left+=px(8,s);r.right-=px(5,s);
@@ -294,21 +332,19 @@ unsafe fn paint_start(hwnd:HWND){
                 label(dc,prompt,rr(20,CONTENT_Y,450,36,s),body,sub);
             }
             if let Some(y)=flow.recent_y{
-                fill(dc,&rr(20,y-2,450,1,s),card);
+                fill(dc,&rr(20,y-2,450,1,s),color(tile_ink));
                 label(dc,"Đã mở gần đây",rr(20,y,450,24,s),detail,fg);
                 if empty_recent{label(dc,"Ứng dụng mở từ Start sẽ xuất hiện ở đây.",rr(20,y+26,450,27,s),small,sub);}
             }
             if !error.is_empty(){label(dc,&error,rr(20,flow.footer_y-25,450,24,s),small,fg);}
-            fill(dc,&rr(20,flow.footer_y,450,1,s),card);
+            fill(dc,&rr(20,flow.footer_y,450,1,s),color(tile_ink));
             #[cfg(test)]
-            if let Some(path)=std::env::var_os("TUANPC_DESK_START_EVIDENCE").map(PathBuf::from){
-                if CAPTURE.with(Cell::get)&&!path.exists(){let _=capture_render(dc,width,height,&path);}
-            }
-            BitBlt(target,0,0,width,height,dc,0,0,SRCCOPY);
-            SelectObject(dc,old);
+            CAPTURE.with(|c|{
+                if let Some(path)=c.borrow_mut().take(){capture_render(dc,width,height,&path).expect("native Start fixture ink");}
+            });
+            surface.blit(target);
             for f in [body,small,heading,detail]{DeleteObject(f);}
         }
-        if !bm.is_null(){DeleteObject(bm);}if !dc.is_null(){DeleteDC(dc);}
         if pending{SetTimer(hwnd,POLL,70,None);}
     }
     EndPaint(hwnd,&ps);
@@ -446,7 +482,7 @@ unsafe extern "system" fn proc_start(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
         WM_CTLCOLOREDIT=>{
             let dark=START.with(|s|s.borrow().as_ref().is_some_and(|m|m.dark));
             SetTextColor(w as HDC,if dark{0x00FFFFFF}else{0x00262422});
-            let color=if dark{0x003B3734}else{0x00EDEAE7};
+            let color=color(search_ink(dark));
             SetBkColor(w as HDC,color);SetDCBrushColor(w as HDC,color);
             GetStockObject(DC_BRUSH) as LRESULT
         }
@@ -607,7 +643,7 @@ pub(crate) fn toggle(owner:HWND,anchor:DockAnchor){
         let work=info.rcWork;
         let _=SetWindowPos(hwnd,ptr::null_mut(),work.left,work.top,1,1,SWP_NOACTIVATE|SWP_NOZORDER);
         let s=(windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd).clamp(72,288) as f32/96.0)
-            .min((work.right-work.left) as f32/WIDTH as f32).min((work.bottom-work.top) as f32/MAX_HEIGHT as f32);
+            .min((work.right-work.left) as f32/WIDTH as f32).min((work.bottom-work.top) as f32/MAX_HEIGHT as f32).min(2.75);
         if s<=0.0{return;}
         let (width,height)=(px(WIDTH,s),px(MAX_HEIGHT,s));
         let (x,y)=anchor.position(work,width,height,px(10,s));
@@ -626,7 +662,7 @@ pub(crate) fn toggle(owner:HWND,anchor:DockAnchor){
         SendMessageW(edit,WM_SETFONT,font as usize,1);
         if !old_font.is_null(){DeleteObject(old_font);}
         SetWindowTextW(edit,wide("").as_ptr());
-        MoveWindow(edit,px(55,s),px(54,s),px(398,s),px(20,s),0);
+        MoveWindow(edit,px(55,s),px(57,s),px(398,s),px(20,s),0);
         use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
         let round=2i32;let border=0xffff_fffeu32;let mode=i32::from(dark);
         DwmSetWindowAttribute(hwnd,33,(&round as *const i32).cast(),4);
@@ -700,12 +736,41 @@ mod tests {
             });
             relayout(host);
             if let Some(path)=std::env::var_os("TUANPC_DESK_START_EVIDENCE").map(PathBuf::from){
+                let root=PathBuf::from(std::env::var_os("SystemRoot").expect("Windows directory"));
+                let fixtures=[("File Explorer",root.join("explorer.exe")),
+                    ("Notepad",root.join("System32").join("notepad.exe")),
+                    ("Task Manager",root.join("System32").join("taskmgr.exe"))];
+                use windows::Win32::System::Com::{CoInitializeEx,CoUninitialize,COINIT_APARTMENTTHREADED};
+                let com=CoInitializeEx(None,COINIT_APARTMENTTHREADED);
+                let capture=|path:PathBuf|{
+                    CAPTURE.with(|c|{c.replace(Some(path.clone()));});
+                    relayout(host);UpdateWindow(host);
+                    assert!(path.is_file(),"native Start render evidence is required: {}",path.display());
+                };
                 START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){
-                    m.glass=Rc::from([]);m.pins=vec!["mspaint.exe".into(),"notepad.exe".into(),"deskland:settings".into()];
+                    m.glass=Rc::from([]);m.pins=fixtures.iter().map(|(_,p)|p.to_string_lossy().into_owned()).chain([SETTINGS.into()]).collect();
+                    m.all=fixtures.iter().map(|(name,path)|Entry{name:(*name).into(),path:path.clone(),kind:"Application",detail:String::new()}).collect();
+                    for (_,path) in &fixtures{
+                        for size in [px(42,m.scale).max(16),px(22,m.scale).max(16)]{
+                            m.icons.insert((path.clone(),size),extract_icon(path,size));
+                        }
+                    }
+                    assert!(m.icons.values().any(Option::is_some),"real Shell icon at least once in evidence");
+                    m.dark=false;
                 });
-                CAPTURE.with(|c|c.set(true));relayout(host);UpdateWindow(host);CAPTURE.with(|c|c.set(false));
-                assert!(path.is_file(),"native Start render evidence is required");
-                START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){m.pins=vec![r"C:\Test\Notepad.exe".into()];});
+                if com.is_ok(){CoUninitialize();}
+                capture(path.clone());
+                START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){m.dark=true;});
+                capture(path.with_file_name("start-native-dark.png"));
+                START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){m.dark=false;m.area=Area::Apps;});
+                capture(path.with_file_name("start-native-apps.png"));
+                SetWindowTextW(edit,wide("note").as_ptr());
+                capture(path.with_file_name("start-native-search.png"));
+                SetWindowTextW(edit,wide("").as_ptr());
+                START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){
+                    m.area=Area::Home;m.pins=vec![r"C:\Test\Notepad.exe".into()];
+                    m.all=vec![Entry{name:"Paint".into(),path:"mspaint.exe".into(),kind:"Application",detail:String::new()}];
+                });
                 relayout(host);
             }
             assert_ne!(IsWindowVisible(host),0);

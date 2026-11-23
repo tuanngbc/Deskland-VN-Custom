@@ -26,7 +26,7 @@ pub(super) const CONTROL_OPACITY: u8 = 218;
 
 /// Shared color tokens for native Dock, Stage and utility controls (BGR order).
 #[derive(Clone,Copy)]
-pub(super) struct Palette {
+pub(crate) struct Palette {
     pub panel:[u8;3],pub ink:[u8;3],pub muted:[u8;3],pub accent:[u8;3],pub edge:[u8;3],
 }
 impl Palette {
