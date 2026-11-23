@@ -49,3 +49,8 @@ html[data-appearance=dark] #page-dock{--dock-blue:#8ebfff;--dock-mist:#243953}
 #page-dock .dock-utility-rows li{background:var(--panel);padding-block:7px}
 #page-dock .dock-utility-rows button{min-height:27px}
 @media(max-width:620px){.dock-miniature{display:none}#page-dock .setting-row{gap:8px 10px}#page-dock .setting-row select{width:140px}#page-dock .setting-row span:has(output){grid-template-columns:minmax(54px,115px) 31px}}
+
+.dock-command-card .setting-row{display:grid;grid-template-columns:minmax(115px,0.35fr) minmax(0,1fr);gap:12px}
+.dock-command-card .setting-row input{width:100%;max-width:none;min-width:0;box-sizing:border-box}
+.dock-command-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.dock-command-actions [hidden]{display:none}

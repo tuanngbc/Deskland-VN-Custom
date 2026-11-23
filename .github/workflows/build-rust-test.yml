@@ -87,6 +87,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./tests/dock-benchmark-contract.ps1
           ./tests/dock-fixture-native.ps1
+          ./tests/cooperative-tray-poc.ps1 -Exe (Resolve-Path target/release/tuanpc-desk.exe).Path
 
       - name: Package Rust native build
         run: |

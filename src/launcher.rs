@@ -115,13 +115,27 @@ thread_local! {
 pub fn dock_pins(paths:&[String]){
     DOCK_PINS.with(|v|v.replace(paths.to_vec()));
     if let Some((hwnd,_,_,_))=handles(){
-        unsafe{if IsWindowVisible(hwnd)!=0{InvalidateRect(hwnd,std::ptr::null(),0);}}
+        STATE.with(|c|if let Some(s)=c.borrow_mut().as_mut(){sync_pin_entries(&mut s.all);});
+        unsafe{if IsWindowVisible(hwnd)!=0{refresh_results(false);}}
     }
 }
 pub fn take_dock_edit()->Option<crate::dock::Edit>{PIN_EDIT.with(|edit|edit.borrow_mut().take())}
 fn pinned(path:&Path)->bool{DOCK_PINS.with(|pins|pins.borrow().iter().any(|p|same_path(Path::new(p),path)))}
+fn app_entry(e:&Entry)->bool{matches!(e.kind,"Application"|"Pinned")}
+fn sync_pin_entries(all:&mut Vec<Entry>){
+    all.retain(|entry|entry.kind!="Pinned");
+    DOCK_PINS.with(|prefs|for value in prefs.borrow().iter(){
+        let path=PathBuf::from(value);
+        if all.iter().any(|e|same_path(&e.path,&path)){continue;}
+        let command=crate::dock::command_pin::decode(value);
+        let name=command.as_ref().map(|c|c.label.clone()).unwrap_or_else(||{
+            path.file_stem().and_then(|name|name.to_str()).unwrap_or(value).to_owned()
+        });
+        all.push(Entry{name,path,kind:"Pinned",detail:"Đã ghim vào Dock".into()});
+    });
+}
 fn pin_change(entry:&Entry)->Option<crate::dock::Edit>{
-    (entry.kind=="Application").then(||{
+    app_entry(entry).then(||{
         let path=entry.path.to_string_lossy().into_owned();
         if pinned(&entry.path){crate::dock::Edit::Unpin(path)}else{crate::dock::Edit::Pin(path)}
     })
@@ -234,25 +248,21 @@ fn filter(all: &[Entry], query: &str, history: &History) -> Vec<usize> {
 fn handles() -> Option<(HWND, i32, i32, f32)> {
     STATE.with(|c| c.borrow().as_ref().map(|s| (s.hwnd, s.width, s.height, s.scale)))
 }
+fn start_rows(all:&[Entry],history:&History)->Vec<usize>{
+    let pins=DOCK_PINS.with(|prefs|prefs.borrow().iter().filter_map(|path|
+        all.iter().position(|e|app_entry(e)&&same_path(&e.path,Path::new(path)))).collect::<Vec<_>>());
+    let mut seen=std::collections::HashSet::new();
+    pins.into_iter().chain(filter(all,"",history).into_iter().filter(|&i|app_entry(&all[i])))
+        .chain(all.iter().enumerate().filter_map(|(i,e)|app_entry(e).then_some(i)))
+        .filter(|i|seen.insert(*i)).take(100).collect()
+}
 fn refresh() {refresh_results(false);}
 fn refresh_results(keep_selection:bool) {
     let hwnd = STATE.with(|c| {
         let mut guard = c.borrow_mut(); let s = guard.as_mut()?;
         let keep=keep_selection.then(||s.matches.get(s.selected).copied()).flatten();
-        s.matches = filter(&s.all, &s.query, &s.history);
-        if s.dock_start&&s.query.trim().is_empty(){
-            for (i,entry) in s.all.iter().enumerate(){
-                if entry.kind=="Application"&&pinned(&entry.path)&&!s.matches.contains(&i){
-                    s.matches.push(i);
-                }
-            }
-            if s.matches.len()<PAGE{
-                for i in s.all.iter().enumerate().filter_map(|(i,e)|(e.kind=="Application").then_some(i)){
-                    if !s.matches.contains(&i){s.matches.push(i);}
-                    if s.matches.len()>=PAGE{break;}
-                }
-            }
-        }
+        s.matches = if s.dock_start&&s.query.trim().is_empty(){start_rows(&s.all,&s.history)}
+            else{filter(&s.all,&s.query,&s.history)};
         s.selected=keep.and_then(|idx|s.matches.iter().position(|&i|i==idx)).unwrap_or(0);
         s.first=s.first.min(s.selected).max((s.selected+1).saturating_sub(PAGE));if !keep_selection{s.error.clear();} Some(s.hwnd)
     });
@@ -311,6 +321,9 @@ fn launch_selected() {
 
 #[cfg(not(test))]
 unsafe fn execute(hwnd: HWND, path: &Path) -> isize {
+    if let Some(value)=path.to_str().filter(|v|crate::dock::command_pin::decode(v).is_some()){
+        return crate::dock::command_pin::open(value);
+    }
     ShellExecuteW(hwnd, wide("open").as_ptr(), wide(&path.to_string_lossy()).as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) as isize
 }
 
@@ -331,6 +344,9 @@ fn icon_worker() -> (std::sync::mpsc::Sender<(PathBuf, i32)>, std::sync::mpsc::R
 }
 
 unsafe fn extract_icon(path: &Path, size: i32) -> Option<IconPixels> {
+    if let Some(command)=path.to_str().and_then(crate::dock::command_pin::decode){
+        return shell_icon(Path::new(&command.exe),size);
+    }
     let icon = shell_icon(path, (size * 2).clamp(64, 256))?;
     let scale = size as f32 / icon.width.max(icon.height) as f32;
     let width = (icon.width as f32 * scale).round().max(1.0) as i32;
@@ -634,8 +650,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     match rx.try_recv(){
                         Ok(apps)=>{
                             s.apps_rx=None;
+                            s.all.retain(|entry|entry.kind!="Pinned");
                             let mut seen=s.all.iter().map(|e|e.path.to_string_lossy().to_ascii_lowercase()).collect::<std::collections::HashSet<_>>();
                             s.all.extend(apps.into_iter().filter(|e|seen.insert(e.path.to_string_lossy().to_ascii_lowercase())));
+                            sync_pin_entries(&mut s.all);
                             apps_changed=true;
                         },
                         Err(std::sync::mpsc::TryRecvError::Disconnected)=>s.apps_rx=None,
@@ -698,17 +716,18 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         }
         WM_MOUSEWHEEL => { move_selection(if (w >> 16) as i16 > 0 { -1 } else { 1 }); 0 }
         WM_RBUTTONUP=>{result_menu(hwnd,Some((l as i16 as i32,(l>>16) as i16 as i32)));0},
-        WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
+        WM_LBUTTONDOWN | WM_LBUTTONUP | WM_LBUTTONDBLCLK => {
             let y = (l >> 16) as i16 as i32;
             let clicked = STATE.with(|c| {
-                let mut guard = c.borrow_mut(); let Some(s) = guard.as_mut() else { return false; };
+                let mut guard = c.borrow_mut(); let Some(s) = guard.as_mut() else { return (false,false); };
                 let logical_y = (y as f32 / s.scale) as i32 - 12;
                 let row = (logical_y - TOP) / ROW;
                 if logical_y >= TOP && row >= 0 && row < PAGE as i32 && s.first + (row as usize) < s.matches.len() {
-                    s.selected = s.first + row as usize; true
-                } else { false }
+                    s.selected = s.first + row as usize;
+                    (true,if s.dock_start{msg==WM_LBUTTONUP}else{msg==WM_LBUTTONDBLCLK})
+                } else { (false,false) }
             });
-            if clicked { InvalidateRect(hwnd, std::ptr::null(), 0); if msg == WM_LBUTTONDBLCLK { PostMessageW(hwnd, OPEN_SELECTED, 0, 0); } }
+            if clicked.0 { InvalidateRect(hwnd, std::ptr::null(), 0); if clicked.1 { PostMessageW(hwnd, OPEN_SELECTED, 0, 0); } }
             0
         }
         WM_SETCURSOR => { SetCursor(LoadCursorW(std::ptr::null_mut(), IDC_ARROW)); 1 }
@@ -717,7 +736,28 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
 }
 
 pub fn toggle(_owner: HWND) {toggle_at(None);}
-pub fn toggle_at(dock:Option<POINT>) {
+#[derive(Clone,Copy)]
+pub(crate) struct DockAnchor {pub point:POINT,pub side:crate::dock::DockSide}
+impl DockAnchor {
+    pub(crate) fn encode(self)->(WPARAM,LPARAM){
+        let side=match self.side{crate::dock::DockSide::Bottom=>0,crate::dock::DockSide::Left=>1,crate::dock::DockSide::Right=>2};
+        (((self.point.x as u32 as u64)|((side as u64)<<32)) as WPARAM,self.point.y as LPARAM)
+    }
+    pub(crate) fn decode(w:WPARAM,l:LPARAM)->Self{
+        let side=match (w as u64)>>32{1=>crate::dock::DockSide::Left,2=>crate::dock::DockSide::Right,_=>Default::default()};
+        Self{point:POINT{x:w as i32,y:l as i32},side}
+    }
+    fn position(self,work:RECT,w:i32,h:i32,pad:i32)->(i32,i32){
+        use crate::dock::DockSide;
+        let (x,y)=match self.side{
+            DockSide::Bottom=>(self.point.x-w/2,self.point.y-h-pad),
+            DockSide::Left=>(self.point.x+pad,self.point.y-h/2),
+            DockSide::Right=>(self.point.x-w-pad,self.point.y-h/2),
+        };
+        (x.clamp(work.left,(work.right-w).max(work.left)),y.clamp(work.top,(work.bottom-h).max(work.top)))
+    }
+}
+pub(crate) fn toggle_at(dock:Option<DockAnchor>) {
     unsafe {
         if let Some((hwnd, _, _, _)) = handles() {
             if IsWindowVisible(hwnd) != 0 { dismiss(hwnd); return; }
@@ -732,18 +772,24 @@ pub fn toggle_at(dock:Option<POINT>) {
             let hwnd = CreateWindowExW(WS_EX_LAYERED|WS_EX_TOOLWINDOW, cls.as_ptr(), wide("tuanpc-desk Spotlight").as_ptr(), WS_POPUP, 0, 0, 684, 468, std::ptr::null_mut(), std::ptr::null_mut(), instance, std::ptr::null_mut());
             if hwnd.is_null() { crate::log!("Launcher: CreateWindowEx failed {}", GetLastError()); return; }
             let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED);
-            let all = entries();
+            let mut all = entries();
+            sync_pin_entries(&mut all);
             let (icon_requests,icon_results)=icon_worker();
             STATE.with(|c| *c.borrow_mut() = Some(State { hwnd, all, matches: Vec::new(), query: String::new(), selected: 0, first: 0, scale: 1.0, width: 660, height: 444, glass: Vec::new(), backdrop: Vec::new(), error: String::new(), select_all: false, icons:std::collections::HashMap::new(),icon_requests,icon_results,pending_icons:0,apps_indexed:false,apps_rx:None,history:load_history(),launching:false,dock_start:false }));
         }
         let Some((hwnd, _, _, _)) = handles() else { return; };
-        let mouse=dock.unwrap_or_else(||{let mut p=POINT{x:0,y:0};GetCursorPos(&mut p);p});
+        let mouse=dock.map_or_else(||{let mut p=POINT{x:0,y:0};GetCursorPos(&mut p);p},|a|a.point);
         let monitor = MonitorFromPoint(mouse, MONITOR_DEFAULTTONEAREST); let mut mi: MONITORINFO = std::mem::zeroed(); mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32; GetMonitorInfoW(monitor, &mut mi);
-        let scale = windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd).max(96) as f32 / 96.0;
+        if mi.rcWork.right<=mi.rcWork.left||mi.rcWork.bottom<=mi.rcWork.top{return;}
+        // Query DPI after moving the still-hidden HWND to the target output.
+        SetWindowPos(hwnd,std::ptr::null_mut(),mouse.x,mouse.y,0,0,SWP_NOACTIVATE|SWP_NOSIZE|SWP_NOZORDER);
+        let scale = (windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd).clamp(72,288) as f32 / 96.0)
+            .min((mi.rcWork.right-mi.rcWork.left) as f32/684.0).min((mi.rcWork.bottom-mi.rcWork.top) as f32/468.0);
         let width = (660.0 * scale) as i32; let height = (444.0 * scale) as i32;
         let pad=(12.0*scale).round() as i32;
-        let x = mi.rcWork.left + (mi.rcWork.right - mi.rcWork.left - width-2*pad) / 2;
-        let y = mi.rcWork.top + ((mi.rcWork.bottom - mi.rcWork.top - height-2*pad) / 3).max(0);
+        let (x,y)=if let Some(anchor)=dock{anchor.position(mi.rcWork,width+2*pad,height+2*pad,(32.0*scale).round() as i32)}
+        else{(mi.rcWork.left+(mi.rcWork.right-mi.rcWork.left-width-2*pad)/2,
+            mi.rcWork.top+((mi.rcWork.bottom-mi.rcWork.top-height-2*pad)/3).max(0))};
         let backdrop = capture_glass(x+pad, y+pad, width, height);
         let appearance=PREFS.with(|c| c.borrow().clone());
         let glass=frost(&backdrop,width,height,scale,&appearance);
@@ -763,6 +809,19 @@ pub fn hotkey_text(mods: u32, vk: u32) -> String { crate::shortcuts::label(mods,
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dock_anchor_roundtrips_and_stays_on_negative_output(){
+        let work=RECT{left:-1080,top:-731,right:0,bottom:1141};
+        for side in [crate::dock::DockSide::Bottom,crate::dock::DockSide::Left,crate::dock::DockSide::Right]{
+            let a=DockAnchor{point:POINT{x:-1035,y:-620},side};
+            let (w,l)=a.encode();
+            let decoded=DockAnchor::decode(w,l);
+            assert_eq!(a.side,decoded.side);
+            assert_eq!((decoded.point.x,decoded.point.y),(-1035,-620));
+            let (x,y)=decoded.position(work,680,460,10);
+            assert!(x>=work.left&&y>=work.top&&x+680<=work.right&&y+460<=work.bottom);
+        }
+    }
     fn sample_entries() -> Vec<Entry> {
         [("Paint", "C:\\Windows\\System32\\mspaint.exe"), ("Notepad", "C:\\Windows\\System32\\notepad.exe"), ("Budget", "C:\\Documents\\Budget.xlsx")]
             .into_iter().map(|(name,path)| Entry {name:name.into(),path:path.into(),kind:if name=="Budget"{"File"}else{"Application"},detail:String::new()}).collect()

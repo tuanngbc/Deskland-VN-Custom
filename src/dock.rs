@@ -33,8 +33,9 @@ mod panel_chrome;
 mod appbar;
 mod shell_access;
 mod taskbar_guard;
-mod command_pin;
-pub(crate) fn create_command_pin(line:&str,label:&str)->Result<String,&'static str>{command_pin::encode(line,label)}
+pub(crate) mod tray_poc;
+pub(crate) mod command_pin;
+pub(crate) fn create_command_pin(line:&str,label:&str)->Result<String,command_pin::PinError>{command_pin::encode(line,label)}
 pub(crate) use taskbar_guard::watchdog as taskbar_watchdog;
 pub use utilities::{HostAction,Profile as UtilityProfile,Widget as UtilityWidget};
 pub use control_center::MetricOptions;
@@ -961,7 +962,7 @@ unsafe fn show_status_tip(owner:HWND){
             }else{item.title.chars().take(512).collect()});
         }
         let bar=state.bars.iter().find(|b|b.hwnd==owner&&!b.hidden&&!b.collapsed)?;
-        if let Some(target)=bar.pointer.and_then(|(x,y)|bar.shell_target(x,y)){return Some(target.title(taskbar_hidden()).to_owned());}
+        if let Some(target)=bar.pointer.and_then(|(x,y)|bar.shell_target(x,y)){return Some(target.title(local_shell_buttons()).to_owned());}
         let item=bar.status_hover?;
         Some(item.map_or("Bảng tiện ích",UtilityWidget::title).to_owned())
     });
@@ -1484,6 +1485,10 @@ thread_local!{
 fn taskbar_active()->bool{TASKBAR_WATCH.with(|w|w.borrow().is_some())}
 fn taskbar_hidden()->bool{TASKBAR_HIDDEN.with(Cell::get)}
 fn taskbar_pending()->bool{taskbar_active()&&!taskbar_hidden()}
+fn local_shell_buttons()->bool{
+    let opt_in=STATE.with(|s|s.borrow().prefs.native_shell_buttons);
+    shell_access::local_buttons(taskbar_active(),opt_in)
+}
 
 unsafe fn show_taskbar(message:&str){
     let old=TASKBAR_WATCH.with(|w|w.borrow_mut().take());
@@ -1502,6 +1507,7 @@ unsafe fn show_taskbar(message:&str){
 unsafe fn set_taskbar_hidden(hidden:bool){
     if !hidden {show_taskbar(taskbar_guard::Exit::Requested.message());return;}
     if taskbar_active(){return;}
+    crate::log!("DOCK_TASKBAR hide requested");
     if shell_access::native_busy(){
         emit(Event::Taskbar{hidden:false,pending:false,message:"Đợi bảng Windows đóng rồi bật lại chế độ Dock.".into()});return;
     }
@@ -1522,7 +1528,10 @@ unsafe fn set_taskbar_hidden(hidden:bool){
             TASKBAR_WATCH.with(|slot|slot.replace(Some(watch)));
             emit(Event::Taskbar{hidden:false,pending:true,message:"Đang kiểm tra đường khôi phục…".into()});
         }
-        Err(message)=>emit(Event::Taskbar{hidden:false,pending:false,message}),
+        Err(message)=>{
+            crate::log!("DOCK_TASKBAR startup refused: {message}");
+            emit(Event::Taskbar{hidden:false,pending:false,message});
+        }
     }
 }
 unsafe fn poll_taskbar(hwnd:HWND){
@@ -1575,13 +1584,17 @@ unsafe fn shell_anchor(owner:HWND,target:shell_access::Target)->Option<panel_chr
 unsafe fn open_dock_launcher(anchor:panel_chrome::Anchor){
     utilities::close_panels();
     UTILITY_ANCHOR.with(|a|a.set(None));
-    PostMessageW(OWNER.with(Cell::get),crate::WM_OPEN_DOCK_LAUNCHER,anchor.point.x as WPARAM,anchor.point.y as LPARAM);
+    let (w,l)=crate::launcher::DockAnchor{point:anchor.point,side:anchor.side}.encode();
+    PostMessageW(OWNER.with(Cell::get),crate::WM_OPEN_DOCK_LAUNCHER,w,l);
 }
 unsafe fn activate_shell(owner:HWND,target:shell_access::Target,context:bool){
     let anchor=shell_anchor(owner,target);
     use shell_access::Route;
-    // While hiding, keep native shell commands out of the handshake as well.
-    match shell_access::route(taskbar_active(),target,context){
+    // Native surfaces always require explicit opt-in and are never called
+    // during takeover or while the watchdog is hiding the taskbar.
+    let local=local_shell_buttons();
+    crate::log!("DOCK_SHELL button={target:?} local={local} taskbar_hidden={}",taskbar_hidden());
+    match shell_access::route(local,target,context){
         Route::Native=>shell_access::activate(target,context,anchor,owner,CONTROL.with(Cell::get)),
         Route::Launcher=>if let Some(anchor)=anchor{open_dock_launcher(anchor);},
         Route::Calendar=>if let Some(anchor)=anchor{
@@ -1922,7 +1935,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_UTILITY_READY=>{show_utilities();0},
         WM_SHELL_FALLBACK if hwnd==CONTROL.with(Cell::get)=>{
             let owner=w as HWND;
-            if !taskbar_active()&&!control_center::open_for(owner){
+            if !local_shell_buttons()&&!control_center::open_for(owner){
                 let target=if l==0{shell_access::Target::Start}else{shell_access::Target::Tray};
                 if let Some(anchor)=shell_anchor(owner,target){
                     if l==0{open_dock_launcher(anchor);}else{open_dock_hub(owner,anchor,true);}

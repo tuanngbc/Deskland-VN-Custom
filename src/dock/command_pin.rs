@@ -3,7 +3,7 @@ use std::{path::Path,ptr};
 use windows_sys::Win32::{Foundation::LocalFree,UI::Shell::CommandLineToArgvW};
 
 const PREFIX:&str="deskland-command:v1:";
-pub(super) struct Launch {
+pub(crate) struct Launch {
     pub exe:String,
     pub parameters:String,
     pub directory:String,
@@ -13,14 +13,20 @@ fn absolute_exe(path:&str)->bool{
     Path::new(path).is_absolute()&&Path::new(path).extension().and_then(|v|v.to_str())
         .is_some_and(|v|v.eq_ignore_ascii_case("exe"))
 }
+fn unescape_path(path:&str)->String{
+    path.replace(r"\_", "_").replace(r"\.", ".")
+}
+fn exe_token(path:&str)->bool{
+    absolute_exe(path)||(path.contains(r"\.")&&absolute_exe(&unescape_path(path)))
+}
 fn split(line:&str)->Option<(&str,&str)>{
     if let Some(quoted)=line.strip_prefix('"'){
         let (exe,tail)=quoted.split_once('"')?;
-        return (absolute_exe(exe)&&tail.chars().next().is_none_or(char::is_whitespace)).then_some((exe,tail.trim_start()));
+        return (exe_token(exe)&&tail.chars().next().is_none_or(char::is_whitespace)).then_some((exe,tail.trim_start()));
     }
     line.char_indices().map(|(i,_)|i).chain([line.len()]).find_map(|i|{
         let tail=&line[i..];
-        (tail.chars().next().is_none_or(char::is_whitespace)&&absolute_exe(&line[..i]))
+        (tail.chars().next().is_none_or(char::is_whitespace)&&exe_token(&line[..i]))
             .then(||(&line[..i],tail.trim_start()))
     })
 }
@@ -55,9 +61,45 @@ fn parse(line:&str,label:&str)->Option<Launch>{
         else{label.trim().chars().take(80).collect()};
     Some(Launch{exe:exe.into(),parameters:parameters.into(),directory,label})
 }
-pub(super) fn encode(line:&str,label:&str)->Result<String,&'static str>{
-    let Some(launch)=parse(line,label)else{return Err("Nhập đường dẫn đầy đủ đến tệp .exe, rồi thêm tham số nếu cần.");};
-    if !Path::new(&launch.exe).is_file(){return Err("Không tìm thấy tệp .exe tại đường dẫn đã nhập.");}
+#[derive(Debug)]
+pub(crate) struct PinError {pub message:&'static str,pub suggestion:Option<String>}
+fn corrected_path(path:&str,exists:&impl Fn(&str)->bool)->Option<String>{
+    if !Path::new(path).is_absolute()||exists(path){return None;}
+    let repaired=unescape_path(path);
+    (repaired!=path&&exists(&repaired)).then_some(repaired)
+}
+fn quote(path:&str)->String{
+    if path.chars().any(char::is_whitespace){format!("\"{path}\"")}else{path.into()}
+}
+fn suggest_repair(launch:&Launch,exists:&impl Fn(&str)->bool)->Option<String>{
+    let repaired_exe=corrected_path(&launch.exe,exists);
+    if !exists(&launch.exe)&&repaired_exe.is_none(){return None;}
+    let (script,tail)=if let Some(value)=launch.parameters.strip_prefix('"'){
+        value.split_once('"').unwrap_or(("",launch.parameters.as_str()))
+    }else{
+        let split=launch.parameters.find(char::is_whitespace).unwrap_or(launch.parameters.len());
+        launch.parameters.split_at(split)
+    };
+    // A Python script is a known file argument. Leave arbitrary options and
+    // other applications' argument strings alone.
+    let python=Path::new(&repaired_exe.as_deref().unwrap_or(&launch.exe)).file_stem()
+        .and_then(|stem|stem.to_str()).is_some_and(|stem|matches!(stem.to_ascii_lowercase().as_str(),"python"|"pythonw"));
+    let corrected_script=(python&&[".py",".pyw"].iter().any(|ext|script.to_ascii_lowercase().ends_with(ext)))
+        .then(||corrected_path(script,exists)).flatten();
+    if repaired_exe.is_none()&&corrected_script.is_none(){return None;}
+    let exe=quote(repaired_exe.as_deref().unwrap_or(&launch.exe));
+    let params=corrected_script.map_or_else(||launch.parameters.clone(),|value|format!("{}{tail}",quote(&value)));
+    Some(if params.is_empty(){exe}else{format!("{exe} {params}")})
+}
+pub(super) fn encode(line:&str,label:&str)->Result<String,PinError>{
+    let Some(launch)=parse(line,label)else{return Err(PinError{message:"Nhập đường dẫn đầy đủ đến tệp .exe, rồi thêm tham số nếu cần.",suggestion:None});};
+    let exists=|path:&str|Path::new(path).is_file();
+    if let Some(suggestion)=suggest_repair(&launch,&exists){
+        return Err(PinError{message:"Đường dẫn có dấu gạch thừa. Kiểm tra gợi ý rồi bấm Ghim lệnh lần nữa.",suggestion:Some(suggestion)});
+    }
+    if !absolute_exe(&launch.exe)||!exists(&launch.exe){
+        return Err(PinError{message:"Không tìm thấy tệp .exe tại đường dẫn đã nhập.",suggestion:None});
+    }
     Ok(key(&launch))
 }
 fn key(launch:&Launch)->String{
@@ -69,7 +111,7 @@ fn key(launch:&Launch)->String{
     for byte in value.to_string().bytes(){let _=write!(key,"{byte:02x}");}
     key
 }
-pub(super) fn decode(value:&str)->Option<Launch>{
+pub(crate) fn decode(value:&str)->Option<Launch>{
     let bytes=value.strip_prefix(PREFIX)?.as_bytes();
     if bytes.len()%2!=0||bytes.len()>30000{return None;}
     let digit=|b|match b{b'0'..=b'9'=>Some(b-b'0'),b'a'..=b'f'=>Some(b-b'a'+10),_=>None};
@@ -78,7 +120,7 @@ pub(super) fn decode(value:&str)->Option<Launch>{
     (absolute_exe(&exe)&&Path::new(&directory).is_absolute()&&[&exe,&parameters,&directory,&label].into_iter()
         .all(|s|!s.chars().any(char::is_control))).then_some(Launch{exe,parameters,directory,label})
 }
-pub(super) unsafe fn open(value:&str)->isize{
+pub(crate) unsafe fn open(value:&str)->isize{
     use windows_sys::Win32::UI::{Shell::ShellExecuteW,WindowsAndMessaging::SW_SHOWNORMAL};
     use crate::desktop::wide;
     let command=decode(value);
@@ -92,6 +134,17 @@ pub(super) unsafe fn open(value:&str)->isize{
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn offers_verified_markdown_escape_correction_without_changing_options(){
+        let bad=parse(r#"E:\PandaTV\_Studio\venv\Scripts\pythonw\.exe "E:\PandaTV\_Studio\main.py" --mode literal\_arg"#,"PandaTV").unwrap();
+        let good_exe=r"E:\PandaTV_Studio\venv\Scripts\pythonw.exe";
+        let good_script=r"E:\PandaTV_Studio\main.py";
+        let exists=|s:&str|s==good_exe||s==good_script;
+        assert_eq!(suggest_repair(&bad,&exists),Some(format!(r"{good_exe} {good_script} --mode literal\_arg")));
+        assert!(suggest_repair(&bad,&|_|false).is_none());
+        let legitimate=parse(r"E:\Path\_tools\pythonw.exe E:\Path\_tools\main.py","Tools").unwrap();
+        assert!(suggest_repair(&legitimate,&|_|true).is_none());
+    }
     #[test]
     fn python_script_keeps_arguments_and_uses_script_directory(){
         let launch=parse(r#"E:\PandaTV\_Studio\venv\Scripts\pythonw.exe "E:\PandaTV\_Studio\main.py" --Title "A & B""#,"").unwrap();

@@ -21,6 +21,22 @@ test('command pin sends the full executable and argument string intact',()=>{
   $('dockPinSubmit').onclick();
   assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'dockPinCommand',command,label:'PandaTV'});
 });
+test('native shell buttons are opt-in and do not issue a taskbar hide command',()=>{
+  context.syncDockSettings({dock:{nativeShellButtons:false}});
+  assert.equal($('dockShellButtons').value,'local');
+  $('dockShellButtons').onchange({target:{value:'windows'}});
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'dock',nativeShellButtons:true});
+});
+test('a command correction waits for the user to apply it',()=>{
+  $('dockPinCommand').focus=()=>{};
+  $('dockPinCommand').value='original';
+  context.setDockPinResult({message:'Path was not found',suggestion:'verified command'});
+  assert.equal($('dockPinCommand').value,'original');
+  assert.equal($('dockPinCorrection').hidden,false);
+  $('dockPinCorrection').onclick();
+  assert.equal($('dockPinCommand').value,'verified command');
+  assert.equal($('dockPinCorrection').hidden,true);
+});
 test('editing one module preserves the other module and scope',()=>{
   $('dockEnabled').checked=true;$('dockEnabled').listeners.change();
   const message=messages.pop();assert.equal(message.t,'dock');assert.equal(message.enabled,true);

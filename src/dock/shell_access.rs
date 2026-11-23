@@ -28,6 +28,9 @@ impl Target {
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub(super) enum Route { Native, Launcher, Hub, Calendar }
+pub(super) fn local_buttons(takeover_active:bool,native_opt_in:bool)->bool{
+    takeover_active||!native_opt_in
+}
 pub(super) fn route(dock_mode:bool,target:Target,context:bool)->Route{
     match (dock_mode,target,context){
         (true,Target::Start,false)=>Route::Launcher,
@@ -235,6 +238,13 @@ unsafe fn open_native(target:Target,anchor:Option<Anchor>,owner:HWND,control:HWN
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn default_buttons_are_local_even_before_hide_and_after_recovery(){
+        assert!(local_buttons(false,false));
+        assert!(local_buttons(true,false));
+        assert!(local_buttons(true,true));
+        assert!(!local_buttons(false,true));
+    }
     #[test]
     fn dock_mode_never_routes_mouse_or_keyboard_shell_buttons_to_explorer(){
         for target in Target::ALL{

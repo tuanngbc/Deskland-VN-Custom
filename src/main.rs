@@ -108,7 +108,7 @@ const WM_OPEN_SETTINGS: u32 = WM_APP + 2;
 const WM_OPEN_LAUNCHER: u32 = WM_APP + 3;
 const WM_OPEN_DOCK_LAUNCHER: u32 = WM_APP + 79;
 const CMD_DOCK_LAUNCHER: usize = 140;
-thread_local!{static DOCK_LAUNCH_POINT: Cell<Option<POINT>>=const{Cell::new(None)};}
+thread_local!{static DOCK_LAUNCH_POINT: Cell<Option<launcher::DockAnchor>>=const{Cell::new(None)};}
 const CMD_EXIT: usize = 199;
 const HOTKEY_SAVER: i32 = 1;
 const HOTKEY_LAUNCHER: i32 = 2;
@@ -298,7 +298,7 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
             0
         }
         WM_OPEN_DOCK_LAUNCHER => {
-            DOCK_LAUNCH_POINT.with(|c|c.set(Some(POINT{x:w as i32,y:l as i32})));
+            DOCK_LAUNCH_POINT.with(|c|c.set(Some(launcher::DockAnchor::decode(w,l))));
             PENDING_CMD.with(|c|c.set(CMD_DOCK_LAUNCHER));
             0
         }
@@ -2120,6 +2120,7 @@ fn main() {
         eprintln!("Trial initialization refused: {error}");
         std::process::exit(2);
     }
+    if let Some(code)=dock::tray_poc::dispatch(&args){std::process::exit(code);}
     if args.iter().any(|a|a=="--trial-fixture-pids") {
         let Some(raw)=arg_value(&args,"--trial-fixture-pids") else {std::process::exit(2);};
         if trial::configure_demo(&raw).is_err(){std::process::exit(2);}
@@ -3013,12 +3014,13 @@ fn main() {
                 "dock" => {
                     // Partial UI patch must preserve pins/unknown monitor settings.
                     let mut value=app.cfg.dock.json();
-                    for key in ["enabled","stageEnabled","allWindows","stageSide","dockDisplay","stageDisplay","appearance"] {
+                    for key in ["enabled","stageEnabled","allWindows","nativeShellButtons","stageSide","dockDisplay","stageDisplay","appearance"] {
                         if let Some(v)=m.get(key){value[key]=v.clone();}
                     }
                     app.cfg.dock=dock::Options::from_json(&value);app.configure_dock();web_changed=true;
                 }
                 "dockPinCommand" => {
+                    let mut suggestion=None;
                     let (ok,message)=match dock::create_command_pin(&s_("command"),&s_("label")){
                         Ok(pin) if app.cfg.dock.pinned.iter().any(|p|p==&pin)=>(false,"Lệnh này đã được ghim."),
                         Ok(_) if app.cfg.dock.pinned.len()>=32=>(false,"Dock đã đủ 32 mục ghim."),
@@ -3028,9 +3030,9 @@ fn main() {
                             web_changed=true;
                             (true,"Đã ghim lệnh vào Dock.")
                         }
-                        Err(message)=>(false,message),
+                        Err(error)=>{suggestion=error.suggestion;(false,error.message)},
                     };
-                    web::post(&serde_json::json!({"t":"dockPinResult","ok":ok,"message":message}).to_string());
+                    web::post(&serde_json::json!({"t":"dockPinResult","ok":ok,"message":message,"suggestion":suggestion}).to_string());
                 }
                 "dockTaskbar" => {
                     if let Some(hidden)=m["hidden"].as_bool(){

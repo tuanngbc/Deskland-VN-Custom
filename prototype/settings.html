@@ -150,16 +150,20 @@
     <label class="setting-row"><b>Chế độ</b><select id="dockShellMode" aria-describedby="taskbarTakeoverStatus">
       <option value="windows">Tương thích Windows</option><option value="dock">Deskland Dock · Ẩn taskbar</option>
     </select></label>
-    <p class="dock-section-copy">Tương thích dùng Start và khay của Windows. Chế độ Dock dùng Launcher, tiện ích và lịch của Deskland.</p>
+    <label class="setting-row"><b>Nút Start, ^ và lịch trên Dock</b><select id="dockShellButtons" aria-describedby="dockShellButtonsHint">
+      <option value="local">Giao diện Deskland</option><option value="windows">Giao diện Windows</option>
+    </select></label>
+    <p class="dock-section-copy" id="dockShellButtonsHint">Nút Deskland không mở lại taskbar. Giao diện Windows chỉ dùng ở chế độ hiện taskbar.</p>
     <p class="monitor-detail">Chỉ áp dụng cho phiên này. Ctrl+Alt+Shift+F12 để hiện lại thanh Windows.</p>
     <p class="monitor-detail" id="taskbarTakeoverStatus" role="status" aria-live="polite"></p>
   </section>
-  <section class="setting-card">
+  <section class="setting-card dock-command-card">
     <h3>Ghim lệnh vào Dock</h3>
     <p class="dock-section-copy">Dán đường dẫn đến tệp .exe và tham số. Anh cũng có thể ghim tệp .lnk có sẵn từ menu chuột phải trên Dock.</p>
     <label class="setting-row"><b>Lệnh</b><input id="dockPinCommand" type="text" maxlength="4096" spellcheck="false" placeholder="C:\Tools\pythonw.exe &quot;D:\Project\main.py&quot;"></label>
     <label class="setting-row"><b>Tên hiển thị (tùy chọn)</b><input id="dockPinLabel" type="text" maxlength="80" placeholder="Ví dụ: PandaTV Studio"></label>
-    <button id="dockPinSubmit" type="button">Ghim lệnh</button>
+    <div class="dock-command-actions"><button class="ghost-btn primary" id="dockPinSubmit" type="button">Ghim lệnh</button>
+      <button class="ghost-btn" id="dockPinCorrection" type="button" hidden>Dùng đường dẫn đã sửa</button></div>
     <p id="dockPinStatus" class="monitor-detail" role="status" aria-live="polite"></p>
   </section>
   <section class="setting-card dock-placement">
@@ -1078,12 +1082,25 @@ function renderDockPlacement(){
   }).join(''):'<p>'+esc(dockText('dockDisplayNone'))+'</p>';
 }
 let shellModePending=false;
+function setDockPinResult(result){
+  $('dockPinStatus').textContent=result.message||'';
+  const correction=$('dockPinCorrection');
+  correction.hidden=!result.suggestion;
+  correction.onclick=result.suggestion?()=>{
+    $('dockPinCommand').value=result.suggestion;
+    correction.hidden=true;
+    $('dockPinCommand').focus();
+  }:null;
+  if(result.ok){$('dockPinCommand').value='';$('dockPinLabel').value='';}
+}
 function submitDockPin(){
   const command=$('dockPinCommand').value.trim();
   if(!command){$('dockPinStatus').textContent='Nhập lệnh cần ghim.';return;}
   send({t:'dockPinCommand',command,label:$('dockPinLabel').value.trim()});
 }
 $('dockPinSubmit').onclick=submitDockPin;
+$('dockPinCommand').oninput=()=>{$('dockPinCorrection').hidden=true;};
+$('dockShellButtons').onchange=e=>send({t:'dock',nativeShellButtons:e.target.value==='windows'});
 $('dockPinCommand').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();submitDockPin();}};
 function syncDockTaskbar(m){
   const control=$('dockShellMode');
@@ -1101,6 +1118,7 @@ function syncDockSettings(m) {
   if(typeof m.wallpaperEnabled==='boolean')$('dockWallpaperEnabled').checked=m.wallpaperEnabled;
   $('dockEnabled').checked=!!dockOptions.enabled;
   syncDockTaskbar(m);
+  $('dockShellButtons').value=dockOptions.nativeShellButtons?'windows':'local';
   $('dockStageEnabled').checked=!!dockOptions.stageEnabled;
   $('dockAllWindows').checked=!!dockOptions.allWindows;
   $('dockStageSide').value=dockOptions.stageSide==='right'?'right':'left';
@@ -1399,8 +1417,7 @@ function onHost(m) {
   } else if (m.t === 'dockState') {
     syncDockSettings(m);
   } else if (m.t === 'dockPinResult') {
-    $('dockPinStatus').textContent=m.message||'';
-    if(m.ok){$('dockPinCommand').value='';$('dockPinLabel').value='';}
+    setDockPinResult(m);
   } else if (m.t === 'dockTaskbarState') {
     syncDockTaskbar(m);
   } else if (m.t === 'settingsSaveError') {
