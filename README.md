@@ -140,7 +140,7 @@ Dự án dùng [GPL-3.0](LICENSE). Xem [thông báo bên thứ ba](THIRD_PARTY_N
 ## Nguồn gốc và ghi nhận phát triển
 
 - **Deskland** — [BLEZZ0102/Deskland](https://github.com/BLEZZ0102/Deskland) là dự án gốc và nền tảng hình nền động.
-- **Deskland-VN** — [nhhoang188/Deskland-VN](https://github.com/nhhoang188/Deskland-VN) là nguồn của các chủ đề được chuyển sang TLauncher và phần bản địa hóa tiếng Việt, với đóng góp về hình nền đa màn hình.
-- **TLauncher** — [tuanngbc](https://github.com/tuanngbc) phát triển và duy trì bản fork [tuanngbc/TLauncher](https://github.com/tuanngbc/TLauncher). Các tính năng bổ sung gồm Dock, Stage Manager, Start, Spotlight, chế độ thanh tác vụ, trung tâm điều khiển, lịch và chỉ số hệ thống, đồng hồ desktop native, chụp và quay màn hình, phím tắt tùy chỉnh và Cài đặt tích hợp. TLauncher cũng phát triển thêm bộ dựng hình nền Rust, thời tiết theo vị trí và bóng đổ theo Mặt Trời trên nền tảng được kế thừa.
+- **Deskland-VN** — [nhhoang188/Deskland-VN](https://github.com/nhhoang188/Deskland-VN) là nguồn của các chủ đề được chuyển sang TLauncher và phần bản địa hóa tiếng Việt.
+- **TLauncher** — [tuanngbc](https://github.com/tuanngbc) phát triển và duy trì bản fork [tuanngbc/TLauncher](https://github.com/tuanngbc/TLauncher). Các tính năng bổ sung gồm Dock, Stage Manager, Start, Spotlight, chế độ thanh tác vụ, trung tâm điều khiển, lịch và chỉ số hệ thống, đồng hồ desktop native, chụp và quay màn hình, phím tắt tùy chỉnh và Cài đặt tích hợp. Trên nền hình nền được kế thừa, tuanngbc phát triển bộ dựng hình Rust và hệ thống đa màn hình của TLauncher: đồng bộ, cảnh riêng từng màn, toàn cảnh nối qua các màn, và bố trí Dock, Stage, đồng hồ theo từng màn. Thời tiết theo vị trí và bóng đổ theo Mặt Trời cũng là phần TLauncher phát triển thêm.
 
 Xem [NOTICE](NOTICE), [ghi nhận gốc của Deskland-VN](third_party/deskland-vn/NOTICE) và [nguồn thiết kế đồng hồ](assets/widget/NOTICE.txt).
