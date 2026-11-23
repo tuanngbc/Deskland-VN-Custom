@@ -1,7 +1,7 @@
 //! Opt-in Win tap detection. Physical inputs always continue through the
 //! hook chain; the only synthesized events are a one-shot menu mask pair.
-use std::{cell::Cell, mem::{size_of, zeroed}, ptr::null_mut, sync::mpsc, thread::JoinHandle};
-use windows_sys::Win32::{Foundation::*, System::{LibraryLoader::GetModuleHandleW,Threading::GetCurrentThreadId},
+use std::{cell::Cell, mem::{size_of, zeroed}, ptr::null_mut, sync::{Arc,mpsc}, thread::JoinHandle};
+use windows_sys::Win32::{Foundation::*, System::{LibraryLoader::GetModuleHandleW,Threading::{CreateEventW,SetEvent,INFINITE}},
     UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*}};
 
 pub(super) const NOTICE:u32=WM_APP+57;
@@ -41,10 +41,16 @@ thread_local! {
     static MASK_FAILED:Cell<bool>=const{Cell::new(false)};
 }
 
-pub(super) struct Hook { tid:u32, thread:Option<JoinHandle<()>>, pub ticket:usize }
+struct Quit(usize);
+impl Drop for Quit{fn drop(&mut self){unsafe{CloseHandle(self.0 as HANDLE);}}}
+
+pub(super) struct Hook { quit:Arc<Quit>, thread:Option<JoinHandle<()>>, pub ticket:usize }
 impl Hook {
     pub fn install(target:HWND,ticket:usize)->Result<Self,String>{
         let target=target as usize;
+        let handle=unsafe{CreateEventW(std::ptr::null(),1,0,std::ptr::null())};
+        if handle.is_null(){return Err(format!("CreateEventW: {}",unsafe{GetLastError()}));}
+        let quit=Arc::new(Quit(handle as usize));let thread_quit=quit.clone();
         let (ready,answer)=mpsc::sync_channel(1);
         let thread=std::thread::Builder::new().name("Deskland Win tap".into()).spawn(move||unsafe{
             let mut msg:MSG=zeroed();
@@ -62,13 +68,21 @@ impl Hook {
                 if !matches!(vk,0x10..=0x12)&&GetAsyncKeyState(vk)<0{keys.edge(vk as u32,true,false,0);}
             }
             keys.cancel();KEYS.set(keys);TARGET.set((target,ticket));
-            if ready.send(Ok(GetCurrentThreadId())).is_ok(){
-                while GetMessageW(&mut msg,null_mut(),0,0)>0 {DispatchMessageW(&msg);}
+            if ready.send(Ok(())).is_ok(){
+                let quit=thread_quit.0 as HANDLE;
+                'messages:loop{
+                    let r=MsgWaitForMultipleObjectsEx(1,&quit,INFINITE,QS_ALLINPUT,MWMO_INPUTAVAILABLE);
+                    if r!=WAIT_OBJECT_0+1{break;}
+                    while PeekMessageW(&mut msg,null_mut(),0,0,PM_REMOVE)!=0{
+                        if msg.message==WM_QUIT{break 'messages;}
+                        DispatchMessageW(&msg);
+                    }
+                }
             }
             TARGET.set((0,0));UnhookWindowsHookEx(mouse);UnhookWindowsHookEx(keyboard);
         }).map_err(|e|e.to_string())?;
         match answer.recv(){
-            Ok(Ok(tid))=>Ok(Self{tid,thread:Some(thread),ticket}),
+            Ok(Ok(()))=>Ok(Self{quit,thread:Some(thread),ticket}),
             other=>{let _=thread.join();Err(other.ok().and_then(Result::err).unwrap_or_else(||"Luồng phím Win đã dừng.".into()))}
         }
     }
@@ -77,8 +91,8 @@ impl Hook {
 }
 impl Drop for Hook {
     fn drop(&mut self){
-        let posted=unsafe{PostThreadMessageW(self.tid,WM_QUIT,0,0)!=0};
-        if let Some(thread)=self.thread.take(){if posted||thread.is_finished(){let _=thread.join();}}
+        unsafe{SetEvent(self.quit.0 as HANDLE);}
+        if let Some(thread)=self.thread.take(){let _=thread.join();}
     }
 }
 
@@ -130,6 +144,16 @@ mod tests{
         assert!(!old.win_key_start);
         old.win_key_start=true;
         assert!(super::super::Options::from_json(&old.json()).win_key_start);
+    }
+    #[test]
+    #[ignore="install and remove low-level hooks only in isolated Windows CI"]
+    fn native_hook_thread_installs_and_unhooks_without_synthetic_keys(){
+        let hook=Hook::install(null_mut(),1).expect("hook thread and message queue available");
+        assert!(!hook.finished());
+        drop(hook);
+        let hook=Hook::install(null_mut(),2).expect("hook can be restarted after cleanup");
+        assert!(!hook.finished());
+        drop(hook);
     }
     fn key(k:&mut Keys,v:u16,d:bool)->bool{k.edge(u32::from(v),d,false,11)}
     #[test] fn either_win_and_repeats_toggle_once_per_release(){

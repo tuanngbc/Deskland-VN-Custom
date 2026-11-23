@@ -818,7 +818,6 @@ fn web_init(app: &App) -> serde_json::Value {
         "dockDisplays": dock::display_json(),
         "dockRunning": app.dock_runtime.as_ref().is_some_and(|r|!r.finished()),
         "dockError": app.dock_error,
-        "dockWinKeyStatus": app.dock_win_key_status,
         "miniToolsHotkeys": TOOL_HOTKEYS.with(|c|c.get()),
         "autostartWarn": false,
         "interactions": app.interactions_enabled,
@@ -869,6 +868,7 @@ fn web_init(app: &App) -> serde_json::Value {
         },
     });
     init["dockTaskbarHidden"]=serde_json::Value::Bool(app.dock_taskbar_hidden);
+    init["dockWinKeyStatus"]=serde_json::json!(app.dock_win_key_status);
     init["dockTaskbarPending"]=serde_json::Value::Bool(app.dock_taskbar_pending);
     init["dockTaskbarMessage"]=serde_json::Value::String(app.dock_taskbar_message.clone());
     init
