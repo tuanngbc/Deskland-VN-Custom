@@ -12,7 +12,7 @@ pub(super) enum Command {
     #[cfg(test)] Inspect { reply:Sender<Vec<usize>>, paint:bool },
 }
 #[derive(Debug)]
-pub enum Event { Edit(super::Edit), Error(String), Utility(super::HostAction), Taskbar{hidden:bool,pending:bool,message:String} }
+pub enum Event { Edit(super::Edit), Error(String), Utility(super::HostAction), WinKey(String), Taskbar{hidden:bool,pending:bool,message:String} }
 
 pub struct Runtime {
     control: usize,

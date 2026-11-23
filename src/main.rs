@@ -11,6 +11,7 @@ mod solar;
 mod lock;
 mod settings;
 mod launcher;
+mod native_text;
 mod dock;
 mod mini_tools;
 mod web;
@@ -817,6 +818,7 @@ fn web_init(app: &App) -> serde_json::Value {
         "dockDisplays": dock::display_json(),
         "dockRunning": app.dock_runtime.as_ref().is_some_and(|r|!r.finished()),
         "dockError": app.dock_error,
+        "dockWinKeyStatus": app.dock_win_key_status,
         "miniToolsHotkeys": TOOL_HOTKEYS.with(|c|c.get()),
         "autostartWarn": false,
         "interactions": app.interactions_enabled,
@@ -995,6 +997,7 @@ struct App {
     system_monitor: Option<system_monitor::Monitor>,
     dock_runtime: Option<dock::Runtime>,
     dock_error: Option<String>,
+    dock_win_key_status: String,
     dock_taskbar_hidden:bool,
     dock_taskbar_pending:bool,
     dock_taskbar_message:String,
@@ -1014,7 +1017,7 @@ impl App {
         self.dock_error=None;
         if self.saver || self.headless || !self.cfg.dock.any_enabled() {self.dock_runtime=None;
             if self.dock_taskbar_hidden||self.dock_taskbar_pending {self.dock_taskbar_message="Đã hiện lại thanh Windows khi tắt Dock.".into();}
-            self.dock_taskbar_hidden=false;self.dock_taskbar_pending=false;}
+            self.dock_taskbar_hidden=false;self.dock_taskbar_pending=false;self.dock_win_key_status="off".into();}
         else if let Some(runtime)=self.dock_runtime.as_ref() {runtime.configure(self.cfg.dock.clone());}
         else {match dock::Runtime::new(self.cfg.dock.clone(),self.owner as usize) {
             Ok(runtime)=>self.dock_runtime=Some(runtime),
@@ -1026,7 +1029,7 @@ impl App {
         if !web::is_open() { return; }
         web::post(&serde_json::json!({"t":"dockState","dock":self.cfg.dock.json(),"dockDisplays":dock::display_json(),"wallpaperEnabled":self.cfg.wallpaper_enabled,
             "dockRunning":self.dock_runtime.as_ref().is_some_and(|r|!r.finished()),"dockError":self.dock_error,"dockTaskbarHidden":self.dock_taskbar_hidden,
-            "dockTaskbarPending":self.dock_taskbar_pending,"dockTaskbarMessage":self.dock_taskbar_message}).to_string());
+            "dockWinKeyStatus":self.dock_win_key_status,"dockTaskbarPending":self.dock_taskbar_pending,"dockTaskbarMessage":self.dock_taskbar_message}).to_string());
     }
     fn set_wallpaper_enabled(&mut self,on:bool)->Result<(),String> {
         if self.cfg.wallpaper_enabled==on{return Ok(());}
@@ -2388,6 +2391,7 @@ fn main() {
         system_monitor: None,
         dock_runtime:None,
         dock_error:None,
+        dock_win_key_status:"off".into(),
         dock_taskbar_hidden:false,
         dock_taskbar_pending:false,
         dock_taskbar_message:String::new(),
@@ -2615,6 +2619,7 @@ fn main() {
                 if settings::hwnd().is_some(){settings::sync(&app.settings_state());}
                 web::post(&serde_json::json!({"t":"dockTaskbarState","dockTaskbarHidden":hidden,"dockTaskbarPending":pending,"dockTaskbarMessage":message}).to_string());
             }
+            dock::Event::WinKey(status)=>{app.dock_win_key_status=status;app.post_dock_state();}
             dock::Event::Error(error)=>{log!("Dock & Stage: {error}");app.dock_error=Some(error);app.post_dock_state();}
         }}
         if dock_edited {app.configure_dock();save_config(&app.cfg);settings::sync(&app.settings_state());}
@@ -3018,7 +3023,7 @@ fn main() {
                 "dock" => {
                     // Partial UI patch must preserve pins/unknown monitor settings.
                     let mut value=app.cfg.dock.json();
-                    for key in ["enabled","stageEnabled","allWindows","nativeShellButtons","startShortcut","stageSide","dockDisplay","stageDisplay","appearance"] {
+                    for key in ["enabled","stageEnabled","allWindows","nativeShellButtons","startShortcut","winKeyStart","stageSide","dockDisplay","stageDisplay","appearance"] {
                         if let Some(v)=m.get(key){value[key]=v.clone();}
                     }
                     app.cfg.dock=dock::Options::from_json(&value);app.configure_dock();web_changed=true;

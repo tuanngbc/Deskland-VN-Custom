@@ -198,7 +198,7 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     let min_icon=(style.icon_size.min(29) as f32)*scale;
     let app_gap=if host&&apps>0{group_gap}else{0.0};
     let minimum=if apps>0{gaps+app_gap+min_icon*(apps as f32+spill)}else{0.0};
-    let metric_span=(if vertical{91.0}else{128.0})*scale;
+    let metric_span=(if vertical{96.0}else{146.0})*scale;
     let inline_metrics=host&&cluster.inline_metrics&&widgets.contains(&UtilityWidget::Metrics)
         && minimum+span(0)+metric_span+gap<=content;
     let extras=if inline_metrics{metric_span+gap}else{0.0};

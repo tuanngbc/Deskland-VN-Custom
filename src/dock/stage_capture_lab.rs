@@ -2,21 +2,7 @@
 //! No desktop/display capture, inactive app capture, or production integration.
 use super::{Box2, Card, Layer};
 use crate::desktop::wide;
-use std::{ptr::null_mut, sync::mpsc, time::{Duration, Instant}};
-use windows::{
-    core::{factory, Interface},
-    Foundation::TypedEventHandler,
-    Graphics::{Capture::{Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession},
-        DirectX::{Direct3D11::IDirect3DDevice, DirectXPixelFormat}},
-    Win32::{Foundation::{HMODULE, HWND as OwnedWindow}, Graphics::{
-        Direct3D::D3D_DRIVER_TYPE_HARDWARE, Direct3D11::*,
-        Dxgi::{Common::DXGI_FORMAT_B8G8R8A8_UNORM, IDXGIDevice, IDXGIAdapter}},
-        System::WinRT::{
-            Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess},
-            Graphics::Capture::IGraphicsCaptureItemInterop,
-            RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED,
-        }},
-};
+use std::{ptr::null_mut, time::Instant};
 use windows_sys::Win32::{Foundation::*, Graphics::{Dwm::DwmFlush, Gdi::*},
     System::LibraryLoader::GetModuleHandleW, UI::WindowsAndMessaging::*};
 
@@ -82,87 +68,6 @@ unsafe fn allowed(hwnd: HWND) -> bool {
         && GetWindowDisplayAffinity(hwnd,&mut affinity) != 0 && affinity == WDA_NONE
 }
 
-unsafe fn snapshot(fixture: &Fixture) -> Result<(Vec<u8>,i32,i32),String> {
-    if !allowed(fixture.0) { return Err("fixture identity or affinity denied".into()); }
-    fn step<T>(s:&str,r:windows::core::Result<T>)->Result<T,String>{r.map_err(|e|format!("{s}: {e}"))}
-    step("RoInitialize",RoInitialize(RO_INIT_MULTITHREADED))?;
-    struct Apartment;
-    impl Drop for Apartment { fn drop(&mut self){unsafe{RoUninitialize();}} }
-    let _apartment=Apartment;
-    if !step("WGC support",GraphicsCaptureSession::IsSupported())? {
-        return Err("WGC not supported on this session".into());
-    }
-    let mut device=None;
-    let mut context=None;
-    step("D3D11 hardware device",D3D11CreateDevice(None::<&IDXGIAdapter>,D3D_DRIVER_TYPE_HARDWARE,
-        HMODULE::default(),D3D11_CREATE_DEVICE_BGRA_SUPPORT,None,D3D11_SDK_VERSION,
-        Some(&mut device),None,Some(&mut context)))?;
-    let device=device.ok_or("missing D3D11 device")?;
-    let context=context.ok_or("missing D3D11 context")?;
-    let dxgi=step("DXGI device",device.cast::<IDXGIDevice>())?;
-    let inspectable=step("WinRT D3D11 device",CreateDirect3D11DeviceFromDXGIDevice(&dxgi))?;
-    let winrt=step("IDirect3DDevice",inspectable.cast::<IDirect3DDevice>())?;
-    let interop=step("WGC item factory",factory::<GraphicsCaptureItem,IGraphicsCaptureItemInterop>())?;
-    let item:GraphicsCaptureItem=step("CreateForWindow",interop.CreateForWindow(OwnedWindow(fixture.0)))?;
-    let size=step("WGC item size",item.Size())?;
-    if size.Width<1||size.Height<1||size.Width>512||size.Height>320{return Err("fixture exceeds capture budget".into());}
-    let pool=step("frame pool",Direct3D11CaptureFramePool::CreateFreeThreaded(
-        &winrt,DirectXPixelFormat::B8G8R8A8UIntNormalized,1,size))?;
-    let result=(||{
-        let session=step("capture session",pool.CreateCaptureSession(&item))?;
-        let result=(||{
-            step("omit cursor",session.SetIsCursorCaptureEnabled(false))?;
-            let (tx,rx)=mpsc::sync_channel(1);
-            let notify=TypedEventHandler::new(move|_,_|{let _=tx.try_send(());Ok(())});
-            let token=step("frame event",pool.FrameArrived(&notify))?;
-            let result=(||{
-                step("StartCapture",session.StartCapture())?;
-                rx.recv_timeout(Duration::from_secs(2)).map_err(|_|"no WGC frame within 2 s")?;
-                let frame=step("read first frame",pool.TryGetNextFrame())?;
-                let result=(||{
-                    let size=step("frame content size",frame.ContentSize())?;
-                    if size.Width<1||size.Height<1||size.Width>512||size.Height>320{
-                        return Err("frame resized beyond the fixture limit".into());
-                    }
-                    let surface=step("frame surface",frame.Surface())?;
-                    let interop=step("surface DXGI access",surface.cast::<IDirect3DDxgiInterfaceAccess>())?;
-                    let texture:ID3D11Texture2D=step("frame texture",interop.GetInterface())?;
-                    let mut desc=D3D11_TEXTURE2D_DESC::default();
-                    texture.GetDesc(&mut desc);
-                    let (w,h)=(size.Width as u32,size.Height as u32);
-                    if desc.Format!=DXGI_FORMAT_B8G8R8A8_UNORM||desc.Width<w||desc.Height<h||
-                        desc.Width>512||desc.Height>320||desc.SampleDesc.Count!=1{
-                        return Err("unexpected WGC texture format or size".into());
-                    }
-                    desc.Width=w;desc.Height=h;desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;
-                    desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ.0 as _;desc.MiscFlags=0;
-                    let mut staging=None;
-                    step("fixture staging texture",device.CreateTexture2D(&desc,None,Some(&mut staging)))?;
-                    let staging=staging.ok_or("missing staging texture")?;
-                    let region=D3D11_BOX{left:0,top:0,front:0,right:w,bottom:h,back:1};
-                    context.CopySubresourceRegion(&staging,0,0,0,0,&texture,0,Some(&region));
-                    let mut mapped=D3D11_MAPPED_SUBRESOURCE::default();
-                    step("read back fixture texture",context.Map(&staging,0,D3D11_MAP_READ,0,Some(&mut mapped)))?;
-                    let pitch=w as usize*4;
-                    let mut bytes=vec![0;pitch*h as usize];
-                    for (y,row) in bytes.chunks_exact_mut(pitch).enumerate(){
-                        std::ptr::copy_nonoverlapping((mapped.pData as *const u8).add(y*mapped.RowPitch as usize),row.as_mut_ptr(),pitch);
-                    }
-                    context.Unmap(&staging,0);
-                    Ok((bytes,w as i32,h as i32))
-                })();
-                let _=frame.Close();
-                result
-            })();
-            let _=pool.RemoveFrameArrived(token);
-            result
-        })();
-        let _=session.Close();
-        result
-    })();
-    let _=pool.Close();
-    result
-}
 
 #[test]
 #[ignore = "requires an isolated interactive Windows graphics session"]
@@ -173,7 +78,7 @@ fn native_wgc_projects_one_owned_hwnd_or_reports_blocked() {
     let status=unsafe{
         let fixture=window();
         assert!(!allowed(GetDesktopWindow()),"the desktop is never an eligible source");
-        let captured=snapshot(&fixture);
+        let captured=crate::dock::stage_snapshot::frame(fixture.0,||allowed(fixture.0));
         if SetWindowDisplayAffinity(fixture.0,WDA_EXCLUDEFROMCAPTURE)!=0{
             assert!(!allowed(fixture.0),"protected fixture must be rejected");
         }

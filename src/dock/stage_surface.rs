@@ -138,6 +138,16 @@ impl Layout {
         self.close_button(i).is_some_and(|b|b.hit(x,y))
     }
     pub fn preview(self,i:usize)->RECT{self.preview_layer(i,0).0}
+    pub fn portrait_preview(self,i:usize)->RECT{
+        let c=self.card(i);let mut slot=self.preview(i);
+        if self.landscape&&self.stack_design{
+            slot.top=c.y+(self.inset/3).max(2);
+            // Shift inward from the detached app icon, mirrored on the right.
+            let shift=(c.w/14).min(self.inset*2);
+            if self.right{slot.right-=2*shift;}else{slot.left+=2*shift;}
+        }
+        slot
+    }
     pub fn preview_layer(self,i:usize,depth:usize)->(RECT,Option<RECT>){
         let c=self.rear(i,depth as i32);let p=self.inset.max(2);
         let mut slot=RECT{left:c.x+p,top:c.y+p,right:c.x+c.w-p,bottom:c.y+c.h-self.caption};
@@ -157,10 +167,13 @@ impl Layout {
         (slot,Some(RECT{top:top+margin,bottom:bottom-margin,..clip}))
     }
     pub fn member_hit(self,i:usize,x:i32,y:i32)->Option<usize>{
+        self.member_hit_custom(i,x,y,None)
+    }
+    pub fn member_hit_custom(self,i:usize,x:i32,y:i32,front:Option<bool>)->Option<usize>{
         if i>=self.count{return None;}
         if self.stack_design&&self.detached_icon(i).hit(x,y){return Some(0);}
         let inside=|b:Box2|b.hit(x,y)&&distance(b.rect(),self.radius.min(b.h/2) as f32,x as f32+0.5,y as f32+0.5)<=0.0;
-        (0..self.depth(i)).find(|&layer|inside(self.rear(i,layer as i32)))
+        (0..self.depth(i)).find(|&layer|if layer==0{front.unwrap_or_else(||inside(self.card(i)))}else{inside(self.rear(i,layer as i32))})
     }
     pub fn nav(self)->Option<Box2>{
         if !self.paged||self.count==0{return None;}
@@ -204,19 +217,18 @@ impl Layout {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Look {pub dark:bool,pub layout:Layout,pub active:u8,pub alpha:Option<u8>}
+pub(super) struct Look {pub dark:bool,pub layout:Layout,pub active:u8,pub alpha:Option<u8>,pub projected:Option<usize>}
 
 pub(super) struct Panel {layer:Layer,look:Option<Look>,static_pixels:Vec<u8>,mask:Option<Layer>,font:HFONT,large_fonts:[HFONT;2],dpi:u32,icons:IconRasters}
 impl Panel {
     pub unsafe fn new(w:i32,h:i32,dpi:u32)->Option<Self>{
         let layer=Layer::new(w,h)?;
-        let font=|size,weight|CreateFontW(-super::panel_chrome::scale(dpi,size),0,0,0,weight,0,0,0,
-            DEFAULT_CHARSET as u32,0,0,ANTIALIASED_QUALITY as u32,DEFAULT_PITCH as u32,wide("Segoe UI Variable Text").as_ptr());
-        Some(Self{layer,look:None,static_pixels:Vec::new(),mask:None,font:font(13,540),large_fonts:[font(26,540),font(22,420)],dpi,icons:IconRasters::default()})
+        let font=|size,weight|super::panel_chrome::choose_font(dpi,size,weight);
+        Some(Self{layer,look:None,static_pixels:Vec::new(),mask:None,font:font(13,560),large_fonts:[font(26,560),font(23,490)],dpi,icons:IconRasters::default()})
     }
     pub fn geometry(&self)->(i32,i32,u32){(self.layer.size.0,self.layer.size.1,self.dpi)}
     pub fn font(&self)->HFONT{self.font}
-    pub unsafe fn paint(&mut self,target:HDC,look:Look,items:&[Item],atlas:&Atlas,ready:&[bool],emphasis:Option<(usize,u8)>,layered:Option<(HWND,&[String],usize,usize,Option<usize>)>)->bool {
+    pub unsafe fn paint(&mut self,target:HDC,look:Look,items:&[Item],atlas:&Atlas,ready:&[bool],emphasis:Option<(usize,u8)>,layered:Option<(HWND,&[String],usize,usize,Option<usize>)>,snapshot:Option<&super::stage_snapshot::Preview>)->bool {
         let (w,h)=self.layer.size;
         let layout=look.layout;
         let palette=Palette::new(look.dark);
@@ -228,7 +240,7 @@ impl Panel {
             for i in 0..layout.count {
                 let b=layout.card(i).rect();
                 let radius=(layout.radius as f32).min(b.h/2.0);
-                if look.alpha.is_some(){
+                if look.alpha.is_some()&&look.projected!=Some(i){
                     let k=(layout.inset as f32*0.82).max(2.0);
                     let spread=Rect{x:b.x-k,y:b.y-k,w:b.w+2.0*k,h:b.h+2.0*k};
                     draw(data,w,h,spread,|x,y|{
@@ -245,6 +257,7 @@ impl Panel {
                     }
                     rounded(data,w,h,r,radius,c,alpha.max(205));
                 }
+                if look.projected==Some(i){continue;}
                 let active=look.active&(1<<i)!=0;
                 let edge=if active{palette.accent}else if look.dark{[102,92,82]}else{[224,215,208]};
                 let tint=if look.dark{[50,43,37]}else{[253,249,246]};
@@ -276,7 +289,13 @@ impl Panel {
                 let slot=layout.preview(i);
                 let p=Rect{x:slot.left as f32,y:slot.top as f32,w:(slot.right-slot.left) as f32,h:(slot.bottom-slot.top) as f32};
                 if p.w>0.0&&p.h>0.0 {
-                    rounded(data,w,h,p,4.0,if look.dark{[32,29,27]}else{[224,218,213]},if look.alpha.is_some(){48}else{255});
+                    draw(data,w,h,p,|x,y|{
+                        let cover=(0.5-distance(p,4.0,x,y)).clamp(0.0,1.0);
+                        let glow=(1.0-((x-(p.x+p.w*0.5)).abs()/(p.w*0.5))).clamp(0.0,1.0);
+                        let base=if look.dark{[33u8,30,29]}else{[221u8,217,213]};
+                        let ink=base.map(|v|v.saturating_add((glow*12.0) as u8));
+                        Some((ink,cover*if look.alpha.is_some(){84.0}else{255.0}))
+                    });
                 }
             }
             if let Some(nav)=layout.nav(){
@@ -286,7 +305,11 @@ impl Panel {
         }
         let data=self.layer.pixels();
         data.copy_from_slice(&self.static_pixels);
-        if let Some((i,strength))=emphasis.filter(|&(i,a)|i<layout.count&&a>0){
+        if let Some(view)=snapshot{
+            let hovered=layered.and_then(|(_,_,_,_,h)|h)==Some(view.target.index);
+            view.blend(data,w,h,hovered);
+        }
+        if let Some((i,strength))=emphasis.filter(|&(i,a)|i<layout.count&&a>0&&look.projected!=Some(i)){
             let b=layout.card(i).rect();
             let radius=(layout.radius as f32).min(b.h/2.0);
             let tint=palette.accent;
@@ -326,6 +349,15 @@ impl Panel {
                 let ink=palette.ink;
                 for (i,title) in labels.iter().enumerate(){
                     let mut r=caption_box(layout,i);
+                    if look.projected==Some(i){
+                        // No text over the sampled scene. The popup, tooltip
+                        // and context menu continue to expose its title.
+                        if let Some(button)=hover.filter(|&n|n==i).and_then(|_|layout.close_button(i)){
+                            rounded(data,w,h,button.rect(),button.w as f32/2.0,[110,66,62],255);
+                            draw_mask_scaled(data,w,h,mask,self.large_fonts[0],button,"×",true,[255,242,239],2);
+                        }
+                        continue;
+                    }
                     if let Some(button)=hover.filter(|&index|index==i).and_then(|_|layout.close_button(i)){
                         if layout.landscape&&layout.right{
                             let left=button.x+button.w+layout.inset/2;
@@ -427,7 +459,9 @@ pub(super) unsafe fn draw_mask_scaled(data:&mut[u8],w:i32,h:i32,mask:&mut Layer,
     SetBkMode(dc,TRANSPARENT as i32);SetTextColor(dc,0x00ffffff);
     let mut rect=RECT{left:0,top:0,right:mw,bottom:mh};
     let value=if center{text.to_owned()}else{fit_on_dc(dc,text,mw)};
-    DrawTextW(dc,wide(&value).as_ptr(),-1,&mut rect,DT_SINGLELINE|DT_END_ELLIPSIS|DT_VCENTER|DT_NOPREFIX|if center{DT_CENTER}else{0});
+    if !crate::native_text::draw(dc,rect,&value,font,[255;3],center,true){
+        DrawTextW(dc,wide(&value).as_ptr(),-1,&mut rect,DT_SINGLELINE|DT_END_ELLIPSIS|DT_VCENTER|DT_NOPREFIX|if center{DT_CENTER}else{0});
+    }
     GdiFlush();
     if !previous.is_null(){SelectObject(dc,previous);}
     let mask=mask.pixels();
@@ -622,8 +656,8 @@ mod tests {
             let items=(0..3).map(|_|Item{path:String::new(),title:"Fixture".into(),hwnd:null_mut(),count:1,pinned:false}).collect::<Vec<_>>();
             let labels=vec!["Fixture".to_owned();3];
             let mut panel=Panel::new(w,h,96).unwrap();
-            let layer=Look{dark:true,layout:l,active:1,alpha:Some(155)};
-            let presented=panel.paint(null_mut(),layer,&items,&Atlas::new(),&[false,true,false],Some((0,200)),Some((hwnd,&labels,0,3,None)));
+            let layer=Look{dark:true,layout:l,active:1,alpha:Some(155),projected:None};
+            let presented=panel.paint(null_mut(),layer,&items,&Atlas::new(),&[false,true,false],Some((0,200)),Some((hwnd,&labels,0,3,None)),None);
             DestroyWindow(hwnd);
             assert!(presented,"the isolated layered Stage surface must submit pixels successfully");
             let pixels=panel.layer.pixels();

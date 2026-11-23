@@ -50,10 +50,8 @@ impl Drop for MetricInk{fn drop(&mut self){unsafe{for &font in &self.fonts{if !f
 impl MetricInk{
     unsafe fn new(w:i32,h:i32,scale:f32)->Option<Self>{
         let mask=Layer::new(w,h)?;
-        let font=|size:f32,weight|CreateFontW(-(size*scale).round().max(7.0) as i32,0,0,0,weight,0,0,0,
-            DEFAULT_CHARSET as u32,0,0,ANTIALIASED_QUALITY as u32,DEFAULT_PITCH as u32,
-            crate::desktop::wide("Segoe UI Variable Text").as_ptr());
-        Some(Self{size:(w,h),fonts:[font(9.0,500),font(11.0,600),font(9.5,500)],mask,pixels:vec![0;w as usize*h as usize*4],key:None,painted_at:None})
+        let font=|size:f32,weight|crate::native_text::font_pixels((size*scale).round().max(8.0) as i32,weight);
+        Some(Self{size:(w,h),fonts:[font(10.0,540),font(12.0,630),font(11.0,550)],mask,pixels:vec![0;w as usize*h as usize*4],key:None,painted_at:None})
     }
     unsafe fn paint(&mut self,data:&mut[u8],w:i32,h:i32,x:i32,y:i32,scale:f32,cfg:MetricOptions,palette:Palette,dark:bool,vertical:bool)->bool{
         let (mw,mh)=self.size;
@@ -75,8 +73,8 @@ impl MetricInk{
                 let top=(mh-row*readings.len() as i32)/2;
                 for (i,r) in readings.iter().enumerate(){
                     let y=top+i as i32*row;
-                    write(0,Box2{x:px(3.0),y,w:px(22.0),h:row},r.label,false,palette.muted);
-                    write(1,Box2{x:px(26.0),y,w:mw-px(28.0),h:row},&r.value,false,palette.ink);
+                    write(0,Box2{x:px(3.0),y,w:px(25.0),h:row},r.label,false,palette.muted);
+                    write(1,Box2{x:px(29.0),y,w:mw-px(31.0),h:row},&r.value,false,palette.ink);
                 }
             }else{
                 let split=readings.iter().position(|r|r.network).unwrap_or(readings.len());
@@ -92,8 +90,8 @@ impl MetricInk{
                     let x=i as i32*mw/network.len() as i32;
                     let width=(i as i32+1)*mw/network.len() as i32-x;
                     let y=top+if system.is_empty(){0}else{px(28.0)};
-                    write(0,Box2{x:x+px(3.0),y,w:px(9.0),h:px(16.0)},r.label,true,palette.muted);
-                    write(2,Box2{x:x+px(13.0),y,w:width-px(13.0),h:px(16.0)},&r.value,false,palette.ink);
+                    write(0,Box2{x:x+px(3.0),y,w:px(11.0),h:px(16.0)},r.label,true,palette.muted);
+                    write(2,Box2{x:x+px(15.0),y,w:width-px(15.0),h:px(16.0)},&r.value,false,palette.ink);
                 }
             }
             self.key=Some(key);
@@ -123,7 +121,7 @@ impl ClockInk{
     unsafe fn new(w:i32,h:i32,scale:f32)->Option<Self>{
         let dpi=(scale*96.0).round() as u32;
         Some(Self{mask:Layer::new(w*2,h*2)?,pixels:vec![0;w as usize*h as usize*4],size:(w,h),
-            fonts:[super::panel_chrome::choose_font(dpi,26,510),super::panel_chrome::choose_font(dpi,22,430)],stamp:None})
+            fonts:[super::panel_chrome::choose_font(dpi,26,510),super::panel_chrome::choose_font(dpi,23,510)],stamp:None})
     }
     unsafe fn paint(&mut self,data:&mut[u8],w:i32,h:i32,x:i32,y:i32,scale:f32,p:Palette,dark:bool,vertical:bool){
         use windows_sys::Win32::{Foundation::SYSTEMTIME,System::SystemInformation::GetLocalTime};

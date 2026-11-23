@@ -27,6 +27,8 @@ mod previews;
 mod workspaces;
 mod perf;
 mod stage_surface;
+mod stage_projection;
+mod stage_snapshot;
 mod utilities;
 mod wifi;
 mod control_center;
@@ -34,6 +36,7 @@ mod panel_chrome;
 mod appbar;
 mod shell_access;
 mod taskbar_guard;
+mod win_key;
 pub(crate) mod tray_poc;
 pub(crate) mod command_pin;
 pub(crate) fn create_command_pin(line:&str,label:&str)->Result<String,command_pin::PinError>{command_pin::encode(line,label)}
@@ -243,16 +246,27 @@ struct Stage { hwnd:HWND, rail:HWND, collapsed:bool, auto_hide:bool, preview_hwn
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 enum StageTarget { Group(u64), AppGroup(usize,u32,u32), Window(usize,u32,u32), Close(usize,u32,u32), Page(usize) }
 impl Stage {
+    fn member_hit(&self,layout:stage_surface::Layout,index:usize,x:i32,y:i32)->Option<usize>{
+        let front=stage_snapshot::view(self.hwnd as usize).filter(|v|v.target.index==index).map(|v|{
+            let yaw=if self.hover==Some(index)&&!v.target.reduced{19.0}else{28.0};
+            stage_projection::Card::new(layout.card(index),layout.right,yaw).contains(x as f32+0.5,y as f32+0.5)
+        });
+        layout.member_hit_custom(index,x,y,front)
+    }
+    fn hit(&self,layout:stage_surface::Layout,x:i32,y:i32)->Option<usize>{
+        (0..layout.count).find(|&i|self.member_hit(layout,i,x,y).is_some()
+            ||self.hover==Some(i)&&layout.close_hit(i,x,y))
+    }
     unsafe fn target(&self,x:i32,y:i32)->Option<StageTarget>{
         if self.hidden{return None;}
         let layout=self.layout?;
-        if let Some(i)=layout.hit(x,y) {
+        if let Some(i)=self.hit(layout,x,y) {
             if self.hover==Some(i)&&layout.close_hit(i,x,y){
                 let hwnd=self.items.get(i)?.hwnd;
                 let (pid,tid)=window_owner(hwnd)?;
                 return Some(StageTarget::Close(hwnd as usize,pid,tid));
             }
-            let layer=layout.member_hit(i,x,y)?;
+            let layer=self.member_hit(layout,i,x,y)?;
             if !layout.stack_design||layout.icon_hit(i,x,y){
                 if let Some(id)=self.groups.get(i).copied().flatten(){return Some(StageTarget::Group(id));}
             }
@@ -659,6 +673,7 @@ fn bar_rect(screen:&Screen,items:usize)->RECT {
     RECT{left:x,top:bottom-HEIGHT,right:x+width,bottom}
 }
 unsafe fn destroy_stage(stage:&mut Stage){
+    stage_snapshot::hide(stage.hwnd as usize);
     stage.previews.clear();
     if !stage.rail.is_null(){DestroyWindow(stage.rail);}
     if !stage.preview_hwnd.is_null(){DestroyWindow(stage.preview_hwnd);}
@@ -858,6 +873,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             for (index,group) in members.iter().enumerate(){layout.layers[index]=group.len().min(5) as u8;}
         }
         if stage.items!=items || stage.groups!=groups || stage.members!=members {
+            changed|=stage_snapshot::hide(stage.hwnd as usize);
             KillTimer(stage.hwnd,STATUS_TIP_TIMER);close_status_tip(stage.hwnd);
             stage.hover=None;stage.emphasis=StageEmphasis::default();
             if stage.slide.is_none(){KillTimer(stage.hwnd,STAGE_MOTION_TIMER);}
@@ -869,6 +885,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         }
         stage.items=items;stage.groups=groups;stage.members=members;stage.selected=selected;
         if stage.layout!=Some(layout){
+            changed|=stage_snapshot::hide(stage.hwnd as usize);
             stage.layout=if stage.layered||layout.apply(stage.hwnd){Some(layout)}else{None};
             changed=true;
         }
@@ -902,14 +919,22 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         if hide {
             if stage.emphasis.start.is_some()||stage.slide.is_some(){KillTimer(stage.hwnd,STAGE_MOTION_TIMER);}
             stage.slide=None;stage.offset=0;
+            changed|=stage_snapshot::hide(stage.hwnd as usize);
             stage.hover=None;stage.emphasis=StageEmphasis::default();stage.keyboard=None;stage.pressed=None;KillTimer(stage.hwnd,STATUS_TIP_TIMER);close_status_tip(stage.hwnd);changed|=stage.previews.clear();
         }
         else if layout.width>0&&layout.height>0{
+            let projected=stage_snapshot::view(stage.hwnd as usize).and_then(|view|{
+                let valid=layout==view.target.layout&&style.stack_groups&&automatic&&stage.layered
+                    && state.prefs.appearance.reduced_motion==view.target.reduced
+                    &&stage.items.get(view.target.index).is_some_and(|it|it.hwnd as usize==view.target.source.hwnd)
+                    &&stage_snapshot::still_valid(&view);
+                if valid{Some(view.target.source.hwnd)}else{changed|=stage_snapshot::hide(stage.hwnd as usize);None}
+            });
             let host=if stage.preview_hwnd.is_null(){stage.hwnd}else{stage.preview_hwnd};
             changed|=if stage.preview_hwnd.is_null()||!automatic||!style.stack_groups{
                 stage.previews.update_traced(host,&stage.items,layout,benchmark_sources.map(|_| steps.as_mut_slice()))
             }else{
-                stage.previews.update_stacks(host,&stage.members,layout)
+                stage.previews.update_stacks(host,&stage.members,layout,projected)
             };
         }
         let mut clip_ok=true;
@@ -1028,7 +1053,7 @@ unsafe fn show_status_tip(owner:HWND){
             if let Some(layout)=stage.layout.filter(|layout|on_client&&layout.stack_design){
                 if layout.close_hit(index,cursor.x,cursor.y){return Some("Đóng cửa sổ phía trước".into());}
                 if !layout.icon_hit(index,cursor.x,cursor.y){
-                    if let Some(member)=layout.member_hit(index,cursor.x,cursor.y).and_then(|i|stage.members.get(index)?.get(i)){
+                    if let Some(member)=stage.member_hit(layout,index,cursor.x,cursor.y).and_then(|i|stage.members.get(index)?.get(i)){
                         if let Some(w)=state.windows.iter().find(|w|w.hwnd as usize==*member){
                             return Some(w.title.chars().take(512).collect());
                         }
@@ -1151,9 +1176,11 @@ unsafe fn paint(hwnd:HWND){
             if groups[i].is_some(){return item.title.clone();}
             stage_caption(&item.title,items.iter().enumerate().filter(|(j,o)|*j!=i&&groups[*j].is_none()&&o.path==item.path).map(|(_,o)|o.title.as_str()))
         }).collect::<Vec<_>>();
-        let look=stage_surface::Look{dark,layout,active:active_mask,alpha:layered.then_some((opacity*255/100) as u8)};
+        let still=stage_snapshot::view(hwnd as usize);
+        let look=stage_surface::Look{dark,layout,active:active_mask,alpha:layered.then_some((opacity*255/100) as u8),
+            projected:still.as_ref().map(|p|p.target.index)};
         if layered{EndPaint(hwnd,&ps);}
-        let rendered=panel.as_mut().is_some_and(|p|p.paint(dc,look,&items,&atlas,&ready,emphasis,layered.then_some((hwnd,&labels[..],page,pages,hover))));
+        let rendered=panel.as_mut().is_some_and(|p|p.paint(dc,look,&items,&atlas,&ready,emphasis,layered.then_some((hwnd,&labels[..],page,pages,hover)),still.as_ref()));
         if layered{
             if rendered{
                 if let Some(panel)=panel{STAGE_SURFACES.with(|s|s.borrow_mut().insert(key,panel));}
@@ -1578,6 +1605,10 @@ thread_local!{
     static TASKBAR_WATCH:RefCell<Option<taskbar_guard::Watch>>=const{RefCell::new(None)};
     static TASKBAR_HIDDEN:Cell<bool>=const{Cell::new(false)};
     static START_BOUND:Cell<bool>=const{Cell::new(false)};
+    static WIN_KEY:RefCell<Option<win_key::Hook>>=const{RefCell::new(None)};
+    static WIN_KEY_TOKEN:Cell<usize>=const{Cell::new(0)};
+    static WIN_KEY_STATE:Cell<&'static str>=const{Cell::new("")};
+    static WIN_KEY_FAILED:Cell<bool>=const{Cell::new(false)};
 }
 fn taskbar_active()->bool{TASKBAR_WATCH.with(|w|w.borrow().is_some())}
 fn taskbar_hidden()->bool{TASKBAR_HIDDEN.with(Cell::get)}
@@ -1600,6 +1631,59 @@ unsafe fn sync_start_hotkey(control:HWND,requested:bool){
     }else if !requested&&bound{
         UnregisterHotKey(control,START_HOTKEY);
         START_BOUND.with(|b|b.set(false));
+    }
+}
+fn win_key_status(status:&'static str){
+    if WIN_KEY_STATE.with(|s|s.replace(status))!=status{emit(Event::WinKey(status.into()));}
+}
+fn sync_win_key(){
+    let on=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.win_key_start&&!s.suspended});
+    let allowed=on&&taskbar_hidden()&&!crate::trial::benchmark_active()&&!crate::trial::demo_active();
+    if !allowed{
+        WIN_KEY.with(|s|drop(s.borrow_mut().take()));
+        WIN_KEY_FAILED.set(false);
+        win_key_status(if on{"waiting"}else{"off"});
+        return;
+    }
+    if WIN_KEY.with(|s|s.borrow().as_ref().is_some_and(win_key::Hook::finished)){
+        WIN_KEY.with(|s|drop(s.borrow_mut().take()));
+        WIN_KEY_FAILED.set(true);
+        win_key_status("failed");
+    }
+    if WIN_KEY_FAILED.get()||WIN_KEY.with(|s|s.borrow().is_some()){return;}
+    let generation=WIN_KEY_TOKEN.with(|n|{let next=n.get().wrapping_add(1).max(1);n.set(next);next});
+    match win_key::Hook::install(CONTROL.get(),generation){
+        Ok(hook)=>{WIN_KEY.with(|s|s.replace(Some(hook)));win_key_status("installed");}
+        Err(reason)=>{
+            crate::log!("DOCK_WIN_KEY install failed: {reason}");
+            WIN_KEY_FAILED.set(true);win_key_status("failed");
+        }
+    }
+}
+unsafe fn start_from_win_key(){
+    let foreground=GetForegroundWindow();
+    let monitor=if !foreground.is_null()&&foreground!=GetDesktopWindow()&&foreground!=GetShellWindow()
+        && IsWindowVisible(foreground)!=0&&IsIconic(foreground)==0 {
+        MonitorFromWindow(foreground,MONITOR_DEFAULTTONULL)
+    }else{ptr::null_mut()};
+    let mut info:MONITORINFO=mem::zeroed();info.cbSize=mem::size_of::<MONITORINFO>() as u32;
+    let known=!monitor.is_null()&&GetMonitorInfoW(monitor,&mut info)!=0;
+    let mut cursor:POINT=mem::zeroed();let has_cursor=GetCursorPos(&mut cursor)!=0;
+    let target=STATE.with(|s|{
+        let s=s.borrow();
+        let screen=s.screens.iter().find(|d|known&&same_rect(d.bounds,info.rcMonitor))
+            .or_else(||s.screens.iter().find(|d|has_cursor&&cursor.x>=d.bounds.left&&cursor.x<d.bounds.right&&cursor.y>=d.bounds.top&&cursor.y<d.bounds.bottom))
+            .or_else(||s.screens.iter().find(|d|d.primary))?;
+        let dock=s.bars.iter().find(|b|same_rect(b.bounds,screen.bounds)&&!b.hidden).map(|b|b.hwnd);
+        let side=s.prefs.appearance.position;
+        let q=screen.work;
+        let fallback=POINT{x:match side{DockSide::Left=>q.left,DockSide::Right=>q.right-1,_=>q.left+(q.right-q.left)/2},
+            y:if side==DockSide::Bottom{q.bottom-1}else{q.top+(q.bottom-q.top)/2}};
+        Some((dock,fallback,side))
+    });
+    if let Some((hwnd,point,side))=target{
+        if let Some(anchor)=hwnd.and_then(|h|shell_anchor(h,shell_access::Target::Start)){open_dock_launcher(anchor);}
+        else{let (w,l)=crate::launcher::DockAnchor{point,side}.encode();PostMessageW(OWNER.get(),crate::WM_OPEN_DOCK_LAUNCHER,w,l);}
     }
 }
 unsafe fn start_from_shortcut(){
@@ -1628,6 +1712,7 @@ unsafe fn show_taskbar(message:&str){
     drop(old);
     KillTimer(CONTROL.with(Cell::get),TASKBAR_GUARD_TIMER);
     TASKBAR_HIDDEN.with(|h|h.set(false));
+    sync_win_key();
     emit(Event::Taskbar{hidden:false,pending:false,message:message.into()});
 }
 
@@ -1677,6 +1762,7 @@ unsafe fn poll_taskbar(hwnd:HWND){
             queue_refresh();
             crate::log!("DOCK_TASKBAR dock mode active");
             sync_start_hotkey(hwnd,STATE.with(|s|s.borrow().prefs.start_shortcut));
+            sync_win_key();
             emit(Event::Taskbar{hidden:true,pending:false,message:"Chế độ Dock đang bật cho phiên này. Ctrl+Alt+Shift+F12 để hiện thanh Windows.".into()});
         }
         Some(Err(reason))=>{
@@ -1909,13 +1995,36 @@ unsafe fn move_normal_window(hwnd:HWND,target_id:&str){
             SWP_ASYNCWINDOWPOS|SWP_NOACTIVATE|SWP_NOZORDER);
     }
 }
+fn finish_stage_snapshot(){
+    let Some(result)=stage_snapshot::complete()else{return;};
+    match result{
+        Ok(view)=>{
+            let target=view.target;
+            let accepted=STATE.with(|s|{
+                s.borrow().stages.iter().any(|p|p.hwnd as usize==target.owner&&!p.hidden&&p.layered
+                    &&p.layout==Some(target.layout)&&p.items.get(target.index).is_some_and(|it|it.hwnd as usize==target.source.hwnd))
+            })&&stage_snapshot::still_valid(&view);
+            if accepted{
+                stage_snapshot::install(view);
+                update_state(|s|unsafe{
+                    refresh(s,false);
+                    for stage in &s.stages{InvalidateRect(stage.hwnd,ptr::null(),0);}
+                });
+            }
+        }
+        Err(e)=>{
+            crate::log!("DOCK_STAGE_SNAPSHOT fallback: {e}");
+            emit(Event::Error(format!("Không lấy được ảnh phối cảnh; Stage giữ xem trước bình thường. {e}")));
+        }
+    }
+}
 unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
     let card=STATE.with(|s|{
         let state=s.borrow();
         let stage=state.stages.iter().find(|p|p.hwnd==hwnd)?;
         let layout=stage.layout?;
-        let i=layout.hit(x,y)?;
-        let member=if layout.stack_design{layout.member_hit(i,x,y)?}else{0};
+        let i=stage.hit(layout,x,y)?;
+        let member=if layout.stack_design{stage.member_hit(layout,i,x,y)?}else{0};
         let item=*stage.members.get(i)?.get(member)? as HWND;
         let local=stage_window_is_local(item,stage.bounds);
         let group=stage.groups.get(i).copied().flatten();
@@ -1941,6 +2050,8 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
     const SEPARATE:usize=11;
     const REJOIN:usize=12;
     const DISSOLVE_AUTO:usize=13;
+    const SNAPSHOT:usize=14;
+    const FORGET:usize=15;
     const MOVE_FIRST:usize=32;
     const DETACH_FIRST:usize=256;
     const SELECT_FIRST:usize=512;
@@ -1953,6 +2064,15 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
     add(FOCUS,if IsIconic(item)!=0{"Khôi phục cửa sổ"}else{"Đưa cửa sổ lên trước"},true);
     add(MINIMIZE,"Thu nhỏ cửa sổ",IsIconic(item)==0);
     add(CLOSE,"Đóng cửa sổ",true);
+    let snapshot_target=STATE.with(|s|{
+        let s=s.borrow();let p=s.stages.iter().find(|p|p.hwnd==hwnd&&!p.hidden&&p.layered&&!p.preview_hwnd.is_null())?;
+        let layout=p.layout?;let index=p.items.iter().position(|it|it.hwnd==item)?;
+        (layout.stack_design&&!crate::trial::benchmark_active()&&!crate::trial::demo_active()).then_some(stage_snapshot::Target{
+            owner:hwnd as usize,source:identity,layout,index,reduced:s.prefs.appearance.reduced_motion,
+        })
+    });
+    if snapshot_target.is_some(){add(SNAPSHOT,"Ảnh phối cảnh · chụp cửa sổ này một lần",IsIconic(item)==0);}
+    if stage_snapshot::view(hwnd as usize).is_some(){add(FORGET,"Xóa ảnh phối cảnh · trở về xem trực tiếp",true);}
     if !targets.is_empty()&&IsIconic(item)==0&&IsZoomed(item)==0{
         let submenu=CreatePopupMenu();
         if !submenu.is_null(){
@@ -2005,6 +2125,16 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
         return;
     }
     if result==0{return;}
+    if result==SNAPSHOT{
+        if let Some(target)=snapshot_target{
+            if let Err(e)=stage_snapshot::start(target,CONTROL.get()){emit(Event::Error(e));}
+        }
+        return;
+    }
+    if result==FORGET{
+        if stage_snapshot::hide(hwnd as usize){update_state(|s|refresh(s,false));InvalidateRect(hwnd,ptr::null(),0);}
+        return;
+    }
     if result==CLOSE_GROUP&&MessageBoxW(hwnd,
         wide(&format!("Gửi yêu cầu đóng tới {} cửa sổ trong nhóm?",members.len())).as_ptr(),
         wide("Đóng nhóm Stage Manager").as_ptr(),MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2)!=IDYES{return;}
@@ -2169,6 +2299,19 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if taskbar_hidden()&&START_BOUND.with(Cell::get){start_from_shortcut();}
             0
         },
+        win_key::NOTICE if hwnd==CONTROL.get()=>{
+            let current=WIN_KEY.with(|s|s.borrow().as_ref().is_some_and(|hook|hook.ticket==w));
+            if current&&taskbar_hidden(){
+                if win_key::Hook::is_tap(l){start_from_win_key();}
+                else{
+                    WIN_KEY_FAILED.set(true);
+                    WIN_KEY.with(|s|drop(s.borrow_mut().take()));
+                    win_key_status("maskFailed");
+                }
+            }
+            0
+        },
+        stage_snapshot::READY if hwnd==CONTROL.get()=>{finish_stage_snapshot();0},
         WM_CONFIG=>{drain_commands();0},
         WM_INTERNAL_APP if hwnd==CONTROL.with(Cell::get)=>{queue_refresh();0},
         WM_TICK=>{SetTimer(hwnd,2,60,None);0},
@@ -2349,7 +2492,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_TIMER if w==WORKSPACE_TIMER=>{update_state(|state|{state.workspaces.advance();});0},
-        WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}else{refresh_dock_clock();}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
+        WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}else{refresh_dock_clock();sync_win_key();}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
         WM_TIMECHANGE=>{refresh_dock_clock();0},
         WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_DPICHANGED=>{
             if msg==WM_DISPLAYCHANGE&&taskbar_active(){show_taskbar("Đã hiện lại thanh tác vụ khi thay đổi màn hình.");}
@@ -2362,7 +2505,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let mut state=s.borrow_mut();
                 let reduced=state.prefs.appearance.reduced_motion;
                 let p=state.stages.iter_mut().find(|p|p.hwnd==hwnd)?;
-                let hit=p.layout.and_then(|layout|layout.hit(x,y));
+                let hit=p.layout.and_then(|layout|p.hit(layout,x,y));
                 let old=std::mem::replace(&mut p.hover,hit);
                 let changed=old!=hit;
                 Some((changed,changed&&p.emphasis.change(hit,reduced),hit.is_some()))
@@ -2701,10 +2844,11 @@ unsafe fn drain_commands() {
                 } }
                 state.prefs=options;refresh(state,false);
                 if repaint{for b in &state.bars{InvalidateRect(b.hwnd,ptr::null(),0);}}
-            });},
+            });sync_win_key();},
             Command::Suspend(on)=>{
                 if on&&taskbar_active(){show_taskbar("Đã hiện lại thanh tác vụ khi khóa màn hình.");}
                 update_state(|state|{if state.suspended!=on{state.suspended=on;refresh(state,!on);}});
+                sync_win_key();
             },
             Command::Taskbar(hidden)=>set_taskbar_hidden(hidden),
             Command::Stop=>{control_center::inline_config(CONTROL.with(Cell::get),None);EndMenu();PostQuitMessage(0);},
@@ -2788,6 +2932,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         OWNER.with(|o|o.set(owner as HWND));
         COMMANDS.with(|c|{c.replace(Some(commands));});EVENTS.with(|e|{e.replace(Some(events));});
         update_state(|state|{state.prefs=options;refresh(state,false);});
+        sync_win_key();
         let mut hooks=Vec::new();
         for (low,high) in [(EVENT_SYSTEM_FOREGROUND,EVENT_SYSTEM_FOREGROUND),(EVENT_SYSTEM_MINIMIZESTART,EVENT_SYSTEM_MINIMIZEEND),
             (EVENT_OBJECT_CREATE,EVENT_OBJECT_HIDE),(EVENT_OBJECT_LOCATIONCHANGE,EVENT_OBJECT_NAMECHANGE)] {
@@ -2803,6 +2948,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
             if !utilities::route_panel_keyboard(&msg){TranslateMessage(&msg);DispatchMessageW(&msg);}
         }
         if taskbar_active(){show_taskbar("Đã hiện lại thanh tác vụ khi thoát Deskland.");}
+        WIN_KEY.with(|s|drop(s.borrow_mut().take()));
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
         update_state(|s|{s.appbars.clear();s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){destroy_stage(&mut b);}});
         SURFACES.with(|s|s.borrow_mut().clear());STAGE_SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
@@ -2813,6 +2959,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         CONTROL.with(|c|c.set(ptr::null_mut()));DestroyWindow(control);
         OWNER.with(|o|o.set(ptr::null_mut()));
         COMMANDS.with(|c|{c.take();});EVENTS.with(|e|{e.take();});STATE.with(|s|{s.take();});
+        stage_snapshot::shutdown();
         perf::finish();
         if com.is_ok(){CoUninitialize();}
     }

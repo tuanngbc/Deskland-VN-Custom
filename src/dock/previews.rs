@@ -37,22 +37,22 @@ impl Previews {
         self.update_traced(dst,items,layout,None)
     }
     pub unsafe fn update_traced(&mut self,dst:HWND,items:&[Item],layout:Layout,mut steps:Option<&mut [PreviewStep]>)->bool{
-        self.update_targets(dst,items.iter().enumerate().map(|(i,item)|(item.hwnd,layout.preview(i),None)),steps.as_deref_mut())
+        self.update_targets(dst,items.iter().enumerate().map(|(i,item)|(item.hwnd,layout.preview(i),layout.portrait_preview(i),None)),steps.as_deref_mut())
     }
-    pub unsafe fn update_stacks(&mut self,dst:HWND,groups:&[Vec<usize>],layout:Layout)->bool{
+    pub unsafe fn update_stacks(&mut self,dst:HWND,groups:&[Vec<usize>],layout:Layout,projected:Option<usize>)->bool{
         let targets=groups.iter().enumerate().flat_map(|(group,members)|members.iter().take(layout.depth(group))
             .enumerate().map(move |(depth,&handle)|{
                 let (area,clip)=layout.preview_layer(group,depth);
-                (handle as HWND,area,clip)
+                (handle as HWND,area,if depth==0{layout.portrait_preview(group)}else{area},clip)
             }));
-        self.update_targets(dst,targets,None)
+        self.update_targets(dst,targets.filter(|(hwnd,_,_,_)|Some(*hwnd as usize)!=projected),None)
     }
-    unsafe fn update_targets(&mut self,dst:HWND,targets:impl Iterator<Item=(HWND,RECT,Option<RECT>)>,mut steps:Option<&mut [PreviewStep]>)->bool{
+    unsafe fn update_targets(&mut self,dst:HWND,targets:impl Iterator<Item=(HWND,RECT,RECT,Option<RECT>)>,mut steps:Option<&mut [PreviewStep]>)->bool{
         // A thumbnail is bound to its original DWM destination. Changing
         // hosts must not reuse registrations even if the source list matches.
         let mut changed=self.destination!=dst as usize&&self.clear();
         self.destination=dst as usize;
-        for (i,(source,slot,clip)) in targets.enumerate(){
+        for (i,(source,slot,portrait,clip)) in targets.enumerate(){
             let key=source as usize;
             let mut record=|step|{if let Some(entry)=steps.as_deref_mut().and_then(|entries|entries.get_mut(i)){*entry=step;}};
             if self.next.contains_key(&key){record(PreviewStep::Duplicate);continue;}
@@ -74,6 +74,7 @@ impl Previews {
             let mut size:SIZE=mem::zeroed();
             let result=DwmQueryThumbnailSourceSize(link.raw,&mut size);
             if result<0{record(PreviewStep::SourceSize(result));changed=true;continue;}
+            let slot=adaptive_slot(slot,portrait,size,clip);
             let Some((area,crop))=fit_layer(slot,size,clip) else{record(PreviewStep::EmptySource);changed=true;continue;};
             let mut link=link;
             if !same_rect(link.area,area)||!same_crop(link.crop,crop){
@@ -115,6 +116,11 @@ pub(super) unsafe fn preview_pid(window:HWND)->Result<u32,PreviewStep>{
     if GetWindowDisplayAffinity(window,&mut affinity)==0{return Err(PreviewStep::AffinityQuery(GetLastError()));}
     if affinity!=WDA_NONE{return Err(PreviewStep::Protected);}
     Ok(pid)
+}
+
+fn adaptive_slot(landscape:RECT,portrait:RECT,source:SIZE,clip:Option<RECT>)->RECT{
+    if clip.is_none() && source.cx>0 && source.cy>0 &&
+        i64::from(source.cx)*100<=i64::from(source.cy)*112{portrait}else{landscape}
 }
 
 fn fit(slot:RECT,source:SIZE)->Option<RECT>{
@@ -192,6 +198,29 @@ pub unsafe fn style_destination(window:HWND){
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn adaptive_preview_allocates_more_height_without_cropping_tall_or_square_sources(){
+        for dpi in [96,120,144]{
+            for right in [false,true]{
+                let mut layout=Layout::landscape(252*dpi as i32/96,600,dpi,8,5,1,right,true);
+                layout.count=1;
+                let default=layout.preview(0);
+                let portrait=layout.portrait_preview(0);
+                for (cx,cy) in [(1080,1920),(600,1000),(900,900),(1000,1100),(1080,1000)]{
+                    let source=SIZE{cx,cy};
+                    let (before,_)=fit_layer(default,source,None).unwrap();
+                    let (after,crop)=fit_layer(adaptive_slot(default,portrait,source,None),source,None).unwrap();
+                    assert!(after.bottom-after.top>before.bottom-before.top);
+                    assert!(crop.is_none());
+                    let ratio=(after.right-after.left) as f32/(after.bottom-after.top) as f32;
+                    assert!((ratio-cx as f32/cy as f32).abs()<0.02);
+                }
+                for (cx,cy) in [(1920,1080),(1280,720),(1600,900)]{
+                    assert!(same_rect(adaptive_slot(default,portrait,SIZE{cx,cy},None),default));
+                }
+            }
+        }
+    }
     #[test]
     fn thumbnail_fits_its_tile_without_covering_labels_or_hit_areas(){
         let slot=Layout::new(164,590,96,6,5,5,false).preview(2);

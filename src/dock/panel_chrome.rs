@@ -79,6 +79,10 @@ pub(super) fn mask_popup(data:&mut [u8],w:i32,h:i32,radius:f32,opacity:u8){
 }
 pub(super) fn color(rgb:[u8;3])->u32{rgb[2] as u32|((rgb[1] as u32)<<8)|((rgb[0] as u32)<<16)}
 pub(super) unsafe fn text(dc:HDC,mut bounds:RECT,string:&str,ink:[u8;3],flags:u32){
+    if flags&DT_SINGLELINE!=0&&flags&DT_RIGHT==0{
+        let current=GetCurrentObject(dc,OBJ_FONT as u32);
+        if crate::native_text::draw(dc,bounds,string,current,ink,flags&DT_CENTER!=0,flags&DT_VCENTER!=0){return;}
+    }
     SetTextColor(dc,color(ink));SetBkMode(dc,TRANSPARENT as i32);
     DrawTextW(dc,crate::desktop::wide(string).as_ptr(),-1,&mut bounds,DT_NOPREFIX|flags);
 }
@@ -93,8 +97,7 @@ pub(super) unsafe fn box_fill(dc:HDC,rect:RECT,radius:i32,fill:[u8;3],edge:Optio
     if edge.is_some(){DeleteObject(pen);}
 }
 pub(super) unsafe fn choose_font(dpi:u32,n:i32,weight:i32)->HFONT{
-    CreateFontW(-scale(dpi,n),0,0,0,weight,0,0,0,DEFAULT_CHARSET as u32,0,0,
-        ANTIALIASED_QUALITY as u32,DEFAULT_PITCH as u32,crate::desktop::wide("Segoe UI Variable Text").as_ptr())
+    crate::native_text::font_pixels(scale(dpi,n),weight)
 }
 pub(super) unsafe fn child_color(dc:HDC,dark:bool)->LRESULT{
     let p=Palette::new(dark);

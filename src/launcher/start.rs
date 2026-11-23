@@ -224,10 +224,18 @@ unsafe fn glyph(surface:&mut PopupPixels,r:RECT,glyph:Glyph,ink:[u8;3],s:f32){
     });
 }
 unsafe fn center_label(dc:HDC,text:&str,mut rect:RECT,font:HFONT,color:u32){
+    if crate::native_text::draw(dc,rect,text,font,[(color>>16) as u8,(color>>8) as u8,color as u8],true,true){return;}
+
     let old=SelectObject(dc,font);SetTextColor(dc,color);SetBkMode(dc,TRANSPARENT as i32);
     DrawTextW(dc,wide(text).as_ptr(),-1,&mut rect,DT_SINGLELINE|DT_CENTER|DT_VCENTER|DT_END_ELLIPSIS|DT_NOPREFIX);
     SelectObject(dc,old);
 }
+unsafe fn label(dc:HDC,text:&str,r:RECT,font:HFONT,color:u32){
+    if !crate::native_text::draw(dc,r,text,font,[(color>>16) as u8,(color>>8) as u8,color as u8],false,true){
+        super::label(dc,text,r,font,color);
+    }
+}
+unsafe fn start_font(size:i32,weight:i32)->HFONT{crate::native_text::font_pixels(size,weight)}
 unsafe fn icon(dc:HDC,icon:&IconPixels,x:i32,y:i32){
     let mut info:BITMAPINFO=std::mem::zeroed();
     info.bmiHeader.biSize=std::mem::size_of::<BITMAPINFOHEADER>() as u32;
@@ -304,9 +312,9 @@ unsafe fn paint_start(hwnd:HWND){
                     for p in row.chunks_exact_mut(4){p.copy_from_slice(&[shade[0],shade[1],shade[2],255]);}
                 }
             }
-            let body=font(px(14,s),400);
-            let small=font(px(12,s),400);
-            let heading=font(px(12,s),600);
+            let body=start_font(px(14,s),470);
+            let small=start_font(px(12,s),470);
+            let heading=start_font(px(12,s),600);
             surface.shape(rr(INSET,HEADER_Y,frame.search_width(),HEADER_H,s),13.0*s,search_ink(dark),255);
             glyph(&mut surface,rr(INSET+2,HEADER_Y,30,HEADER_H,s),Glyph::Search,palette.muted,s);
             #[cfg(test)]
@@ -719,7 +727,7 @@ pub(crate) fn toggle(owner:HWND,anchor:DockAnchor){
         let glass=frost(&capture_glass(x,y,width,height),width,height,s,&prefs);
         #[cfg(test)]
         let glass=Vec::<u8>::new();
-        let font=font(px(14,s),400);
+        let font=start_font(px(14,s),470);
         let pins=DOCK_PINS.with(|p|p.borrow().clone());
         let old_font=START.with(|sref|{
             let mut b=sref.borrow_mut();let m=b.as_mut().unwrap();

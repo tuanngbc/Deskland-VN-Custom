@@ -66,6 +66,9 @@ jobs:
           $env:TUANPC_DESK_START_EVIDENCE = Join-Path $env:RUNNER_TEMP "start-native.png"
           cargo test --release launcher::start::tests::native_panel_search_keyboard_and_anchor_are_independent_of_spotlight -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:TUANPC_DESK_TYPE_EVIDENCE = Join-Path $env:RUNNER_TEMP "typography-evidence"
+          cargo test --release native_text::tests::grayscale_typography_sheet_at_96_120_144 -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::command_pin::tests::native_shell_launch_passes_arguments_and_working_directory -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::utilities::tests::native_on_demand_provider_completes_without_an_assumed_device -- --ignored --exact --nocapture --test-threads=1
@@ -149,5 +152,6 @@ jobs:
             ${{ runner.temp }}/stage-fixture-evidence/*.png
             ${{ runner.temp }}/stage-fixture-evidence/stage-wgc-result.txt
             ${{ runner.temp }}/start-native*.png
+            ${{ runner.temp }}/typography-evidence/*.png
           if-no-files-found: error
           retention-days: 14
