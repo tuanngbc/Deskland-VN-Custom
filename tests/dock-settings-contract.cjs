@@ -152,8 +152,6 @@ test('utility order, visibility and reset are isolated to the selected monitor',
   assert.equal(first.profile.order[0],'bluetooth');
   $('utilityRows').listeners.change({target:{checked:false,dataset:{utilityVisible:'audio'}}});
   assert.equal(messages.pop().profile.hidden[0],'audio');
-  $('utilityRows').listeners.click({target:{closest:s=>s==='[data-utility-pin]'?{dataset:{utilityPin:'bluetooth'}}:null}});
-  assert.equal(messages.pop().profile.inline[0],'bluetooth');
   $('utilityReset').listeners.click();
   assert.equal(messages.pop().profile.hidden.length,0);
   $('utilityDisplay').listeners.change({target:{value:'main'}});
@@ -187,14 +185,13 @@ test('taskbar hide is an explicit session command separate from saved Dock setti
   context.syncDockSettings({dock:{enabled:false},dockTaskbarHidden:false});
   assert.equal(control.disabled,true);
 });
-test('two rows and metrics settings preserve per-display options',()=>{
+test('compact status and metrics preserve per-display options',()=>{
   const main={id:'main',name:'Main',w:2560,h:1080,dpi:96,primary:true};
   const side={id:'side',name:'Side',w:1080,h:1920,dpi:120,primary:false};
   context.syncDockSettings({dockDisplays:[main,side],dock:{utilityProfiles:{side:{rows:1,gap:8}}}});
   $('utilityDisplay').listeners.change({target:{value:'side'}});
-  assert.equal($('utilityLanes').value,'1');
-  $('utilityLanes').value='2';$('utilityLanes').listeners.change();
-  let m=messages.pop();assert.equal(m.display,'side');assert.equal(m.profile.rows,2);assert.equal(m.profile.gap,8);
+  $('utilityGap').value='4';$('utilityGap').listeners.change();
+  let m=messages.pop();assert.equal(m.display,'side');assert.equal(m.profile.rows,1);assert.equal(m.profile.gap,4);
   $('utilityMetrics').checked=true;$('utilityMetricGPU').checked=false;$('utilityMetricInterval').value='5';
   $('utilityMetrics').listeners.change();
   m=messages.pop();assert.equal(m.display,'side');assert.equal(m.profile.metrics.enabled,true);

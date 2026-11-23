@@ -21,7 +21,7 @@
 .dock-utility-settings{margin-top:.8rem;border-top:1px solid var(--line,#80808040);padding-top:.65rem}
 .dock-utility-settings summary{cursor:pointer;font-weight:650;padding:.4rem 0}
 .dock-utility-rows{display:grid;gap:.3rem;max-height:18rem;overflow:auto;margin:.4rem 0 .75rem;padding:0;list-style:none}
-.dock-utility-rows li{display:grid;grid-template-columns:1.1rem 1fr auto auto auto;align-items:center;gap:.4rem;border:1px solid var(--line,#80808040);border-radius:.55rem;padding:.32rem .45rem}
+.dock-utility-rows li{display:grid;grid-template-columns:1.1rem 1fr auto auto;align-items:center;gap:.4rem;border:1px solid var(--line,#80808040);border-radius:.55rem;padding:.32rem .45rem}
 .dock-utility-rows li>span{cursor:grab;opacity:.6}
 .dock-utility-rows button{min-width:2rem}
 </style>
@@ -183,17 +183,16 @@
       <summary data-i18n="utilityTitle">Tiện ích Dock</summary>
       <label class="setting-row"><b data-i18n="dockDisplayTarget">Màn hình hiển thị</b><select id="utilityDisplay"></select></label>
       <div id="utilityControls" hidden>
-        <label class="setting-row"><b data-i18n="utilityEnabled">Hiện nút tiện ích</b><input id="utilityEnabled" type="checkbox"></label>
+        <label class="setting-row"><b>Hiện Mạng và Âm thanh trên Dock</b><input id="utilityEnabled" type="checkbox"></label>
         <label class="setting-row"><b data-i18n="utilitySide">Vị trí trong Dock</b><select id="utilitySide"><option value="left" data-i18n="dockLeft">Bên trái</option><option value="right" data-i18n="dockRight">Bên phải</option></select></label>
         <label class="setting-row"><b data-i18n="utilityDetails">Hiện thông tin trong bảng tiện ích</b><input id="utilityDetails" type="checkbox"></label>
         <label class="setting-row"><b>Cỡ nút tiện ích</b><select id="utilityCell"><option value="24">Nhỏ · 24 px</option><option value="28">Chuẩn · 28 px</option><option value="32">Dễ bấm · 32 px</option></select></label>
-        <label class="setting-row"><b>Bố cục cụm hệ thống</b><select id="utilityLanes"><option value="2">Hai hàng</option><option value="1">Một hàng</option></select></label>
         <label class="setting-row"><b>Khoảng cách tiện ích</b><select id="utilityGap"><option value="2">Gọn</option><option value="4">Chuẩn</option><option value="8">Thoáng</option></select></label>
         <fieldset class="dock-utility-settings">
           <legend>Chỉ số máy trong Dock</legend>
-          <label class="setting-row"><b>Hiện nút chỉ số máy</b><input id="utilityMetrics" type="checkbox"></label>
+          <label class="setting-row"><b>Hiện chỉ số máy</b><input id="utilityMetrics" type="checkbox"></label>
           <div id="utilityMetricControls" hidden>
-            <label class="setting-row"><b>Vị trí số liệu</b><select id="utilityMetricMode"><option value="popover">Trong bảng nổi</option><option value="inline">Hiện trực tiếp trên Dock</option></select></label>
+            <label class="setting-row"><b>Vị trí số liệu</b><select id="utilityMetricMode"><option value="popover">Trong Trung tâm điều khiển</option><option value="inline">Hiện trực tiếp trên Dock</option></select></label>
             <label class="setting-row"><b>Bảng chỉ số dạng gọn</b><input id="utilityMetricCompact" type="checkbox"></label>
             <label class="setting-row"><b>Chu kỳ cập nhật</b><select id="utilityMetricInterval"><option value="1">1 giây</option><option value="2">2 giây</option><option value="5">5 giây</option><option value="10">10 giây</option></select></label>
             <div class="dock-display-choices"><label><input id="utilityMetricCPU" type="checkbox"> CPU</label>
@@ -1005,7 +1004,7 @@ function renderUtilityControls(){
   $('utilitySide').value=p.side;
   $('utilityDetails').checked=p.details;
   $('utilityCell').value=String(p.cell);
-  $('utilityLanes').value=String(p.rows);$('utilityGap').value=String(p.gap);
+  $('utilityGap').value=String(p.gap);
   const metrics=p.metrics||metricDrafts.get(utilityDisplay)||metricDefault();
   $('utilityMetrics').checked=metrics.enabled;
   $('utilityMetricControls').hidden=!metrics.enabled;
@@ -1018,7 +1017,6 @@ function renderUtilityControls(){
     const name=label==='utilityItem_'+key?utilityLabels[key]:label;
     return '<li draggable="true" data-widget="'+esc(key)+'"><span aria-hidden="true">⋮⋮</span><label>'+
       '<input type="checkbox" data-utility-visible="'+esc(key)+'"'+(p.hidden.includes(key)?'':' checked')+'> '+esc(name)+'</label>'+
-      '<button type="button" data-utility-pin="'+esc(key)+'" aria-pressed="'+(p.inline.includes(key)?'true':'false')+'" aria-label="'+esc(dockText('utilityPin')+': '+name)+'"'+(!p.inline.includes(key)&&p.inline.length>=10?' disabled':'')+'>'+(p.inline.includes(key)?'★':'☆')+'</button>'+
       '<button type="button" data-utility-move="-1" aria-label="'+esc(dockText('utilityUp')+': '+name)+'"'+(i===0?' disabled':'')+'>↑</button>'+
       '<button type="button" data-utility-move="1" aria-label="'+esc(dockText('utilityDown')+': '+name)+'"'+(i===p.order.length-1?' disabled':'')+'>↓</button></li>';
   }).join('');
@@ -1037,7 +1035,6 @@ function moveUtility(key,to){
 }
 $('utilityDisplay').addEventListener('change',e=>{utilityDisplay=e.target.value;renderUtilityControls();});
 $('utilityCell').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),cell:Number($('utilityCell').value)}));
-$('utilityLanes').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),rows:Number($('utilityLanes').value)}));
 $('utilityGap').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),gap:Number($('utilityGap').value)}));
 $('utilityEnabled').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),enabled:$('utilityEnabled').checked}));
 $('utilityDetails').addEventListener('change',()=>saveUtilityProfile({...utilityProfile(),details:$('utilityDetails').checked}));
@@ -1061,13 +1058,6 @@ utilityRows.addEventListener('change',e=>{
   saveUtilityProfile({...p,hidden:next});
 });
 utilityRows.addEventListener('click',e=>{
-  const pin=e.target.closest('[data-utility-pin]');
-  if(pin){
-    const p=utilityProfile(),key=pin.dataset.utilityPin;
-    const inline=p.inline.includes(key)?p.inline.filter(w=>w!==key):p.inline.length<10?[...p.inline,key]:p.inline;
-    saveUtilityProfile({...p,inline});
-    return;
-  }
   const button=e.target.closest('[data-utility-move]');
   if(!button)return;
   const key=button.closest('[data-widget]')?.dataset.widget;

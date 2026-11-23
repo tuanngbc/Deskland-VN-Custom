@@ -134,7 +134,8 @@ mod tests {
             assert_eq!(inspect_stage(),stage_row(&display.id,first,false));
             assert!(super::super::stage_window_owner(first).is_some());
             assert!(super::super::stage_window_owner(other).is_none());
-            assert!(super::super::previews::permitted_pid(first).is_err(),"Settings must remain excluded from graphics capture");
+            assert!(super::super::previews::permitted_pid(first).is_err(),"the generic capture path must still exclude this process");
+            assert!(super::super::previews::permitted_settings_pid(other).is_err(),"the dedicated route must only accept registered Settings");
             ShowWindow(first,SW_MINIMIZE);
             assert_eq!(inspect(),vec![(display.id.clone(),first as usize,true,false)]);
             assert_eq!(inspect_stage(),stage_row(&display.id,first,true));

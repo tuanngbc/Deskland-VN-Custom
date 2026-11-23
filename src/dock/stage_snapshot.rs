@@ -184,6 +184,12 @@ impl Target{
         self.sources.get(layer).is_some_and(Option::is_some)&&self.card(layer,self.body(layer))
             .contains(unscale(x,cx),unscale(y,cy))
     }
+    pub(super) fn front_shape(self,mask:u8,strength:u8)->Card{
+        let area=self.body(0);
+        let delta=self.zoom(mask,strength)-1.0;
+        let (dx,dy)=((area.w as f32*delta*0.5).round() as i32,(area.h as f32*delta*0.5).round() as i32);
+        self.card(0,Box2{x:area.x-dx,y:area.y-dy,w:area.w+2*dx,h:area.h+2*dy})
+    }
     fn bounds(self)->Box2{
         let mut b=self.layout.card(self.index);
         let mut right=b.x+b.w;
@@ -201,10 +207,14 @@ impl Target{
 }
 #[derive(Clone)]
 pub(super) struct Preview{
-    pub target:Target, pub mask:u8, bounds:Box2,idle:Arc<[u8]>,
+    pub target:Target, pub mask:u8, pub settings_placeholder:bool, bounds:Box2,idle:Arc<[u8]>,
 }
 impl Preview{
     fn project(target:Target,frames:&[Option<&Frame>;5])->Self{
+        let settings_placeholder=frames[0].is_none()&&target.sources[0].is_some_and(|id|id.pid==std::process::id());
+        let placeholder=settings_placeholder.then(settings_tile);
+        let mut frames=*frames;
+        if let Some(tile)=placeholder.as_ref(){frames[0]=Some(tile);}
         let mask=frames.iter().enumerate().fold(0,|m,(i,f)|if f.is_some(){m|(1<<i)}else{m});
         let b=target.bounds();
         let idle={
@@ -230,7 +240,7 @@ impl Preview{
             }
             Arc::<[u8]>::from(out)
         };
-        Self{target,mask,bounds:b,idle}
+        Self{target,mask,settings_placeholder,bounds:b,idle}
     }
     pub(super) fn blend(&self,data:&mut[u8],w:i32,h:i32,strength:u8){
         let b=self.bounds;
@@ -276,6 +286,21 @@ impl Preview{
     }
 }
 type Frame=(Vec<u8>,i32,i32);
+fn settings_tile()->Frame{
+    const W:i32=96;
+    const H:i32=60;
+    let mut pixels=Vec::with_capacity((W*H*4) as usize);
+    for y in 0..H{
+        for x in 0..W{
+            let top=y<9;
+            let menu=x<23;
+            let chrome=top||menu;
+            let line=!chrome&&x>31&&x<84&&matches!(y,20..=23|31..=33|43..=45);
+            pixels.extend(if chrome{[72,65,58,255]}else if line{[106,95,84,255]}else{[53,48,43,255]});
+        }
+    }
+    (pixels,W,H)
+}
 const MAX_ENTRIES:usize=80;
 const MAX_FRAME_BYTES:usize=40*1024*1024;
 const MAX_PROJECTION_BYTES:usize=28*1024*1024;
@@ -349,7 +374,11 @@ thread_local!{static CURRENT:RefCell<State>=RefCell::new(State::default());}
 
 unsafe fn retainable(source:WindowIdentity)->bool{
     let hwnd=source.hwnd as HWND;
-    source.matches(hwnd)&&super::previews::permitted_pid(hwnd)==Ok(source.pid)
+    if source.pid==std::process::id(){
+        source.matches_stage()&&super::previews::permitted_settings_pid(hwnd)==Ok(source.pid)
+    }else{
+        source.matches(hwnd)&&super::previews::permitted_pid(hwnd)==Ok(source.pid)
+    }
 }
 unsafe fn stamp(source:WindowIdentity)->Option<Stamp>{
     use windows_sys::Win32::{Foundation::RECT,UI::WindowsAndMessaging::*};
@@ -357,9 +386,13 @@ unsafe fn stamp(source:WindowIdentity)->Option<Stamp>{
     if !retainable(source)||IsIconic(hwnd)!=0||IsWindowVisible(hwnd)==0{return None;}
     let mut r:RECT=std::mem::zeroed();
     if GetWindowRect(hwnd,&mut r)==0||!budget(r.right-r.left,r.bottom-r.top){return None;}
-    let mut text=[0u16;256];
-    let len=GetWindowTextW(hwnd,text.as_mut_ptr(),text.len() as i32).max(0) as usize;
-    Some(Stamp{i:r.right-r.left,j:r.bottom-r.top,title:String::from_utf16_lossy(&text[..len])})
+    // Never synchronously ask the Settings UI thread for its title.
+    let title=if source.pid==std::process::id(){super::internal_app::LABEL.into()}else{
+        let mut text=[0u16;256];
+        let len=GetWindowTextW(hwnd,text.as_mut_ptr(),text.len() as i32).max(0) as usize;
+        String::from_utf16_lossy(&text[..len])
+    };
+    Some(Stamp{i:r.right-r.left,j:r.bottom-r.top,title})
 }
 impl State{
     fn evict(&mut self,now:Instant){
@@ -456,7 +489,7 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
             if b.w<=0||b.h<=0||i64::from(b.w)*i64::from(b.h)>300_000{continue;}
             let frames=target.sources.map(|id|id.and_then(|id|state.sources.get(&id)).filter(|s|s.frame.is_some()));
             let revisions=frames.map(|v|v.map_or(0,|s|s.revision));
-            if revisions==[0;5]{continue;}
+            if revisions==[0;5]&&!target.sources[0].is_some_and(|id|id.pid==std::process::id()){continue;}
             bytes+=b.w as usize*b.h as usize*4;
             if bytes>MAX_PROJECTION_BYTES{break;}
             if let Some(previous)=old.iter().find(|p|p.preview.target==target&&p.revisions==revisions){

@@ -11,7 +11,9 @@ pub(super) const GRID_GAP: i32 = 5;
 pub(super) const GRID_ICON: i32 = 46;
 pub(super) const LIST_ROW: i32 = 36;
 pub(super) const LIST_ICON: i32 = 23;
-pub(super) const FOOTER_H: i32 = 46;
+pub(super) const FOOTER_H: i32 = 50;
+pub(super) const POWER: i32 = 38;
+pub(super) const POWER_GAP: i32 = 12;
 pub(super) const MAX_WIDTH: i32 = 544;
 pub(super) const MAX_HEIGHT: i32 = 528;
 const RECENT_H: i32 = 65;
@@ -39,7 +41,7 @@ impl Frame {
 
     pub fn inner(self) -> i32 { self.width - 2 * INSET }
 
-    pub fn search_width(self) -> i32 { self.inner() - 3 * CONTROL_STEP }
+    pub fn search_width(self) -> i32 { self.inner() - 2 * CONTROL_STEP }
 
     pub fn columns(self, grid: bool) -> usize {
         if grid { (self.inner() as usize / 86).clamp(2, 5) } else { 1 }

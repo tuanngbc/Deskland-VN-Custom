@@ -95,6 +95,15 @@ impl Card{
         }
         amount/16.0
     }
+    pub(super) fn highlight(self,pixels:&mut[u8],w:i32,h:i32,ink:[u8;3],width:f32){
+        draw(pixels,w,h,self.rect.rect(),|x,y|{
+            let (u,v)=self.uv(x,y);
+            let d=self.edge_distance(u,v);
+            let body=self.coverage(x,y,d);
+            let border=(1.0+d/width.max(1.0)).clamp(0.0,1.0);
+            Some((ink,body*border*235.0))
+        });
+    }
     pub(super) fn shadow(self,pixels:&mut[u8],w:i32,h:i32,layer:usize){
         self.shadow_with_filter(pixels,w,h,layer,true);
     }

@@ -359,6 +359,10 @@ impl Panel {
         for view in snapshots{
             let strength=emphasis.filter(|&(i,_)|i==view.target.index).map_or(0,|(_,a)|a);
             view.blend(data,w,h,strength);
+            if look.active&(1<<view.target.index)!=0 && view.mask&1!=0{
+                view.target.front_shape(view.mask,strength).highlight(data,w,h,palette.accent,(self.dpi as f32/96.0)*2.4);
+            }
+
         }
         if let Some((i,strength))=emphasis.filter(|&(i,a)|i<layout.count&&a>0&&look.projected[i]&1==0){
             let b=layout.card(i).rect();
@@ -388,6 +392,20 @@ impl Panel {
                     Some(([8,9,13],112.0*(1.0-d.max(0.0)/k).clamp(0.0,1.0).powi(2)))
                 });
                 rounded(data,w,h,small,small.w*0.23,if look.dark{[51,53,60]}else{[247,248,252]},229);
+            }
+            if look.active&(1<<i)!=0{
+                let ring=Rect{x:small.x-1.5,y:small.y-1.5,w:small.w+3.0,h:small.h+3.0};
+                draw(data,w,h,ring,|x,y|{
+                    let d=distance(ring,ring.w*0.24,x,y);
+                    Some((palette.accent,(0.5-d).clamp(0.0,1.0)*(d+2.0).clamp(0.0,1.0)*243.0))
+                });
+            }
+            if snapshots.iter().any(|view|view.target.index==i&&view.settings_placeholder){
+                let size=(c.h as f32*0.24).clamp(14.0,34.0);
+                let (x,y)=c.center();
+                let mark=Rect{x:x as f32-size/2.0,y:y as f32-size/2.0,w:size,h:size};
+                if let Some(Some(icon))=atlas.get(&item.path){self.icons.paint(data,w,h,mark,icon);}
+                else{fallback_icon(data,w,h,mark,tint);}
             }
             if let Some(Some(icon))=atlas.get(&item.path){self.icons.paint(data,w,h,small,icon);}
             else{fallback_icon(data,w,h,small,tint);}

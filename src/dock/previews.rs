@@ -110,6 +110,10 @@ pub(super) unsafe fn preview_pid(window:HWND)->Result<u32,PreviewStep>{
 pub(super) unsafe fn permitted_pid(window:HWND)->Result<u32,PreviewStep>{
     check_preview_pid(window,false)
 }
+pub(super) unsafe fn permitted_settings_pid(window:HWND)->Result<u32,PreviewStep>{
+    if !super::internal_app::owns(window){return Err(PreviewStep::ForeignIdentity);}
+    check_preview_pid(window,true)
+}
 unsafe fn check_preview_pid(window:HWND,allow_settings:bool)->Result<u32,PreviewStep>{
     if window.is_null()||IsWindow(window)==0{return Err(PreviewStep::Gone);}
     let mut pid=0;

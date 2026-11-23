@@ -621,6 +621,15 @@ fn stage_width(screen:&Screen,style:StageStyle)->i32{
     let base=if stage_legacy_layout(){160.0}else{252.0};
     (base*style.scale as f32/100.0*scale).round() as i32
 }
+fn dock_status_widgets(profile:Option<&UtilityProfile>)->Vec<UtilityWidget>{
+    use UtilityWidget::{Network,Sound,Metrics};
+    if profile.is_some_and(|p|!p.enabled){return Vec::new();}
+    let mut cells=[Network,Sound].into_iter().filter(|w|profile.is_none_or(|p|!p.hidden.contains(w))).collect::<Vec<_>>();
+    if profile.is_some_and(|p|p.metrics.enabled&&p.metrics.inline&&p.metrics.mask!=0&&!p.hidden.contains(&Metrics)){
+        cells.push(Metrics);
+    }
+    cells
+}
 fn stage_legacy_layout()->bool{crate::trial::benchmark_active()||crate::trial::demo_active()}
 fn stage_width_cap(width:i32)->i32{
     if stage_legacy_layout(){(width/5).max(62)}else{(width*28/100).max(1)}
@@ -713,8 +722,7 @@ unsafe fn recreate(state:&mut State) {
     for (i, screen) in screens.iter().enumerate() {
         if dock_targets.contains(&i) && !state.bars.iter().any(|b|same_rect(b.bounds,screen.bounds)) {
         let items=item_list(&state.windows,screen.bounds,&state.prefs);
-        let mut pinned_widgets=state.prefs.utility_profiles.get(&screen.id).map_or_else(Vec::new,UtilityProfile::pinned);
-        if taskbar_hidden(){pinned_widgets.retain(|w|utilities::available_in_dock_mode(Some(*w)));}
+        let pinned_widgets=dock_status_widgets(state.prefs.utility_profiles.get(&screen.id));
         let layout=geometry::measure_cluster(screen,&state.prefs.appearance,items.len(),None,0.0,&pinned_widgets,state.prefs.utility_cluster(&screen.id));
         let r=layout.window;
         let hwnd=CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|WS_EX_LAYERED,
@@ -802,11 +810,10 @@ unsafe fn refresh(state:&mut State, topology:bool) {
                 b.reveal=motion::Spring::rest(if b.collapsed{0.0}else{1.0});changed=true;
             }
             let r=if b.layout.is_some(){
-                b.pinned_widgets=state.prefs.utility_profiles.get(&screen.id).map_or_else(Vec::new,UtilityProfile::pinned);
-                if taskbar_hidden(){b.pinned_widgets.retain(|w|utilities::available_in_dock_mode(Some(*w)));}
+                b.pinned_widgets=dock_status_widgets(state.prefs.utility_profiles.get(&screen.id));
                 let layout=geometry::measure_cluster(&placed,&state.prefs.appearance,b.items.len(),b.motion.focus_value(),b.motion.zoom.value,
                     &b.pinned_widgets,state.prefs.utility_cluster(&screen.id));
-                changed|=b.layout.as_ref().is_some_and(|old|old.glass!=layout.glass||old.slots!=layout.slots||old.utility!=layout.utility||old.inline!=layout.inline);
+                changed|=b.layout.as_ref().is_some_and(|old|old.glass!=layout.glass||old.slots!=layout.slots||old.scan!=layout.scan||old.inline!=layout.inline);
                 let r=layout.window;b.layout=Some(layout);r
             }else{bar_rect(&placed,b.items.len())};
             let mut actual:RECT=mem::zeroed();
@@ -954,7 +961,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             for (index,members) in stage.members.iter().enumerate(){
                 let mut sources=[None;5];
                 for (layer,&handle) in members.iter().take(layout.depth(index).min(5)).enumerate(){
-                    sources[layer]=WindowIdentity::read(handle as HWND);
+                    sources[layer]=WindowIdentity::read_stage(handle as HWND);
                 }
                 targets.push(stage_snapshot::Target{owner:stage.hwnd as usize,layout,index,
                     reduced:state.prefs.appearance.reduced_motion,sources});
@@ -1215,14 +1222,14 @@ unsafe fn paint(hwnd:HWND){
         let ready=stage.items.iter().map(|item|(stage.preview_hwnd.is_null()||stage.preview_visible)&&stage.previews.includes(item.hwnd)).collect::<Vec<_>>();
         let dpi=state.screens.iter().find(|s|s.id==stage.display).map_or(96,|s|s.dpi);
         let dark=state.material.is_none_or(|m|m.dark);
-        Some((stage.items.clone(),ready,stage.groups.clone(),stage.selected,stage.layout?,stage.page,stage.pages,state.foreground,dpi,dark,stage.emphasis.highlight(stage.keyboard),stage.hover,stage.layered,stage.opacity,state.prefs.appearance.reduced_motion))
+        Some((stage.items.clone(),ready,stage.groups.clone(),stage.members.clone(),stage.layout?,stage.page,stage.pages,state.foreground,dpi,dark,stage.emphasis.highlight(stage.keyboard),stage.hover,stage.layered,stage.opacity,state.prefs.appearance.reduced_motion))
     });
-    if let Some((items,ready,groups,active,layout,page,pages,foreground,dpi,dark,emphasis,hover,layered,opacity,reduced))=stage {
+    if let Some((items,ready,groups,members,layout,page,pages,foreground,dpi,dark,emphasis,hover,layered,opacity,reduced))=stage {
         let key=hwnd as usize;
         let size=(area.right,area.bottom,dpi);
         let panel=STAGE_SURFACES.with(|s|s.borrow_mut().remove(&key));
         let mut panel=match panel{Some(p) if p.geometry()==size=>Some(p),_=>stage_surface::Panel::new(size.0,size.1,size.2)};
-        let selected=|i:usize|items[i].hwnd as isize==foreground || (active.is_some()&&active==groups[i]);
+        let selected=|i:usize|foreground!=0&&members[i].contains(&(foreground as usize));
         let active_mask=(0..items.len()).filter(|&i|selected(i)).fold(0u8,|bits,i|bits|(1<<i));
         let atlas=ATLAS.with(|a|a.borrow_mut().as_mut().map(|w|w.request(&items)).unwrap_or_default());
         let labels=items.iter().enumerate().map(|(i,item)|{
@@ -1283,7 +1290,7 @@ unsafe fn paint(hwnd:HWND){
                 fill(dc,RECT{left:left+24,top:56,right:left+28,bottom:60},0x00888888);
             }
         }
-        if utility_profile(hwnd).is_some_and(|p|p.enabled){label(dc,area.right-52,20,42,"⋯",0x00ffffff);}
+        label(dc,area.right-52,20,42,"⌃",0x00ffffff);
     }
     EndPaint(hwnd,&ps);
 }
@@ -2924,7 +2931,8 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                     let mut s=s.borrow_mut();
                     let b=s.bars.iter_mut().find(|b|b.hwnd==hwnd)?;
                     let layout=b.layout.as_ref()?;
-                    let status=if layout.is_utility_button(x as f32,y as f32)||b.shell_target(x as f32,y as f32).is_some(){Some(None)}
+                    let status=if layout.is_launch_button(x as f32,y as f32){Some(Some(UtilityWidget::Spotlight))}
+                        else if layout.is_utility_button(x as f32,y as f32)||b.shell_target(x as f32,y as f32).is_some(){Some(None)}
                         else{layout.inline_at(x as f32,y as f32).map(Some)};
                     if b.status_hover==status{return None;}
                     b.status_hover=status;

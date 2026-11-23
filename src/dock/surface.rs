@@ -231,13 +231,14 @@ impl Surface {
             let radius=cluster.w.min(cluster.h).min(28.0*scale)*0.42;
             let backing=(control_backing((100-self.material.transparency) as f32*2.55)*0.45).min(86.0);
             rounded(data,w,h,cluster,radius,control_tint,backing.ceil() as u8);
-        }else if control_alpha!=0{rounded(data,w,h,scan,scan.w*0.32,control_tint,control_alpha);}
+        }
+        rounded(data,w,h,scan,scan.w*0.29,control_tint,control_alpha.max(if self.material.dark{148}else{165}));
         if hover==Some(items.len()){rounded(data,w,h,scan,scan.w*0.22,tint,50);}
         let center=(scan.x+0.45*scan.w,scan.y+0.44*scan.h);
         let radius=scan.w*0.19;
         draw(data,w,h,scan,|x,y|{
-            let ring=((x-center.0).hypot(y-center.1)-radius).abs()-0.85*scale;
-            let tail=segment_distance(x,y,center.0+radius*0.65,center.1+radius*0.65,scan.x+scan.w*0.73,scan.y+scan.h*0.73)-0.88*scale;
+            let ring=((x-center.0).hypot(y-center.1)-radius).abs()-scan.w*0.034;
+            let tail=segment_distance(x,y,center.0+radius*0.65,center.1+radius*0.65,scan.x+scan.w*0.73,scan.y+scan.h*0.73)-scan.w*0.036;
             Some((tint,(0.5-ring.min(tail)).clamp(0.0,1.0)*238.0))
         });
         let utility=layout.utility;

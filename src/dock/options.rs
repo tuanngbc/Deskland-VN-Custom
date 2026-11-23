@@ -285,7 +285,7 @@ impl Options {
     pub(super) fn utility_cluster(&self,id:&str)->super::geometry::Cluster{
         let p=self.utility_profiles.get(id);
         super::geometry::Cluster{side:self.utility_position(id),cell:p.map_or(28,|p|p.cell),
-            gap:p.map_or(4,|p|p.gap),two_rows:p.is_none_or(|p|p.two_rows),
+            gap:p.map_or(4,|p|p.gap),
             inline_metrics:p.is_some_and(|p|p.metrics.enabled&&p.metrics.inline&&p.metrics.mask!=0&&!p.hidden.contains(&super::UtilityWidget::Metrics))}
     }
     pub fn utility_position(&self,id:&str)->Option<bool>{

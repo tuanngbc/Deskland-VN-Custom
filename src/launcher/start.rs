@@ -121,7 +121,7 @@ fn build_view(model:&Model)->StartView{
         tiles.push(Tile{hit,text:text.into(),rect:rr(r.0,r.1,r.2,r.3,s),entry,compact,pinned});
     };
     let controls=INSET+frame.search_width()+CONTROL_STEP-CONTROL;
-    for (i,hit,text) in [(0,Hit::Settings,"Cài đặt Deskland"),(1,Hit::Power,"Nguồn và phiên"),(2,Hit::Account,"Tài khoản") ]{
+    for (i,hit,text) in [(0,Hit::Settings,"Cài đặt Deskland"),(1,Hit::Account,"Tài khoản") ]{
         put(hit,text,(controls+i*CONTROL_STEP,HEADER_Y+2,CONTROL,CONTROL),None,true,false);
     }
     put(Hit::Home,"Đã ghim",(INSET,TABS_Y,66,26),None,true,false);
@@ -129,16 +129,19 @@ fn build_view(model:&Model)->StartView{
     let (entries,grid,recent,page,pages,limit,flow)=content(model);
     let count=entries.len();
     let y=flow.footer_y+7;
-    let edge=frame.width-INSET;
-    if page>0{put(Hit::Page(-1),"‹",(edge-106,y,25,30),None,true,false);}
+    let power_x=frame.width-INSET-POWER;
+    put(Hit::Power,"Nguồn và phiên",(power_x,flow.footer_y+(FOOTER_H-POWER)/2,POWER,POWER),None,true,false);
+    let edge=power_x-POWER_GAP;
+    let index_room=frame.width>=330;
+    if page>0{put(Hit::Page(-1),"‹",(edge-if index_room{106}else{54},y,25,30),None,true,false);}
     if page+1<pages{put(Hit::Page(1),"›",(edge-25,y,25,30),None,true,false);}
-    let index_label=if model.area==Area::Apps&&grid&&count>0{
+    let index_label=if index_room&&model.area==Area::Apps&&grid&&count>0{
         let first=initial(&entries[page*limit].name);
         let last=initial(&entries[((page+1)*limit).min(count)-1].name);
         let title=if first==last{first}else{format!("{first}–{last}")};
         put(Hit::Index,&title,(edge-79,y,52,30),None,true,false);
         String::new()
-    }else if pages>1{format!("{} / {pages}",page+1)}else{String::new()};
+    }else if index_room&&pages>1{format!("{} / {pages}",page+1)}else{String::new()};
     for (i,entry) in entries.iter().skip(page*limit).take(limit).enumerate(){
         put(Hit::Entry(i),&entry.name,frame.app(i,grid),Some(entry.clone()),!grid,is_home(model));
     }
@@ -335,7 +338,7 @@ unsafe fn paint_start(hwnd:HWND){
             }
             if !empty_query{label(dc,"Kết quả tìm kiếm",rr(INSET,TABS_Y,frame.inner(),26,s),heading,sub);}
             if !index_label.is_empty(){
-                center_label(dc,&index_label,rr(frame.width-INSET-79,flow.footer_y+7,52,30,s),small,sub);
+                center_label(dc,&index_label,rr(frame.width-INSET-POWER-POWER_GAP-79,flow.footer_y+7,52,30,s),small,sub);
             }
             for (tile,img) in tiles.iter().zip(icons.iter()){
                 let tab=matches!(tile.hit,Hit::Home|Hit::Apps);
@@ -353,7 +356,13 @@ unsafe fn paint_start(hwnd:HWND){
                     Hit::Explorer=>Some(Glyph::Folder),Hit::Windows=>Some(Glyph::Window),
                     Hit::TaskManager=>Some(Glyph::Activity),_=>None,
                 };
-                let header=matches!(tile.hit,Hit::Settings|Hit::Power|Hit::Account);
+                let header=matches!(tile.hit,Hit::Settings|Hit::Account);
+                if tile.hit==Hit::Power{
+                    let fill=if dark{[72,63,233]}else{[59,58,196]};
+                    surface.shape(tile.rect,13.0*s,fill,if hovered{255}else{218});
+                    glyph(&mut surface,tile.rect,Glyph::Power,[251,249,255],s*1.24);
+                    continue;
+                }
                 if picked||hovered||header{
                     surface.shape(tile.rect,if header{16.0*s}else{12.0*s},if picked{select_ink}else{tile_ink},if picked||hovered{188}else{110});
                 }
@@ -391,7 +400,7 @@ unsafe fn paint_start(hwnd:HWND){
             if let Some(tile)=tiles.iter().find(|t|hover.as_ref()==Some(&t.hit)&&
                 matches!(t.hit,Hit::Explorer|Hit::Windows|Hit::TaskManager|Hit::Settings|Hit::Power|Hit::Account)){
                 let hint=if tile.hit==Hit::Account{std::env::var("USERNAME").unwrap_or_else(|_|"Tài khoản".into())}else{tile.text.clone()};
-                let hint_width=(frame.inner()-210).max(0);
+                let hint_width=(frame.inner()-210-POWER-POWER_GAP).max(0);
                 if hint_width>=60{label(dc,&hint,rr(INSET+102,flow.footer_y+7,hint_width,30,s),small,sub);}
             }
             #[cfg(test)]
@@ -435,18 +444,18 @@ unsafe fn launch(hwnd:HWND,entry:Entry){
         relayout(hwnd);ShowWindow(hwnd,SW_SHOW);
     }
 }
-unsafe fn action_menu(hwnd:HWND,point:POINT,actions:&[&str])->u32{
+unsafe fn action_menu(hwnd:HWND,point:POINT,actions:&[&str],align:u32)->u32{
     let menu=CreatePopupMenu();if menu.is_null(){return 0;}
     for (i,text) in actions.iter().enumerate(){AppendMenuW(menu,MF_STRING,i+1,wide(text).as_ptr());}
     MENU.with(|flag|flag.set(true));
-    let result=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY|TPM_RIGHTBUTTON,point.x,point.y,0,hwnd,ptr::null_mut());
+    let result=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY|TPM_RIGHTBUTTON|align,point.x,point.y,0,hwnd,ptr::null_mut());
     DestroyMenu(menu);MENU.with(|flag|flag.set(false));
     result as u32
 }
 unsafe fn power(hwnd:HWND,r:RECT){
-    let mut point=POINT{x:r.left,y:r.bottom};ClientToScreen(hwnd,&mut point);
+    let mut point=POINT{x:r.right,y:r.top};ClientToScreen(hwnd,&mut point);
     let actions=["Khóa máy","Ngủ","Đăng xuất","Khởi động lại","Tắt máy"];
-    let choice=action_menu(hwnd,point,&actions);
+    let choice=action_menu(hwnd,point,&actions,TPM_RIGHTALIGN|TPM_BOTTOMALIGN);
     if choice==0||choice as usize>actions.len(){return;}
     if cfg!(test)||crate::trial::protect_windows().is_err(){
         START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){m.error="Bản thử không thực hiện thao tác nguồn hoặc phiên Windows.".into();});
@@ -502,7 +511,7 @@ unsafe fn activate(hwnd:HWND,tile:Tile){
             });
             let labels=choices.iter().map(|(letter,_)|letter.as_str()).collect::<Vec<_>>();
             let mut point=POINT{x:tile.rect.left,y:tile.rect.bottom};ClientToScreen(hwnd,&mut point);
-            let choice=action_menu(hwnd,point,&labels);
+            let choice=action_menu(hwnd,point,&labels,0);
             if let Some((_,page))=choice.checked_sub(1).and_then(|i|choices.get(i as usize)){
                 START.with(|slot|if let Some(m)=slot.borrow_mut().as_mut(){m.page=*page;m.selected=0;m.hover=None;});
                 relayout(hwnd);
@@ -530,7 +539,7 @@ unsafe fn entry_menu(hwnd:HWND,tile:Tile,mut at:POINT){
     let location=entry.path.is_absolute()&&entry.path.file_name().is_some();
     let actions=if location{vec!["Mở ứng dụng",text,"Mở vị trí tệp"]}else{vec!["Mở ứng dụng",text]};
     ClientToScreen(hwnd,&mut at);
-    match action_menu(hwnd,at,&actions){
+    match action_menu(hwnd,at,&actions,0){
         1=>launch(hwnd,entry),
         2=>if let Some(edit)=edit{PIN_EDIT.with(|p|p.replace(Some(edit)));},
         3 if location=>{
@@ -852,6 +861,15 @@ mod tests {
                 });
                 relayout(host);
             }
+            START.with(|s|{
+                let s=s.borrow();
+                let m=s.as_ref().unwrap();
+                let power=m.view.tiles.iter().find(|t|t.hit==Hit::Power).unwrap().rect;
+                let account=m.view.tiles.iter().find(|t|t.hit==Hit::Account).unwrap().rect;
+                assert!(power.top>=px(m.view.flow.footer_y,m.scale)&&power.right==account.right);
+                assert!(power.right-power.left>account.right-account.left);
+                assert!(hit_at(m,(power.left+power.right)/2,(power.top+power.bottom)/2).is_some_and(|t|t.hit==Hit::Power));
+            });
             assert_ne!(IsWindowVisible(host),0);
             assert!(handles().is_none(),"opening Start must not start Spotlight");
             let mut rc:RECT=std::mem::zeroed();
