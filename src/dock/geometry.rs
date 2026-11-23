@@ -358,7 +358,7 @@ mod tests{
         }
     }
     #[test]
-    fn windows_controls_bookend_the_dock_without_overlapping_apps_or_utilities(){
+    fn system_controls_follow_the_arrow_and_do_not_overlap_apps(){
         let bounds=RECT{left:-1080,top:-700,right:0,bottom:1220};
         let work=Display{id:"portrait".into(),name:String::new(),bounds,work:bounds,dpi:144,primary:false};
         for position in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
@@ -366,14 +366,15 @@ mod tests{
                 let style=Appearance{position,..Default::default()};
                 let l=measure_widgets(&work,&style,5,None,0.0,Some(leading),&[UtilityWidget::Network],28);
                 let along=|r:Rect|if position==DockSide::Bottom{(r.x,r.x+r.w)}else{(r.y,r.y+r.h)};
-                let controls=[l.scan].into_iter().chain(l.slots.iter().copied()).chain(l.inline.iter().map(|(_,r)|*r));
-                for r in controls{
+                for r in [l.scan].into_iter().chain(l.slots.iter().copied()){
                     assert!(along(l.start).1<=along(r).0&&along(l.tray).0>=along(r).1);
                 }
-                assert!(along(l.tray).1<=along(l.clock).0);
+                let (_,network)=l.inline[0];
+                assert!(along(l.tray).1<=along(network).0);
+                assert!(along(network).1<=along(l.clock).0+0.001);
                 let order=l.key_order();
                 assert_eq!(order[0],l.shell_index());
-                assert_eq!(&order[order.len()-2..],&[l.shell_index()+1,l.shell_index()+2]);
+                assert_eq!(&order[order.len()-3..],&[l.shell_index()+1,l.slots.len()+2,l.shell_index()+2]);
                 for (i,r) in [l.start,l.tray,l.clock].into_iter().enumerate(){
                     assert_eq!(l.hot(r.x+r.w/2.0,r.y+r.h/2.0),Some(l.shell_index()+i));
                 }

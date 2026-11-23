@@ -16,7 +16,7 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName",      "tuanpc-desk contributors"
+            VALUE "CompanyName",      "TLauncher contributors"
             VALUE "FileDescription",  "TLauncher - Desktop, Dock and Stage Manager"
             VALUE "FileVersion",      "1.1.0.0"
             VALUE "InternalName",     "TLauncher"

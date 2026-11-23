@@ -35,9 +35,9 @@ impl Anchor {
     pub fn alpha(self)->u8{(254-self.transparency.clamp(4,74)/4) as u8}
 }
 fn hub_area(monitor:RECT,work:RECT,anchor:Anchor,gap:i32)->Option<RECT>{
-    let mut area=RECT{left:monitor.left,right:monitor.right,top:work.top,bottom:monitor.bottom};
+    let mut area=RECT{left:monitor.left,right:monitor.right,top:work.top,bottom:work.bottom};
     match anchor.side{
-        DockSide::Bottom=>area.bottom=area.bottom.min(anchor.point.y-gap),
+        DockSide::Bottom=>area.bottom=monitor.bottom.min(anchor.point.y-gap),
         DockSide::Left=>area.left=area.left.max(anchor.point.x+gap),
         DockSide::Right=>area.right=area.right.min(anchor.point.x-gap),
     }
