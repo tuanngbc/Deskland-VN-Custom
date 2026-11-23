@@ -1440,7 +1440,7 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::BackgroundApps=>show_background_apps(owner),
         Command::WindowsTray=>{
             if taskbar_active(){
-                show_taskbar("Đã về chế độ tương thích. Mở lại ^ và chọn Khay ứng dụng Windows.");
+                show_taskbar("Đã hiện thanh tác vụ. Mở lại ^ → Ứng dụng chạy nền / Khay ứng dụng để dùng khay Windows.");
             }else{
                 let anchor=shell_anchor(owner,shell_access::Target::Tray);
                 shell_access::activate(shell_access::Target::Tray,false,anchor,owner,CONTROL.with(Cell::get));

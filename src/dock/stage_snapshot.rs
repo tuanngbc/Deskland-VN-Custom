@@ -271,3 +271,34 @@ pub(super) fn shutdown(){
     let job=CURRENT.with(|c|{let mut s=c.borrow_mut();s.view.take();s.job.take()});
     if let Some(job)=job{job.epoch.store(false,Ordering::Relaxed);let _=job.thread.join();}
 }
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    #[test]
+    fn projected_group_raster_retains_rear_hits_and_mirrors_without_losing_identity(){
+        for right in [false,true]{
+            let mut layout=Layout::landscape(262,300,96,16,4,1,right,true);
+            layout.count=1;layout.layers[0]=3;
+            let id=|hwnd|Some(WindowIdentity{hwnd,pid:11,tid:13});
+            let tgt=Target{owner:9,layout,index:0,reduced:false,sources:[id(1),id(2),id(3),None,None]};
+            assert!(tgt.matches_members(Some(&vec![1,2,3])));
+            assert!(!tgt.matches_members(Some(&vec![2,1,3])));
+            assert!(!tgt.matches_members(Some(&vec![1,2])));
+            let textures=[(vec![198;160*90*4],160,90),(vec![215;75*125*4],75,125),(vec![232;92*92*4],92,92)];
+            let raster=Preview::project(tgt,&textures);
+            assert_ne!(raster.idle,raster.hover);
+            for layer in 0..3{
+                let b=tgt.body(layer);
+                let x=if right{b.x+2}else{b.x+b.w-3};
+                let y=b.y+b.h/2;
+                assert_eq!((0..3).find(|&i|tgt.contains(i,x,y,false)),Some(layer));
+                assert!(!tgt.contains(layer,x,b.y-2,false));
+            }
+            let mut pixels=vec![0;layout.width as usize*layout.height as usize*4];
+            raster.blend(&mut pixels,layout.width,layout.height,false);
+            assert!(pixels.chunks_exact(4).any(|p|p[3]==255));
+            assert!(pixels.chunks_exact(4).any(|p|p[3]==0));
+        }
+    }
+}
