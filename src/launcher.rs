@@ -758,7 +758,7 @@ impl DockAnchor {
     fn position(self,work:RECT,w:i32,h:i32,pad:i32)->(i32,i32){
         use crate::dock::DockSide;
         let (x,y)=match self.side{
-            DockSide::Bottom=>(self.point.x-w/2,self.point.y-h-pad),
+            DockSide::Bottom=>(self.point.x,self.point.y-h-pad),
             DockSide::Left=>(self.point.x+pad,self.point.y-h/2),
             DockSide::Right=>(self.point.x-w-pad,self.point.y-h/2),
         };
@@ -824,6 +824,26 @@ pub fn hotkey_text(mods: u32, vk: u32) -> String { crate::shortcuts::label(mods,
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn start_tracks_button_left_and_keeps_gap_across_content_height_and_dpi(){
+        use crate::dock::DockSide;
+        for dpi in [96,120,144]{
+            let pad=10*dpi/96;
+            let work=RECT{left:-1440,top:-640,right:0,bottom:900};
+            let a=DockAnchor{point:POINT{x:-1120,y:822},side:DockSide::Bottom};
+            for h in [120,250]{
+                let (x,y)=a.position(work,620,h,pad);
+                assert_eq!(x,a.point.x);
+                assert_eq!(y+h,a.point.y-pad);
+            }
+            let left=DockAnchor{point:POINT{x:-1370,y:100},side:DockSide::Left};
+            assert_eq!(left.position(work,620,200,pad).0,left.point.x+pad);
+            let right=DockAnchor{point:POINT{x:-90,y:100},side:DockSide::Right};
+            assert_eq!(right.position(work,620,200,pad).0+620,right.point.x-pad);
+            let clamp=DockAnchor{point:POINT{x:-55,y:822},..a};
+            assert_eq!(clamp.position(work,620,200,pad).0,work.right-620);
+        }
+    }
     #[test]
     fn dock_anchor_roundtrips_and_stays_on_negative_output(){
         let work=RECT{left:-1080,top:-731,right:0,bottom:1141};

@@ -5,8 +5,24 @@ use windows_sys::Win32::{Foundation::*, System::{LibraryLoader::GetModuleHandleW
     UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*}};
 
 pub(super) const NOTICE:u32=WM_APP+57;
-const TAP:isize=1;
-const MASK_ERROR:isize=-1;
+// The x64 UI message carries full signed desktop coordinates. Reserve
+// values outside the desktop range for a missing pointer and mask failure.
+const TAP_WITHOUT_CURSOR:isize=isize::MIN;
+const MASK_ERROR:isize=isize::MAX;
+pub(super) fn cursor_now()->Option<POINT>{
+    let mut point=POINT::default();
+    (unsafe{GetCursorPos(&mut point)}!=0).then_some(point)
+}
+fn encode_tap(point:Option<POINT>)->LPARAM{
+    point.map_or(TAP_WITHOUT_CURSOR,|p|((u64::from(p.y as u32)<<32)|u64::from(p.x as u32)) as LPARAM)
+}
+pub(super) fn decode_tap(message:LPARAM)->Result<Option<POINT>,()>{
+    match message{
+        MASK_ERROR=>Err(()),
+        TAP_WITHOUT_CURSOR=>Ok(None),
+        p=>Ok(Some(POINT{x:p as i32,y:((p as u64)>>32) as i32})),
+    }
+}
 const MENU_MASK:u16=0xe8;
 
 #[derive(Clone,Copy,Default)]
@@ -87,7 +103,6 @@ impl Hook {
         }
     }
     pub fn finished(&self)->bool{self.thread.as_ref().is_none_or(JoinHandle::is_finished)}
-    pub fn is_tap(l:LPARAM)->bool{l==TAP}
 }
 impl Drop for Hook {
     fn drop(&mut self){
@@ -107,6 +122,7 @@ unsafe extern "system" fn keyboard(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
         KEYS.set(keys);
         let (target,ticket)=TARGET.get();
         if tap&&target!=0&&!MASK_FAILED.get(){
+            let tap_message=encode_tap(cursor_now());
             let mut pair:[INPUT;2]=zeroed();
             for (i,input) in pair.iter_mut().enumerate(){
                 input.r#type=INPUT_KEYBOARD;
@@ -114,7 +130,7 @@ unsafe extern "system" fn keyboard(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
             }
             let sent=SendInput(2,pair.as_ptr(),size_of::<INPUT>() as i32);
             if sent==2{
-                PostMessageW(target as HWND,NOTICE,ticket,TAP);
+                PostMessageW(target as HWND,NOTICE,ticket,tap_message);
             }else{
                 // Try to release the unassigned mask key if only down made
                 // it through. Always allow the physical Win-up.
@@ -139,6 +155,14 @@ unsafe extern "system" fn mouse(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test] fn captured_pointer_keeps_signed_monitor_coordinates(){
+        for point in [POINT{x:-815,y:400},POINT{x:2570,y:-1180},POINT{x:-1,y:-1},POINT{x:0,y:0}]{
+            let got=decode_tap(encode_tap(Some(point))).unwrap().unwrap();
+            assert_eq!((got.x,got.y),(point.x,point.y));
+        }
+        assert!(decode_tap(encode_tap(None)).unwrap().is_none());
+        assert!(decode_tap(MASK_ERROR).is_err());
+    }
     #[test] fn preference_is_opt_in_and_round_trips(){
         let mut old=super::super::Options::from_json(&serde_json::json!({"enabled":true}));
         assert!(!old.win_key_start);

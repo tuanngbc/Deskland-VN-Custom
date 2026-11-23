@@ -1660,45 +1660,36 @@ fn sync_win_key(){
         }
     }
 }
-unsafe fn start_from_win_key(){
+fn screen_for_start(screens:&[Display],cursor_bounds:Option<RECT>,foreground_bounds:Option<RECT>)->Option<&Display>{
+    cursor_bounds.and_then(|r|screens.iter().find(|d|same_rect(d.bounds,r)))
+        .or_else(||foreground_bounds.and_then(|r|screens.iter().find(|d|same_rect(d.bounds,r))))
+        .or_else(||screens.iter().find(|d|d.primary))
+}
+unsafe fn monitor_bounds(monitor:HMONITOR)->Option<RECT>{
+    if monitor.is_null(){return None;}
+    let mut info=MONITORINFO{cbSize:mem::size_of::<MONITORINFO>() as u32,..mem::zeroed()};
+    (GetMonitorInfoW(monitor,&mut info)!=0).then_some(info.rcMonitor)
+}
+unsafe fn start_from_pointer(cursor:Option<POINT>){
+    let cursor_bounds=cursor.and_then(|p|monitor_bounds(MonitorFromPoint(p,MONITOR_DEFAULTTONULL)));
     let foreground=GetForegroundWindow();
-    let monitor=if !foreground.is_null()&&foreground!=GetDesktopWindow()&&foreground!=GetShellWindow()
+    let foreground_bounds=if !foreground.is_null()&&foreground!=GetDesktopWindow()&&foreground!=GetShellWindow()
         && IsWindowVisible(foreground)!=0&&IsIconic(foreground)==0 {
-        MonitorFromWindow(foreground,MONITOR_DEFAULTTONULL)
-    }else{ptr::null_mut()};
-    let mut info:MONITORINFO=mem::zeroed();info.cbSize=mem::size_of::<MONITORINFO>() as u32;
-    let known=!monitor.is_null()&&GetMonitorInfoW(monitor,&mut info)!=0;
-    let mut cursor:POINT=mem::zeroed();let has_cursor=GetCursorPos(&mut cursor)!=0;
+        monitor_bounds(MonitorFromWindow(foreground,MONITOR_DEFAULTTONULL))
+    }else{None};
     let target=STATE.with(|s|{
         let s=s.borrow();
-        let screen=s.screens.iter().find(|d|known&&same_rect(d.bounds,info.rcMonitor))
-            .or_else(||s.screens.iter().find(|d|has_cursor&&cursor.x>=d.bounds.left&&cursor.x<d.bounds.right&&cursor.y>=d.bounds.top&&cursor.y<d.bounds.bottom))
-            .or_else(||s.screens.iter().find(|d|d.primary))?;
-        let dock=s.bars.iter().find(|b|same_rect(b.bounds,screen.bounds)&&!b.hidden).map(|b|b.hwnd);
+        let screen=screen_for_start(&s.screens,cursor_bounds,foreground_bounds)?;
+        let dock=s.bars.iter().find(|b|same_rect(b.bounds,screen.bounds));
         let side=s.prefs.appearance.position;
-        let q=screen.work;
-        let fallback=POINT{x:match side{DockSide::Left=>q.left,DockSide::Right=>q.right-1,_=>q.left+(q.right-q.left)/2},
-            y:if side==DockSide::Bottom{q.bottom-1}else{q.top+(q.bottom-q.top)/2}};
-        Some((dock,fallback,side))
+        Some(if let Some(bar)=dock{start_anchor_for(&s,bar,screen)}else{
+            let q=screen.work;
+            let point=POINT{x:match side{DockSide::Left=>q.left,DockSide::Right=>q.right-1,_=>q.left+(q.right-q.left)/8},
+                y:if side==DockSide::Bottom{q.bottom-1}else{q.top+(q.bottom-q.top)/2}};
+            crate::launcher::DockAnchor{point,side}
+        })
     });
-    if let Some((hwnd,point,side))=target{
-        if let Some(anchor)=hwnd.and_then(|h|shell_anchor(h,shell_access::Target::Start)){open_dock_launcher(anchor);}
-        else{let (w,l)=crate::launcher::DockAnchor{point,side}.encode();PostMessageW(OWNER.get(),crate::WM_OPEN_DOCK_LAUNCHER,w,l);}
-    }
-}
-unsafe fn start_from_shortcut(){
-    let mut cursor:POINT=mem::zeroed();GetCursorPos(&mut cursor);
-    let dock=STATE.with(|s|{
-        let s=s.borrow();
-        s.bars.iter().find(|b|!b.hidden&&cursor.x>=b.bounds.left&&cursor.x<b.bounds.right
-            &&cursor.y>=b.bounds.top&&cursor.y<b.bounds.bottom).map(|b|b.hwnd)
-    });
-    if let Some(anchor)=dock.and_then(|h|shell_anchor(h,shell_access::Target::Start)){
-        open_dock_launcher(anchor);
-    }else{
-        let (w,l)=crate::launcher::DockAnchor{point:cursor,side:DockSide::Bottom}.encode();
-        PostMessageW(OWNER.with(Cell::get),crate::WM_OPEN_DOCK_LAUNCHER,w,l);
-    }
+    if let Some(anchor)=target{open_dock_launcher(anchor);}
 }
 unsafe fn show_taskbar(message:&str){
     sync_start_hotkey(CONTROL.with(Cell::get),false);
@@ -1795,10 +1786,25 @@ unsafe fn shell_anchor(owner:HWND,target:shell_access::Target)->Option<panel_chr
     });
     slot.map(|point|panel_chrome::Anchor::for_owner(owner,point))
 }
-unsafe fn open_dock_launcher(anchor:panel_chrome::Anchor){
+fn start_anchor_for(state:&State,bar:&Bar,screen:&Display)->crate::launcher::DockAnchor{
+    let (display,_)=state.appbars.placement(screen,false);
+    // Compute the unmagnified frame, independent of transient hover and
+    // auto-hide translation. The panel also keeps this anchor during search.
+    geometry::measure_cluster(&display,&state.prefs.appearance,bar.items.len(),None,0.0,
+        &bar.pinned_widgets,state.prefs.utility_cluster(&screen.id)).start_anchor()
+}
+fn dock_start_anchor(owner:HWND)->Option<crate::launcher::DockAnchor>{
+    STATE.with(|s|{
+        let s=s.borrow();
+        let bar=s.bars.iter().find(|b|b.hwnd==owner&&!b.hidden)?;
+        let screen=s.screens.iter().find(|d|same_rect(d.bounds,bar.bounds))?;
+        Some(start_anchor_for(&s,bar,screen))
+    })
+}
+unsafe fn open_dock_launcher(anchor:crate::launcher::DockAnchor){
     utilities::close_panels();
     UTILITY_ANCHOR.with(|a|a.set(None));
-    let (w,l)=crate::launcher::DockAnchor{point:anchor.point,side:anchor.side}.encode();
+    let (w,l)=anchor.encode();
     PostMessageW(OWNER.with(Cell::get),crate::WM_OPEN_DOCK_LAUNCHER,w,l);
 }
 unsafe fn activate_shell(owner:HWND,target:shell_access::Target,context:bool){
@@ -1810,7 +1816,7 @@ unsafe fn activate_shell(owner:HWND,target:shell_access::Target,context:bool){
     crate::log!("DOCK_SHELL button={target:?} local={local} taskbar_hidden={}",taskbar_hidden());
     match shell_access::route(local,target,context){
         Route::Native=>shell_access::activate(target,context,anchor,owner,CONTROL.with(Cell::get)),
-        Route::Launcher=>if let Some(anchor)=anchor{open_dock_launcher(anchor);},
+        Route::Launcher=>if let Some(anchor)=dock_start_anchor(owner){open_dock_launcher(anchor);},
         Route::Calendar=>if let Some(anchor)=anchor{
             UTILITY_ANCHOR.with(|a|a.set(None));
             utilities::show_calendar(owner,anchor);
@@ -2296,13 +2302,13 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     match msg {
         appbar::CALLBACK=>{if w as u32==ABN_POSCHANGED{APPBAR_DIRTY.with(|f|f.set(true));queue_refresh();}0},
         WM_HOTKEY if hwnd==CONTROL.with(Cell::get)&&w==START_HOTKEY as usize=>{
-            if taskbar_hidden()&&START_BOUND.with(Cell::get){start_from_shortcut();}
+            if taskbar_hidden()&&START_BOUND.with(Cell::get){start_from_pointer(win_key::cursor_now());}
             0
         },
         win_key::NOTICE if hwnd==CONTROL.get()=>{
             let current=WIN_KEY.with(|s|s.borrow().as_ref().is_some_and(|hook|hook.ticket==w));
             if current&&taskbar_hidden(){
-                if win_key::Hook::is_tap(l){start_from_win_key();}
+                if let Ok(cursor)=win_key::decode_tap(l){start_from_pointer(cursor);}
                 else{
                     WIN_KEY_FAILED.set(true);
                     WIN_KEY.with(|s|drop(s.borrow_mut().take()));
@@ -2319,9 +2325,10 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_SHELL_FALLBACK if hwnd==CONTROL.with(Cell::get)=>{
             let owner=w as HWND;
             if !local_shell_buttons()&&!control_center::open_for(owner){
-                let target=if l==0{shell_access::Target::Start}else{shell_access::Target::Tray};
-                if let Some(anchor)=shell_anchor(owner,target){
-                    if l==0{open_dock_launcher(anchor);}else{open_dock_hub(owner,anchor,taskbar_active());}
+                if l==0{
+                    if let Some(anchor)=dock_start_anchor(owner){open_dock_launcher(anchor);}
+                }else if let Some(anchor)=shell_anchor(owner,shell_access::Target::Tray){
+                    open_dock_hub(owner,anchor,taskbar_active());
                 }
             }
             0
@@ -2966,6 +2973,19 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
 }
 #[cfg(test)]
 mod tests{
+    #[test]
+    fn start_monitor_prefers_captured_pointer_over_foreground(){
+        let main=RECT{left:0,top:0,right:1920,bottom:1080};
+        let portrait=RECT{left:-1080,top:-400,right:0,bottom:1520};
+        let display=|id:&str,bounds,primary,dpi|Display{id:id.into(),name:id.into(),bounds,work:bounds,primary,dpi};
+        let screens=[display("main",main,true,96),display("portrait",portrait,false,144)];
+        assert_eq!(screen_for_start(&screens,Some(portrait),Some(main)).unwrap().id,"portrait");
+        assert_eq!(screen_for_start(&screens,Some(main),Some(portrait)).unwrap().id,"main");
+        assert_eq!(screen_for_start(&screens,None,Some(portrait)).unwrap().id,"portrait");
+        assert_eq!(screen_for_start(&screens,Some(portrait),None).unwrap().id,"portrait");
+        assert_eq!(screen_for_start(&screens,None,None).unwrap().id,"main");
+    }
+
     use super::*;
     fn rect(a:[i32;4])->RECT{RECT{left:a[0],top:a[1],right:a[2],bottom:a[3]}}
     #[test] fn stage_titles_keep_different_names_after_shared_unicode_prefix(){

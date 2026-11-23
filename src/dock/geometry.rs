@@ -50,6 +50,16 @@ pub struct Layout {
     pub side:DockSide,
 }
 impl Layout {
+    pub(super) fn start_anchor(&self)->crate::launcher::DockAnchor{
+        use windows_sys::Win32::Foundation::POINT;
+        let (x,y)=match self.side{
+            DockSide::Bottom=>(self.start.x,self.glass.y),
+            DockSide::Left=>(self.glass.x+self.glass.w,self.start.y+self.start.h*0.5),
+            DockSide::Right=>(self.glass.x,self.start.y+self.start.h*0.5),
+        };
+        crate::launcher::DockAnchor{point:POINT{x:self.window.left+x.round() as i32,
+            y:self.window.top+y.round() as i32},side:self.side}
+    }
     pub fn hit(&self,x:f32,y:f32)->Option<usize>{
         self.slots.iter().position(|r|r.contains(x,y))
     }
