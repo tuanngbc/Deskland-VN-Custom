@@ -106,7 +106,7 @@ impl Panel{
         let dc=self.layer.dc();
         let (w,h)=self.layer.size;
         let rect=|x,y,width,height|self.in_rect(x,y,width,height);
-        let radius=|logical| (logical*w/WIDTH).max(2);
+        let radius=|logical:i32| (logical*w/WIDTH).max(2);
         let prev=SelectObject(dc,self.fonts[0]);
         let c=|bounds,value:&str,ink|chrome::text(dc,bounds,value,ink,TEXT|DT_CENTER);
         let l=|bounds,value:&str,ink|chrome::text(dc,bounds,value,ink,TEXT|DT_LEFT);

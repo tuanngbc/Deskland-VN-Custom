@@ -471,7 +471,7 @@ pub(super) fn draw(data:&mut [u8],w:i32,h:i32,r:Rect,f:impl Fn(f32,f32)->Option<
             if a==0{continue;}
             let i=((y*w+x)*4) as usize;
             for c in 0..3{data[i+c]=((a*rgb[c] as u32+(255-a)*data[i+c] as u32+127)/255) as u8;}
-            data[i+3]=(a+(255-a)*data[i+3] as u32/255) as u8;
+            data[i+3]=(a+((255-a)*data[i+3] as u32+127)/255) as u8;
         }
     }
 }

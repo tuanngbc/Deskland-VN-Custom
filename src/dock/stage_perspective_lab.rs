@@ -43,8 +43,10 @@ fn polygon_stack_respects_front_mask_rear_hit_and_mirror(){
 }
 
 unsafe fn source(index:usize)->Layer{
+    source_with_size(index,480,270)
+}
+unsafe fn source_with_size(index:usize,w:i32,h:i32)->Layer{
     use crate::desktop::wide;
-    let (w,h)=(480,270);
     let texture=Layer::new(w,h).unwrap();
     let fill=|x,y,right,bottom,c|{
         let brush=CreateSolidBrush(c);FillRect(texture.dc(),&RECT{left:x,top:y,right,bottom},brush);DeleteObject(brush);
@@ -53,17 +55,110 @@ unsafe fn source(index:usize)->Layer{
     fill(0,0,w,h,0x00262420);
     fill(2,2,w-2,h-2,0x00f7f6f3);
     fill(2,2,w-2,44,0x002e2b26);
-    fill(2,44,108,h-2,themes[index%themes.len()]);
-    for y in [122,143,164,185,206,227]{fill(130,y,432-y/6,y+4,0x00a9a196);}
+    let divider=w*24/100;
+    fill(2,44,divider,h-2,themes[index%themes.len()]);
+    for y in (120..h-6).step_by(21){
+        fill(divider+16,y,w-14-(y/21)%17,y+4,0x00a9a196);
+        fill(divider+16,y+8,w-20,y+9,0x00c1bcaf);
+    }
     let f=CreateFontW(-23,0,0,0,600,0,0,0,DEFAULT_CHARSET as u32,0,0,ANTIALIASED_QUALITY as u32,0,wide("Segoe UI Variable Text").as_ptr());
     let prev=SelectObject(texture.dc(),f);
     SetBkMode(texture.dc(),TRANSPARENT as i32);SetTextColor(texture.dc(),0x00ffffff);
     let title=wide(&format!("Stage fixture {}",index+1));TextOutW(texture.dc(),16,9,title.as_ptr(),title.len() as i32-1);
     SetTextColor(texture.dc(),0x003d3732);
-    let text=wide("Native Windows source pixels");
-    TextOutW(texture.dc(),129,76,text.as_ptr(),text.len() as i32-1);
+    let text=wide("Windows preview");
+    TextOutW(texture.dc(),divider+16,76,text.as_ptr(),text.len() as i32-1);
     SelectObject(texture.dc(),prev);DeleteObject(f);GdiFlush();
     texture
+}
+
+#[test]
+#[ignore = "Windows DIBs and layered fixture; exports no owner pixels"]
+fn native_stage_aa_comparison_at_three_dpi(){
+    unsafe{
+        let mut textures=[source_with_size(0,240,480),source_with_size(1,480,270),source_with_size(2,360,350)];
+        let hwnd=CreateWindowExW(WS_EX_LAYERED|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,
+            crate::desktop::wide("STATIC").as_ptr(),crate::desktop::wide("Stage AA comparison fixture").as_ptr(),
+            WS_POPUP,20,20,260,500,null_mut(),null_mut(),null_mut(),null_mut());
+        assert!(!hwnd.is_null());
+        struct Guard(HWND);
+        impl Drop for Guard{fn drop(&mut self){unsafe{DestroyWindow(self.0);}}}
+        let _guard=Guard(hwnd);
+        let output=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE").map(std::path::PathBuf::from);
+        if let Some(dir)=&output{std::fs::create_dir_all(dir).unwrap();}
+        for dpi in [96,120,144]{
+            let scale=|n:i32|n*dpi/96;
+            let (w,h)=(scale(260),scale(370));
+            let mut project=|filtered:bool,hover:bool,shadows:bool,layer:&mut Layer|{
+                let data=layer.pixels();data.fill(0);
+                for (row,depth) in [1,1,1,3].into_iter().enumerate(){
+                    for j in (0..depth).rev(){
+                        let right=row%2==1;
+                        let push=scale(13*j as i32);
+                        let r=Box2{x:scale(38)+if right{-push}else{push},y:scale(14+88*row as i32)+push/4,
+                            w:scale(176),h:scale(73)-push/4};
+                        let card=Card::new(r,right,if hover{19.0}else{28.0});
+                        let src=&mut textures[(row+j)%3];
+                        let (sw,sh)=src.size;
+                        if shadows{card.shadow_with_filter(data,w,h,j,filtered);}
+                        card.paint_with_filter(data,w,h,src.pixels(),sw,sh,j,filtered);
+                    }
+                }
+            };
+            let (mut old,mut new)=(Layer::new(w,h).unwrap(),Layer::new(w,h).unwrap());
+            let mut times=[Vec::new(),Vec::new()];
+            for repeat in 0..16{
+                for filtered in [repeat%2==1,repeat%2==0]{
+                    let then=std::time::Instant::now();
+                    project(filtered,repeat%4>=2,true,if filtered{&mut new}else{&mut old});
+                    times[usize::from(filtered)].push(then.elapsed().as_micros());
+                }
+            }
+            for t in &mut times{t.sort_unstable();}
+            project(false,false,false,&mut old);project(true,false,false,&mut new);
+            let edge_levels=|p:&mut Layer|{
+                let mut counts=[false;256];
+                for px in p.pixels().chunks_exact(4){
+                    assert!(px[..3].iter().all(|v|*v<=px[3]),"non-premultiplied edge at {dpi}");
+                    counts[px[3] as usize]=true;
+                }
+                counts[1..255].iter().filter(|b|**b).count()
+            };
+            let (old_levels,new_levels)=(edge_levels(&mut old),edge_levels(&mut new));
+            assert!(new_levels>old_levels+12);
+            project(false,false,true,&mut old);project(true,false,true,&mut new);
+            assert!(new.present(hwnd));
+            println!("STAGE_AA_FIXTURE dpi={dpi} baseline_cpu_median_us={} filtered_cpu_median_us={} edge_alpha_levels={old_levels}->{new_levels} result_bytes={} includes_stacks=3",
+                times[0][8],times[1][8],w*h*4);
+            if let Some(dir)=&output{
+                let (old,new)=(old.pixels(),new.pixels());
+                let bg=|dark:bool,x:usize,y:usize|{
+                    let tone=((x+2*y)%149/7) as u8;
+                    if dark{[32+tone,25+tone,17+tone]}else{[234+tone,222+tone,203+tone]}
+                };
+                for dark in [false,true]{
+                    // Previous on the left; improved on the right. Pixel scale 1:1.
+                    let mut result=image::RgbImage::new(2*w as u32,h as u32);
+                    for (x,y,p) in result.enumerate_pixels_mut(){
+                        let (base,xx)=if x<w as u32{(&*old,x)}else{(&*new,x-w as u32)};
+                        let i=(y as usize*w as usize+xx as usize)*4;
+                        let under=bg(dark,xx as usize,y as usize);
+                        let inv=255-base[i+3] as u16;
+                        *p=image::Rgb(std::array::from_fn(|k|
+                            (base[i+2-k] as u16+(under[2-k] as u16*inv+127)/255).min(255) as u8));
+                    }
+                    let name=if dark{"dark"}else{"light"};
+                    result.save(dir.join(format!("stage-aa-{dpi}-{name}-before-after.png"))).unwrap();
+                    let clip=|x:u32|image::imageops::crop_imm(&result,x,scale(12) as u32,scale(140) as u32,scale(50) as u32).to_image();
+                    let a=clip(scale(67) as u32);let b=clip((w+scale(67)) as u32);
+                    let mut detail=image::RgbImage::new(a.width()*2,a.height());
+                    image::imageops::replace(&mut detail,&a,0,0);
+                    image::imageops::replace(&mut detail,&b,i64::from(a.width()),0);
+                    detail.save(dir.join(format!("stage-aa-{dpi}-{name}-edge-1to1.png"))).unwrap();
+                }
+            }
+        }
+    }
 }
 
 #[test]

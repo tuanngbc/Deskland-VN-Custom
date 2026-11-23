@@ -125,19 +125,17 @@ impl CaptureDevice {
                         let mut mapped=D3D11_MAPPED_SUBRESOURCE::default();
                         step("WGC readback",context.Map(&staging,0,D3D11_MAP_READ,0,Some(&mut mapped)))?;
                         let (dw,dh)=thumb_size(w as usize,h as usize);
-                        let mut bytes=vec![0;dw*dh*4];
                         let ptr=mapped.pData as *const u8;
                         if ptr.is_null()||mapped.RowPitch<(w*4){
                             context.Unmap(&staging,0);
                             return Err("invalid staging mapping".into());
                         }
-                        for y in 0..dh{
-                            let sy=(y*h as usize/dh)*mapped.RowPitch as usize;
-                            for x in 0..dw{
-                                let sx=x*w as usize/dw*4;
-                                std::ptr::copy_nonoverlapping(ptr.add(sy+sx),bytes.as_mut_ptr().add((y*dw+x)*4),4);
-                            }
-                        }
+                        let stride=mapped.RowPitch as usize;
+                        let bytes=super::stage_projection::downsample_rows(w as usize,h as usize,dw,dh,|y|{
+                            // Each mapped row has w initialized texels; do not
+                            // form a slice over the driver's row padding.
+                            std::slice::from_raw_parts(ptr.add(y*stride),w as usize*4)
+                        });
                         context.Unmap(&staging,0);
                         if !valid(){return Err("window changed during capture".into());}
                         if !bytes.chunks_exact(4).any(|p|p[0]|p[1]|p[2]!=0){return Err("capture was blank".into());}
