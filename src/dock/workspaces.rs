@@ -276,7 +276,6 @@ impl Workspaces{
     }
     pub fn has_cards(&self,screen:&str,bounds:RECT,monitors:&[RECT],windows:&[AppWindow],global:bool)->bool{
         windows.iter().any(|w|{
-            if w.path==super::internal_app::KEY{return false;}
             if let Some(group)=self.groups.iter().find(|g|g.members.iter().any(|m|m.key.hwnd==w.hwnd as usize)){
                 return group.screen==screen;
             }
@@ -297,7 +296,7 @@ impl Workspaces{
             }
         }
         let mut indices=std::collections::HashMap::new();
-        for w in windows.iter().filter(|w|w.path!=super::internal_app::KEY&&!known.contains(&(w.hwnd as usize))){
+        for w in windows.iter().filter(|w|!known.contains(&(w.hwnd as usize))){
             let local=on_output(w.rect,bounds,monitors);
             if !global&&!local{continue;}
             let key=app_key(w,automatic&&!self.is_separate(w.hwnd));
@@ -336,6 +335,7 @@ pub(super) struct StageGroup {
 }
 
 fn app_key(w:&AppWindow,automatic:bool)->String{
+    if w.path==super::internal_app::KEY{return super::internal_app::KEY.into();}
     if automatic{
         if let Some(id)=&w.stage_aumid{return format!("aumid:{}",id.to_lowercase());}
         let path=w.path.to_lowercase();

@@ -101,17 +101,22 @@ impl Previews {
 }
 
 pub(super) unsafe fn preview_pid(window:HWND)->Result<u32,PreviewStep>{
-    let pid=permitted_pid(window)?;
+    let pid=check_preview_pid(window,true)?;
     if IsWindowVisible(window)==0{return Err(PreviewStep::Hidden);}
     if IsIconic(window)!=0{return Err(PreviewStep::Minimized);}
     Ok(pid)
 }
 
 pub(super) unsafe fn permitted_pid(window:HWND)->Result<u32,PreviewStep>{
+    check_preview_pid(window,false)
+}
+unsafe fn check_preview_pid(window:HWND,allow_settings:bool)->Result<u32,PreviewStep>{
     if window.is_null()||IsWindow(window)==0{return Err(PreviewStep::Gone);}
     let mut pid=0;
     GetWindowThreadProcessId(window,&mut pid);
-    if pid==0||pid==std::process::id(){return Err(PreviewStep::ForeignIdentity);}
+    if pid==0||pid==std::process::id()&&(!allow_settings||!super::internal_app::owns(window)){
+        return Err(PreviewStep::ForeignIdentity);
+    }
     let mut cloaked=0u32;
     let result=DwmGetWindowAttribute(window,DWMWA_CLOAKED as u32,(&mut cloaked as *mut u32).cast(),mem::size_of::<u32>() as u32);
     if result<0{return Err(PreviewStep::CloakQuery(result));}

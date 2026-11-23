@@ -42,6 +42,11 @@ pub(super) fn unlisten(hwnd:HWND){
     if state.listener==hwnd as usize{state.listener=0;}
 }
 pub(super) fn current()->HWND{SETTINGS.lock().unwrap().hwnd as HWND}
+pub(super) fn owns(hwnd:HWND)->bool{
+    if hwnd.is_null()||current()!=hwnd{return false;}
+    let mut pid=0;
+    unsafe{GetWindowThreadProcessId(hwnd,&mut pid)!=0&&pid==std::process::id()&&current()==hwnd}
+}
 pub(super) fn window()->Option<super::AppWindow>{
     if crate::trial::demo_active()||crate::trial::benchmark_active(){return None;}
     let hwnd=current();

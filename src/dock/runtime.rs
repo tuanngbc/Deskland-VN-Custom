@@ -9,6 +9,7 @@ pub(super) enum Command {
     Focus,
     Taskbar(bool),
     #[cfg(test)] InspectSettings { reply:Sender<Vec<(String,usize,bool,bool)>> },
+    #[cfg(test)] InspectStageSettings { reply:Sender<Vec<(String,usize,bool)>> },
     #[cfg(test)] Inspect { reply:Sender<Vec<usize>>, paint:bool },
 }
 #[derive(Debug)]
@@ -115,28 +116,43 @@ mod tests {
             };
             let first=create(display.bounds.left+10,display.bounds.top+10);
             let other=create(display.bounds.left+24,display.bounds.top+24);
-            let mut options=Options{enabled:true,all_windows:false,..Default::default()};
+            let mut options=Options{enabled:true,stage_enabled:true,all_windows:false,..Default::default()};
             let rt=Runtime::new(options.clone(),0).unwrap();
             let inspect=||{
                 let (tx,rx)=mpsc::channel();rt.send(Command::InspectSettings{reply:tx});
                 rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap()
             };
+            let inspect_stage=||{
+                let (tx,rx)=mpsc::channel();rt.send(Command::InspectStageSettings{reply:tx});
+                rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap()
+            };
+            let stage_row=|screen:&str,hwnd:HWND,minimized:bool|vec![(screen.to_owned(),hwnd as usize,minimized)];
             assert!(inspect().is_empty(),"all unregistered internal windows must stay excluded");
+            assert!(inspect_stage().is_empty(),"Stage must not include arbitrary in-process windows");
             internal_app::register(first);
             assert_eq!(inspect(),vec![(display.id.clone(),first as usize,false,false)]);
+            assert_eq!(inspect_stage(),stage_row(&display.id,first,false));
+            assert!(super::super::stage_window_owner(first).is_some());
+            assert!(super::super::stage_window_owner(other).is_none());
+            assert!(super::super::previews::permitted_pid(first).is_err(),"Settings must remain excluded from graphics capture");
             ShowWindow(first,SW_MINIMIZE);
             assert_eq!(inspect(),vec![(display.id.clone(),first as usize,true,false)]);
+            assert_eq!(inspect_stage(),stage_row(&display.id,first,true));
             assert!(crate::desktop::show_settings_window(first));
             assert_eq!(inspect(),vec![(display.id.clone(),first as usize,false,false)]);
+            assert_eq!(inspect_stage(),stage_row(&display.id,first,false));
             internal_app::register(other);
             internal_app::unregister(first);DestroyWindow(first);
             assert_eq!(inspect(),vec![(display.id.clone(),other as usize,false,false)]);
+            assert_eq!(inspect_stage(),stage_row(&display.id,other,false));
             if let Some(second)=screens.get(1){
                 SetWindowPos(other,null_mut(),second.bounds.left+10,second.bounds.top+10,0,0,SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);
                 assert_eq!(inspect(),vec![(second.id.clone(),other as usize,false,false)]);
+                assert_eq!(inspect_stage(),stage_row(&second.id,other,false));
             }
             internal_app::unregister(other);DestroyWindow(other);
             assert!(inspect().is_empty());
+            assert!(inspect_stage().is_empty());
             options.pinned=vec![KEY.into()];rt.configure(options);
             let pinned=inspect();
             assert_eq!(pinned.len(),screens.len());

@@ -283,13 +283,13 @@ impl Stage {
             }
             if self.hover==Some(i)&&self.close_hit(layout,i,x,y){
                 let hwnd=self.items.get(i)?.hwnd;
-                let (pid,tid)=window_owner(hwnd)?;
+                let (pid,tid)=stage_window_owner(hwnd)?;
                 return Some(StageTarget::Close(hwnd as usize,pid,tid));
             }
             let layer=self.member_hit(layout,i,x,y)?;
             // Old flat compatibility cards draw decorative edges only.
             let hwnd=*self.members.get(i)?.get(if layout.stack_design{layer}else{0})? as HWND;
-            let (pid,tid)=window_owner(hwnd)?;
+            let (pid,tid)=stage_window_owner(hwnd)?;
             return Some(StageTarget::Window(hwnd as usize,pid,tid));
         }
         layout.pages(self.pages)?.target(x,y,self.page).map(StageTarget::Page)
@@ -844,7 +844,8 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         if !auto&&!stage.rail.is_null(){DestroyWindow(stage.rail);stage.rail=ptr::null_mut();}
         let automatic=!stage_legacy_layout();
         let mut cards=state.workspaces.cards(&stage.display,stage.bounds,&monitor_bounds,&state.windows,state.prefs.all_windows,automatic,foreground as HWND);
-        if automatic{cards.sort_by_cached_key(|card|stage.order.iter().position(|key|*key==card.key).unwrap_or(usize::MAX));}
+        if automatic{cards.sort_by_cached_key(|card|(card.item.path!=internal_app::KEY,
+            stage.order.iter().position(|key|*key==card.key).unwrap_or(usize::MAX)));}
         stage.order=cards.iter().map(|card|card.key.clone()).collect::<Vec<_>>();
         let items=cards.iter().map(|card|card.item.clone()).collect::<Vec<_>>();
         let groups=cards.iter().map(|card|card.manual).collect::<Vec<_>>();
@@ -1556,6 +1557,13 @@ impl WindowIdentity{
     unsafe fn matches(self,hwnd:HWND)->bool{
         self.hwnd==hwnd as usize&&window_owner(hwnd)==Some((self.pid,self.tid))
     }
+    unsafe fn read_stage(hwnd:HWND)->Option<Self>{
+        let (pid,tid)=stage_window_owner(hwnd)?;
+        Some(Self{hwnd:hwnd as usize,pid,tid})
+    }
+    unsafe fn matches_stage(self)->bool{
+        stage_window_owner(self.hwnd as HWND)==Some((self.pid,self.tid))
+    }
 }
 
 #[derive(PartialEq,Eq)]
@@ -1568,7 +1576,7 @@ thread_local!{
 }
 // The second click uses the first window's identity and original visibility.
 unsafe fn app_click(owner:HWND,key:ClickKey,target:HWND,double:bool)->Option<AppClick>{
-    let window=WindowIdentity::read(target);
+    let window=if matches!(&key,ClickKey::Stage(_)){WindowIdentity::read_stage(target)}else{WindowIdentity::read(target)};
     APP_CLICK.with(|slot|{
         let mut slot=slot.borrow_mut();
         if double{
@@ -1585,13 +1593,13 @@ unsafe fn app_click(owner:HWND,key:ClickKey,target:HWND,double:bool)->Option<App
 }
 unsafe fn minimize_click(window:WindowIdentity)->bool{
     let hwnd=window.hwnd as HWND;
-    window.matches(hwnd)&&IsIconic(hwnd)==0&&GetWindowLongPtrW(hwnd,GWL_STYLE)&WS_MINIMIZEBOX as isize!=0
+    window.matches_stage()&&IsIconic(hwnd)==0&&(internal_app::owns(hwnd)||GetWindowLongPtrW(hwnd,GWL_STYLE)&WS_MINIMIZEBOX as isize!=0)
         &&ShowWindowAsync(hwnd,SW_MINIMIZE)!=0
 }
 unsafe fn finish_double_click(click:AppClick)->Option<FeedbackKind>{
     let window=click.window?;
     let hwnd=window.hwnd as HWND;
-    if !window.matches(hwnd){return None;}
+    if !window.matches_stage(){return None;}
     if click.was_open{minimize_click(window).then_some(FeedbackKind::Minimize)}
     else if IsIconic(hwnd)!=0{focus_stage_window(hwnd);Some(FeedbackKind::Restore)}
     else{None}
@@ -1846,7 +1854,10 @@ unsafe fn sync_start_hotkey(control:HWND,requested:bool){
     }
 }
 fn win_key_status(status:&'static str){
-    if WIN_KEY_STATE.with(|s|s.replace(status))!=status{emit(Event::WinKey(status.into()));}
+    if WIN_KEY_STATE.with(|s|s.replace(status))!=status{
+        crate::log!("DOCK_WIN_KEY state={status}");
+        emit(Event::WinKey(status.into()));
+    }
 }
 fn sync_win_key(){
     let on=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.win_key_start&&!s.suspended});
@@ -2282,6 +2293,13 @@ unsafe fn window_owner(hwnd:HWND)->Option<(u32,u32)>{
     let thread=GetWindowThreadProcessId(hwnd,&mut process);
     (process!=0&&thread!=0&&process!=std::process::id()).then_some((process,thread))
 }
+unsafe fn stage_window_owner(hwnd:HWND)->Option<(u32,u32)>{
+    if let Some(owner)=window_owner(hwnd){return Some(owner);}
+    if !internal_app::owns(hwnd){return None;}
+    let mut pid=0;
+    let tid=GetWindowThreadProcessId(hwnd,&mut pid);
+    (pid==std::process::id()&&tid!=0&&internal_app::current()==hwnd).then_some((pid,tid))
+}
 unsafe fn move_normal_window(hwnd:HWND,target_id:&str){
     if IsIconic(hwnd)!=0||IsZoomed(hwnd)!=0||IsWindowVisible(hwnd)==0{return;}
     let screens=displays();
@@ -2307,7 +2325,8 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
         let i=stage.hit(layout,x,y)?;
         let member=if layout.stack_design{stage.member_hit(layout,i,x,y)?}else{0};
         let item=*stage.members.get(i)?.get(member)? as HWND;
-        let local=stage_window_is_local(item,stage.bounds);
+        let settings=internal_app::owns(item);
+        let local=!settings&&stage_window_is_local(item,stage.bounds);
         let group=stage.groups.get(i).copied().flatten();
         let members=group.map(|id|state.workspaces.members(id))
             .unwrap_or_else(||stage.members[i].iter().map(|&h|h as HWND).collect()).into_iter()
@@ -2316,8 +2335,8 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
                 state.windows.iter().find(|w|w.hwnd==hwnd).map(|w|(identity,w.title.clone()))
             })
             .collect::<Vec<_>>();
-        let targets=state.screens.iter().filter(|s|!stage_window_is_local(item,s.bounds)).map(|s|s.id.clone()).collect::<Vec<_>>();
-        Some((WindowIdentity::read(item)?,group,stage.display.clone(),stage.selected,local,state.workspaces.can_create(&stage.display),members,targets,state.workspaces.is_separate(item)))
+        let targets=state.screens.iter().filter(|s|!settings&&!stage_window_is_local(item,s.bounds)).map(|s|s.id.clone()).collect::<Vec<_>>();
+        Some((WindowIdentity::read_stage(item)?,group,stage.display.clone(),stage.selected,local,state.workspaces.can_create(&stage.display),members,targets,state.workspaces.is_separate(item)))
     });
     let Some((identity,group,display,current,local,can_create,members,targets,separate))=card else{return;};
     let item=identity.hwnd as HWND;
@@ -2436,7 +2455,7 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
     let card_index=STATE.with(|s|{
         let state=s.borrow();
         let stage=state.stages.iter().find(|stage|stage.hwnd==hwnd&&stage.display==display&&!stage.hidden)?;
-        stage.members.iter().enumerate().find(|(i,m)|stage.groups[*i]==group&&m.contains(&identity.hwnd)&&identity.matches(item))
+        stage.members.iter().enumerate().find(|(i,m)|stage.groups[*i]==group&&m.contains(&identity.hwnd)&&identity.matches_stage())
             .map(|(i,_)|i)
     });
     let Some(index)=card_index else{return;};
@@ -2529,6 +2548,11 @@ unsafe fn stage_picker(hwnd:HWND,i:usize){
         hint:format!("{} cửa sổ · Chọn một cửa sổ để đưa lên trước",cards.len()),cards,metrics:None});
 }
 unsafe fn focus_stage_window(hwnd:HWND){
+    if internal_app::owns(hwnd){
+        let owner=OWNER.with(Cell::get);
+        if !owner.is_null(){PostMessageW(owner,crate::WM_OPEN_SETTINGS,0,0);}
+        return;
+    }
     if window_owner(hwnd).is_none(){return;}
     if IsIconic(hwnd)!=0{ShowWindowAsync(hwnd,SW_RESTORE);}
     SetForegroundWindow(hwnd);
@@ -2621,7 +2645,10 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         win_key::NOTICE if hwnd==CONTROL.get()=>{
             let current=WIN_KEY.with(|s|s.borrow().as_ref().is_some_and(|hook|hook.ticket==w));
             if current&&taskbar_hidden(){
-                if let Ok(cursor)=win_key::decode_tap(l){start_from_pointer(cursor);}
+                if let Ok(cursor)=win_key::decode_tap(l){
+                    if crate::trial::active(){crate::log!("DOCK_WIN_KEY standalone routed to Deskland Start");}
+                    start_from_pointer(cursor);
+                }
                 else{
                     WIN_KEY_FAILED.set(true);
                     WIN_KEY.with(|s|drop(s.borrow_mut().take()));
@@ -3050,10 +3077,10 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                         if let Some(i)=item{stage_picker(hwnd,i);}
                     }}
                     Some(StageTarget::Close(target,pid,tid))=>{
-                        if window_owner(target as HWND)==Some((pid,tid)){PostMessageW(target as HWND,WM_CLOSE,0,0);}
+                        if stage_window_owner(target as HWND)==Some((pid,tid)){PostMessageW(target as HWND,WM_CLOSE,0,0);}
                     }
                     Some(StageTarget::Window(target,pid,tid))=>{
-                        if window_owner(target as HWND)==Some((pid,tid)){
+                        if stage_window_owner(target as HWND)==Some((pid,tid)){
                             if let Some(second)=key.and_then(|key|app_click(hwnd,ClickKey::Stage(key),target as HWND,double)){
                                 if finish_double_click(second).is_some(){queue_refresh();}
                                 return 0;
@@ -3223,6 +3250,17 @@ unsafe fn drain_commands() {
                     }).collect()
                 });
                 let _=reply.send(items);
+            },
+            #[cfg(test)] Command::InspectStageSettings{reply}=>{
+                let mut rows=Vec::new();
+                update_state(|state|{
+                    refresh(state,false);
+                    for stage in &state.stages{
+                        rows.extend(stage.items.iter().filter(|item|item.path==internal_app::KEY)
+                            .map(|item|(stage.display.clone(),item.hwnd as usize,IsIconic(item.hwnd)!=0)));
+                    }
+                });
+                let _=reply.send(rows);
             },
             #[cfg(test)] Command::Inspect{reply,paint}=>{
                 let handles:Vec<usize>=STATE.with(|s|{let s=s.borrow();s.bars.iter().map(|b|b.hwnd as usize)

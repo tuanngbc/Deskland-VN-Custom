@@ -1,5 +1,5 @@
-//! Opt-in Win tap detection. Physical inputs always continue through the
-//! hook chain; the only synthesized events are a one-shot menu mask pair.
+//! Opt-in Win tap detection. Chords pass through as physical input. Only a
+//! confirmed standalone Win release can be replaced by a masked release.
 use std::{cell::Cell, mem::{size_of, zeroed}, ptr::null_mut, sync::{Arc,mpsc}, thread::JoinHandle};
 use windows_sys::Win32::{Foundation::*, System::{LibraryLoader::GetModuleHandleW,Threading::{CreateEventW,SetEvent,INFINITE}},
     UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*}};
@@ -24,6 +24,14 @@ pub(super) fn decode_tap(message:LPARAM)->Result<Option<POINT>,()>{
     }
 }
 const MENU_MASK:u16=0xe8;
+
+fn masked_release(key:u16,scan:u16,extended:bool)->[INPUT;3]{
+    let keyboard=|vk,scan,flags|INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{
+        ki:KEYBDINPUT{wVk:vk,wScan:scan,dwFlags:flags,time:0,dwExtraInfo:0},
+    }};
+    [keyboard(MENU_MASK,0,0),keyboard(MENU_MASK,0,KEYEVENTF_KEYUP),
+        keyboard(key,scan,KEYEVENTF_KEYUP|if extended{KEYEVENTF_EXTENDEDKEY}else{0})]
+}
 
 #[derive(Clone,Copy,Default)]
 struct Keys {
@@ -121,20 +129,20 @@ unsafe extern "system" fn keyboard(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
         let tap=keys.edge(e.vkCode,matches!(w as u32,WM_KEYDOWN|WM_SYSKEYDOWN),injected,foreground);
         KEYS.set(keys);
         let (target,ticket)=TARGET.get();
-        if tap&&target!=0&&!MASK_FAILED.get(){
+        if tap&&target!=0&&!MASK_FAILED.get()&&IsWindow(target as HWND)!=0{
             let tap_message=encode_tap(cursor_now());
-            let mut pair:[INPUT;2]=zeroed();
-            for (i,input) in pair.iter_mut().enumerate(){
-                input.r#type=INPUT_KEYBOARD;
-                input.Anonymous.ki=KEYBDINPUT{wVk:MENU_MASK,dwFlags:if i==0{0}else{KEYEVENTF_KEYUP},..zeroed()};
-            }
-            let sent=SendInput(2,pair.as_ptr(),size_of::<INPUT>() as i32);
-            if sent==2{
+            // Letting the physical release through let Explorer react before
+            // the old separate mask arrived. Queue mask + equivalent release
+            // in one ordered batch and consume only this physical release.
+            let keys=masked_release(e.vkCode as u16,e.scanCode as u16,e.flags&LLKHF_EXTENDED!=0);
+            let sent=SendInput(keys.len() as u32,keys.as_ptr(),size_of::<INPUT>() as i32);
+            if sent==keys.len() as u32{
                 PostMessageW(target as HWND,NOTICE,ticket,tap_message);
+                return 1;
             }else{
                 // Try to release the unassigned mask key if only down made
-                // it through. Always allow the physical Win-up.
-                if sent==1{SendInput(1,pair[1..].as_ptr(),size_of::<INPUT>() as i32);}
+                // it through. Forward the physical Win-up on any failure.
+                if sent==1{SendInput(1,keys[1..].as_ptr(),size_of::<INPUT>() as i32);}
                 MASK_FAILED.set(true);
                 PostMessageW(target as HWND,NOTICE,ticket,MASK_ERROR);
             }
@@ -155,6 +163,17 @@ unsafe extern "system" fn mouse(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test] fn replacement_orders_the_mask_before_the_matching_win_release(){
+        for (key,scan) in [(VK_LWIN,0x5b),(VK_RWIN,0x5c)]{
+            let keys=masked_release(key,scan,true);
+            let sequence=keys.map(|e|unsafe{
+                let k=e.Anonymous.ki;(e.r#type,k.wVk,k.wScan,k.dwFlags)
+            });
+            assert_eq!(sequence,[(INPUT_KEYBOARD,MENU_MASK,0,0),
+                (INPUT_KEYBOARD,MENU_MASK,0,KEYEVENTF_KEYUP),
+                (INPUT_KEYBOARD,key,scan,KEYEVENTF_KEYUP|KEYEVENTF_EXTENDEDKEY)]);
+        }
+    }
     #[test] fn captured_pointer_keeps_signed_monitor_coordinates(){
         for point in [POINT{x:-815,y:400},POINT{x:2570,y:-1180},POINT{x:-1,y:-1},POINT{x:0,y:0}]{
             let got=decode_tap(encode_tap(Some(point))).unwrap().unwrap();

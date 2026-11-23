@@ -294,6 +294,16 @@ fn health(expected:&[Snapshot],current:Option<&[Snapshot]>)->Option<Exit>{
     else{None}
 }
 
+const INVENTORY_SETTLE:Duration=Duration::from_secs(2);
+#[derive(Default)]
+struct InventoryGap{unverified_since:Option<Instant>}
+impl InventoryGap{
+    fn expired(&mut self,verified:bool,now:Instant)->bool{
+        if verified{self.unverified_since=None;return false;}
+        now.saturating_duration_since(*self.unverified_since.get_or_insert(now))>=INVENTORY_SETTLE
+    }
+}
+
 unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle,expected:&[Snapshot],proof:Option<&std::path::Path>,started:Instant)->Exit{
     let Some(starting)=snapshot()else{return Exit::ExplorerChanged;};
     if starting!=expected{return Exit::ExplorerChanged;}
@@ -333,9 +343,31 @@ unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle
     // Each original bar has an independent reveal timer. A pointer over
     // one output cannot keep a different, persistently visible bar alive.
     let mut reveals=vec![AutoHideReveal::default();expected.len()];
+    let mut inventory_gap=InventoryGap::default();
+    let mut inventory_missing=false;
     let interval=if proof.is_some(){250}else if auto_hide{750}else{1000};
     wait_for_restore(&signals,interval,Duration::from_secs(6),||{
-        let current=snapshot();
+        let mut current=snapshot();
+        let now=Instant::now();
+        if current.is_none(){
+            if !inventory_missing{trace(proof,"inventory-unavailable",started,None);}
+            inventory_missing=true;
+            // Search/Start can briefly make the shell inventory unavailable.
+            // Continue with only the original, revalidated HWNDs; never
+            // adopt another window from a partial snapshot.
+            let originals=expected.iter().map(|row|{
+                row.id.matches().then(||Snapshot{id:row.id,visible:IsWindowVisible(row.id.hwnd())!=0})
+            }).collect::<Option<Vec<_>>>();
+            if inventory_gap.expired(originals.is_some(),now){
+                trace(proof,"before-restore:ExplorerChanged",started,None);
+                return Some(Exit::ExplorerChanged);
+            }
+            current=originals;
+            if current.is_none(){return None;}
+        }else{
+            inventory_gap.expired(true,now);
+            if std::mem::take(&mut inventory_missing){trace(proof,"inventory-recovered",started,current.as_deref());}
+        }
         let raw_status=health(expected,current.as_deref());
         let status=if raw_status==Some(Exit::ShellRevealed)&&auto_hide&&appbar_state()&ABS_AUTOHIDE!=0{
             let mut pos:POINT=mem::zeroed();
@@ -400,6 +432,18 @@ unsafe fn wait_for_restore(signals:&[HANDLE;3],interval:u32,lease:Duration,mut h
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn transient_missing_shell_inventory_is_not_an_explorer_restart(){
+        let start=Instant::now();
+        let mut gap=InventoryGap::default();
+        assert!(!gap.expired(false,start));
+        assert!(!gap.expired(false,start+Duration::from_millis(1600)));
+        assert!(!gap.expired(true,start+Duration::from_millis(1700)));
+        assert!(!gap.expired(true,start+Duration::from_secs(6)));
+        let missing_again=start+Duration::from_secs(7);
+        assert!(!gap.expired(false,missing_again));
+        assert!(gap.expired(false,missing_again+INVENTORY_SETTLE));
+    }
     #[test]
     fn auto_hide_sliver_is_not_the_full_taskbar_even_on_a_negative_coordinate_monitor(){
         let bounds=|r:[i32;4]|RECT{left:r[0],top:r[1],right:r[2],bottom:r[3]};
