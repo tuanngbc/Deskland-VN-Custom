@@ -666,7 +666,7 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
         if let Some((true,status))=taskbar{
             use crate::dock::TaskbarMode;
             let label=match status.effective{
-                TaskbarMode::Hidden=>"Hiện thanh tác vụ Windows",
+                TaskbarMode::Hidden|TaskbarMode::Parked|TaskbarMode::EdgePeek=>"Hiện thanh tác vụ Windows",
                 TaskbarMode::HidePending=>"Hủy yêu cầu ẩn thanh tác vụ",
                 TaskbarMode::Restoring=>"Đang xác minh thanh tác vụ đã hiện lại…",
                 _=>"Ẩn thanh tác vụ cho phiên này",
@@ -864,7 +864,7 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
     if command==2998 {
         let hide=UI.with(|u|u.borrow().as_ref().and_then(|ui|{
             let mode=ui.taskbar.effective;
-            (mode!=crate::dock::TaskbarMode::Restoring).then_some(!mode.hidden()&&!mode.pending())
+            (mode!=crate::dock::TaskbarMode::Restoring).then_some(!mode.engaged()&&!mode.pending())
         }));
         if let Some(hide)=hide{push(Action::DockTaskbar(hide));}
         return;

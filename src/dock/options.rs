@@ -401,6 +401,22 @@ mod tests {
         assert_eq!(Options::from_json(&options.json()),options);
     }
     #[test]
+    fn override_icon_survives_roundtrip_and_reset_replaces_the_saved_array(){
+        let mut options=Options{pinned:vec![r"C:\Apps\editor.exe".into()],..Default::default()};
+        let key=r"C:/Apps/Editor.exe";
+        let file="0123456789abcdef0123456789abcdef.png";
+        Edit::AppIcon{key:key.into(),file:Some(file.into())}.apply(&mut options);
+        let saved=options.json();
+        assert_eq!(saved["appIcons"][0]["app"],r"c:\apps\editor.exe");
+        assert_eq!(saved["appIcons"][0]["image"],file);
+        assert_eq!(Options::from_json(&saved),options);
+        Edit::AppIcon{key:key.into(),file:Some("../old.png".into())}.apply(&mut options);
+        assert_eq!(options.json()["appIcons"],saved["appIcons"]);
+        Edit::AppIcon{key:key.into(),file:None}.apply(&mut options);
+        assert_eq!(options.json()["appIcons"],json!([]));
+        assert_eq!(options.json()["pinned"],saved["pinned"]);
+    }
+    #[test]
     fn window_policy_keeps_legacy_auto_hide_and_per_screen_overrides() {
         let mut options=Options::from_json(&json!({"appearance":{"autoHide":true},"windowPolicies":{
             "Portrait":{"dock":"reserve","stage":"autoHide"},
