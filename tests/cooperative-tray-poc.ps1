@@ -11,5 +11,5 @@ $file=Join-Path $dir 'cooperative-tray-poc.json'
 $raw=Get-Content -LiteralPath $file -Raw
 $r=$raw|ConvertFrom-Json
 if(!$r.added -or $r.tooltipRevision -ne 2 -or $r.leftCallback -ne 1 -or $r.doubleCallback -ne 1 -or
-   $r.appOwnedContextMenuItems -ne 2 -or !$r.removed -or !$r.cleanRestart -or $r.externalAppEnumeration){throw "Unexpected cooperative proof: $raw"}
+   $r.appOwnedContextMenuItems -ne 2 -or !$r.removed -or !$r.cleanRestart -or !$r.recoveredAfterPeerExit -or $r.externalAppEnumeration){throw "Unexpected cooperative proof: $raw"}
 Write-Output $raw

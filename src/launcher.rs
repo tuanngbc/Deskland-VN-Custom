@@ -101,7 +101,7 @@ struct State {
     icon_results: std::sync::mpsc::Receiver<((PathBuf, i32), Option<IconPixels>)>,
     pending_icons: usize,
     apps_indexed:bool, apps_rx:Option<std::sync::mpsc::Receiver<Vec<Entry>>>,
-    history: History, launching: bool, dock_start:bool,
+    history: History, launching: bool, dock_start:bool, dock_anchor:Option<DockAnchor>,
 }
 #[derive(Clone)]
 pub(crate) struct IconPixels { pub(crate) width: i32, pub(crate) height: i32, pub(crate) pixels: Vec<u8> }
@@ -344,9 +344,8 @@ fn icon_worker() -> (std::sync::mpsc::Sender<(PathBuf, i32)>, std::sync::mpsc::R
 }
 
 unsafe fn extract_icon(path: &Path, size: i32) -> Option<IconPixels> {
-    if let Some(command)=path.to_str().and_then(crate::dock::command_pin::decode){
-        return shell_icon(Path::new(&command.exe),size);
-    }
+    let command=path.to_str().and_then(crate::dock::command_pin::decode);
+    let path=command.as_ref().map_or(path,|c|Path::new(&c.exe));
     let icon = shell_icon(path, (size * 2).clamp(64, 256))?;
     let scale = size as f32 / icon.width.max(icon.height) as f32;
     let width = (icon.width as f32 * scale).round().max(1.0) as i32;
@@ -760,7 +759,14 @@ impl DockAnchor {
 pub(crate) fn toggle_at(dock:Option<DockAnchor>) {
     unsafe {
         if let Some((hwnd, _, _, _)) = handles() {
-            if IsWindowVisible(hwnd) != 0 { dismiss(hwnd); return; }
+            if IsWindowVisible(hwnd) != 0 {
+                let same=STATE.with(|s|s.borrow().as_ref().is_some_and(|s|match (s.dock_anchor,dock){
+                    (Some(a),Some(b))=>a.point.x==b.point.x&&a.point.y==b.point.y&&a.side==b.side,
+                    (None,None)=>true,_=>false,
+                }));
+                dismiss(hwnd);
+                if same{return;}
+            }
         } else {
             let instance = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(std::ptr::null());
             let cls = wide(CLASS); let mut wc: WNDCLASSEXW = std::mem::zeroed();
@@ -775,14 +781,14 @@ pub(crate) fn toggle_at(dock:Option<DockAnchor>) {
             let mut all = entries();
             sync_pin_entries(&mut all);
             let (icon_requests,icon_results)=icon_worker();
-            STATE.with(|c| *c.borrow_mut() = Some(State { hwnd, all, matches: Vec::new(), query: String::new(), selected: 0, first: 0, scale: 1.0, width: 660, height: 444, glass: Vec::new(), backdrop: Vec::new(), error: String::new(), select_all: false, icons:std::collections::HashMap::new(),icon_requests,icon_results,pending_icons:0,apps_indexed:false,apps_rx:None,history:load_history(),launching:false,dock_start:false }));
+            STATE.with(|c| *c.borrow_mut() = Some(State { hwnd, all, matches: Vec::new(), query: String::new(), selected: 0, first: 0, scale: 1.0, width: 660, height: 444, glass: Vec::new(), backdrop: Vec::new(), error: String::new(), select_all: false, icons:std::collections::HashMap::new(),icon_requests,icon_results,pending_icons:0,apps_indexed:false,apps_rx:None,history:load_history(),launching:false,dock_start:false,dock_anchor:None }));
         }
         let Some((hwnd, _, _, _)) = handles() else { return; };
         let mouse=dock.map_or_else(||{let mut p=POINT{x:0,y:0};GetCursorPos(&mut p);p},|a|a.point);
         let monitor = MonitorFromPoint(mouse, MONITOR_DEFAULTTONEAREST); let mut mi: MONITORINFO = std::mem::zeroed(); mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32; GetMonitorInfoW(monitor, &mut mi);
         if mi.rcWork.right<=mi.rcWork.left||mi.rcWork.bottom<=mi.rcWork.top{return;}
         // Query DPI after moving the still-hidden HWND to the target output.
-        SetWindowPos(hwnd,std::ptr::null_mut(),mouse.x,mouse.y,0,0,SWP_NOACTIVATE|SWP_NOSIZE|SWP_NOZORDER);
+        SetWindowPos(hwnd,std::ptr::null_mut(),mi.rcWork.left,mi.rcWork.top,1,1,SWP_NOACTIVATE|SWP_NOREDRAW|SWP_NOZORDER);
         let scale = (windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd).clamp(72,288) as f32 / 96.0)
             .min((mi.rcWork.right-mi.rcWork.left) as f32/684.0).min((mi.rcWork.bottom-mi.rcWork.top) as f32/468.0);
         let width = (660.0 * scale) as i32; let height = (444.0 * scale) as i32;
@@ -793,7 +799,7 @@ pub(crate) fn toggle_at(dock:Option<DockAnchor>) {
         let backdrop = capture_glass(x+pad, y+pad, width, height);
         let appearance=PREFS.with(|c| c.borrow().clone());
         let glass=frost(&backdrop,width,height,scale,&appearance);
-        STATE.with(|c| if let Some(s) = c.borrow_mut().as_mut() { s.scale = scale; s.width = width; s.height = height; s.glass = glass; s.backdrop=backdrop; s.query.clear(); s.select_all = false; s.dock_start=dock.is_some();
+        STATE.with(|c| if let Some(s) = c.borrow_mut().as_mut() { s.scale = scale; s.width = width; s.height = height; s.glass = glass; s.backdrop=backdrop; s.query.clear(); s.select_all = false; s.dock_start=dock.is_some();s.dock_anchor=dock;
             if s.dock_start&&!s.apps_indexed{s.apps_indexed=true;s.apps_rx=installed_apps_worker();}
         });
         refresh();

@@ -5,7 +5,7 @@ use std::{
     cell::Cell, io::{self, Read, Write}, mem, os::windows::process::CommandExt, path::Path,
     process::{Child, ChildStdin, Command, Stdio}, ptr, sync::mpsc, thread, time::Duration,
 };
-use windows_sys::Win32::{Foundation::*, System::LibraryLoader::GetModuleHandleW, UI::{Shell::*, WindowsAndMessaging::*}};
+use windows_sys::Win32::{Foundation::*, Graphics::Gdi::{COLOR_WINDOW,UpdateWindow}, System::LibraryLoader::GetModuleHandleW, UI::{Shell::*, WindowsAndMessaging::*}};
 
 const VERSION:u8=1;
 const ADD:u8=1;
@@ -15,6 +15,9 @@ const RIGHT:u8=4;
 const DOUBLE:u8=5;
 const REMOVE:u8=6;
 const EXIT:u8=7;
+const OPEN_MENU:u8=8;
+const SHOW_PEER_MENU:u32=WM_APP+172;
+const KEY_SELECT:u32=NIN_SELECT|1; // NINF_KEY from ShellAPI.h
 const SHELL_CALLBACK:u32=WM_APP+170;
 const FIXTURE_CALLBACK:u32=WM_APP+171;
 const FIXTURE_ICON:u32=1;
@@ -34,6 +37,7 @@ unsafe fn app_menu()->HMENU{
 }
 unsafe extern "system" fn peer_window(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     let code=match msg{
+        SHOW_PEER_MENU=>WM_CONTEXTMENU,
         FIXTURE_CALLBACK if w as u32==FIXTURE_ICON=>l as u32,
         SHELL_CALLBACK if (l as u32>>16)==FIXTURE_ICON=>l as u32&0xffff,
         _=>return DefWindowProcW(hwnd,msg,w,l),
@@ -41,18 +45,19 @@ unsafe extern "system" fn peer_window(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRES
     ACTIONS.with(|a|{
         let mut state=a.get();
         match code{
-            WM_LBUTTONUP|NIN_SELECT|NIN_KEYSELECT=>state.left=state.left.saturating_add(1),
+            WM_LBUTTONUP|NIN_SELECT|KEY_SELECT=>state.left=state.left.saturating_add(1),
             WM_LBUTTONDBLCLK=>state.double=state.double.saturating_add(1),
             WM_CONTEXTMENU=>{
                 let menu=app_menu();
                 if !menu.is_null(){
                     state.menu_items=GetMenuItemCount(menu).max(0) as u8;
-                    if msg==SHELL_CALLBACK{
-                        // Only real clicks on the explicitly registered
-                        // fixture icon show its native application menu.
-                        let x=w as i16 as i32;let y=(w>>16) as i16 as i32;
+                    if msg==SHELL_CALLBACK||msg==SHOW_PEER_MENU{
+                        let packed=if msg==SHELL_CALLBACK{w}else{l as usize};
+                        let x=packed as i16 as i32;let y=(packed>>16) as i16 as i32;
                         SetForegroundWindow(hwnd);
-                        TrackPopupMenu(menu,TPM_RIGHTBUTTON|TPM_RETURNCMD,x,y,0,hwnd,ptr::null());
+                        let choice=TrackPopupMenu(menu,TPM_RIGHTBUTTON|TPM_RETURNCMD,x,y,0,hwnd,ptr::null());
+                        if choice==1{PostMessageW(hwnd,FIXTURE_CALLBACK,FIXTURE_ICON as usize,WM_LBUTTONUP as isize);}
+                        if choice==2{PostQuitMessage(0);}
                         PostMessageW(hwnd,WM_NULL,0,0);
                     }
                     DestroyMenu(menu);
@@ -92,7 +97,7 @@ impl Icon {
         for (d,s) in data.szTip.iter_mut().zip(tooltip.encode_utf16()){*d=s;}
         data
     }
-    unsafe fn act(&mut self,op:u8)->io::Result<[u8;6]>{
+    unsafe fn act(&mut self,op:u8,point:i32)->io::Result<[u8;6]>{
         match op{
             ADD if self.revision==0=>{
                 self.revision=1;
@@ -113,6 +118,7 @@ impl Icon {
                 // send messages to owner HWNDs supplied by another process.
                 SendMessageW(self.hwnd,FIXTURE_CALLBACK,FIXTURE_ICON as usize,code as isize);
             }
+            OPEN_MENU if self.revision>0=>{PostMessageW(self.hwnd,SHOW_PEER_MENU,0,point as isize);}
             REMOVE|EXIT=>self.remove(),
             _=>return Err(io::Error::other("Unexpected tray fixture operation")),
         }
@@ -132,9 +138,10 @@ fn peer(allow_shell:bool)->io::Result<()>{
     let (tx,rx)=mpsc::sync_channel(1);
     thread::spawn(move||{
         let mut input=io::stdin().lock();
-        let mut frame=[0u8;2];
+        let mut frame=[0u8;6];
         while input.read_exact(&mut frame).is_ok(){
-            if frame[0]!=VERSION||!(ADD..=EXIT).contains(&frame[1])||tx.send(frame[1]).is_err(){break;}
+            let point=i32::from_le_bytes([frame[2],frame[3],frame[4],frame[5]]);
+            if frame[0]!=VERSION||!(ADD..=OPEN_MENU).contains(&frame[1])||tx.send((frame[1],point)).is_err(){break;}
         }
     });
     let mut icon=unsafe{Icon::new(allow_shell)?};
@@ -151,8 +158,8 @@ fn peer(allow_shell:bool)->io::Result<()>{
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
-            if let Some(op)=op{
-                output.write_all(&icon.act(op)?)?;output.flush()?;
+            if let Some((op,point))=op{
+                output.write_all(&icon.act(op,point)?)?;output.flush()?;
                 if op==EXIT{break;}
             }
         }
@@ -177,7 +184,11 @@ impl Bridge{
         Ok(Self{child,write,answers})
     }
     fn call(&mut self,op:u8)->io::Result<[u8;6]>{
-        self.write.write_all(&[VERSION,op])?;
+        self.at(op,0)
+    }
+    fn at(&mut self,op:u8,point:i32)->io::Result<[u8;6]>{
+        let [a,b,c,d]=point.to_le_bytes();
+        self.write.write_all(&[VERSION,op,a,b,c,d])?;
         let answer=self.answers.recv_timeout(Duration::from_secs(3)).map_err(io::Error::other)?;
         if answer[0]!=VERSION||answer[1]>2||answer[2]>1 || self.child.try_wait()?.is_some_and(|status|op!=EXIT||!status.success()){
             return Err(io::Error::other("Invalid tray fixture response"));
@@ -209,27 +220,109 @@ fn run(dir:&Path,allow_shell:bool)->io::Result<()>{
     let removed=bridge.call(REMOVE)?;
     let _=bridge.call(EXIT)?;
     drop(bridge);
+    let mut interrupted=Bridge::start(dir,false)?;
+    let _=interrupted.call(ADD)?;
+    interrupted.child.kill()?;
+    interrupted.child.wait()?;
+    let observed_crash=interrupted.call(LEFT).is_err();
+    drop(interrupted);
     let mut recovered=Bridge::start(dir,false)?;
     let again=recovered.call(ADD)?;
     let _=recovered.call(EXIT)?;
-    if initial[1]!=1||updated[1]!=2||left[3]!=1||right[4]!=2||double[5]!=1||removed[1]!=0||removed[2]!=0||again[1]!=1{
+    if initial[1]!=1||updated[1]!=2||left[3]!=1||right[4]!=2||double[5]!=1||removed[1]!=0||removed[2]!=0||again[1]!=1||!observed_crash{
         return Err(io::Error::other("Tray fixture did not complete its lifecycle"));
     }
     let report=serde_json::json!({
         "protocol":VERSION,"cooperativePeer":true,"added":true,"tooltipRevision":updated[1],"iconRevision":updated[1],
         "leftCallback":left[3],"doubleCallback":double[5],"appOwnedContextMenuItems":right[4],
-        "removed":true,"cleanRestart":true,"registeredWithExplorer":initial[2]!=0,
+        "removed":true,"cleanRestart":true,"recoveredAfterPeerExit":observed_crash,"registeredWithExplorer":initial[2]!=0,
         "externalAppEnumeration":false,"interactiveRightClickForwarding":false
     });
     std::fs::write(dir.join("cooperative-tray-poc.json"),report.to_string())
 }
 
+struct Demo{bridge:Bridge,revision:u8,status:String}
+unsafe fn peer_icon(hwnd:HWND,state:&Demo){
+    let id=if state.revision>=2{IDI_INFORMATION}else{IDI_APPLICATION};
+    let icon=if state.revision==0{ptr::null_mut()}else{LoadIconW(ptr::null_mut(),id)};
+    SendMessageW(GetDlgItem(hwnd,5),0x0170,icon as usize,0); // STM_SETICON
+    SetWindowTextW(GetDlgItem(hwnd,6),wide(&state.status).as_ptr());
+}
+unsafe extern "system" fn demo_window(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
+    let state=GetWindowLongPtrW(hwnd,GWLP_USERDATA) as *mut Demo;
+    match msg{
+        WM_NCCREATE=>{
+            let create=&*(l as *const CREATESTRUCTW);
+            SetWindowLongPtrW(hwnd,GWLP_USERDATA,create.lpCreateParams as isize);
+            DefWindowProcW(hwnd,msg,w,l)
+        }
+        WM_COMMAND if !state.is_null()=>{
+            let op=match w&0xffff{1=>ADD,2=>UPDATE,3=>REMOVE,4=>DOUBLE,5=>LEFT,_=>return 0};
+            let state=&mut *state;
+            let result=state.bridge.call(op);
+            reflect_demo(hwnd,state,result);0
+        }
+        WM_CONTEXTMENU if !state.is_null()=>{
+            let state=&mut *state;
+            if state.revision!=0&&w as HWND==GetDlgItem(hwnd,5){
+                let mut point=POINT{x:0,y:0};GetCursorPos(&mut point);
+                AllowSetForegroundWindow(state.bridge.child.id());
+                let packed=((point.y as u16 as u32)<<16)|(point.x as u16 as u32);
+                let result=state.bridge.at(OPEN_MENU,packed as i32);
+                reflect_demo(hwnd,state,result);
+            }
+            0
+        }
+        WM_DESTROY=>{PostQuitMessage(0);0}
+        _=>DefWindowProcW(hwnd,msg,w,l),
+    }
+}
+unsafe fn reflect_demo(hwnd:HWND,state:&mut Demo,result:io::Result<[u8;6]>){
+    state.status=match result{
+        Ok(r)=>{
+            state.revision=r[1];
+            let tooltip=match r[1]{0=>"Đã ẩn icon",1=>"Tooltip: Deskland trial tray: ready",_=>"Tooltip: Deskland trial tray: updated"};
+            format!("{tooltip} · click trái: {} · double: {}",r[3],r[5])
+        }
+        Err(_)=>"Ứng dụng mẫu đã đóng hoặc không nhận thao tác này.".into(),
+    };
+    peer_icon(hwnd,state);
+}
+unsafe fn demo(dir:&Path)->io::Result<()>{
+    let mut state=Box::new(Demo{bridge:Bridge::start(dir,false)?,revision:0,status:"Chưa thêm icon".into()});
+    let hinstance=GetModuleHandleW(ptr::null());
+    let class=wide("TuanpcDeskTrialTrayPanel");
+    let wc=WNDCLASSW{lpfnWndProc:Some(demo_window),hInstance:hinstance,lpszClassName:class.as_ptr(),
+        hbrBackground:(COLOR_WINDOW+1) as _,hCursor:LoadCursorW(ptr::null_mut(),IDC_ARROW),..mem::zeroed()};
+    if RegisterClassW(&wc)==0&&GetLastError()!=ERROR_CLASS_ALREADY_EXISTS{return Err(io::Error::last_os_error());}
+    let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW,class.as_ptr(),wide("Deskland · Khay thử nghiệm").as_ptr(),
+        WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,CW_USEDEFAULT,CW_USEDEFAULT,540,224,ptr::null_mut(),ptr::null_mut(),hinstance,(&mut *state as *mut Demo).cast());
+    if hwnd.is_null(){return Err(io::Error::last_os_error());}
+    let ctl=|class:&str,label:&str,id:i32,x,y,w,h,style:u32|{
+        CreateWindowExW(0,wide(class).as_ptr(),wide(label).as_ptr(),WS_CHILD|WS_VISIBLE|style,x,y,w,h,hwnd,id as HMENU,hinstance,ptr::null())
+    };
+    ctl("STATIC","Bấm vào icon hoặc bấm chuột phải để mở menu của ứng dụng mẫu.",0,20,15,490,26,0);
+    ctl("STATIC","",5,24,51,40,44,0x0103); // SS_ICON | SS_NOTIFY
+    ctl("STATIC","",6,75,56,424,52,0);
+    for (i,label) in ["Thêm icon","Đổi icon","Ẩn icon","Double-click"].into_iter().enumerate(){
+        ctl("BUTTON",label,i as i32+1,20+i as i32*126,126,113,32,WS_TABSTOP);
+    }
+    let initial=state.bridge.call(ADD);
+    reflect_demo(hwnd,&mut state,initial);
+    ShowWindow(hwnd,SW_SHOW);UpdateWindow(hwnd);
+    let mut msg:MSG=mem::zeroed();
+    while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0{TranslateMessage(&msg);DispatchMessageW(&msg);}
+    let _=state.bridge.call(EXIT);
+    Ok(())
+}
+
 pub(crate) fn dispatch(args:&[String])->Option<i32>{
     let is_peer=args.iter().any(|a|a=="--trial-tray-poc-peer");
-    if !is_peer&&!args.iter().any(|a|a=="--trial-tray-poc"){return None;}
+    let demo_requested=args.iter().any(|a|a=="--trial-tray-poc-demo");
+    if !is_peer&&!demo_requested&&!args.iter().any(|a|a=="--trial-tray-poc"){return None;}
     let Some(dir)=crate::trial::data_dir()else{return Some(2);};
     let allow_shell=args.iter().any(|a|a=="--trial-tray-poc-shell")
         &&std::env::var("GITHUB_ACTIONS").as_deref()==Ok("true");
-    let result=if is_peer{peer(allow_shell)}else{run(dir,allow_shell)};
+    let result=if is_peer{peer(allow_shell)}else if demo_requested{unsafe{demo(dir)}}else{run(dir,allow_shell)};
     Some(match result{Ok(())=>0,Err(error)=>{eprintln!("Cooperative tray fixture: {error}");3}})
 }
