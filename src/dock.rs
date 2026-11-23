@@ -1094,9 +1094,8 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let Some(screen)=state.screens.iter().find(|s|s.id==stage.display) else{continue;};
         let mut steps=[previews::PreviewStep::NotRun;8];
         if !hide&&layout.width>0&&layout.height>0{
-            let mut projected=[0;8];
-            for v in stage_snapshot::views(stage.hwnd as usize){projected[v.target.index]=v.mask;}
-            changed|=projection_changed;
+            let projected=stage_snapshot::masks(stage.hwnd as usize);
+            changed|=projection_changed.contains(&(stage.hwnd as usize));
             let host=if stage.preview_hwnd.is_null(){stage.hwnd}else{stage.preview_hwnd};
             changed|=if stage.preview_hwnd.is_null()||!automatic{
                 stage.previews.update_traced(host,&stage.items,layout,benchmark_sources.map(|_| steps.as_mut_slice()))

@@ -449,7 +449,22 @@ impl State{
     }
 }
 
-pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usize)->bool{
+fn mark_changed(changed:&mut Vec<usize>,owner:usize){
+    if !changed.contains(&owner){changed.push(owner);}
+}
+
+fn check_removed(changed:&mut Vec<usize>,old:&[Raster],next:&[Raster]){
+    // The number of tiles can stay the same when a tile disappears on one
+    // monitor and a different monitor adds a tile in the same update.
+    for previous in old{
+        let target=previous.preview.target;
+        if !changed.contains(&target.owner)&&!next.iter().any(|v|v.preview.target==target){
+            mark_changed(changed,target.owner);
+        }
+    }
+}
+
+pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usize)->Vec<usize>{
     CURRENT.with(|cell|{
         let mut state=cell.borrow_mut();
         let now=Instant::now();
@@ -459,8 +474,8 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
             state.foreground=0;state.visible=false;state.next_capture=None;
             if let Some(j)=&state.job{j.live.store(false,Ordering::Relaxed);}
             state.sources.clear();
-            let changed=!state.views.is_empty();
-            state.views.clear();
+            let mut changed=Vec::new();
+            for raster in state.views.drain(..){mark_changed(&mut changed,raster.preview.target.owner);}
             return changed;
         }
         // Don't initialize Windows Graphics Capture during brief Stage
@@ -518,7 +533,7 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
         let old=std::mem::take(&mut state.views);
         let mut next=Vec::new();
         let mut bytes=0;
-        let mut changed=false;
+        let mut changed=Vec::new();
         for &target in targets{
             let b=target.bounds();
             if b.w<=0||b.h<=0||i64::from(b.w)*i64::from(b.h)>300_000{continue;}
@@ -530,11 +545,11 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
             if let Some(previous)=old.iter().find(|p|p.preview.target==target&&p.revisions==revisions){
                 next.push(Raster{revisions,preview:previous.preview.clone()});
             }else{
-                changed=true;
+                mark_changed(&mut changed,target.owner);
                 next.push(Raster{revisions,preview:Preview::project(target,&frames.map(|f|f.and_then(|s|s.frame.as_ref())))});
             }
         }
-        changed|=old.len()!=next.len();
+        check_removed(&mut changed,&old,&next);
         state.views=next;
         changed
     })
@@ -555,6 +570,16 @@ pub(super) fn complete(){
             _=>entry.retry=Some(Instant::now()+Duration::from_secs(30)),
         }
     });
+}
+pub(super) fn masks(owner:usize)->[u8;8]{
+    CURRENT.with(|c|{
+        let mut masks=[0;8];
+        for raster in &c.borrow().views{
+            let view=&raster.preview;
+            if view.target.owner==owner{masks[view.target.index]=view.mask;}
+        }
+        masks
+    })
 }
 pub(super) fn views(owner:usize)->Vec<Preview>{
     CURRENT.with(|c|c.borrow().views.iter().filter(|v|v.preview.target.owner==owner).map(|v|v.preview.clone()).collect())
@@ -660,6 +685,21 @@ mod tests{
             assert_ne!(pixels,zoomed);
             assert!(zoomed.chunks_exact(4).all(|p|p[..3].iter().all(|&v|v<=p[3])));
         }
+    }
+
+    #[test]
+    fn removing_a_tile_dirties_its_monitor_even_when_another_adds_one(){
+        let layout=Layout::landscape(272,420,96,12,5,1,false,true);
+        let raster=|owner|{
+            let target=Target{owner,layout,index:0,reduced:true,dark:true,dpi:96,sources:[None;5]};
+            Raster{revisions:[0;5],preview:Preview{target,mask:0,settings_placeholder:false,
+                bounds:Box2{x:0,y:0,w:1,h:1},idle:Arc::from([])}}
+        };
+        let previous=[raster(1),raster(2)];
+        let current=[raster(2),raster(3)];
+        let mut changed=vec![3];
+        check_removed(&mut changed,&previous,&current);
+        assert_eq!(changed,[3,1]);
     }
 
     #[test]
