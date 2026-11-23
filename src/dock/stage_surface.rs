@@ -70,7 +70,7 @@ impl Layout {
         l.landscape=true;l.stack_design=stacked;
         // Include the glow and detached icon inside the layered HWND, even
         // when the active card expands or a perspective preview is hovered.
-        l.inset=px(15).min((width/8).max(1));
+        l.inset=px(19).min((width/8).max(1));
         l.radius=px(9);
         // Keep rear layers distinct without sacrificing the front silhouette.
         l.stack_step=(width/17).clamp(px(5).max(1),px(15).max(1));

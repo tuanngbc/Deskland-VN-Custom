@@ -175,7 +175,23 @@ impl Target{
     fn zoom(self,mask:u8,strength:u8)->f32{
         // A partial stack shares space with static compatibility layers.
         let full=(1u8<<self.sources.iter().flatten().count())-1;
-        if self.reduced||mask!=full{1.0}else{1.0+0.055*f32::from(strength)/255.0}
+        if self.reduced||mask!=full||strength==0{return 1.0;}
+        let (x,y)=self.layout.card(self.index).center();
+        let (x,y)=(x as f32,y as f32);
+        let mut limit=1.055f32;
+        for layer in 0..self.sources.iter().flatten().count(){
+            let r=self.body(layer);
+            let halo=(r.h as f32*0.067).clamp(3.0,10.0)+1.0;
+            for (available,used) in [
+                (x,x-r.x as f32+halo),
+                (self.layout.width as f32-x,(r.x+r.w) as f32-x+halo),
+                (y,y-r.y as f32+halo),
+                (self.layout.height as f32-y,(r.y+r.h) as f32-y+halo),
+            ]{
+                if used>0.0{limit=limit.min((available/used).max(1.0));}
+            }
+        }
+        1.0+(limit-1.0)*f32::from(strength)/255.0
     }
     pub fn contains(self,layer:usize,x:i32,y:i32,mask:u8,strength:u8)->bool{
         let (cx,cy)=self.layout.card(self.index).center();
@@ -199,9 +215,16 @@ impl Target{
             b.x=b.x.min(r.x);b.y=b.y.min(r.y);
             right=right.max(r.x+r.w);bottom=bottom.max(r.y+r.h);
         }
-        b.x=(b.x-11).max(0);b.y=(b.y-11).max(0);
-        b.w=(right+11).min(self.layout.width)-b.x;
-        b.h=(bottom+11).min(self.layout.height)-b.y;
+        // Leave room in the cached tile for the scaled halo as well as the
+        // body. A fixed eleven-pixel halo clips when the tile itself grows.
+        let pad=11+if self.reduced{0}else{
+            let (x,y)=self.layout.card(self.index).center();
+            let reach=(x-b.x).max(right-x).max(y-b.y).max(bottom-y)+11;
+            (reach as f32*0.055).ceil() as i32+1
+        };
+        b.x=(b.x-pad).max(0);b.y=(b.y-pad).max(0);
+        b.w=(right+pad).min(self.layout.width)-b.x;
+        b.h=(bottom+pad).min(self.layout.height)-b.y;
         b
     }
 }
@@ -634,6 +657,27 @@ mod tests{
             raster.blend(&mut zoomed,layout.width,layout.height,180);
             assert_ne!(pixels,zoomed);
             assert!(zoomed.chunks_exact(4).all(|p|p[..3].iter().all(|&v|v<=p[3])));
+        }
+    }
+
+    #[test]
+    fn active_preview_keeps_a_transparent_edge_at_full_hover(){
+        for right in [false,true]{
+            let mut layout=Layout::landscape(272,420,96,12,5,1,right,true);
+            layout.count=1;
+            layout.active=Some(0);
+            layout.height=layout.content_height();
+            let id=WindowIdentity{hwnd:1,pid:11,tid:13};
+            let target=Target{owner:9,layout,index:0,reduced:false,sources:[Some(id),None,None,None,None]};
+            let frame=(vec![210;160*90*4],160,90);
+            let preview=Preview::project(target,&[Some(&frame),None,None,None,None]);
+            let w=layout.width as usize;
+            let mut pixels=vec![0;w*layout.height as usize*4];
+            preview.blend(&mut pixels,layout.width,layout.height,255);
+            assert!(target.zoom(1,255)>1.0);
+            let edge=if right{w-1}else{0};
+            assert!(pixels.chunks_exact(w*4).all(|row|row[edge*4+3]==0));
+            assert!(pixels.chunks_exact(w*4).last().unwrap().iter().all(|&p|p==0));
         }
     }
 }

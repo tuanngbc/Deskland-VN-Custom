@@ -658,7 +658,7 @@ fn dock_depth(screen:&Screen,style:&Appearance,cluster:geometry::Cluster)->i32 {
 }
 fn stage_width(screen:&Screen,style:StageStyle)->i32{
     let scale=(screen.dpi as f32/96.0).clamp(0.75,3.0);
-    let base=if stage_legacy_layout(){160.0}else{264.0};
+    let base=if stage_legacy_layout(){160.0}else{272.0};
     (base*style.scale as f32/100.0*scale).round() as i32
 }
 fn dock_status_widgets(profile:Option<&UtilityProfile>)->Vec<UtilityWidget>{
