@@ -90,6 +90,34 @@ fn parked_at_bottom(bar:RECT,display:RECT)->bool{
     span>=(display.right-display.left)/2&&span>0&&bar.bottom-bar.top>=16
         &&(display.bottom-3..=display.bottom+3).contains(&bar.top)&&bar.bottom>display.bottom
 }
+fn pointer_over_bar(point:POINT,bar:RECT,display:RECT)->bool{
+    // Use the actual on-screen strip, including the revealed area above
+    // the bottom edge. A half off-screen bar must not claim another output.
+    point.x>=bar.left.max(display.left)&&point.x<bar.right.min(display.right)
+        &&point.y>=bar.top.max(display.top)&&point.y<bar.bottom.min(display.bottom)
+}
+
+// This timer starts after the pointer leaves the revealed bar, not when
+// Explorer starts to show it. Re-entering the bar cancels the countdown.
+const AUTO_HIDE_SETTLE:Duration=Duration::from_secs(3);
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+enum Reveal{Idle,Started,Waiting,Ended,Persistent}
+#[derive(Clone,Copy,Default)]
+struct AutoHideReveal{active:bool,away_since:Option<Instant>}
+impl AutoHideReveal{
+    fn observe(&mut self,visible:bool,over_bar:bool,now:Instant)->Reveal{
+        if !visible{
+            let ended=std::mem::take(self).active;
+            return if ended{Reveal::Ended}else{Reveal::Idle};
+        }
+        let started=!std::mem::replace(&mut self.active,true);
+        if over_bar{self.away_since=None;}
+        else if now.saturating_duration_since(*self.away_since.get_or_insert(now))>=AUTO_HIDE_SETTLE{
+            return Reveal::Persistent;
+        }
+        if started{Reveal::Started}else{Reveal::Waiting}
+    }
+}
 unsafe fn visual_snapshot(raw:&[Snapshot],auto_hide:bool)->Vec<Snapshot>{
     raw.iter().map(|row|{
         let mut row=*row;
@@ -302,30 +330,45 @@ unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle
     if proof.is_some(){let current=snapshot();trace(proof,"hidden-confirmed",started,current.as_deref());}
     if SetEvent(ready.0)==0{return Exit::LinkLost;}
     let signals=[parent.0,stop.0,pulse.0];
-    let mut edge_observed=None;
+    // Each original bar has an independent reveal timer. A pointer over
+    // one output cannot keep a different, persistently visible bar alive.
+    let mut reveals=vec![AutoHideReveal::default();expected.len()];
     let interval=if proof.is_some(){250}else if auto_hide{750}else{1000};
     wait_for_restore(&signals,interval,Duration::from_secs(6),||{
         let current=snapshot();
-        let visual=if auto_hide{current.as_ref().map(|rows|visual_snapshot(rows,true))}else{current.clone()};
-        let status=health(expected,visual.as_deref());
-        match status{
-            Some(Exit::ShellRevealed) if auto_hide=>{
-                let mut pos:POINT=mem::zeroed();
-                let near_edge=GetCursorPos(&mut pos)!=0&&visual.as_ref().is_some_and(|rows|rows.iter().filter(|r|r.visible).all(|row|{
-                    let (_,display)=geometry(row.id);
-                    display.is_some_and(|r|pos.x>=r.left&&pos.x<r.right&&pos.y>=r.bottom-8&&pos.y<r.bottom)
-                }));
-                if near_edge||edge_observed.is_some(){
-                    if edge_observed.is_none(){trace(proof,"edge-reveal-observed",started,current.as_deref());}
-                    let first=edge_observed.get_or_insert_with(Instant::now);
-                    if first.elapsed()<Duration::from_millis(1050){return None;}
+        let raw_status=health(expected,current.as_deref());
+        let status=if raw_status==Some(Exit::ShellRevealed)&&auto_hide&&appbar_state()&ABS_AUTOHIDE!=0{
+            let mut pos:POINT=mem::zeroed();
+            let cursor=if GetCursorPos(&mut pos)!=0{Some(pos)}else{None};
+            let now=Instant::now();
+            let mut began=false;
+            let mut ended=false;
+            let mut persistent=false;
+            for (row,peek) in current.as_deref().unwrap_or_default().iter().zip(&mut reveals){
+                let (visible,over)=if row.visible{
+                    let pair=geometry(row.id);
+                    let on_screen=pair.0.zip(pair.1);
+                    (!on_screen.is_some_and(|(bar,display)|parked_at_bottom(bar,display)),
+                        cursor.zip(on_screen).is_some_and(|(point,(bar,display))|pointer_over_bar(point,bar,display)))
+                }else{(false,false)};
+                match peek.observe(visible,over,now){
+                    Reveal::Started=>began=true,
+                    Reveal::Ended=>ended=true,
+                    Reveal::Persistent=>persistent=true,
+                    Reveal::Waiting|Reveal::Idle=>{}
                 }
-            },
-            None=>{
-                if edge_observed.take().is_some(){trace(proof,"edge-reveal-ended",started,current.as_deref());}
-            },
-            _=>{}
-        }
+            }
+            if began{trace(proof,"edge-reveal-observed",started,current.as_deref());}
+            if ended{trace(proof,"edge-reveal-ended",started,current.as_deref());}
+            persistent.then_some(Exit::ShellRevealed)
+        }else{
+            if raw_status.is_none(){
+                let mut ended=false;
+                for peek in &mut reveals{ended|=std::mem::take(peek).active;}
+                if ended{trace(proof,"edge-reveal-ended",started,current.as_deref());}
+            }
+            raw_status
+        };
         if let Some(reason)=status{trace(proof,&format!("before-restore:{reason:?}"),started,current.as_deref());}
         status
     })
@@ -365,6 +408,53 @@ mod tests{
         assert!(!parked_at_bottom(bounds([-1080,1141,0,1189]),portrait));
         assert!(!parked_at_bottom(bounds([0,1078,2560,1126]),portrait));
         assert!(!parked_at_bottom(bounds([-1080,1187,-1000,1235]),portrait));
+    }
+    #[test]
+    fn owner_recording_reveal_stays_in_dock_while_hovering_and_during_explorer_slide(){
+        let main=RECT{left:0,top:0,right:2560,bottom:1080};
+        let bar=RECT{left:0,top:1032,right:2560,bottom:1080};
+        let point=POINT{x:2473,y:1071};
+        // The old bottom-eight-pixel check returned false here.
+        assert!(pointer_over_bar(point,bar,main));
+        assert!(!pointer_over_bar(POINT{x:2473,y:1080},bar,main));
+        let t=Instant::now();
+        let mut reveal=AutoHideReveal::default();
+        assert_eq!(reveal.observe(true,true,t),Reveal::Started);
+        assert_eq!(reveal.observe(true,true,t+Duration::from_secs(15)),Reveal::Waiting);
+        let away=t+Duration::from_secs(16);
+        assert_eq!(reveal.observe(true,false,away),Reveal::Waiting);
+        assert_eq!(reveal.observe(false,false,away+Duration::from_millis(240)),Reveal::Ended);
+        // First sample may already be after the pointer left. It still gets
+        // a chance to settle; this is not immediate Explorer replacement.
+        assert_eq!(reveal.observe(true,false,away+Duration::from_secs(4)),Reveal::Started);
+        assert_eq!(reveal.observe(false,false,away+Duration::from_secs(5)),Reveal::Ended);
+    }
+    #[test]
+    fn persistent_reveal_is_independent_of_pointer_activity_on_the_other_screen(){
+        let main=RECT{left:0,top:0,right:2560,bottom:1080};
+        let main_bar=RECT{top:1032,..main};
+        let portrait=RECT{left:-1080,top:-731,right:0,bottom:1189};
+        let portrait_bar=RECT{top:1141,..portrait};
+        let pointer=POINT{x:-300,y:1180};
+        assert!(pointer_over_bar(pointer,portrait_bar,portrait));
+        assert!(!pointer_over_bar(pointer,main_bar,main));
+        let now=Instant::now();
+        let mut a=AutoHideReveal::default();
+        let mut b=AutoHideReveal::default();
+        assert_eq!(a.observe(true,false,now),Reveal::Started);
+        assert_eq!(b.observe(true,true,now),Reveal::Started);
+        assert_eq!(a.observe(true,false,now+AUTO_HIDE_SETTLE-Duration::from_millis(1)),Reveal::Waiting);
+        assert_eq!(a.observe(true,false,now+AUTO_HIDE_SETTLE),Reveal::Persistent);
+        assert_eq!(b.observe(true,true,now+AUTO_HIDE_SETTLE),Reveal::Waiting);
+    }
+    #[test]
+    fn returning_to_the_revealed_bar_restarts_its_settle_window(){
+        let start=Instant::now();
+        let mut reveal=AutoHideReveal::default();
+        assert_eq!(reveal.observe(true,false,start),Reveal::Started);
+        assert_eq!(reveal.observe(true,true,start+Duration::from_secs(2)),Reveal::Waiting);
+        assert_eq!(reveal.observe(true,false,start+Duration::from_secs(4)),Reveal::Waiting);
+        assert_eq!(reveal.observe(true,false,start+Duration::from_secs(7)),Reveal::Persistent);
     }
     #[test]
     fn distinguishes_explicit_restore_parent_exit_and_missing_dock_heartbeat() {

@@ -2027,7 +2027,7 @@ unsafe fn poll_taskbar(hwnd:HWND){
             // grace period); the UI still reports the observation immediately.
             let mode=TaskbarMode::confirmed(actual);
             let detail=if !actual.known{"Chưa đọc được trạng thái thanh Windows; bộ khôi phục vẫn đang giám sát."}
-                else if actual.visible>0{"Windows đang hiện thanh tác vụ; đang xác minh có phải do rê mép màn hình."}
+                else if actual.visible>0{"Thanh Windows đang hiện; Dock tiếp tục hoạt động trong lúc bộ giám sát chờ thanh tự ẩn."}
                 else if actual.parked>0{"Windows đã đẩy thanh tác vụ ra mép tự ẩn; Dock vẫn quản lý phiên này."}
                 else{"Chế độ Dock đang bật cho phiên này. Ctrl+Alt+Shift+F12 để hiện thanh Windows."};
             publish_taskbar(true,mode,actual,"HideConfirmed",detail);
