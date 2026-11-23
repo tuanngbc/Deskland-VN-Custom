@@ -1,7 +1,7 @@
 {
   "name": "简体中文",
   "ui": {
-    "dockAutoHide": "自动隐藏 Dock",
+    "dockAutoHide": "窗口最大化时隐藏 Dock",
     "dockAppearanceTitle": "Dock 外观",
     "dockIconSize": "图标大小",
     "dockSpacing": "图标间距",

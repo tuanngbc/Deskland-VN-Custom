@@ -242,12 +242,22 @@ impl Preview{
         };
         Self{target,mask,settings_placeholder,bounds:b,idle}
     }
+    #[cfg(test)]
     pub(super) fn blend(&self,data:&mut[u8],w:i32,h:i32,strength:u8){
+        self.blend_with_ink(data,w,h,strength,255);
+    }
+    pub(super) fn blend_with_ink(&self,data:&mut[u8],w:i32,h:i32,strength:u8,ink:u8){
         let b=self.bounds;
         if b.x<0||b.y<0||b.w<=0||b.h<=0||b.x+b.w>w||b.y+b.h>h{return;}
         let composite=|s:&[u8],d:&mut[u8]|{
             let a=u16::from(s[3]);
-            if a!=0{for k in 0..4{d[k]=(u16::from(s[k])+(u16::from(d[k])*(255-a)+127)/255).min(255) as u8;}}
+            if a!=0{
+                for k in 0..4{
+                    let src=u16::from(s[k]);
+                    let src=if ink!=255&&k<3{(src*u16::from(ink)+127)/255}else{src};
+                    d[k]=(src+(u16::from(d[k])*(255-a)+127)/255).min(255) as u8;
+                }
+            }
         };
         let scale=self.target.zoom(self.mask,strength);
         if scale!=1.0{

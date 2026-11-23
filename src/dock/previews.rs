@@ -4,7 +4,7 @@ use super::{Item,same_rect,stage_surface::Layout};
 use std::{collections::HashMap,mem};
 use windows_sys::Win32::{Foundation::*,Graphics::{Dwm::*,Gdi::*},UI::WindowsAndMessaging::*};
 
-pub struct Link { raw:isize, pid:u32, area:RECT, crop:Option<RECT> }
+pub struct Link { raw:isize, pid:u32, area:RECT, crop:Option<RECT>, opacity:u8 }
 impl Drop for Link {fn drop(&mut self){unsafe{DwmUnregisterThumbnail(self.raw);}}}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +26,12 @@ impl Previews {
         let mut areas=self.links.values().map(|link|link.area).collect::<Vec<_>>();
         areas.sort_unstable_by_key(|r|(r.top,r.left,r.bottom,r.right));
         areas
+    }
+    pub(super) unsafe fn set_opacity(&mut self,source:usize,opacity:u8){
+        let Some(link)=self.links.get_mut(&source)else{return;};
+        if link.opacity==opacity{return;}
+        let properties=DWM_THUMBNAIL_PROPERTIES{dwFlags:DWM_TNP_OPACITY,opacity,..mem::zeroed()};
+        if DwmUpdateThumbnailProperties(link.raw,&properties)>=0{link.opacity=opacity;}
     }
     pub fn includes(&self,hwnd:HWND)->bool{self.links.contains_key(&(hwnd as usize))}
     pub fn benchmark_counts(&self, pid: u32, anchor: usize) -> (usize, usize) {
@@ -69,7 +75,7 @@ impl Previews {
                     if result<0{record(PreviewStep::Register(result));continue;}
                     if raw==0{record(PreviewStep::NullLink);continue;}
                     changed=true;
-                    Link{raw,pid,area:mem::zeroed(),crop:None}
+                    Link{raw,pid,area:mem::zeroed(),crop:None,opacity:255}
                 }
             };
             let mut size:SIZE=mem::zeroed();
@@ -81,7 +87,7 @@ impl Previews {
             if !same_rect(link.area,area)||!same_crop(link.crop,crop){
                 let properties=DWM_THUMBNAIL_PROPERTIES {
                     dwFlags:DWM_TNP_RECTDESTINATION|DWM_TNP_VISIBLE|DWM_TNP_OPACITY|if crop.is_some()||link.crop.is_some(){DWM_TNP_RECTSOURCE}else{0},
-                    rcDestination:area,rcSource:crop.unwrap_or_else(||RECT{left:0,top:0,right:size.cx,bottom:size.cy}),opacity:255,fVisible:1,fSourceClientAreaOnly:0,
+                    rcDestination:area,rcSource:crop.unwrap_or_else(||RECT{left:0,top:0,right:size.cx,bottom:size.cy}),opacity:link.opacity,fVisible:1,fSourceClientAreaOnly:0,
                 };
                 let result=DwmUpdateThumbnailProperties(link.raw,&properties);
                 if result<0{record(PreviewStep::Update(result));changed=true;continue;}

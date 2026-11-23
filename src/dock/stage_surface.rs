@@ -167,10 +167,10 @@ impl Layout {
     pub(super) fn group_arrows(self,i:usize)->Option<[Box2;2]>{
         if i>=self.count{return None;}
         let c=self.card(i);
-        let edge=(self.inset/2).max(3);
-        let size=(self.inset*5/2).clamp(16,40).min((c.h/3).max(1));
-        if c.w<3*size+2*edge||size<12{return None;}
-        let first=Box2{x:c.x+edge,y:c.y+edge,w:size,h:size};
+        let edge=(self.inset/3).max(2);
+        let size=(self.inset*3).clamp(22,46).min(c.h/2).min((c.w-2*edge-8)/2);
+        if size<12{return None;}
+        let first=Box2{x:c.x+edge,y:c.y+(c.h-size)/2,w:size,h:size};
         Some([first,Box2{x:c.x+c.w-edge-size,..first}])
     }
     pub(super) fn group_arrow_hit(self,i:usize,x:i32,y:i32)->Option<bool>{
@@ -196,7 +196,13 @@ impl Layout {
     }
     pub(super) fn projected_close(self,i:usize)->Option<Box2>{
         let mut button=self.close_button(i)?;
+        let rest=button.y;
         button.y-=(self.card(i).h/7).max(2);
+        if self.depth(i)>1{
+            if let Some([left,_])=self.group_arrows(i){
+                button.y=button.y.max(left.y+left.h+2).min(rest);
+            }
+        }
         Some(button)
     }
     pub fn close_hit(self,i:usize,x:i32,y:i32)->bool{
@@ -285,6 +291,32 @@ impl Layout {
     }
 }
 
+/// Draw the chevron directly into the premultiplied surface. It must work
+/// even when compact cards are shorter than a native font's line height.
+fn paint_group_arrow(data:&mut[u8],w:i32,h:i32,box_:Box2,right:bool,hot:bool){
+    let r=box_.rect();
+    let side=r.h;
+    let dim=side*0.82;
+    let cx=r.x+r.w*0.5;
+    let cy=r.y+side*0.5;
+    let plate=Rect{x:cx-dim*0.5,y:cy-dim*0.5,w:dim,h:dim};
+    rounded(data,w,h,plate,dim*0.5,[24,25,30],if hot{210}else{170});
+    let sign=if right{1.0}else{-1.0};
+    let tip=(cx+sign*side*0.16,cy);
+    let tail=cx-sign*side*0.13;
+    let dy=side*0.25;
+    let stroke=(side*0.085).max(1.0);
+    let distance_to=|x:f32,y:f32,end:f32|{
+        let (dx,dy)=(tip.0-tail,tip.1-end);
+        let t=(((x-tail)*dx+(y-end)*dy)/(dx*dx+dy*dy)).clamp(0.0,1.0);
+        (x-tail-dx*t).hypot(y-end-dy*t)
+    };
+    draw(data,w,h,r,|x,y|{
+        let d=distance_to(x,y,cy-dy).min(distance_to(x,y,cy+dy));
+        Some(([248,249,253],(stroke+0.5-d).clamp(0.0,1.0)*255.0))
+    });
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Look {pub dark:bool,pub layout:Layout,pub active:u8,pub alpha:Option<u8>,pub projected:[u8;8],pub reduced:bool}
 
@@ -297,7 +329,7 @@ impl Panel {
     }
     pub fn geometry(&self)->(i32,i32,u32){(self.layer.size.0,self.layer.size.1,self.dpi)}
     pub fn font(&self)->HFONT{self.font}
-    pub unsafe fn paint(&mut self,target:HDC,look:Look,items:&[Item],atlas:&Atlas,ready:&[bool],emphasis:Option<(usize,u8)>,layered:Option<(HWND,&[String],usize,usize,Option<usize>)>,snapshots:&[super::stage_snapshot::Preview])->bool {
+    pub unsafe fn paint(&mut self,target:HDC,look:Look,items:&[Item],atlas:&Atlas,ready:&[bool],emphasis:Option<(usize,u8)>,layered:Option<(HWND,&[String],usize,usize,Option<usize>)>,snapshots:&[super::stage_snapshot::Preview],switch:Option<(usize,u8)>)->bool {
         let (w,h)=self.layer.size;
         let layout=look.layout;
         let palette=Palette::new(look.dark);
@@ -377,7 +409,8 @@ impl Panel {
         data.copy_from_slice(&self.static_pixels);
         for view in snapshots{
             let strength=emphasis.filter(|&(i,_)|i==view.target.index).map_or(0,|(_,a)|a);
-            view.blend(data,w,h,strength);
+            let ink=switch.filter(|&(i,_)|i==view.target.index).map_or(255,|(_,ink)|ink);
+            view.blend_with_ink(data,w,h,strength,ink);
             if look.active&(1<<view.target.index)!=0 && view.mask&1!=0{
                 view.target.front_shape(view.mask,strength).highlight(data,w,h,palette.accent,(self.dpi as f32/96.0)*2.4);
             }
@@ -438,6 +471,23 @@ impl Panel {
                 else{fallback_icon(data,w,h,center,tint);}
             }
         }
+        // Give icon-only previews the same short selection cue without
+        // covering the card controls or touching the other windows.
+        if let Some((i,ink))=switch.filter(|&(i,_)|look.projected[i]&1==0&&!ready[i]){
+            let b=layout.card(i).rect();
+            let radius=(layout.radius as f32).min(b.h*0.5);
+            draw(data,w,h,b,|x,y|{
+                let d=distance(b,radius,x,y);
+                Some((palette.accent,(0.5-d).clamp(0.0,1.0)*(d+2.0).clamp(0.0,1.0)*f32::from(255-ink)*2.0))
+            });
+        }
+        let hovered=layered.and_then(|(_,_,_,_,hover)|hover);
+        for (i,item) in items.iter().enumerate(){
+            if let Some([left,right])=layout.group_arrows(i).filter(|_|item.count>1){
+                paint_group_arrow(data,w,h,left,false,hovered==Some(i));
+                paint_group_arrow(data,w,h,right,true,hovered==Some(i));
+            }
+        }
         if let Some((hwnd,labels,page,pages,hover))=layered {
             let mask_h=layout.caption.max(layout.nav_h)*2;
             if self.mask.as_ref().is_none_or(|m|m.size!=(w*2,mask_h)){self.mask=Layer::new(w*2,mask_h);}
@@ -445,14 +495,6 @@ impl Panel {
                 let ink=palette.ink;
                 for (i,title) in labels.iter().enumerate(){
                     let mut r=caption_box(layout,i);
-                    if let Some(arrows)=layout.group_arrows(i).filter(|_|items[i].count>1){
-                        for (button,mark) in arrows.into_iter().zip(["‹","›"]){
-                            let over=hover==Some(i);
-                            rounded(data,w,h,button.rect(),button.h as f32/2.0,[31,28,26],if over{176}else{128});
-                            let ink=if over{[247,242,238]}else{[210,205,200]};
-                            draw_mask_scaled(data,w,h,mask,self.large_fonts[1],button,mark,true,ink,2);
-                        }
-                    }
                     if look.projected[i]&1!=0{
                         // No text over the sampled scene. The popup, tooltip
                         // and context menu continue to expose its title.
@@ -598,16 +640,38 @@ mod tests {
             for right_edge in [false,true]{
                 let mut l=Layout::landscape(320*dpi as i32/96,1000,dpi,10,6,3,right_edge,true);
                 l.count=3;
+                l.layers=[2;8];
+                l.apply_heights(dpi,&[60,130,195]);
+                assert!(l.card(0).h<l.card(1).h&&l.card(1).h<l.card(2).h);
                 for i in 0..l.count{
                     let [left,right]=l.group_arrows(i).expect("usable arrows");
                     let (lx,ly)=left.center();let (rx,ry)=right.center();
-                    assert!(lx<l.card(i).center().0&&rx>l.card(i).center().0);
+                    let (cx,cy)=l.card(i).center();
+                    assert!(lx<cx&&rx>cx);
+                    assert!((ly-cy).abs()<=1&&(ry-cy).abs()<=1);
+                    assert!(!l.projected_close(i).is_some_and(|b|b.hit(lx,ly)||b.hit(rx,ry)));
                     assert_eq!(l.group_arrow_hit(i,lx,ly),Some(false));
                     assert_eq!(l.group_arrow_hit(i,rx,ry),Some(true));
                     assert!(!l.close_button(i).is_some_and(|b|b.hit(lx,ly)||b.hit(rx,ry)));
                 }
             }
         }
+    }
+    #[test]
+    fn stage_chevrons_have_visible_ink_and_mirror_without_a_font(){
+        const N:i32=32;
+        let box_=Box2{x:0,y:0,w:N,h:N};
+        let mut left=vec![0;N as usize*N as usize*4];
+        let mut right=left.clone();
+        paint_group_arrow(&mut left,N,N,box_,false,false);
+        paint_group_arrow(&mut right,N,N,box_,true,false);
+        let bright=|p:&[u8]|p[0]>220&&p[1]>220&&p[2]>220&&p[3]>220;
+        assert!(left.chunks_exact(4).filter(|p|bright(p)).count()>30);
+        let at=|x,y|((y*N+x)*4) as usize;
+        for y in 0..N{for x in 0..N{
+            assert_eq!(bright(&left[at(x,y)..][..4]),bright(&right[at(N-1-x,y)..][..4]));
+        }}
+        assert!(bright(&left[at(11,15)..][..4])&&!bright(&left[at(20,15)..][..4]));
     }
     #[test]
     fn mixed_heights_page_and_keep_hit_targets_within_portrait_rail(){
@@ -822,7 +886,7 @@ mod tests {
             let labels=vec!["Fixture".to_owned();3];
             let mut panel=Panel::new(w,h,96).unwrap();
             let layer=Look{dark:true,layout:l,active:1,alpha:Some(155),projected:[0;8],reduced:false};
-            let presented=panel.paint(null_mut(),layer,&items,&Atlas::new(),&[false,true,false],Some((0,200)),Some((hwnd,&labels,0,3,None)),&[]);
+            let presented=panel.paint(null_mut(),layer,&items,&Atlas::new(),&[false,true,false],Some((0,200)),Some((hwnd,&labels,0,3,None)),&[],None);
             DestroyWindow(hwnd);
             assert!(presented,"the isolated layered Stage surface must submit pixels successfully");
             let pixels=panel.layer.pixels();

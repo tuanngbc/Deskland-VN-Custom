@@ -1,7 +1,7 @@
 {
   "name": "Tiếng Việt",
   "ui": {
-    "dockAutoHide": "Tự ẩn Dock",
+    "dockAutoHide": "Ẩn Dock khi cửa sổ phóng tối đa",
     "dockAppearanceTitle": "Kiểu hiển thị Dock",
     "dockIconSize": "Cỡ biểu tượng",
     "dockSpacing": "Khoảng cách biểu tượng",

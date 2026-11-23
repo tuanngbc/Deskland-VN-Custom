@@ -1,7 +1,7 @@
 {
   "name": "English",
   "ui": {
-    "dockAutoHide": "Auto-hide Dock",
+    "dockAutoHide": "Hide Dock when a window is maximized",
     "dockAppearanceTitle": "Dock appearance",
     "dockIconSize": "Icon size",
     "dockSpacing": "Icon spacing",

@@ -458,6 +458,20 @@ mod tests {
             let monitor = super::super::MonitorFromWindow(normal, super::super::MONITOR_DEFAULTTONEAREST);
             assert_ne!(IsZoomed(maximized), 0);
             assert_ne!(IsIconic(already_minimized), 0);
+            let screens=super::super::displays();
+            let maximized_screen=screens.iter().find(|s|super::super::stage_window_is_local(maximized,s.bounds)).unwrap();
+            let app=|hwnd|{
+                let mut rect=mem::zeroed();
+                assert_ne!(GetWindowRect(hwnd,&mut rect),0);
+                super::super::AppWindow{hwnd,rect,path:String::new(),title:String::new(),stage_aumid:None}
+            };
+            let ordinary=[app(normal),app(already_minimized)];
+            assert!(!super::super::display_has_maximized(maximized_screen.bounds,&ordinary));
+            let full=[app(maximized)];
+            assert!(super::super::display_has_maximized(maximized_screen.bounds,&full));
+            for screen in screens.iter().filter(|s|s.id!=maximized_screen.id){
+                assert!(!super::super::display_has_maximized(screen.bounds,&full));
+            }
             let mut model = Workspaces::default();
             let a = model.create("primary", normal).unwrap();
             model.add("primary", maximized);
