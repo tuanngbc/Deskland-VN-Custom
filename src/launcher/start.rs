@@ -32,6 +32,7 @@ thread_local!{
     static START:RefCell<Option<Model>>=const{RefCell::new(None)};
     static EDIT_PROC:Cell<WNDPROC>=const{Cell::new(None)};
     static MENU:Cell<bool>=const{Cell::new(false)};
+    #[cfg(test)] static CAPTURE:Cell<bool>=const{Cell::new(false)};
 }
 
 #[cfg(test)]
@@ -232,6 +233,10 @@ unsafe fn paint_start(hwnd:HWND){
                 if empty_recent{label(dc,"Ứng dụng mở từ Start sẽ xuất hiện ở đây.",rr(22,412,560,31,s),small,sub);}
             }
             if !error.is_empty(){label(dc,&error,rr(22,463,564,24,s),small,fg);}
+            #[cfg(test)]
+            if let Some(path)=std::env::var_os("TUANPC_DESK_START_EVIDENCE").map(PathBuf::from){
+                if CAPTURE.with(Cell::get)&&!path.exists(){let _=capture_render(dc,width,height,&path);}
+            }
             BitBlt(target,0,0,width,height,dc,0,0,SRCCOPY);
             SelectObject(dc,old);
             for f in [body,small,heading,detail]{DeleteObject(f);}
@@ -284,7 +289,7 @@ unsafe fn power(hwnd:HWND,r:RECT){
     let actions=["Khóa máy","Ngủ","Đăng xuất","Khởi động lại","Tắt máy"];
     let choice=action_menu(hwnd,point,&actions);
     if choice==0||choice as usize>actions.len(){return;}
-    if crate::trial::protect_windows().is_err(){
+    if cfg!(test)||crate::trial::protect_windows().is_err(){
         START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){m.error="Bản thử không thực hiện thao tác nguồn hoặc phiên Windows.".into();});
         repaint(hwnd);return;
     }
@@ -535,6 +540,29 @@ pub(crate) fn toggle(owner:HWND,anchor:DockAnchor){
 
 
 #[cfg(test)]
+unsafe fn capture_render(dc:HDC,width:i32,height:i32,path:&Path)->Result<(),String>{
+    let memory=CreateCompatibleDC(dc);
+    if memory.is_null(){return Err("No screenshot DC".into());}
+    let mut info:BITMAPINFO=std::mem::zeroed();
+    info.bmiHeader.biSize=std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+    info.bmiHeader.biWidth=width;info.bmiHeader.biHeight=-height;
+    info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;
+    let mut bits=ptr::null_mut();
+    let bitmap=CreateDIBSection(dc,&info,DIB_RGB_COLORS,&mut bits,ptr::null_mut(),0);
+    let result=if !bitmap.is_null()&&!bits.is_null(){
+        let old=SelectObject(memory,bitmap);
+        let copied=BitBlt(memory,0,0,width,height,dc,0,0,SRCCOPY)!=0;GdiFlush();
+        let result=if copied{
+            let bytes=std::slice::from_raw_parts(bits.cast::<u8>(),(width*height*4) as usize);
+            let pixels:Vec<_>=bytes.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0]]).collect();
+            image::save_buffer(path,&pixels,width as u32,height as u32,image::ColorType::Rgb8).map_err(|e|e.to_string())
+        }else{Err("No Start pixels received".into())};
+        SelectObject(memory,old);result
+    }else{Err("No screenshot bitmap".into())};
+    if !bitmap.is_null(){DeleteObject(bitmap);}DeleteDC(memory);result
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
@@ -554,6 +582,14 @@ mod tests {
                 m.all=vec![Entry{name:"Paint".into(),path:"mspaint.exe".into(),kind:"Application",detail:String::new()}];
                 (m.hwnd,m.edit)
             });
+            if let Some(path)=std::env::var_os("TUANPC_DESK_START_EVIDENCE").map(PathBuf::from){
+                START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){
+                    m.glass.clear();m.pins=vec!["mspaint.exe".into(),"notepad.exe".into(),"deskland:settings".into()];
+                });
+                CAPTURE.with(|c|c.set(true));repaint(host);UpdateWindow(host);CAPTURE.with(|c|c.set(false));
+                assert!(path.is_file(),"native Start render evidence is required");
+                START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){m.pins=vec![r"C:\Test\Notepad.exe".into()];});
+            }
             assert_ne!(IsWindowVisible(host),0);
             assert!(handles().is_none(),"opening Start must not start Spotlight");
             let mut rc:RECT=std::mem::zeroed();

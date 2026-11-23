@@ -128,6 +128,7 @@ fn app_entry(e:&Entry)->bool{matches!(e.kind,"Application"|"Pinned")}
 fn sync_pin_entries(all:&mut Vec<Entry>){
     all.retain(|entry|entry.kind!="Pinned");
     DOCK_PINS.with(|prefs|for value in prefs.borrow().iter(){
+        if value=="deskland:settings"{continue;}
         let path=PathBuf::from(value);
         if all.iter().any(|e|same_path(&e.path,&path)){continue;}
         let command=crate::dock::command_pin::decode(value);

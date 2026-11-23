@@ -1656,7 +1656,7 @@ unsafe fn activate_shell(owner:HWND,target:shell_access::Target,context:bool){
             utilities::show_calendar(owner,anchor);
         },
         Route::Hub=>if let Some(anchor)=anchor{
-            open_dock_hub(owner,anchor,true);
+            open_dock_hub(owner,anchor,taskbar_active());
         },
     }
 }
@@ -1997,7 +1997,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if !local_shell_buttons()&&!control_center::open_for(owner){
                 let target=if l==0{shell_access::Target::Start}else{shell_access::Target::Tray};
                 if let Some(anchor)=shell_anchor(owner,target){
-                    if l==0{open_dock_launcher(anchor);}else{open_dock_hub(owner,anchor,true);}
+                    if l==0{open_dock_launcher(anchor);}else{open_dock_hub(owner,anchor,taskbar_active());}
                 }
             }
             0
