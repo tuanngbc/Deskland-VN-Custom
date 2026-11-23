@@ -62,6 +62,7 @@ const STAGE_MOTION_TIMER:usize=7;
 const STATUS_TIP_TIMER:usize=8;
 const FEEDBACK_TIMER:usize=9;
 const TASKBAR_GUARD_TIMER:usize=12;
+const START_HOTKEY:i32=44;
 const UTILITY_RETRY_TIMER:usize=13;
 const WM_DOCK_MOUSELEAVE:u32=0x02A3;
 // winuser.h macro: HSHELL_REDRAW | HSHELL_HIGHBIT.
@@ -449,7 +450,7 @@ unsafe fn window_fullscreen(hwnd:HWND,screen:RECT)->bool {
 }
 unsafe fn display_fullscreen(screen:RECT,windows:&[AppWindow])->bool{
     window_fullscreen(GetForegroundWindow(),screen)||
-        windows.iter().find(|w|rect_intersects(w.rect,screen)&&IsIconic(w.hwnd)==0&&stage_window_is_local(w.hwnd,screen))
+        windows.iter().find(|w|w.path!=internal_app::KEY&&rect_intersects(w.rect,screen)&&IsIconic(w.hwnd)==0&&stage_window_is_local(w.hwnd,screen))
             .is_some_and(|w|window_fullscreen(w.hwnd,screen))
 }
 // GetApplicationUserModelId is a local process query, so packaged apps retain
@@ -1494,6 +1495,7 @@ unsafe fn dock_context(owner:HWND,bar:usize,index:usize,advanced:bool){
 thread_local!{
     static TASKBAR_WATCH:RefCell<Option<taskbar_guard::Watch>>=const{RefCell::new(None)};
     static TASKBAR_HIDDEN:Cell<bool>=const{Cell::new(false)};
+    static START_BOUND:Cell<bool>=const{Cell::new(false)};
 }
 fn taskbar_active()->bool{TASKBAR_WATCH.with(|w|w.borrow().is_some())}
 fn taskbar_hidden()->bool{TASKBAR_HIDDEN.with(Cell::get)}
@@ -1503,7 +1505,37 @@ fn local_shell_buttons()->bool{
     shell_access::local_buttons(taskbar_active(),opt_in)
 }
 
+unsafe fn sync_start_hotkey(control:HWND,requested:bool){
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey,UnregisterHotKey,MOD_CONTROL,MOD_ALT,MOD_NOREPEAT,VK_SPACE};
+    let bound=START_BOUND.with(Cell::get);
+    if requested&&!bound{
+        let ok=RegisterHotKey(control,START_HOTKEY,MOD_CONTROL|MOD_ALT|MOD_NOREPEAT,VK_SPACE as u32)!=0;
+        START_BOUND.with(|b|b.set(ok));
+        if !ok{
+            crate::log!("DOCK_START shortcut unavailable: {}",GetLastError());
+            emit(Event::Error("Ctrl + Alt + Space đang được Windows hoặc ứng dụng khác dùng.".into()));
+        }
+    }else if !requested&&bound{
+        UnregisterHotKey(control,START_HOTKEY);
+        START_BOUND.with(|b|b.set(false));
+    }
+}
+unsafe fn start_from_shortcut(){
+    let mut cursor:POINT=mem::zeroed();GetCursorPos(&mut cursor);
+    let dock=STATE.with(|s|{
+        let s=s.borrow();
+        s.bars.iter().find(|b|!b.hidden&&cursor.x>=b.bounds.left&&cursor.x<b.bounds.right
+            &&cursor.y>=b.bounds.top&&cursor.y<b.bounds.bottom).map(|b|b.hwnd)
+    });
+    if let Some(anchor)=dock.and_then(|h|shell_anchor(h,shell_access::Target::Start)){
+        open_dock_launcher(anchor);
+    }else{
+        let (w,l)=crate::launcher::DockAnchor{point:cursor,side:DockSide::Bottom}.encode();
+        PostMessageW(OWNER.with(Cell::get),crate::WM_OPEN_DOCK_LAUNCHER,w,l);
+    }
+}
 unsafe fn show_taskbar(message:&str){
+    sync_start_hotkey(CONTROL.with(Cell::get),false);
     let old=TASKBAR_WATCH.with(|w|w.borrow_mut().take());
     if old.is_some(){
         utilities::close_panels();
@@ -1562,6 +1594,7 @@ unsafe fn poll_taskbar(hwnd:HWND){
             }
             queue_refresh();
             crate::log!("DOCK_TASKBAR dock mode active");
+            sync_start_hotkey(hwnd,STATE.with(|s|s.borrow().prefs.start_shortcut));
             emit(Event::Taskbar{hidden:true,pending:false,message:"Chế độ Dock đang bật cho phiên này. Ctrl+Alt+Shift+F12 để hiện thanh Windows.".into()});
         }
         Some(Err(reason))=>{
@@ -1943,6 +1976,10 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     }
     match msg {
         appbar::CALLBACK=>{if w as u32==ABN_POSCHANGED{APPBAR_DIRTY.with(|f|f.set(true));queue_refresh();}0},
+        WM_HOTKEY if hwnd==CONTROL.with(Cell::get)&&w==START_HOTKEY as usize=>{
+            if taskbar_hidden()&&START_BOUND.with(Cell::get){start_from_shortcut();}
+            0
+        },
         WM_CONFIG=>{drain_commands();0},
         WM_INTERNAL_APP if hwnd==CONTROL.with(Cell::get)=>{queue_refresh();0},
         WM_TICK=>{SetTimer(hwnd,2,60,None);0},
@@ -2447,6 +2484,8 @@ unsafe fn drain_commands() {
     for command in commands {
         match command {
             Command::Configure(options)=>{
+                let shortcut_changed=STATE.with(|s|s.borrow().prefs.start_shortcut!=options.start_shortcut);
+                if shortcut_changed&&taskbar_hidden(){sync_start_hotkey(CONTROL.with(Cell::get),options.start_shortcut);}
                 if !options.enabled&&taskbar_active(){show_taskbar("Đã hiện lại thanh tác vụ khi tắt Dock.");}
                 update_state(|state|{
                 close_status_tip(ptr::null_mut());

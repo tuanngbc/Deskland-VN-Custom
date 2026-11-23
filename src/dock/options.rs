@@ -115,6 +115,7 @@ pub struct Options {
     pub pinned: Vec<String>,
     pub all_windows: bool,
     pub native_shell_buttons: bool,
+    pub start_shortcut:bool,
     pub stage_side: String,
     pub dock_display: DisplayTarget,
     pub stage_display: DisplayTarget,
@@ -178,7 +179,7 @@ impl Edit {
 }
 impl Default for Options {
     fn default() -> Self {
-        Self { enabled: false, stage_enabled: false, pinned: Vec::new(), all_windows: false, native_shell_buttons:false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), appearance: Appearance::default(),utility_profiles:BTreeMap::new(),window_policies:BTreeMap::new() }
+        Self { enabled: false, stage_enabled: false, pinned: Vec::new(), all_windows: false, native_shell_buttons:false, start_shortcut:false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), appearance: Appearance::default(),utility_profiles:BTreeMap::new(),window_policies:BTreeMap::new() }
     }
 }
 impl Options {
@@ -192,6 +193,7 @@ impl Options {
                 .filter(|s| seen.insert(s.to_lowercase())).take(32).map(str::to_owned).collect()).unwrap_or_default(),
             all_windows: v["allWindows"].as_bool().unwrap_or(false),
             native_shell_buttons:v["nativeShellButtons"].as_bool().unwrap_or(false),
+            start_shortcut:v["startShortcut"].as_bool().unwrap_or(false),
             dock_display: DisplayTarget::from_json(&v["dockDisplay"]),
             stage_display: DisplayTarget::from_json(&v["stageDisplay"]),
             stage_styles: v["stageStyles"].as_object().into_iter().flatten().filter_map(|(id,value)|{
@@ -246,7 +248,7 @@ impl Options {
     }
     pub fn json(&self) -> Value {
         json!({"version":2,"enabled":self.enabled,"stageEnabled":self.stage_enabled,
-            "pinned":self.pinned,"allWindows":self.all_windows,"nativeShellButtons":self.native_shell_buttons,"stageSide":self.stage_side,
+            "pinned":self.pinned,"allWindows":self.all_windows,"nativeShellButtons":self.native_shell_buttons,"startShortcut":self.start_shortcut,"stageSide":self.stage_side,
             "dockDisplay":self.dock_display.json(),"stageDisplay":self.stage_display.json(),"appearance":self.appearance.json(),
             "windowPolicies":self.window_policies.iter().map(|(id,p)|(id.clone(),p.json())).collect::<serde_json::Map<_,_>>(),
             "utilityProfiles":self.utility_profiles.iter().map(|(id,p)|(id.clone(),p.json())).collect::<serde_json::Map<_,_>>(),

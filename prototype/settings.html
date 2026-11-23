@@ -154,6 +154,8 @@
       <option value="local">Giao diện Deskland</option><option value="windows">Giao diện Windows</option>
     </select></label>
     <p class="dock-section-copy" id="dockShellButtonsHint">Nút Deskland không mở lại taskbar. Giao diện Windows chỉ dùng ở chế độ hiện taskbar.</p>
+    <label class="setting-row switch-row"><b>Mở Start bằng Ctrl + Alt + Space</b><input type="checkbox" id="dockStartShortcut" role="switch"><i class="switch" aria-hidden="true"></i></label>
+    <p class="dock-section-copy">Phím tắt tùy chọn chỉ hoạt động khi Dock đã ẩn taskbar. Phím Win và các tổ hợp Win vẫn do Windows xử lý.</p>
     <p class="monitor-detail">Chỉ áp dụng cho phiên này. Ctrl+Alt+Shift+F12 để hiện lại thanh Windows.</p>
     <p class="monitor-detail" id="taskbarTakeoverStatus" role="status" aria-live="polite"></p>
   </section>
@@ -1100,6 +1102,7 @@ function submitDockPin(){
 }
 $('dockPinSubmit').onclick=submitDockPin;
 $('dockPinCommand').oninput=()=>{$('dockPinCorrection').hidden=true;};
+$('dockStartShortcut').onchange=e=>send({t:'dock',startShortcut:e.target.checked});
 $('dockShellButtons').onchange=e=>send({t:'dock',nativeShellButtons:e.target.value==='windows'});
 $('dockPinCommand').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();submitDockPin();}};
 function syncDockTaskbar(m){
@@ -1119,6 +1122,7 @@ function syncDockSettings(m) {
   $('dockEnabled').checked=!!dockOptions.enabled;
   syncDockTaskbar(m);
   $('dockShellButtons').value=dockOptions.nativeShellButtons?'windows':'local';
+  $('dockStartShortcut').checked=!!dockOptions.startShortcut;
   $('dockStageEnabled').checked=!!dockOptions.stageEnabled;
   $('dockAllWindows').checked=!!dockOptions.allWindows;
   $('dockStageSide').value=dockOptions.stageSide==='right'?'right':'left';

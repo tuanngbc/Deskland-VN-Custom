@@ -11,6 +11,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
+pub(crate) mod start;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Appearance { pub theme: String, pub transparency: f32, pub blur: f32 }
 impl Default for Appearance {
@@ -114,6 +116,7 @@ thread_local! {
 }
 pub fn dock_pins(paths:&[String]){
     DOCK_PINS.with(|v|v.replace(paths.to_vec()));
+    start::pins_changed();
     if let Some((hwnd,_,_,_))=handles(){
         STATE.with(|c|if let Some(s)=c.borrow_mut().as_mut(){sync_pin_entries(&mut s.all);});
         unsafe{if IsWindowVisible(hwnd)!=0{refresh_results(false);}}
@@ -163,7 +166,7 @@ fn enum_dir(root: &Path, depth: u8, files: bool, out: &mut Vec<Entry>) {
     }
 }
 
-fn entries() -> Vec<Entry> {
+fn app_entries() -> Vec<Entry> {
     let mut out = Vec::new();
     // Prefer explicit system commands over duplicate shortcuts.
     for (name, command) in [("Paint", "mspaint.exe"), ("Notepad", "notepad.exe"), ("Calculator", "calc.exe"), ("File Explorer", "explorer.exe"), ("Settings", "ms-settings:"), ("Task Manager","Taskmgr.exe")] {
@@ -175,6 +178,11 @@ fn entries() -> Vec<Entry> {
     for key in ["APPDATA", "PROGRAMDATA"] {
         if let Ok(base) = std::env::var(key) { enum_dir(&PathBuf::from(base).join("Microsoft\\Windows\\Start Menu\\Programs"), 5, false, &mut out); }
     }
+    out
+}
+
+fn entries() -> Vec<Entry> {
+    let mut out=app_entries();
     if let Ok(base) = std::env::var("USERPROFILE") {
         for folder in ["Desktop", "Documents", "Downloads", "OneDrive\\Desktop", "OneDrive\\Documents"] {
             enum_dir(&PathBuf::from(&base).join(folder), 2, true, &mut out);
