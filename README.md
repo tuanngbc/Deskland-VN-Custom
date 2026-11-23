@@ -6,7 +6,7 @@ TLauncher mang **hình nền động, Dock, Stage Manager và Spotlight lấy c�
 
 ![Ảnh thật TLauncher trên màn dọc 1080×1920 và màn ngang 2560×1080, với hình nền Bãi biển toàn cảnh, đồng hồ, Dock và thẻ Stage Manager](docs/images/showcase/dual-monitor-real.webp)
 
-*Ảnh chụp trên Windows 11. Hai màn chạy chung cảnh Bãi biển và mỗi màn có Dock riêng. Các cụm icon vẫn tạo hình đảo; chỉ biểu tượng và tên tệp trên desktop được che. Các thẻ xem trước của Stage Manager vẫn hiện ở cạnh phải.*
+*Ảnh chụp trên Windows 11. Hai màn chạy chung cảnh Bãi biển, ghép đúng tỷ lệ và vị trí theo bố trí màn hình trong Windows. Mỗi màn có Dock riêng. Các cụm icon vẫn tạo hình đảo; chỉ biểu tượng và tên tệp trên desktop được che. Các thẻ xem trước của Stage Manager vẫn hiện ở cạnh phải.*
 
 <!-- product-guide:start -->
 ## Hình nền động và tương tác
