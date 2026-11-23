@@ -484,7 +484,7 @@ unsafe fn execute(_hwnd: HWND, _path: &Path) -> isize { 33 }
 // Frost the pixels behind the panel once per opening. Text remains fully opaque.
 // Unlike whole-window alpha this never reveals sharp desktop icons through text,
 // and costs no continuous blur/redraw work while the panel is idle.
-unsafe fn capture_glass(x: i32, y: i32, width: i32, height: i32) -> Vec<u8> {
+pub(crate) unsafe fn capture_glass(x: i32, y: i32, width: i32, height: i32) -> Vec<u8> {
     let (bw, bh) = ((width / 4).max(1), (height / 4).max(1));
     let screen = GetDC(std::ptr::null_mut()); let dc = CreateCompatibleDC(screen);
     let mut info: BITMAPINFO = std::mem::zeroed();
@@ -506,7 +506,7 @@ unsafe fn capture_glass(x: i32, y: i32, width: i32, height: i32) -> Vec<u8> {
     raw
 }
 
-fn frost(raw: &[u8], width: i32, height: i32, scale: f32, appearance: &Appearance) -> Vec<u8> {
+pub(crate) fn frost(raw: &[u8], width: i32, height: i32, scale: f32, appearance: &Appearance) -> Vec<u8> {
     let bw = (width / 4).max(1) as u32; let bh = (height / 4).max(1) as u32;
     let Some(img) = image::RgbaImage::from_raw(bw, bh, raw.to_vec()) else { return Vec::new() };
     let mut pixels = image::imageops::blur(&img, appearance.blur * scale / 4.0).into_raw();
@@ -795,6 +795,9 @@ impl DockAnchor {
         (x.clamp(work.left,(work.right-w).max(work.left)),y.clamp(work.top,(work.bottom-h).max(work.top)))
     }
 }
+fn spotlight_origin(screen:RECT,w:i32,h:i32)->(i32,i32){
+    (screen.left+(screen.right-screen.left-w)/2,screen.top+(screen.bottom-screen.top-h)/2)
+}
 pub(crate) fn toggle_at(dock:Option<DockAnchor>) {
     unsafe {
         if let Some((hwnd, _, _, _)) = handles() {
@@ -828,13 +831,13 @@ pub(crate) fn toggle_at(dock:Option<DockAnchor>) {
         if mi.rcWork.right<=mi.rcWork.left||mi.rcWork.bottom<=mi.rcWork.top{return;}
         // Query DPI after moving the still-hidden HWND to the target output.
         SetWindowPos(hwnd,std::ptr::null_mut(),mi.rcWork.left,mi.rcWork.top,1,1,SWP_NOACTIVATE|SWP_NOREDRAW|SWP_NOZORDER);
+        let fit=if dock.is_some(){mi.rcWork}else{mi.rcMonitor};
         let scale = (windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd).clamp(72,288) as f32 / 96.0)
-            .min((mi.rcWork.right-mi.rcWork.left) as f32/684.0).min((mi.rcWork.bottom-mi.rcWork.top) as f32/468.0);
+            .min((fit.right-fit.left) as f32/684.0).min((fit.bottom-fit.top) as f32/468.0);
         let width = (660.0 * scale) as i32; let height = (444.0 * scale) as i32;
         let pad=(12.0*scale).round() as i32;
         let (x,y)=if let Some(anchor)=dock{anchor.position(mi.rcWork,width+2*pad,height+2*pad,(32.0*scale).round() as i32)}
-        else{(mi.rcWork.left+(mi.rcWork.right-mi.rcWork.left-width-2*pad)/2,
-            mi.rcWork.top+((mi.rcWork.bottom-mi.rcWork.top-height-2*pad)/3).max(0))};
+        else{spotlight_origin(mi.rcMonitor,width+2*pad,height+2*pad)};
         let backdrop = capture_glass(x+pad, y+pad, width, height);
         let appearance=PREFS.with(|c| c.borrow().clone());
         let glass=frost(&backdrop,width,height,scale,&appearance);
@@ -942,6 +945,13 @@ mod tests {
         assert_eq!(panel_coverage(0.5,0.5,660.0,444.0,20.0).0,0.0);
         assert_eq!(panel_coverage(330.0,222.0,660.0,444.0,20.0).0,1.0);
         assert!((0..40).any(|x| (0..40).any(|y| { let a=panel_coverage(x as f32+0.5,y as f32+0.5,660.0,444.0,20.0).0; a>0.0 && a<1.0 })));
+    }
+    #[test]
+    fn spotlight_is_centered_on_the_physical_negative_monitor(){
+        let display=RECT{left:-1200,top:-450,right:0,bottom:1470};
+        let (x,y)=spotlight_origin(display,684,468);
+        assert_eq!((x,y),(-942,276));
+        assert_eq!((x*2+684,y*2+468),(display.left+display.right,display.top+display.bottom));
     }
     #[test]
     fn glass_theme_and_transparency_affect_background_only() {

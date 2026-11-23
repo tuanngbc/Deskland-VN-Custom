@@ -699,6 +699,10 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
                 item(title,appearance.size==size,Appearance{size,..appearance.clone()});
             }
             AppendMenuW(look,MF_SEPARATOR,0,std::ptr::null());
+            for edge_gap in [0,8,24,48]{
+                item(&format!("Đệm mép Dock · {edge_gap} px"),appearance.edge_gap==edge_gap,Appearance{edge_gap,..appearance.clone()});
+            }
+            AppendMenuW(look,MF_SEPARATOR,0,std::ptr::null());
             for (icon_size,title) in [(34,"Biểu tượng nhỏ"),(44,"Biểu tượng chuẩn"),(56,"Biểu tượng lớn")]{
                 item(title,appearance.icon_size==icon_size,Appearance{icon_size,..appearance.clone()});
             }
@@ -784,6 +788,17 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
                         500+edits.len()-1, wide(&format!("Khoảng cách {spacing} px")).as_ptr());
                 }
                 AppendMenuW(submenu, MF_SEPARATOR, 0, std::ptr::null());
+                for (title,is_edge) in [("Đệm từ Stage đến mép màn hình",true),("Đệm thêm giữa Stage và ứng dụng",false)]{
+                    let gaps=CreatePopupMenu();
+                    if gaps.is_null(){continue;}
+                    for value in [0,4,12,24,48]{
+                        let (checked,style)=if is_edge{(base.edge_gap==value,StageStyle{edge_gap:value,..base})}
+                            else{(base.app_gap==value,StageStyle{app_gap:value,..base})};
+                        edits.push((d.id.clone(),style));
+                        AppendMenuW(gaps,MF_STRING|if checked{MF_CHECKED}else{0},500+edits.len()-1,wide(&format!("{value} px")).as_ptr());
+                    }
+                    if AppendMenuW(submenu,MF_POPUP,gaps as usize,wide(title).as_ptr())==0{DestroyMenu(gaps);}
+                }
                 for group_limit in [1,3,5,8] {
                     edits.push((d.id.clone(), StageStyle {group_limit,..base}));
                     AppendMenuW(submenu, MF_STRING | if base.group_limit == group_limit {MF_CHECKED} else {0},

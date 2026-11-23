@@ -33,13 +33,15 @@ pub struct StageStyle {
     pub right: Option<bool>,
     pub scale: u32,
     pub spacing: u32,
+    pub edge_gap: u32,
+    pub app_gap: u32,
     pub group_limit: u32,
     pub opacity: u32,
     pub stack_groups: bool,
     pub theme:super::Theme,
 }
 impl Default for StageStyle {
-    fn default() -> Self { Self { card_height:0,right: None, scale: 100, spacing: 6, group_limit: 5, opacity: 76, stack_groups: true,theme:super::Theme::Auto } }
+    fn default() -> Self { Self { card_height:0,right: None, scale: 100, spacing: 6, edge_gap:4, app_gap:0, group_limit: 5, opacity: 76, stack_groups: true,theme:super::Theme::Auto } }
 }
 impl StageStyle {
     pub fn from_json(v: &Value) -> Self {
@@ -49,6 +51,8 @@ impl StageStyle {
             right: match v["side"].as_str() { Some("left") => Some(false), Some("right") => Some(true), _ => None },
             scale: size("scale", 100, 75, 140),
             spacing: size("spacing", 6, 2, 20),
+            edge_gap:size("edgeGap",4,0,64),
+            app_gap:size("appGap",0,0,64),
             group_limit: size("groupLimit", 5, 1, 8),
             opacity: size("opacity", 76, 35, 100),
             stack_groups: v["groupPresentation"].as_str()!=Some("flat"),
@@ -57,7 +61,7 @@ impl StageStyle {
     }
     fn json(self) -> Value {
         json!({"cardHeight":self.card_height,"side":match self.right{Some(false)=>"left",Some(true)=>"right",None=>"default"},
-            "scale":self.scale,"spacing":self.spacing,"groupLimit":self.group_limit,"opacity":self.opacity,
+            "scale":self.scale,"spacing":self.spacing,"edgeGap":self.edge_gap,"appGap":self.app_gap,"groupLimit":self.group_limit,"opacity":self.opacity,
             "groupPresentation":if self.stack_groups{"stacked"}else{"flat"},"theme":self.theme.key()})
     }
 }

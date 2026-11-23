@@ -42,7 +42,7 @@ pub(super) fn control_backing(base: f32) -> f32 {
 
 pub type Atlas = HashMap<String, Option<Arc<crate::launcher::IconPixels>>>;
 pub struct Surface {
-    layer:Layer,glass:Rect,material:Material,static_pixels:Vec<u8>,motion_pixels:Vec<u8>,icons:IconRasters,metric:Option<MetricInk>,clock:Option<ClockInk>,popup_anchor:Option<crate::launcher::DockAnchor>,
+    layer:Layer,glass:Rect,material:Material,static_pixels:Vec<u8>,motion_pixels:Vec<u8>,icons:IconRasters,metric:Option<MetricInk>,clock:Option<ClockInk>,popup_anchor:Option<crate::launcher::DockAnchor>,backdrop:Option<super::glass::Glass>,
 }
 struct MetricInk{size:(i32,i32),fonts:[HFONT;3],mask:Layer,pixels:Vec<u8>,key:Option<(usize,MetricOptions,bool,bool)>,painted_at:Option<Instant>}
 impl Drop for MetricInk{fn drop(&mut self){unsafe{for &font in &self.fonts{if !font.is_null(){DeleteObject(font);}}}}}
@@ -154,7 +154,12 @@ impl ClockInk{
 impl Surface {
     pub unsafe fn new(w:i32,h:i32,glass:Rect,material:Material)->Option<Self>{
         let layer=Layer::new(w,h)?;
-        Some(Self{layer,glass,material,static_pixels:Vec::new(),motion_pixels:Vec::new(),icons:IconRasters::default(),metric:None,clock:None,popup_anchor:None})
+        Some(Self{layer,glass,material,static_pixels:Vec::new(),motion_pixels:Vec::new(),icons:IconRasters::default(),metric:None,clock:None,popup_anchor:None,backdrop:None})
+    }
+    pub unsafe fn refresh_glass(&mut self,layout:&Layout,dpi:u32){
+        if super::glass::Glass::refresh(&mut self.backdrop,layout.window,dpi,self.material.dark,self.material.transparency){
+            self.static_pixels.clear();self.motion_pixels.clear();
+        }
     }
     pub fn update_popup_anchor(&mut self,anchor:crate::launcher::DockAnchor)->bool{
         self.popup_anchor.replace(anchor).is_none_or(|old|!old.same_position(anchor))
@@ -191,7 +196,7 @@ impl Surface {
         if self.glass!=layout.glass||self.static_pixels.is_empty() {
             self.glass=layout.glass;
             self.static_pixels.resize(w as usize*h as usize*4,0);
-            render_glass(&mut self.static_pixels,w,h,layout.glass,self.material,scale);
+            render_glass_sample(&mut self.static_pixels,w,h,layout.glass,self.material,scale,self.backdrop.as_ref());
         }
         let data=self.layer.pixels();
         data.copy_from_slice(&self.static_pixels);
@@ -526,19 +531,37 @@ fn segment_distance(x:f32,y:f32,ax:f32,ay:f32,bx:f32,by:f32)->f32{
 }
 // Only the shadow bounds need drawing. Along a horizontal capsule's
 // straight middle, glass color, rim and shadow depend on y alone.
+#[cfg(test)]
 fn render_glass(data:&mut[u8],w:i32,h:i32,rect:Rect,tint:Material,scale:f32){
+    render_glass_sample(data,w,h,rect,tint,scale,None);
+}
+fn render_glass_sample(data:&mut[u8],w:i32,h:i32,rect:Rect,tint:Material,scale:f32,glass:Option<&super::glass::Glass>){
     data.fill(0);
     let radius=rect.w.min(rect.h)*0.40;
     let margin=9.0*scale;
     let start=((rect.x-margin).floor() as i32).clamp(0,w);
     let end=((rect.x+rect.w+margin).ceil() as i32).clamp(start,w);
-    let left=((rect.x+rect.h*0.5).ceil() as i32).clamp(start,end);
+    let glass=glass.filter(|g|g.is_ready());
+    let left=if glass.is_some(){end}else{((rect.x+rect.h*0.5).ceil() as i32).clamp(start,end)};
     let right=((rect.x+rect.w-rect.h*0.5).floor() as i32).clamp(left,end);
     let top=((rect.y-margin).floor() as i32).clamp(0,h);
     let bottom=((rect.y+rect.h+margin).ceil() as i32).clamp(top,h);
     for y in top..bottom{
         let yy=y as f32+0.5;
-        let at=|x|glass_pixel(tint,rect,radius,x,yy,scale,distance(rect,radius,x,yy));
+        let at=|x|{
+            let d=distance(rect,radius,x,yy);
+            let mut p=glass_pixel(tint,rect,radius,x,yy,scale,d);
+            if let Some(g)=glass.filter(|_|d<0.5){
+                let alpha=(0.5-d).clamp(0.0,1.0);
+                let color=g.tint(x,yy,[p[0],p[1],p[2]],205);
+                let out_a=(p[3] as f32+(255.0-p[3] as f32)*alpha*0.81).round() as u8;
+                for c in 0..3{
+                    p[c]=((color[c] as f32*alpha+p[c] as f32*(1.0-alpha)).round() as u8).min(out_a);
+                }
+                p[3]=out_a;
+            }
+            p
+        };
         let row=&mut data[(y*w*4) as usize..((y+1)*w*4) as usize];
         let center=if left<right{at(rect.x+rect.w*0.5)}else{[0;4]};
         for x in start..left{row[(x*4) as usize..(x*4+4) as usize].copy_from_slice(&at(x as f32+0.5));}

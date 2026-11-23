@@ -17,6 +17,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent,TRACKMOUSE
 mod options;
 mod runtime;
 mod glass_probe;
+pub(crate) mod glass;
+pub(crate) mod glass_menu;
 mod calendar;
 mod appearance;
 mod geometry;
@@ -667,7 +669,8 @@ fn available_items(all:&[AppWindow],screen:RECT,prefs:&Preferences)->Vec<Item>{
 fn dock_depth(screen:&Screen,style:&Appearance,cluster:geometry::Cluster)->i32 {
     let scale=style.pixel_scale(screen.dpi);
     let zoom=if style.reduced_motion{0.0}else{style.magnification as f32/100.0};
-    (8.0*scale+((style.icon_size as f32*(1.0+zoom)+18.0).max(cluster.cross())*scale+12.0*scale).ceil()).ceil() as i32
+    let cross=(screen.bounds.right-screen.bounds.left).min(screen.bounds.bottom-screen.bounds.top) as f32;
+    (style.edge_pixels(screen.dpi,cross)+((style.icon_size as f32*(1.0+zoom)+18.0).max(cluster.cross())*scale+12.0*scale).ceil()).ceil() as i32
 }
 fn stage_width(screen:&Screen,style:StageStyle)->i32{
     let scale=(screen.dpi as f32/96.0).clamp(0.75,3.0);
@@ -686,13 +689,16 @@ fn stage_legacy_layout()->bool{crate::trial::benchmark_active()||crate::trial::d
 fn stage_width_cap(width:i32)->i32{
     if stage_legacy_layout(){(width/5).max(62)}else{(width*28/100).max(1)}
 }
-fn stage_margin(screen:&Screen)->i32{
+fn stage_margin(screen:&Screen,style:StageStyle)->i32{
     let scale=(screen.dpi as f32/96.0).clamp(0.75,3.0);
-    ((if stage_legacy_layout(){8.0}else{4.0})*scale).round() as i32
+    ((if stage_legacy_layout(){8.0}else{style.edge_gap as f32})*scale).round() as i32
+}
+fn stage_app_gap(screen:&Screen,style:StageStyle)->i32{
+    if stage_legacy_layout(){0}else{panel_chrome::scale(screen.dpi,style.app_gap as i32)}
 }
 fn stage_depth(screen:&Screen,style:StageStyle)->i32{
     let trim=if stage_legacy_layout(){0}else{panel_chrome::scale(screen.dpi,16)};
-    (stage_width(screen,style).min(stage_width_cap(screen.bounds.right-screen.bounds.left))-trim).max(1)+stage_margin(screen)
+    (stage_width(screen,style).min(stage_width_cap(screen.bounds.right-screen.bounds.left))-trim).max(1)+stage_margin(screen,style)+stage_app_gap(screen,style)
 }
 unsafe fn sync_appbars(state:&mut State,topology:bool){
     // Don't ask Explorer to renegotiate AppBars while the watchdog is
@@ -736,8 +742,8 @@ fn stage_rect(screen:&Screen,style:StageStyle)->RECT { stage_rect_with_depth(scr
 fn stage_rect_with_depth(screen:&Screen,style:StageStyle,depth:Option<i32>)->RECT {
     let scale=(screen.dpi as f32/96.0).clamp(0.75,3.0);
     let px=|n:f32|(n*scale).round() as i32;
-    let margin=stage_margin(screen);
-    let width=depth.map_or_else(||stage_width(screen,style).min(stage_width_cap(screen.work.right-screen.work.left)),|d|(d-margin).max(1));
+    let margin=stage_margin(screen,style);
+    let width=depth.map_or_else(||stage_width(screen,style).min(stage_width_cap(screen.work.right-screen.work.left)),|d|(d-margin-stage_app_gap(screen,style)).max(1));
     let edge=if style.right==Some(true){screen.work.right-width-margin}else{screen.work.left+margin};
     let top=screen.work.top+((screen.work.bottom-screen.work.top)/12).min(px(90.0));
     let height=((screen.work.bottom-screen.work.top)-px(150.0)).clamp(px(112.0),px(650.0*style.scale as f32/100.0).max(px(112.0)));
@@ -1323,6 +1329,9 @@ unsafe fn paint(hwnd:HWND){
         let canvas=match canvas{Some(c) if c.size()==size=>Some(c),_=>surface::Surface::new(size.0,size.1,layout.glass,material)};
         if let Some(mut canvas)=canvas{
             canvas.set_material(material);
+            if openness>=0.997{
+                canvas.refresh_glass(&layout,windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd).clamp(72,288));
+            }
             // Clone Arc handles only; do not hold the atlas borrow across
             // UpdateLayeredWindow, which may dispatch nested Win32 messages.
             let atlas=if canvas.has_motion_frame(&layout,openness)||openness<=0.003{surface::Atlas::default()}else{ATLAS.with(|a|{
@@ -1359,9 +1368,9 @@ unsafe fn paint(hwnd:HWND){
         let dark=stage.dark;
         let switch=stage.group_switch.as_ref().and_then(|swap|
             stage.items.iter().position(|item|item.hwnd as usize==swap.source).map(|i|(i,swap.ink)));
-        Some((stage.items.clone(),ready,stage.groups.clone(),stage.members.clone(),stage.layout?,stage.page,stage.pages,state.foreground,dpi,dark,stage.emphasis.highlight(stage.keyboard),stage.hover,stage.layered,stage.opacity,state.prefs.appearance.reduced_motion,switch))
+        Some((stage.items.clone(),ready,stage.groups.clone(),stage.members.clone(),stage.layout?,stage.page,stage.pages,state.foreground,dpi,dark,stage.emphasis.highlight(stage.keyboard),stage.hover,stage.layered,stage.opacity,state.prefs.appearance.reduced_motion,switch,stage.resting))
     });
-    if let Some((items,ready,groups,members,layout,page,pages,foreground,dpi,dark,emphasis,hover,layered,opacity,reduced,switch))=stage {
+    if let Some((items,ready,groups,members,layout,page,pages,foreground,dpi,dark,emphasis,hover,layered,opacity,reduced,switch,resting))=stage {
         let key=hwnd as usize;
         let size=(area.right,area.bottom,dpi);
         let panel=STAGE_SURFACES.with(|s|s.borrow_mut().remove(&key));
@@ -1378,7 +1387,10 @@ unsafe fn paint(hwnd:HWND){
         for view in &still{projected[view.target.index]=view.mask;}
         let look=stage_surface::Look{dark,layout,active:active_mask,alpha:layered.then_some((opacity*255/100) as u8),
             projected,reduced};
-        if layered{EndPaint(hwnd,&ps);}
+        if layered{
+            EndPaint(hwnd,&ps);
+            if let Some(p)=panel.as_mut(){p.refresh_glass(resting,dark,opacity);}
+        }
         let rendered=panel.as_mut().is_some_and(|p|p.paint(dc,look,&items,&atlas,&ready,emphasis,layered.then_some((hwnd,&labels[..],page,pages,hover)),&still,switch));
         if layered{
             if rendered{
@@ -2358,6 +2370,9 @@ unsafe fn activate_shell(owner:HWND,target:shell_access::Target,context:bool){
         Route::Hub=>open_dock_hub(owner,taskbar_active()),
     }
 }
+fn material_dark()->bool{
+    STATE.with(|s|s.borrow().material.is_some_and(|m|m.dark))
+}
 unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     let menu=CreatePopupMenu();if menu.is_null(){return;}
     let prefs=STATE.with(|s|s.borrow().prefs.clone());
@@ -2435,7 +2450,7 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     });
     if let Some(at)=key_target{point=at;ClientToScreen(hwnd,&mut point);}
     SetForegroundWindow(hwnd);
-    let cmd=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,hwnd,ptr::null()) as usize;
+    let cmd=glass_menu::track(menu,hwnd,point,TPM_RETURNCMD|TPM_RIGHTBUTTON,material_dark(),prefs.appearance.transparency) as usize;
     DestroyMenu(menu);
     match cmd {
         MENU_TASK_MANAGER=>open_task_manager(),
@@ -2641,7 +2656,7 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
     // native menu is open, so Escape and clicks outside dismiss the menu.
     let previous=GetForegroundWindow();
     SetForegroundWindow(hwnd);
-    let result=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,point.x,point.y,0,hwnd,ptr::null()) as usize;
+    let result=glass_menu::track(menu,hwnd,point,TPM_RETURNCMD|TPM_NONOTIFY,material_dark(),36) as usize;
     DestroyMenu(menu);
     if GetForegroundWindow()==hwnd && IsWindow(previous)!=0 {SetForegroundWindow(previous);}
     if result==5{
@@ -3752,6 +3767,22 @@ mod tests{
     }
     #[test] fn mixed_coordinate_overlap(){assert!(rect_intersects(rect([-1200,-200,0,900]),rect([-100,0,100,100])));assert!(!rect_intersects(rect([-1200,-200,0,900]),rect([0,0,100,100])));}
     #[test] fn distinct_monitor_geometry(){let s=Screen{bounds:rect([-1920,0,0,1080]),work:rect([-1920,0,0,1040]),primary:false,id:"test".into(),name:"Test".into(),dpi:96};let r=bar_rect(&s,5);assert!(r.left<0 && r.right<=0 && r.bottom<=1040);}
+    #[test] fn stage_padding_moves_cards_and_appbar_independently(){
+        let sc=Screen{bounds:rect([-1400,-650,0,1050]),work:rect([-1400,-650,0,1010]),
+            primary:false,id:"test".into(),name:"Test".into(),dpi:144};
+        for right in [false,true]{
+            let base=StageStyle{right:Some(right),edge_gap:0,app_gap:0,..Default::default()};
+            let inset=StageStyle{edge_gap:24,..base};
+            let app=StageStyle{app_gap:16,..base};
+            let old=stage_rect_with_depth(&sc,base,Some(stage_depth(&sc,base)));
+            let padded=stage_rect_with_depth(&sc,inset,Some(stage_depth(&sc,inset)));
+            let spacing=stage_rect_with_depth(&sc,app,Some(stage_depth(&sc,app)));
+            assert_eq!(padded.left-old.left,if right{-36}else{36});
+            assert_eq!(padded.right-padded.left,old.right-old.left);
+            assert_eq!((spacing.left,spacing.right),(old.left,old.right));
+            assert_eq!(stage_depth(&sc,app)-stage_depth(&sc,base),24);
+        }
+    }
     #[test] fn stage_geometry_on_negative_monitor(){
         let sc=Screen{bounds:rect([-1920,-120,0,1080]),work:rect([-1920,-120,0,1040]),primary:false,id:"test".into(),name:"Test".into(),dpi:96};
         let left=stage_rect(&sc,StageStyle::default());

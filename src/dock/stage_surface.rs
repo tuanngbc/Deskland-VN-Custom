@@ -78,7 +78,8 @@ impl Layout {
         l.caption=px(20);
         let limit=limit.clamp(1,8);
         let wanted=total.min(limit).max(1) as i32;
-        let row_height=(l.card_width()*10/18).max(1);
+        let typical_width=l.card_width()+if stacked{2*l.step()}else{0};
+        let row_height=(typical_width*10/18).max(1);
         let min_h=row_height.min(px(60)).max(1);
         let roomy_gap=gap.max(px(21));
         let need_nav=if total>limit{l.nav_h+roomy_gap}else{0};
@@ -108,14 +109,16 @@ impl Layout {
         let (room,icon_room)=self.card_room();
         let height=|n:usize|self.heights.get(n).copied().filter(|&h|h>0).unwrap_or(self.card_h);
         let h=height(i);
-        let full=self.card_width();
+        let visible_stack=if self.stack_design{self.step()*(self.depth(i).saturating_sub(1) as i32)}else{0};
+        let full=if self.align_to_work_area&&self.landscape{
+            (self.width-2*self.inset-visible_stack).max(1)
+        }else{self.card_width()};
         // Reduce width with height to preserve the perspective silhouette.
         // In Reserve mode, balance the leftover strip around the entire
         // stack (including the rearmost card), with a slight bias toward the
         // application so the gap there stays small.
         let w=if self.landscape{full.min((h*18/10).max(1))}else{full};
         let x=if self.align_to_work_area&&self.landscape{
-            let visible_stack=if self.stack_design{self.step()*(self.depth(i).saturating_sub(1) as i32)}else{0};
             let slack=(self.width-2*self.inset-w-visible_stack).max(0);
             let inner=(slack*2/5).min(self.inset+5);
             if self.right{self.inset+visible_stack+inner}else{self.width-self.inset-w-visible_stack-inner}
@@ -345,18 +348,24 @@ fn paint_group_arrow(data:&mut[u8],w:i32,h:i32,box_:Box2,right:bool,hot:bool){
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Look {pub dark:bool,pub layout:Layout,pub active:u8,pub alpha:Option<u8>,pub projected:[u8;8],pub reduced:bool}
 
-pub(super) struct Panel {layer:Layer,look:Option<Look>,static_pixels:Vec<u8>,mask:Option<Layer>,font:HFONT,large_fonts:[HFONT;2],dpi:u32,icons:IconRasters}
+pub(super) struct Panel {layer:Layer,glass:Option<super::glass::Glass>,look:Option<Look>,static_pixels:Vec<u8>,mask:Option<Layer>,font:HFONT,large_fonts:[HFONT;2],dpi:u32,icons:IconRasters}
 impl Panel {
     pub unsafe fn new(w:i32,h:i32,dpi:u32)->Option<Self>{
         let layer=Layer::new(w,h)?;
         let font=|size,weight|super::panel_chrome::choose_font(dpi,size,weight);
-        Some(Self{layer,look:None,static_pixels:Vec::new(),mask:None,font:font(13,560),large_fonts:[font(26,560),font(23,490)],dpi,icons:IconRasters::default()})
+        Some(Self{layer,glass:None,look:None,static_pixels:Vec::new(),mask:None,font:font(13,560),large_fonts:[font(26,560),font(23,490)],dpi,icons:IconRasters::default()})
     }
     pub fn geometry(&self)->(i32,i32,u32){(self.layer.size.0,self.layer.size.1,self.dpi)}
     pub fn font(&self)->HFONT{self.font}
+    pub unsafe fn refresh_glass(&mut self,resting:RECT,dark:bool,opacity:u32){
+        if super::glass::Glass::refresh(&mut self.glass,resting,self.dpi,dark,100-opacity.min(100)){
+            self.look=None;
+        }
+    }
     pub unsafe fn paint(&mut self,target:HDC,look:Look,items:&[Item],atlas:&Atlas,ready:&[bool],emphasis:Option<(usize,u8)>,layered:Option<(HWND,&[String],usize,usize,Option<usize>)>,snapshots:&[super::stage_snapshot::Preview],switch:Option<(usize,u8)>)->bool {
         let (w,h)=self.layer.size;
         let layout=look.layout;
+        let glass=self.glass.as_ref().filter(|g|g.is_ready());
         let palette=Palette::new(look.dark);
         if self.look!=Some(look){
             self.static_pixels.resize(w as usize*h as usize*4,0);
@@ -382,7 +391,9 @@ impl Panel {
                     if layout.landscape{
                         rounded(data,w,h,Rect{x:r.x-1.0,y:r.y+2.0,w:r.w+2.0,h:r.h+1.0},radius+1.0,[10,12,16],57);
                     }
-                    rounded(data,w,h,r,radius,c,alpha.max(205));
+                    if let Some(g)=glass{
+                        draw(data,w,h,r,|x,y|Some((g.tint(x,y,c,178),(0.5-distance(r,radius,x,y)).clamp(0.0,1.0)*alpha.max(218) as f32)));
+                    }else{rounded(data,w,h,r,radius,c,alpha.max(205));}
                 }
                 if look.projected[i]&1!=0{continue;}
                 let active=look.active&(1<<i)!=0;
@@ -410,6 +421,7 @@ impl Panel {
                         let base=(tint[i] as f32+shine*if look.dark{29.0}else{13.0}).min(255.0);
                         (base+(edge[i] as f32-base)*line).round() as u8
                     });
+                    let rgb=glass.map_or(rgb,|g|g.tint(x,y,rgb,(182.0*(1.0-line)) as u8));
                     Some((rgb,coverage*(alpha as f32+40.0*line+14.0*shine).min(255.0)))
                 });
                 // Local caption backing keeps text stable on bright, dark and
@@ -453,7 +465,8 @@ impl Panel {
                 let active=look.active&(1<<view.target.index)!=0;
                 let edge=if active{palette.accent}else if look.dark{[88,81,75]}else{[248,243,235]};
                 let stroke=if active{2.4}else{1.0};
-                view.target.front_shape(view.mask,strength).highlight(data,w,h,edge,(self.dpi as f32/96.0)*stroke);
+                let shape=view.target.front_shape(view.mask,strength);
+                shape.highlight(data,w,h,edge,(self.dpi as f32/96.0)*stroke,glass);
             }
 
         }

@@ -36,6 +36,7 @@ struct Model {
     catalog:Option<Receiver<Vec<Entry>>>, indexed_at:Option<Instant>,
 }
 thread_local!{
+    static CORNERS:RefCell<Option<chrome::StartCorners>>=const{RefCell::new(None)};
     static SHADOW:RefCell<Option<chrome::PanelShadow>>=const{RefCell::new(None)};
     static START:RefCell<Option<Model>>=const{RefCell::new(None)};
     static EDIT_PROC:Cell<WNDPROC>=const{Cell::new(None)};
@@ -249,7 +250,12 @@ unsafe fn place(hwnd:HWND){
     let size_changed=r.right-r.left!=previous.right-previous.left||r.bottom-r.top!=previous.bottom-previous.top;
     if size_changed||r.left!=previous.left||r.top!=previous.top{
         SetWindowPos(hwnd,ptr::null_mut(),r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_NOZORDER);
-        if size_changed{chrome::start_frame(hwnd,r.right-r.left,r.bottom-r.top,dpi);}
+        if size_changed{
+            CORNERS.with(|c|c.replace(None));
+            chrome::start_frame(hwnd,r.right-r.left,r.bottom-r.top,dpi);
+        }else{
+            CORNERS.with(|c|if let Some(edge)=c.borrow().as_ref(){edge.move_to(r.left,r.top);});
+        }
     }
     if IsWindowVisible(hwnd)!=0{sync_shadow(hwnd,r,dpi,side,dark);}
 }
@@ -506,6 +512,9 @@ unsafe fn paint_start(hwnd:HWND){
             CAPTURE.with(|c|{
                 if let Some(path)=c.borrow_mut().take(){capture_render(dc,width,height,&path).expect("native Start fixture ink");}
             });
+            if IsWindowVisible(hwnd)!=0{
+                CORNERS.with(|c|chrome::StartCorners::paint(&mut c.borrow_mut(),hwnd,dc,width,height,dock_dpi));
+            }
             surface.blit(target);
 
         }
@@ -556,6 +565,7 @@ unsafe fn hide(hwnd:HWND){
     FOCUS.set(None);KillTimer(hwnd,FOCUS_TIMER);
     stop_dismissal(hwnd);
     SHADOW.with(|s|s.replace(None));
+    CORNERS.with(|c|c.replace(None));
     ShowWindow(hwnd,SW_HIDE);
     SetWindowPos(hwnd,HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
 }
@@ -626,7 +636,9 @@ unsafe fn action_menu(hwnd:HWND,point:POINT,actions:&[&str],align:u32)->u32{
     let menu=CreatePopupMenu();if menu.is_null(){return 0;}
     for (i,text) in actions.iter().enumerate(){AppendMenuW(menu,MF_STRING,i+1,wide(text).as_ptr());}
     MENU.with(|flag|flag.set(true));
-    let result=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY|TPM_RIGHTBUTTON|align,point.x,point.y,0,hwnd,ptr::null_mut());
+    let dark=START.with(|s|s.borrow().as_ref().is_some_and(|m|m.dark));
+    let transparency=PREFS.with(|p|(p.borrow().transparency*100.0) as u32);
+    let result=crate::dock::glass_menu::track(menu,hwnd,point,TPM_RETURNCMD|TPM_NONOTIFY|TPM_RIGHTBUTTON|align,dark,transparency);
     DestroyMenu(menu);MENU.with(|flag|flag.set(false));touch();
     result as u32
 }
@@ -802,7 +814,7 @@ unsafe extern "system" fn proc_start(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
             if update{place(hwnd);}
             0
         },
-        WM_NCDESTROY=>{SHADOW.with(|s|s.replace(None));FOCUS.set(None);KillTimer(hwnd,FOCUS_TIMER);stop_dismissal(hwnd);DefWindowProcW(hwnd,msg,w,l)}
+        WM_NCDESTROY=>{CORNERS.with(|c|c.replace(None));SHADOW.with(|s|s.replace(None));FOCUS.set(None);KillTimer(hwnd,FOCUS_TIMER);stop_dismissal(hwnd);DefWindowProcW(hwnd,msg,w,l)}
         WM_TIMER if w==FOCUS_TIMER=>{
             let foreground=GetForegroundWindow();
             if !MENU.get()&&IsWindowVisible(hwnd)!=0&&foreground==hwnd{

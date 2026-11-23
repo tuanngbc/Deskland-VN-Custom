@@ -194,7 +194,7 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     let screen_w=(display.work.right-display.work.left).max(1) as f32;
     let screen_h=(display.work.bottom-display.work.top).max(1) as f32;
     let (axis,cross_axis)=if vertical{(screen_h,screen_w)}else{(screen_w,screen_h)};
-    let edge=(8.0*scale).min(axis.min(cross_axis)*0.04);
+    let edge=style.edge_pixels(display.dpi,axis.min(cross_axis));
     let shadow=(6.0*scale).min(axis.min(cross_axis)*0.035);
     let pad=(if vertical || !display.primary && screen_h>screen_w {8.0}else{10.0}*scale).min(axis*0.04);
     let room=(axis-2.0*(edge+shadow+pad)).max(1.0);
@@ -350,6 +350,21 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn dock_edge_gap_keeps_dock_centered_on_all_edges(){
+        let bounds=RECT{left:-1500,top:-100,right:0,bottom:1000};
+        let screen=Display{id:"negative".into(),name:String::new(),bounds,work:bounds,dpi:144,primary:false};
+        for position in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
+            let base=Appearance{position,edge_gap:0,..Default::default()};
+            let near=measure(&screen,&base,4,None,0.0);
+            let away=measure(&screen,&Appearance{edge_gap:24,..base},4,None,0.0);
+            match position{
+                DockSide::Bottom=>assert_eq!((near.window.left,near.window.top-36),(away.window.left,away.window.top)),
+                DockSide::Left=>assert_eq!((near.window.left+36,near.window.top),(away.window.left,away.window.top)),
+                DockSide::Right=>assert_eq!((near.window.left-36,near.window.top),(away.window.left,away.window.top)),
+            }
+        }
+    }
     #[test]
     fn panel_anchors_share_the_capsule_edge_as_dock_scales_and_folds(){
         let bounds=RECT{left:-1440,top:-100,right:0,bottom:1600};

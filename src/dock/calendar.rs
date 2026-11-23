@@ -63,7 +63,7 @@ impl Button{
     }
 }
 struct Panel{
-    hwnd:HWND,owner:HWND,anchor:chrome::Anchor,layer:Layer,dpi:u32,shadow:Option<chrome::PanelShadow>,
+    hwnd:HWND,owner:HWND,anchor:chrome::Anchor,layer:Layer,dpi:u32,glass:super::glass::Glass,shadow:Option<chrome::PanelShadow>,
     fonts:[HFONT;4],local:Local,view:Month,following:bool,dirty:bool,
     hover:Option<Button>,focus:Option<Button>,pressed:Option<Button>,
 }
@@ -110,8 +110,10 @@ impl Panel{
         let prev=SelectObject(dc,self.fonts[0]);
         let c=|bounds,value:&str,ink|chrome::text(dc,bounds,value,ink,TEXT|DT_CENTER);
         let l=|bounds,value:&str,ink|chrome::text(dc,bounds,value,ink,TEXT|DT_LEFT);
-        SetDCBrushColor(dc,chrome::color(p.panel));
-        FillRect(dc,&rect(0,0,WIDTH,HEIGHT),GetStockObject(DC_BRUSH) as HBRUSH);
+        if !self.glass.draw(dc,w,h){
+            SetDCBrushColor(dc,chrome::color(p.panel));
+            FillRect(dc,&rect(0,0,WIDTH,HEIGHT),GetStockObject(DC_BRUSH) as HBRUSH);
+        }
         l(rect(20,15,216,32),&format!("Tháng {} · {}",self.view.number,self.view.year),p.ink);
         SelectObject(dc,self.fonts[1]);
         l(rect(21,50,215,22),&format!("{:02}:{:02}  ·  Lịch TLauncher",self.local.hour,self.local.minute),p.muted);
@@ -147,7 +149,7 @@ impl Panel{
             self.local.day,self.local.month.number,self.local.month.year),p.muted);
         SelectObject(dc,prev);
         GdiFlush();
-        chrome::mask_popup(self.layer.pixels(),w,h,radius(17) as f32,self.anchor.alpha());
+        chrome::mask_popup(self.layer.pixels(),w,h,radius(16) as f32,if self.glass.is_ready(){255}else{self.anchor.alpha()});
         self.dirty=false;
     }
 }
@@ -194,7 +196,8 @@ pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor){
     let fonts=[(22,560),(12,460),(14,510),(25,490)].map(|(size,weight)|
         crate::native_text::font_pixels((size*dpi as i32+48)/96,weight));
     let local=Local::now();
-    let mut panel=Panel{hwnd,owner,anchor,layer,dpi:dock_dpi,shadow:None,fonts,local,view:local.month,following:true,
+    let glass=super::glass::Glass::capture(RECT{left:x,top:y,right:x+w,bottom:y+h},dock_dpi,anchor.dark,anchor.transparency);
+    let mut panel=Panel{hwnd,owner,anchor,layer,dpi:dock_dpi,glass,shadow:None,fonts,local,view:local.month,following:true,
         dirty:true,hover:None,focus:None,pressed:None};
     panel.paint();
     if !panel.layer.present(hwnd){DestroyWindow(hwnd);return;}

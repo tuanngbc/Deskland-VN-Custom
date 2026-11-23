@@ -95,7 +95,7 @@ fn metric_cards(view:&Snapshot,cfg:MetricOptions)->Vec<Card>{
 struct Panel {
     layered:bool,dirty:bool,
     hwnd:HWND,owner:HWND,tag:usize,anchor:chrome::Anchor,dpi:u32,layer:Layer,ink:Option<Layer>,
-    fonts:[HFONT;4], view:View, metrics:Option<Metrics>, index:Option<usize>, pressed:Option<usize>, page:usize,
+    glass:super::glass::Glass,fonts:[HFONT;4], view:View, metrics:Option<Metrics>, index:Option<usize>, pressed:Option<usize>, page:usize,
     cols:usize,per_page:usize, row_height:i32,list:bool,entrance:Option<(std::time::Instant,POINT)>,shadow:Option<chrome::PanelShadow>,hub:bool,
 }
 impl Drop for Panel {
@@ -212,7 +212,7 @@ impl Panel{
         let g=self.ink.as_ref().unwrap_or(&self.layer).dc();
         let p=Palette::new(self.anchor.dark);
         let px=|n|chrome::scale(self.dpi,n);
-        super::fill(g,RECT{left:0,top:0,right:w,bottom:h},chrome::color(p.panel));
+        if !self.glass.draw(g,w,h){super::fill(g,RECT{left:0,top:0,right:w,bottom:h},chrome::color(p.panel));}
         let old=SelectObject(g,self.fonts[0]);
         chrome::text(g,RECT{left:px(18),top:px(13),right:w-px(18),bottom:px(41)},&self.view.title,p.ink,SINGLE_LINE);
         SelectObject(g,self.fonts[2]);
@@ -287,7 +287,7 @@ impl Panel{
             let slot=Rect{x:badge.x+inset,y:badge.y+inset,w:badge.w-2.0*inset,h:badge.h-2.0*inset};
             surface::status_on(data,w,h,slot,scale,p.accent,Some(icon));
         }
-        if self.layered{chrome::mask_popup(self.layer.pixels(),w,h,px(16) as f32,self.anchor.alpha());}
+        if self.layered{chrome::mask_popup(self.layer.pixels(),w,h,px(16) as f32,if self.glass.is_ready(){255}else{self.anchor.alpha()});}
     }
 }
 pub(super) fn wants_status()->bool{
@@ -380,12 +380,13 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bo
         WS_POPUP,x,y,width,height,owner,ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
     if hwnd.is_null(){return;}
     chrome::disable_system_border(hwnd);
+    let glass=super::glass::Glass::capture(RECT{left:x,top:y,right:x+width,bottom:y+height},dpi,anchor.dark,anchor.transparency);
     let tag=serial();
     let fonts=[chrome::choose_font(dpi,if list{18}else{21},550),chrome::choose_font(dpi,14,if list{455}else{530}),chrome::choose_font(dpi,12,420),chrome::choose_font(dpi,19,540)];
     let metrics=view.metrics.map(Metrics::new);
     let start=std::time::Instant::now();
     let animated=list&&!super::STATE.with(|s|s.borrow().prefs.appearance.reduced_motion);
-    let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,fonts,view,metrics,index:None,pressed:None,page:0,cols,per_page,row_height,list,entrance:None,shadow:None,hub};
+    let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,glass,fonts,view,metrics,index:None,pressed:None,page:0,cols,per_page,row_height,list,entrance:None,shadow:None,hub};
     // A hidden HWND can't be relied on to dispatch WM_PAINT. Submit the
     // completed bitmap directly, then show the window with content.
     p.paint();

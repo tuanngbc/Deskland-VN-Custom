@@ -146,11 +146,81 @@ impl PanelShadow{
         }
     }
 }
+/// Start keeps its native Edit control. The GDI window paints the solid
+/// interior; this sister window supplies only the four fractional-alpha
+/// corners, sampled from that exact same frame. It never takes focus or input.
+pub(crate) struct StartCorners{hwnd:HWND,layer:Layer}
+impl Drop for StartCorners{
+    fn drop(&mut self){unsafe{DestroyWindow(self.hwnd);}}
+}
+impl StartCorners{
+    pub(crate) unsafe fn paint(slot:&mut Option<Self>,owner:HWND,dc:HDC,w:i32,h:i32,dpi:u32){
+        if slot.as_ref().is_none_or(|s|s.layer.size!=(w,h)){
+            *slot=None;
+            let class=crate::desktop::wide("STATIC");
+            let Some(layer)=Layer::new(w,h)else{return;};
+            let hwnd=CreateWindowExW(WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW|WS_EX_TOPMOST,
+                class.as_ptr(),ptr::null(),WS_POPUP,0,0,w,h,ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
+            if hwnd.is_null(){return;}
+            disable_system_border(hwnd);
+            *slot=Some(Self{hwnd,layer});
+        }
+        let Some(edge)=slot.as_mut()else{return;};
+        let r=scale(dpi,16).min(w/2).min(h/2);
+        edge.layer.pixels().fill(0);
+        let dest=edge.layer.dc();
+        for (x,y) in [(0,0),(w-r,0),(0,h-r),(w-r,h-r)]{
+            BitBlt(dest,x,y,r,r,dc,x,y,SRCCOPY);
+        }
+        GdiFlush();
+        let pixels=edge.layer.pixels();
+        for (x,y) in [(0,0),(w-r,0),(0,h-r),(w-r,h-r)]{
+            for n in y..y+r{for m in x..x+r{
+                let dx=r as f32-(m.min(w-1-m) as f32+0.5);
+                let dy=r as f32-(n.min(h-1-n) as f32+0.5);
+                let a=((r as f32+0.5-dx.hypot(dy)).clamp(0.0,1.0)*255.0).round() as u8;
+                let p=&mut pixels[((n*w+m)*4) as usize..][..4];
+                for c in &mut p[..3]{*c=((u16::from(*c)*u16::from(a)+127)/255) as u8;}
+                p[3]=a;
+            }}
+        }
+        let mut rect:RECT=mem::zeroed();
+        if GetWindowRect(owner,&mut rect)==0{return;}
+        if !edge.layer.present_at(edge.hwnd,Some(POINT{x:rect.left,y:rect.top}),255)||
+            SetWindowPos(edge.hwnd,owner,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW)==0{
+            *slot=None;
+            clip_corners(owner,w,h,dpi);
+            return;
+        }
+    }
+    pub(crate) unsafe fn move_to(&self,x:i32,y:i32){
+        SetWindowPos(self.hwnd,ptr::null_mut(),x,y,0,0,SWP_NOACTIVATE|SWP_NOSIZE|SWP_NOZORDER);
+    }
+}
 pub(crate) unsafe fn start_frame(hwnd:HWND,width:i32,height:i32,dpi:u32){
     let disabled=1u32; // DWMNCRP_DISABLED: the shared shadow supplies the frame.
     let _=DwmSetWindowAttribute(hwnd,2,(&disabled as *const u32).cast(),4);
     disable_system_border(hwnd);
-    clip_corners(hwnd,width,height,dpi);
+    let r=scale(dpi,16).min(width/2).min(height/2);
+    let region=CreateRectRgn(0,r,width,height-r);
+    let line=CreateRectRgn(0,0,0,0);
+    if region.is_null()||line.is_null(){
+        if !region.is_null(){DeleteObject(region);}
+        if !line.is_null(){DeleteObject(line);}
+        clip_corners(hwnd,width,height,dpi);
+        return;
+    }
+    for y in 0..r{
+        let dy=r as f32-y as f32-0.5;
+        let inner=((r as f32-1.3).powi(2)-dy*dy).max(0.0).sqrt();
+        let x=(r as f32-inner).ceil() as i32;
+        for row in [y,height-1-y]{
+            SetRectRgn(line,x,row,width-x,row+1);
+            CombineRgn(region,region,line,RGN_OR);
+        }
+    }
+    DeleteObject(line);
+    if SetWindowRgn(hwnd,region,0)==0{DeleteObject(region);clip_corners(hwnd,width,height,dpi);}
 }
 pub(super) fn mask_popup(data:&mut [u8],w:i32,h:i32,radius:f32,opacity:u8){
     let (w,h)=(w as usize,h as usize);

@@ -122,11 +122,16 @@ test('stage layout changes one display and leaves saved disconnected layouts unt
   assert.equal($('stageStyle_side').value,'right');
   assert.equal($('stageStyle_scale').value,'115');
   $('stageStyle_spacing').value='16';$('stageStyle_spacing').listeners.change();
-  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'stageStyle',display:'portrait',style:{cardHeight:0,theme:'auto',side:'right',scale:115,spacing:16,groupLimit:5,opacity:76,groupPresentation:'stacked'}});
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'stageStyle',display:'portrait',style:{cardHeight:0,theme:'auto',side:'right',scale:115,spacing:16,edgeGap:4,appGap:0,groupLimit:5,opacity:76,groupPresentation:'stacked'}});
   $('stageStyle_groupLimit').value='8';$('stageStyle_groupLimit').listeners.change();
   assert.equal(messages.pop().style.groupLimit,8);
   $('stageStyle_opacity').value='55';$('stageStyle_opacity').listeners.change();
-  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop().style)),{cardHeight:0,theme:'auto',side:'right',scale:115,spacing:16,groupLimit:8,opacity:55,groupPresentation:'stacked'});
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop().style)),{cardHeight:0,theme:'auto',side:'right',scale:115,spacing:16,edgeGap:4,appGap:0,groupLimit:8,opacity:55,groupPresentation:'stacked'});
+  $('stageStyle_edgeGap').value='0';$('stageStyle_edgeGap').listeners.change();
+  assert.equal(messages.pop().style.edgeGap,0);
+  $('stageStyle_appGap').value='23';$('stageStyle_appGap').listeners.change();
+  const gaps=messages.pop();
+  assert.equal(gaps.display,'portrait');assert.equal(gaps.style.appGap,23);assert.equal(gaps.style.edgeGap,0);
   $('stageStyle_groupPresentation').value='flat';$('stageStyle_groupPresentation').listeners.change();
   assert.equal(messages.pop().style.groupPresentation,'flat');
 });

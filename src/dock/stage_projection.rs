@@ -108,7 +108,7 @@ impl Card{
         let (dx,dy)=self.local_gradient(x,y);
         pixel_coverage(distance,1.18*dx,1.18*dy)
     }
-    pub(super) fn highlight(self,pixels:&mut[u8],w:i32,h:i32,ink:[u8;3],width:f32){
+    pub(super) fn highlight(self,pixels:&mut[u8],w:i32,h:i32,ink:[u8;3],width:f32,glass:Option<&super::glass::Glass>){
         use super::geometry::Rect;
         let r=self.rect.rect();
         let width=width.max(1.0);
@@ -116,7 +116,11 @@ impl Card{
         draw(pixels,w,h,Rect{x:r.x-1.0,y:r.y-1.0,w:r.w+2.0,h:r.h+2.0},|x,y|{
             let (u,v)=self.uv(x,y);
             let d=self.edge_distance(u,v);
-            if d>=band||d<=-width-band{return None;}
+            if d>=band{return None;}
+            if d<=-width-band{
+                let glass=glass.filter(|_|d>-(width+band+3.0))?;
+                return Some((glass.tint(x,y,ink,230),125.0*(1.0+(d+width+band)/3.0)));
+            }
             // Use the very same area filter on both sides of the thin line.
             let (dx,dy)=self.local_gradient(x,y);
             let outer=pixel_coverage(d,1.18*dx,1.18*dy);

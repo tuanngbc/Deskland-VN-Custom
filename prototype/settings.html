@@ -246,6 +246,8 @@
       <label class="setting-row"><b>Màu Stage</b><select id="stageStyle_theme"><option value="auto" data-i18n="appearanceSystem">Theo hệ thống</option><option value="light" data-i18n="launcherLight">Sáng</option><option value="dark" data-i18n="launcherDark">Tối</option></select></label>
       <label class="setting-row"><b data-i18n="stageScale">Kích thước Stage</b><span><input type="range" id="stageStyle_scale" min="75" max="140" step="1"><output id="stageValue_scale"></output></span></label>
       <label class="setting-row"><b data-i18n="stageSpacing">Khoảng cách thẻ Stage</b><span><input type="range" id="stageStyle_spacing" min="2" max="20" step="1"><output id="stageValue_spacing"></output></span></label>
+      <label class="setting-row"><b>Đệm từ Stage đến mép màn hình</b><span><input type="range" id="stageStyle_edgeGap" min="0" max="64" step="1"><output id="stageValue_edgeGap"></output></span></label>
+      <label class="setting-row"><b>Đệm thêm giữa Stage và ứng dụng <small>(Giữ chỗ)</small></b><span><input type="range" id="stageStyle_appGap" min="0" max="64" step="1"><output id="stageValue_appGap"></output></span></label>
       <label class="setting-row"><b data-i18n="stageGroupLimit">Số thẻ Stage mỗi trang</b><span><input type="range" id="stageStyle_groupLimit" min="1" max="8" step="1"><output id="stageValue_groupLimit"></output></span></label>
       <label class="setting-row"><b data-i18n="stageOpacity">Độ đậm của thẻ Stage</b><span><input type="range" id="stageStyle_opacity" min="35" max="100" step="1"><output id="stageValue_opacity"></output></span></label>
       <label class="setting-row"><b data-i18n="stageGroupPresentation">Kiểu thẻ nhóm</b><select id="stageStyle_groupPresentation"><option value="stacked" data-i18n="stageStacked">Xếp lớp</option><option value="flat" data-i18n="stageFlat">Một lớp</option></select></label>
@@ -254,6 +256,7 @@
   </section>
   <section class="setting-card"><h3 data-i18n="dockAppearanceTitle">Kiểu hiển thị Dock</h3><p class="dock-section-copy">Đổi màu, kích cỡ và cách Dock chuyển động.</p>
     <label class="setting-row"><b>Kích thước toàn bộ Dock</b><span><input id="dockLook_size" type="range" min="75" max="140" value="100"> <output id="dockValue_size">100%</output></span></label>
+    <label class="setting-row"><b>Đệm từ Dock đến mép màn hình</b><span><input id="dockLook_edgeGap" type="range" min="0" max="64" value="8"><output id="dockValue_edgeGap">8 px</output></span></label>
     <label class="setting-row"><b data-i18n="dockIconSize">Cỡ biểu tượng</b><span><input id="dockLook_iconSize" type="range" min="28" max="60" value="44"> <output id="dockValue_iconSize">44</output></span></label>
     <label class="setting-row"><b>Biểu tượng nút Start</b><select id="dockLook_startIcon"><option value="windows">Logo Windows</option><option value="grid">Lưới ứng dụng</option><option value="orb">Huy hiệu Dock</option><option value="minimal">Bốn ô đơn sắc</option></select></label>
     <label class="setting-row"><b data-i18n="dockSpacing">Khoảng cách biểu tượng</b><span><input id="dockLook_spacing" type="range" min="4" max="22" value="10"> <output id="dockValue_spacing">10</output></span></label>
@@ -890,8 +893,8 @@ const dockFallbackText={
   dockDisplayNone:'Chưa có màn hình',dockDisplayOff:'Đã tắt',dockDisplayTarget:'Màn hình hiển thị'
 };
 const dockText=key=>{const value=t(key);return value===key?dockFallbackText[key]||value:value;};
-const dockLookDefaults={size:100,iconSize:44,startIcon:'windows',spacing:10,transparency:36,position:'bottom',theme:'auto',magnification:38,animationSpeed:100,reducedMotion:false,autoHide:false};
-const dockLookRanges=['size','iconSize','spacing','transparency','magnification','animationSpeed'];
+const dockLookDefaults={size:100,iconSize:44,startIcon:'windows',spacing:10,edgeGap:8,transparency:36,position:'bottom',theme:'auto',magnification:38,animationSpeed:100,reducedMotion:false,autoHide:false};
+const dockLookRanges=['size','iconSize','spacing','edgeGap','transparency','magnification','animationSpeed'];
 const dockLookSwitches=['reducedMotion','autoHide'];
 const dockLookKeys=[...dockLookRanges,'position','theme','startIcon',...dockLookSwitches];
 function showDockAppearance(){
@@ -900,13 +903,13 @@ function showDockAppearance(){
     const control=$('dockLook_'+key);
     if(dockLookSwitches.includes(key))control.checked=!!appearance[key];
     else control.value=String(appearance[key]);
-    if(dockLookRanges.includes(key))$('dockValue_'+key).textContent=appearance[key]+(['iconSize','spacing'].includes(key)?' px':'%');
+    if(dockLookRanges.includes(key))$('dockValue_'+key).textContent=appearance[key]+(['iconSize','spacing','edgeGap'].includes(key)?' px':'%');
   }
 }
 for(const key of dockLookKeys){
   const id='dockLook_'+key;
   if(dockLookRanges.includes(key))$(id).addEventListener('input',()=>{
-    $('dockValue_'+key).textContent=$(id).value+(['iconSize','spacing'].includes(key)?' px':'%');
+    $('dockValue_'+key).textContent=$(id).value+(['iconSize','spacing','edgeGap'].includes(key)?' px':'%');
   });
   $(id).addEventListener('change',()=>{
     const control=$(id);
@@ -971,11 +974,11 @@ $('stageOverrideReset').addEventListener('click',()=>{
   const group=$('stageOverrideApp').value;
   if(group)send({t:'stageGroupHeight',group,height:0});
 });
-const stageStyleDefaults={cardHeight:0,theme:'auto',side:'default',scale:100,spacing:6,groupLimit:5,opacity:76,groupPresentation:'stacked'};
+const stageStyleDefaults={cardHeight:0,theme:'auto',side:'default',scale:100,spacing:6,edgeGap:4,appGap:0,groupLimit:5,opacity:76,groupPresentation:'stacked'};
 const stageStyleFor=id=>({...stageStyleDefaults,...(Object.hasOwn(dockOptions.stageStyles||{},id)?dockOptions.stageStyles[id]:{})});
 const stageRight=id=>{const side=stageStyleFor(id).side;return (side==='default'?dockOptions.stageSide:side)==='right';};
-const stageUnits={scale:'%',spacing:' px',groupLimit:'',opacity:'%'};
-const stageStyleKeys=['cardHeight','theme','side','scale','spacing','groupLimit','opacity','groupPresentation'];
+const stageUnits={scale:'%',spacing:' px',edgeGap:' px',appGap:' px',groupLimit:'',opacity:'%'};
+const stageStyleKeys=['cardHeight','theme','side','scale','spacing','edgeGap','appGap','groupLimit','opacity','groupPresentation'];
 function showStageStyle(){
   $('stagePreviewMode').value=dockOptions.stagePresentation==='dwm'?'dwm':'perspective';
   selectHeight($('stageDefaultHeight'),dockOptions.stageCardHeight||0);
