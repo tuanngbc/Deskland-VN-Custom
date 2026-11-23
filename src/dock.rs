@@ -12,7 +12,7 @@ use windows_sys::Win32::System::Threading::{OpenProcess,QueryFullProcessImageNam
 use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::Win32::UI::Accessibility::*;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent,TRACKMOUSEEVENT,TME_LEAVE,SetFocus,SetCapture,GetCapture,ReleaseCapture,VK_LEFT,VK_RIGHT,VK_UP,VK_DOWN,VK_RETURN,VK_ESCAPE,VK_HOME,VK_END,VK_PRIOR,VK_NEXT,VK_APPS,VK_F10,VK_SHIFT,VK_SPACE,GetKeyState};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent,TRACKMOUSEEVENT,TME_LEAVE,SetFocus,SetCapture,GetCapture,ReleaseCapture,VK_LEFT,VK_RIGHT,VK_UP,VK_DOWN,VK_RETURN,VK_ESCAPE,VK_HOME,VK_END,VK_PRIOR,VK_NEXT,VK_APPS,VK_F10,VK_SHIFT,VK_SPACE,GetKeyState,GetDoubleClickTime};
 
 mod options;
 mod runtime;
