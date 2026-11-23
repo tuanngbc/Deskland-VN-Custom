@@ -34,8 +34,8 @@
 <section class="settings-page" id="page-wallpaper" aria-labelledby="pageTitle"><div class="wallpaper-layout"><div><div class="collection-head"><h2 data-i18n="themeLibrary">Bộ sưu tập giao diện</h2><input class="theme-search" id="themeSearch" type="search" placeholder="Tìm giao diện…" aria-label="Tìm giao diện" data-i18n-placeholder="themeSearch"></div><div class="theme-list" id="themes"></div><p class="empty-search" id="emptySearch" hidden data-i18n="themeSearchEmpty">Không tìm thấy giao diện phù hợp.</p></div><div class="side">
     <section class="card preview-card">
       <div class="preview-head"><h2 id="themeName">　</h2><label class="switch-row adaptive-switch" id="adaptiveRow" hidden><span data-i18n="adaptive">自适应</span><input type="checkbox" id="adaptive" role="switch" checked><i class="switch" aria-hidden="true"></i></label></div>
-      <div class="stage" id="stage"><div class="preview" id="previewBox"><iframe id="preview" data-i18n-title="livePreview" title="实时预览" tabindex="-1"></iframe></div></div>
-      <p class="preview-foot"><span class="live-dot"></span><span id="previewFoot">实时预览</span></p>
+      <div class="stage" id="stage"><div class="preview" id="previewBox"><img id="previewStill" class="preview-still" alt="" decoding="async"><iframe id="preview" data-i18n-title="livePreview" title="实时预览" tabindex="-1" hidden></iframe></div></div>
+      <div class="preview-foot"><span id="previewFoot"></span><button type="button" class="ghost-btn" id="previewToggle" hidden aria-pressed="false"></button></div>
       <div class="preview-actions">
         <button class="ghost-btn share" id="reseed" data-i18n-title="refreshTitle" title="重新生成这个主题的画面">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.75"/><path d="M13.4 2.6v3.2h-3.2"/></svg>
@@ -359,6 +359,8 @@ const state = { registry0: null, registry: null, theme: 'beach', params: {}, scr
   updateVersion: '', updateStatus: '', updateProgress: -1, updateError: '', pendingInit: null };
 const $ = id => document.getElementById(id);
 const frame = $('preview');
+const previewRecovery = !!host && new URLSearchParams(location.search).has('recovery');
+let livePreview = !host;
 
 /* ---------- 界面语言：文字表在 i18n/<语言>.json（ui：界面文字；themes：主题名和参数——简体中文的就是 themes.json 本身） ---------- */
 // 增加语言时同步宿主 I18n.Supported 与体验版导出的语言列表。
@@ -1173,7 +1175,7 @@ function syncDockSettings(m) {
   $('dockShellButtons').value=dockOptions.nativeShellButtons?'windows':'local';
   $('dockStartShortcut').checked=!!dockOptions.startShortcut;
   $('dockWinKeyStart').checked=!!dockOptions.winKeyStart;
-  const winKeyMessages={waiting:'Đã lưu. Tính năng chỉ hoạt động khi bật chế độ chỉ Dock.',installed:'Đã cài bộ nhận phím. Anh có thể thử phím Win đơn.',failed:'Bộ nhận phím không hoạt động. Windows xử lý phím Win. Tắt rồi bật tùy chọn để thử lại.',maskFailed:'Windows từ chối thao tác chặn Start gốc. Phím Win đã trở về Windows.'};
+  const winKeyMessages={waiting:'Đã lưu. Tính năng chỉ hoạt động khi bật chế độ chỉ Dock.',installed:'Đã cài bộ nhận phím. Anh có thể thử phím Win đơn.',failed:'Bộ nhận phím không hoạt động. Windows xử lý phím Win. Tắt rồi bật tùy chọn để thử lại.',maskFailed:'Windows từ chối chuyển tiếp tổ hợp Win. Phím Win đã trở về Windows.'};
   $('dockWinKeyStatus').textContent=winKeyMessages[m.dockWinKeyStatus]||'';
   $('dockStageEnabled').checked=!!dockOptions.stageEnabled;
   $('dockAllWindows').checked=!!dockOptions.allWindows;
@@ -1266,7 +1268,7 @@ $('updateProgram').addEventListener('click', () => {
 });
 
 /* ---------- 实时预览：iframe 按整块桌面的尺寸排版，再整体缩小 ---------- */
-const toPreview = m => { if (frame.contentWindow) frame.contentWindow.postMessage(JSON.stringify(m), '*'); };
+const toPreview = m => { if (livePreview && frame.contentWindow) frame.contentWindow.postMessage(JSON.stringify(m), '*'); };
 function screenCss() {
   const k = window.devicePixelRatio || 1;
   return { w: Math.round(state.screen.w / k), h: Math.round(state.screen.h / k) };
@@ -1285,7 +1287,7 @@ function layoutPreview() {
 }
 addEventListener('resize', () => { layoutPreview(); renderMonitors(); });
 addEventListener('message', e => {
-  if (e.source !== frame.contentWindow) return;
+  if (!livePreview || e.source !== frame.contentWindow) return;
   const m = JSON.parse(e.data);
   if (m.t === 'ready') {                 // 预览页面加载好了：先给设置，再给图标
     toPreview({ t: 'settings', v: valuesOf(themeById(state.theme)), environment: state.environment });
@@ -1293,8 +1295,34 @@ addEventListener('message', e => {
   }
 });
 function updateFoot() {
-  $('previewFoot').textContent = t('livePreview');
+  $('previewFoot').textContent = livePreview ? t('livePreview') :
+    t(previewRecovery ? 'previewRecovery' : 'previewStill');
+  const button = $('previewToggle');
+  button.hidden = !host || previewRecovery;
+  button.textContent = t(livePreview ? 'previewStop' : 'previewPlay');
+  button.setAttribute('aria-pressed', String(livePreview));
 }
+function refreshThemePreview(){
+  const theme = themeById(state.theme);
+  const still = $('previewStill');
+  const thumbnail = thumbUrl(theme.thumb, theme.id);
+  if (thumbnail) still.setAttribute('src', thumbnail); else still.removeAttribute('src');
+  still.hidden = livePreview || !thumbnail;
+  frame.hidden = !livePreview;
+  if (livePreview){
+    const target = theme.page + '?preview=1';
+    if (frame.getAttribute('src') !== target) frame.setAttribute('src', target);
+  } else if (frame.hasAttribute('src')){
+    frame.removeAttribute('src');
+  }
+  updateFoot();
+}
+function setLivePreview(enabled){
+  if (!host || previewRecovery || !state.registry || livePreview===enabled) return;
+  livePreview=enabled;
+  refreshThemePreview();
+}
+$('previewToggle').addEventListener('click', () => setLivePreview(!livePreview));
 
 function renderHead() {
   const th = themeById(state.theme);
@@ -1307,9 +1335,8 @@ function showTheme() {
   renderHead();
   renderThemes();
   renderControls();
-  updateFoot();
+  refreshThemePreview();
   layoutPreview();
-  frame.src = themeById(state.theme).page + '?preview=1';
 }
 
 /* ---------- 分享：宿主让壁纸页面画一张图 / 录一段动画（示例图标、名字是色块），保存、复制到剪贴板，再把预览发回来 ---------- */

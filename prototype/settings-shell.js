@@ -5,6 +5,7 @@
   function copy(){const key='nav_'+current,sub='navSub_'+current;$('pageTitle').textContent=t(key)===key?fallback[current][0]:t(key);$('pageSubtitle').textContent=t(sub)===sub?fallback[current][1]:t(sub);}
   for(const button of document.querySelectorAll('.nav-item'))button.addEventListener('click',()=>{
     current=button.dataset.page;
+    if(current!=='wallpaper')setLivePreview(false);
     for(const page of document.querySelectorAll('.settings-page'))page.hidden=page.id!=='page-'+current;
     for(const nav of document.querySelectorAll('.nav-item')){if(nav===button)nav.setAttribute('aria-current','page');else nav.removeAttribute('aria-current');}
     copy();$('pageViewport').scrollTop=0;requestAnimationFrame(()=>{layoutPreview();renderMonitors();});

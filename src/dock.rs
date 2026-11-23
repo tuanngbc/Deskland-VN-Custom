@@ -127,7 +127,7 @@ struct Bar {
     hwnd:HWND, bounds:RECT, items:Vec<Item>, hovered:i32, hidden:bool,
     layout:Option<geometry::Layout>, pinned_widgets:Vec<UtilityWidget>, motion:Motion, collapsed:bool, auto_hide:bool,
     status_hover:Option<Option<UtilityWidget>>, pressed:Option<Press>, keyboard:Option<usize>, previous_focus:isize, pointer:Option<(f32,f32)>,
-    reveal:motion::Spring, feedback:Option<Feedback>, active:Option<usize>, minimized:u16, attention:u16, metric_repaint:Option<Instant>,
+    reveal:motion::Spring, rail_face:usize, feedback:Option<Feedback>, active:Option<usize>, minimized:u16, attention:u16, metric_repaint:Option<Instant>,
 }
 #[derive(Clone,Debug,PartialEq,Eq)]
 enum DockTarget { App(String), Launcher, Overflow, Utility(UtilityWidget), Shell(shell_access::Target) }
@@ -214,6 +214,7 @@ impl Bar {
     fn collapse(&mut self, collapsed:bool, reduced:bool)->bool {
         if self.collapsed==collapsed{return false;}
         self.collapsed=collapsed;
+        if collapsed{self.rail_face=0;}
         self.metric_repaint=None;
         if reduced {self.reveal=motion::Spring::rest(if collapsed{0.0}else{1.0});false}
         else {self.schedule()}
@@ -733,7 +734,7 @@ unsafe fn recreate(state:&mut State) {
         if !hwnd.is_null(){
         let auto_hide=state.prefs.dock_auto_hide(&screen.id);
         state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:true,layout:Some(layout),pinned_widgets,motion:Motion::default(),collapsed:auto_hide,auto_hide,status_hover:None,pressed:None,keyboard:None,previous_focus:0,pointer:None,
-            reveal:motion::Spring::rest(if auto_hide{0.0}else{1.0}),feedback:None,active:None,minimized:0,attention:0,metric_repaint:None});
+            reveal:motion::Spring::rest(if auto_hide{0.0}else{1.0}),rail_face:0,feedback:None,active:None,minimized:0,attention:0,metric_repaint:None});
         }else{emit(Event::Error(format!("Create Dock window: {}",GetLastError())));}
         }
         if stage_targets.contains(&i) && !state.stages.iter().any(|s|same_rect(s.bounds,screen.bounds)) {
@@ -824,6 +825,13 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             }
         }
         let fullscreen=state.suspended || screen.is_some_and(|s|fullscreen_outputs.contains(&s.id));
+        if b.collapsed&&!fullscreen&&(topology||changed||b.hidden||b.rail_face==0){
+            if let Some(layout)=&b.layout{
+                let face=stage_rail::sample(surface::rail_bounds(layout),layout.side,false,b.rail_face);
+                changed|=face!=b.rail_face;
+                b.rail_face=face;
+            }
+        }
         if b.hidden!=fullscreen {
             ShowWindow(b.hwnd,if fullscreen{SW_HIDE}else{SW_SHOWNOACTIVATE});b.hidden=fullscreen;
             if fullscreen{utilities::close_panels_for(b.hwnd);close_status_tip(b.hwnd);KillTimer(b.hwnd,STATUS_TIP_TIMER);b.status_hover=None;KillTimer(b.hwnd,MOTION_TIMER);KillTimer(b.hwnd,HIDE_TIMER);KillTimer(b.hwnd,FEEDBACK_TIMER);b.motion=Motion::default();b.hovered=-1;b.keyboard=None;b.pressed=None;b.pointer=None;b.collapsed=b.auto_hide;b.reveal=motion::Spring::rest(if b.collapsed{0.0}else{1.0});b.feedback=None;}
@@ -950,7 +958,8 @@ unsafe fn refresh(state:&mut State, topology:bool) {
                 let moving=IsWindowVisible(stage.rail)==0||!same_rect(old,rail_bounds);
                 if moving||active_changed||topology{
                     let previous=GetWindowLongPtrW(stage.rail,GWLP_USERDATA);
-                    let face=stage_rail::sample(rail_bounds,right,previous as usize) as isize;
+                    let side=if right{DockSide::Right}else{DockSide::Left};
+                    let face=stage_rail::sample(rail_bounds,side,true,previous as usize) as isize;
                     if face!=previous{
                         SetWindowLongPtrW(stage.rail,GWLP_USERDATA,face);
                         InvalidateRect(stage.rail,ptr::null(),0);
@@ -1193,10 +1202,10 @@ unsafe fn paint(hwnd:HWND){
             .map(|i|(i,f.kind,if state.prefs.appearance.reduced_motion{0.2}else{f.start.elapsed().as_secs_f32()/0.42})));
         Some((bar.layout.clone()?,bar.items.clone(),bar.hovered,bar.keyboard,state.material?,bar.active,bar.minimized,bar.attention,bar.drop_target(),bar.reveal.value.clamp(0.0,1.0),feedback,bar.motion.at,state.prefs.appearance.start_icon,
             state.screens.iter().find(|d|same_rect(d.bounds,bar.bounds))
-                .and_then(|d|state.prefs.utility_profiles.get(&d.id)).map(|p|p.metrics)))
+                .and_then(|d|state.prefs.utility_profiles.get(&d.id)).map(|p|p.metrics),bar.rail_face))
     });
     let mut ps:PAINTSTRUCT=mem::zeroed();let dc=BeginPaint(hwnd,&mut ps);
-    if let Some((layout,items,hovered,keyboard,material,active,minimized,attention,drop_target,openness,feedback,animation_tick,start_icon,metrics))=layered{
+    if let Some((layout,items,hovered,keyboard,material,active,minimized,attention,drop_target,openness,feedback,animation_tick,start_icon,metrics,rail_face))=layered{
         EndPaint(hwnd,&ps);
         let key=hwnd as usize;
         let paint=animation_tick.filter(|_|perf::active()).map(|tick|(tick,std::time::Instant::now()));
@@ -1211,7 +1220,7 @@ unsafe fn paint(hwnd:HWND){
                 let mut a=a.borrow_mut();
                 a.as_mut().map(|atlas|atlas.request(&items)).unwrap_or_default()
             });
-            let applied=if openness<=0.003 {canvas.rail(hwnd,&layout)} else {canvas.paint(hwnd,&layout,&items,&atlas,start_icon,active,minimized,attention,keyboard.or_else(||usize::try_from(hovered).ok()),drop_target,openness,feedback,metrics)};
+            let applied=if openness<=0.003 {canvas.rail(hwnd,&layout,rail_face)} else {canvas.paint(hwnd,&layout,&items,&atlas,start_icon,active,minimized,attention,keyboard.or_else(||usize::try_from(hovered).ok()),drop_target,openness,feedback,metrics,rail_face)};
             if applied{
                 if let Some((tick,paint))=paint{perf::submitted(key,tick,paint);}
                 SURFACES.with(|s|s.borrow_mut().insert(key,canvas));

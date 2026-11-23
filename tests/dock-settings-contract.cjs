@@ -229,4 +229,31 @@ test('window policy edits one output without overwriting its other module',()=>{
   $('dockPolicyDisplay').listeners.change({target:{value:'main'}});
   assert.equal($('dockPolicy_dock').value,'floating');
 });
+test('native Settings starts without a live iframe and recovery cannot reopen it',()=>{
+  const from=html.indexOf('function updateFoot()'),to=html.indexOf('function renderHead()',from);
+  assert(from>=0&&to>from);
+  for(const previewRecovery of [false,true]){
+    const nodes=new Map();
+    const element=id=>{
+      if(!nodes.has(id)){
+        const attrs=new Map(),listeners={};
+        nodes.set(id,{listeners,setAttribute:(k,v)=>attrs.set(k,v),removeAttribute:k=>attrs.delete(k),
+          hasAttribute:k=>attrs.has(k),getAttribute:k=>attrs.get(k),addEventListener:(k,v)=>{listeners[k]=v;}});
+      }return nodes.get(id);
+    };
+    const preview=element('preview');
+    const ctx=vm.createContext({$:element,frame:preview,previewRecovery,livePreview:false,host:{},
+      state:{theme:'beach',registry:{}},t:k=>k,themeById:()=>({page:'flat.html',id:'beach'}),thumbUrl:()=>'beach.png'});
+    vm.runInContext(html.slice(from,to),ctx);
+    ctx.refreshThemePreview();
+    assert.equal(preview.getAttribute('src'),undefined);
+    assert.equal(element('previewStill').getAttribute('src'),'beach.png');
+    element('previewToggle').listeners.click();
+    assert.equal(preview.getAttribute('src'),previewRecovery?undefined:'flat.html?preview=1');
+    assert.equal(element('previewToggle').hidden,previewRecovery);
+    ctx.setLivePreview(false);
+    assert.equal(preview.getAttribute('src'),undefined);
+    assert.equal(element('previewStill').hidden,false);
+  }
+});
 console.log('TOTAL: '+count+' PASS / 0 FAIL');

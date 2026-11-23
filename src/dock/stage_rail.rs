@@ -1,4 +1,5 @@
 //! Contrast for the small reveal handle beside a collapsed Stage.
+use super::DockSide;
 use windows_sys::Win32::{Foundation::{HWND,RECT},Graphics::Gdi::*};
 
 const CHARCOAL:usize=0x003f3f3f;
@@ -20,15 +21,22 @@ fn face(samples:[u32;5],previous:usize)->usize{
     if median>=threshold{CHARCOAL}else{WHITE}
 }
 
-pub(super) unsafe fn sample(bounds:RECT,right:bool,previous:usize)->usize{
+pub(super) unsafe fn sample(bounds:RECT,side:DockSide,inside:bool,previous:usize)->usize{
     let screen:HWND=std::ptr::null_mut();
     let dc=GetDC(screen);
     if dc.is_null(){return face([u32::MAX;5],previous);}
     // Look immediately inside the display, outside our topmost window, so
     // the rail never samples its own color on subsequent refreshes.
-    let x=if right{bounds.left-2}else{bounds.right+1};
-    let height=bounds.bottom-bounds.top;
-    let samples=std::array::from_fn(|i|GetPixel(dc,x,bounds.top+height*(i as i32+1)/6));
+    let samples=std::array::from_fn(|i|{
+        let n=i as i32+1;
+        let (x,y)=if side==DockSide::Bottom{
+            (bounds.left+(bounds.right-bounds.left)*n/6,if inside{bounds.top-2}else{bounds.bottom+1})
+        }else{
+            (if (side==DockSide::Right)==inside{bounds.left-2}else{bounds.right+1},
+                bounds.top+(bounds.bottom-bounds.top)*n/6)
+        };
+        GetPixel(dc,x,y)
+    });
     ReleaseDC(screen,dc);
     face(samples,previous)
 }

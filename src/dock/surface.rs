@@ -161,14 +161,14 @@ impl Surface {
     pub fn set_material(&mut self,value:Material){
         if self.material!=value{self.material=value;self.static_pixels.clear();}
     }
-    pub unsafe fn rail(&mut self,hwnd:HWND,layout:&Layout)->bool{
+    pub unsafe fn rail(&mut self,hwnd:HWND,layout:&Layout,rail_face:usize)->bool{
         let (w,h)=self.layer.size;
         let data=self.layer.pixels();data.fill(0);
-        paint_rail(data,w,h,layout,self.material.dark,1.0);
+        paint_rail(data,w,h,layout,rail_face,1.0);
         self.layer.present(hwnd)
     }
     pub unsafe fn paint(&mut self,hwnd:HWND,layout:&Layout,items:&[super::Item],atlas:&Atlas,start_icon:super::StartIcon,active:Option<usize>,minimized:u16,attention:u16,
-        hover:Option<usize>,drop_target:Option<usize>,openness:f32,feedback:Option<(usize,FeedbackKind,f32)>,metrics:Option<MetricOptions>)->bool{
+        hover:Option<usize>,drop_target:Option<usize>,openness:f32,feedback:Option<(usize,FeedbackKind,f32)>,metrics:Option<MetricOptions>,rail_face:usize)->bool{
         let (w,h)=self.layer.size;
         let scale=layout.scale;
         if self.glass!=layout.glass||self.static_pixels.is_empty() {
@@ -310,7 +310,7 @@ impl Surface {
         if openness<1.0 {
             let alpha=(openness.clamp(0.0,1.0)*255.0).round() as u16;
             for value in data.iter_mut(){*value=((*value as u16*alpha+127)/255) as u8;}
-            paint_rail(data,w,h,layout,self.material.dark,1.0-openness);
+            paint_rail(data,w,h,layout,rail_face,1.0-openness);
         }
         self.layer.present(hwnd)
     }
@@ -340,15 +340,30 @@ fn paint_start(data:&mut[u8],w:i32,h:i32,slot:Rect,icon:super::StartIcon,palette
     }}
 }
 
-fn paint_rail(data:&mut[u8],w:i32,h:i32,layout:&Layout,dark:bool,strength:f32) {
+pub(super) fn rail_box(layout:&Layout)->Rect{
     let scale=layout.scale;
     let area=layout.glass;
-    let rail=match layout.side{
+    match layout.side{
         super::DockSide::Bottom=>Rect{x:area.x+area.w*0.25,y:area.y+area.h-4.0*scale,w:area.w*0.50,h:4.0*scale},
         super::DockSide::Left=>Rect{x:area.x,y:area.y+area.h*0.25,w:4.0*scale,h:area.h*0.50},
         super::DockSide::Right=>Rect{x:area.x+area.w-4.0*scale,y:area.y+area.h*0.25,w:4.0*scale,h:area.h*0.50},
-    };
-    rounded(data,w,h,rail,rail.w.min(rail.h)*0.5,if dark{[241,246,255]}else{[26,34,48]},(126.0*strength.clamp(0.0,1.0)).round() as u8);
+    }
+}
+pub(super) fn rail_bounds(layout:&Layout)->windows_sys::Win32::Foundation::RECT{
+    let r=rail_box(layout);
+    let x=layout.window.left;let y=layout.window.top;
+    windows_sys::Win32::Foundation::RECT{left:x+r.x.floor() as i32,top:y+r.y.floor() as i32,
+        right:x+(r.x+r.w).ceil() as i32,bottom:y+(r.y+r.h).ceil() as i32}
+}
+fn paint_rail(data:&mut[u8],w:i32,h:i32,layout:&Layout,face:usize,strength:f32) {
+    let rail=rail_box(layout);
+    let (rim,face)=super::stage_rail::colors(face);
+    let rgb=|c:u32|[(c&255) as u8,((c>>8)&255) as u8,((c>>16)&255) as u8];
+    let alpha=(236.0*strength.clamp(0.0,1.0)).round() as u8;
+    rounded(data,w,h,rail,rail.w.min(rail.h)*0.5,rgb(rim),alpha);
+    let inset=layout.scale*0.65;
+    let core=Rect{x:rail.x+inset,y:rail.y+inset,w:rail.w-2.0*inset,h:rail.h-2.0*inset};
+    rounded(data,w,h,core,core.w.min(core.h)*0.5,rgb(face),alpha);
 }
 
 fn glass_pixel(tint:Material,rect:Rect,radius:f32,x:f32,y:f32,scale:f32,d:f32)->[u8;4]{

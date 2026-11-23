@@ -41,6 +41,8 @@ thread_local! {
     static OPENING: RefCell<Option<Opening>> = const { RefCell::new(None) };
     static TICKET: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static RUNTIME_ERROR: RefCell<Option<(u64, String)>> = const { RefCell::new(None) };
+    static RETRY: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    static RECOVERY_PROFILE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static TRIAL_FAULT: std::cell::Cell<Option<TrialFault>> = const { std::cell::Cell::new(None) };
     static TRIAL_CRASH: std::cell::Cell<Option<(u64, Option<Instant>)>> = const { std::cell::Cell::new(None) };
 }
@@ -211,7 +213,9 @@ pub fn open(proto: &Path) -> Result<(), String> {
         let ticket=TICKET.with(|n|{let next=n.get().wrapping_add(1);n.set(next);next});
         OPENING.with(|p| p.replace(Some(Opening{ticket,hwnd,started:Instant::now(),error:None})));
         let fault = TRIAL_FAULT.with(|f| f.take());
-        if let Err(error) = start(ticket, proto.to_owned(), fault) {
+        let recovery=RECOVERY_PROFILE.with(|r|r.get());
+        RETRY.with(|r|r.replace((!recovery&&fault.is_none()).then(||proto.to_owned())));
+        if let Err(error) = start(ticket, proto.to_owned(), fault, recovery) {
             close();
             return Err(error);
         }
@@ -270,7 +274,7 @@ fn installed(ticket: u64) -> bool {
     WEB.with(|w| w.try_borrow().is_ok_and(|w| w.as_ref().is_some_and(|w| w.ticket == ticket)))
 }
 
-fn process_failed(ticket: u64, kind: COREWEBVIEW2_PROCESS_FAILED_KIND) {
+fn process_failed(ticket: u64, kind: COREWEBVIEW2_PROCESS_FAILED_KIND, details:Option<(i32,i32)>) {
     if kind != COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED
         && kind != COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED
         && kind != COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE {
@@ -279,7 +283,10 @@ fn process_failed(ticket: u64, kind: COREWEBVIEW2_PROCESS_FAILED_KIND) {
     if opening_window(ticket).is_none() && !installed(ticket) { return; }
     // No destruction from inside a WebView2 event callback. The owner consumes
     // this after dispatch, dropping any commands queued by the failed view.
-    RUNTIME_ERROR.with(|e| e.replace(Some((ticket, format!("Tiến trình WebView2 gặp lỗi ({})", kind.0)))));
+    let error=if let Some((reason,exit))=details{
+        format!("Tiến trình WebView2 gặp lỗi (loại {}, lý do {reason}, mã 0x{:08x})",kind.0,exit as u32)
+    }else{format!("Tiến trình WebView2 gặp lỗi (loại {})",kind.0)};
+    RUNTIME_ERROR.with(|e| e.replace(Some((ticket,error))));
 }
 
 fn queue_page_message(ticket: u64, message: String) {
@@ -288,15 +295,30 @@ fn queue_page_message(ticket: u64, message: String) {
         INBOX.with(|i| i.borrow_mut().push(message));
     }
 }
-pub fn take_open_error() -> Option<String> {
+pub fn take_open_error() -> Option<String> { take_open_error_with(open) }
+fn take_open_error_with(reopen:impl FnOnce(&Path)->Result<(),String>) -> Option<String> {
     let runtime = RUNTIME_ERROR.with(|e| e.borrow_mut().take())
         .filter(|(ticket,_)| opening_window(*ticket).is_some() || installed(*ticket))
         .map(|(_,message)| message);
-    let error=runtime.or_else(|| OPENING.with(|p| {
+    let recreate=runtime.as_ref().and_then(|_|RETRY.with(|r|r.borrow_mut().take()));
+    let mut error=runtime.or_else(|| OPENING.with(|p| {
         let p=p.borrow();
         let p=p.as_ref()?;
         p.error.clone().or_else(||(p.started.elapsed()>=OPEN_TIMEOUT).then(||"WebView2 không gửi tín hiệu sẵn sàng trong 8 giây".to_owned()))
     }));
+    if let Some(path)=recreate{
+        if close(){
+            // Do not share the terminating browser's profile or reload
+            // animated previews in recovery. Application settings live
+            // in their original file; this folder holds only WebView data.
+            RECOVERY_PROFILE.with(|r|r.set(true));
+            crate::log!("Cài đặt: {} → mở lại giao diện đầy đủ",error.as_deref().unwrap_or("WebView2 đã dừng"));
+            match reopen(&path){
+                Ok(())=>return None,
+                Err(second)=>error=Some(format!("Khôi phục WebView2 không thành công: {second}")),
+            }
+        }
+    }
     if error.is_some(){close();}
     error
 }
@@ -319,6 +341,7 @@ pub fn close() -> bool {
     let hwnd=pending.or_else(||WEB.with(|w|w.borrow().as_ref().map(|w|w.hwnd)));
     if let Some(hwnd)=hwnd{unsafe{if IsWindow(hwnd)!=0&&DestroyWindow(hwnd)==0{return false;}}}
     OPENING.with(|p|p.borrow_mut().take());
+    RETRY.with(|r|r.borrow_mut().take());
     RUNTIME_ERROR.with(|e|e.borrow_mut().take());
     INBOX.with(|i|i.borrow_mut().clear());
     true
@@ -344,8 +367,9 @@ pub fn poll_trial_fault() {
     }
 }
 
-fn start(ticket: u64, proto: PathBuf, fault: Option<TrialFault>) -> Result<(), String> {
-    let data = HSTRING::from(crate::lock::data_dir().join("WebView2").to_string_lossy().as_ref());
+fn start(ticket: u64, proto: PathBuf, fault: Option<TrialFault>, recovery:bool) -> Result<(), String> {
+    let folder=if recovery{"WebView2-Recovery"}else{"WebView2"};
+    let data = HSTRING::from(crate::lock::data_dir().join(folder).to_string_lossy().as_ref());
     let opts = webview2_com::CoreWebView2EnvironmentOptions::default();
     if DEBUG_PORT.load(std::sync::atomic::Ordering::Relaxed) {
         unsafe { opts.set_additional_browser_arguments("--remote-debugging-port=9222".into()) };
@@ -370,7 +394,7 @@ fn start(ticket: u64, proto: PathBuf, fault: Option<TrialFault>) -> Result<(), S
                 failed(ticket,err);return Ok(());
             }
             let Some(controller)=controller else{failed(ticket,"WebView2 không trả về controller");return Ok(());};
-            match attach(ticket,hwnd,&proto,&controller,fault) {
+            match attach(ticket,hwnd,&proto,&controller,fault,recovery) {
                 Ok(web) if opening_window(ticket)==Some(hwnd)=>{WEB.with(|w|w.replace(Some(web)));resize(hwnd);}
                 Ok(_)=>{let _=unsafe{controller.Close()};}
                 Err(error)=>{let _=unsafe{controller.Close()};failed(ticket,error);}
@@ -386,7 +410,7 @@ fn start(ticket: u64, proto: PathBuf, fault: Option<TrialFault>) -> Result<(), S
         .map_err(|e|format!("Không khởi tạo được WebView2: {e}"))
 }
 
-fn attach(ticket:u64, hwnd:F::HWND, proto:&Path, controller:&ICoreWebView2Controller, fault:Option<TrialFault>)->Result<Web,String>{
+fn attach(ticket:u64, hwnd:F::HWND, proto:&Path, controller:&ICoreWebView2Controller, fault:Option<TrialFault>,recovery:bool)->Result<Web,String>{
     unsafe {
         if let Ok(c2) = controller.cast::<ICoreWebView2Controller2>() {
             let bg = if light_theme() { COREWEBVIEW2_COLOR { A: 255, R: 255, G: 255, B: 255 } } else { COREWEBVIEW2_COLOR { A: 255, R: 23, G: 23, B: 23 } };
@@ -425,11 +449,20 @@ fn attach(ticket:u64, hwnd:F::HWND, proto:&Path, controller:&ICoreWebView2Contro
         webview.add_ProcessFailed(&ProcessFailedEventHandler::create(Box::new(move |_, args| {
             if let Some(args)=args {
                 let mut kind=COREWEBVIEW2_PROCESS_FAILED_KIND(0);
-                if args.ProcessFailedKind(&mut kind).is_ok(){ process_failed(ticket,kind); }
+                if args.ProcessFailedKind(&mut kind).is_ok(){
+                    let details=args.cast::<ICoreWebView2ProcessFailedEventArgs2>().ok().and_then(|args|{
+                        let mut reason=COREWEBVIEW2_PROCESS_FAILED_REASON(0);
+                        let mut exit=0;
+                        args.Reason(&mut reason).ok()?;args.ExitCode(&mut exit).ok()?;
+                        Some((reason.0,exit))
+                    });
+                    process_failed(ticket,kind,details);
+                }
             }
             Ok(())
         })),&mut token).map_err(|e|e.to_string())?;
-        let url = HSTRING::from(format!("https://app.local/settings.html?v={}", env!("CARGO_PKG_VERSION")));
+        let suffix=if recovery{"&recovery=1"}else{""};
+        let url = HSTRING::from(format!("https://app.local/settings.html?v={}{suffix}", env!("CARGO_PKG_VERSION")));
         webview.Navigate(PCWSTR(url.as_ptr())).map_err(|e| e.to_string())?;
         if fault == Some(TrialFault::Renderer) {
             // Use only the dedicated trial profile and the Settings renderer.
@@ -477,7 +510,7 @@ mod tests {
         let first=start_pending(31);
         for _ in 0..10{crate::settings::request(&state(),false);}
         assert_eq!(hosts(),[(first,false)]);
-        process_failed(31,COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED);
+        process_failed(31,COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,None);
         crate::settings::reconcile(state);
         let fallback=crate::settings::hwnd().expect("Win32 recovery");
         assert_eq!(unsafe{IsWindow(first)},0);
@@ -515,7 +548,7 @@ mod tests {
         OPENING.with(|p|p.replace(Some(Opening{ticket:8,hwnd:second,started:Instant::now(),error:None})));
         failed(7,"stale completion");
         queue_page_message(7,"late message from canceled request".into());
-        process_failed(7,COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED);
+        process_failed(7,COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,None);
         assert!(take_inbox().is_empty());
         assert!(take_open_error().is_none());
         assert_eq!(opening_window(8),Some(second));
@@ -529,12 +562,37 @@ mod tests {
     fn terminal_failure_clears_host_and_rejects_page_messages_but_gpu_exit_does_not(){
         let hwnd=unsafe{create_host()}.expect("Settings HWND");
         OPENING.with(|p|p.replace(Some(Opening{ticket:5,hwnd,started:Instant::now(),error:None})));
-        process_failed(5,COREWEBVIEW2_PROCESS_FAILED_KIND_GPU_PROCESS_EXITED);
+        process_failed(5,COREWEBVIEW2_PROCESS_FAILED_KIND_GPU_PROCESS_EXITED,None);
         assert!(take_open_error().is_none());
         queue_page_message(5,"ready".into());
-        process_failed(5,COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED);
+        process_failed(5,COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,None);
         assert!(take_open_error().is_some());
         assert!(take_inbox().is_empty());
         assert_eq!(unsafe{IsWindow(hwnd)},0);
+    }
+
+    #[test]
+    fn browser_exit_recreates_the_full_host_once_before_native_fallback(){
+        let host=|ticket|{
+            let hwnd=unsafe{create_host()}.expect("Settings HWND");
+            OPENING.with(|p|p.replace(Some(Opening{ticket,hwnd,started:Instant::now(),error:None})));
+            hwnd
+        };
+        let initial=host(41);
+        RETRY.with(|r|r.replace(Some(PathBuf::from("fixture"))));
+        process_failed(41,COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,Some((1,-1)));
+        assert!(take_open_error_with(|path|{
+            assert_eq!(path,Path::new("fixture"));
+            assert!(host_is_closed(initial));
+            assert!(RECOVERY_PROFILE.with(|r|r.get()));
+            host(42);Ok(())
+        }).is_none());
+        queue_page_message(41,"stale page".into());
+        assert!(take_inbox().is_empty());
+        let retry=opening_window(42).unwrap();
+        process_failed(42,COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,Some((1,-1)));
+        assert!(take_open_error_with(|_|panic!("retry must be bounded")).is_some());
+        assert!(host_is_closed(retry));
+        fn host_is_closed(hwnd:F::HWND)->bool{unsafe{IsWindow(hwnd)==0}}
     }
 }
