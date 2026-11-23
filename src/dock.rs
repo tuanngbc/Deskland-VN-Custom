@@ -104,7 +104,7 @@ pub struct Display {
 }
 type Screen = Display;
 #[derive(Clone)]
-struct AppWindow { hwnd:HWND, title:String, path:String, rect:RECT }
+struct AppWindow { hwnd:HWND, title:String, path:String, rect:RECT, stage_aumid:Option<String> }
 #[derive(Clone,Debug,PartialEq,Eq)]
 struct Item { path:String, title:String, hwnd:HWND, count:usize, pinned:bool }
 #[derive(Clone)]
@@ -236,7 +236,7 @@ impl StageEmphasis {
         keyboard.map(|i|(i,255)).or_else(||self.index.map(|i|(i,self.strength)))
     }
 }
-struct Stage { hwnd:HWND, rail:HWND, collapsed:bool, auto_hide:bool, preview_hwnd:HWND, preview_boxes:Vec<RECT>, preview_visible:bool, layered:bool, opacity:u32, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, emphasis:StageEmphasis, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews,
+struct Stage { hwnd:HWND, rail:HWND, collapsed:bool, auto_hide:bool, preview_hwnd:HWND, preview_boxes:Vec<RECT>, preview_visible:bool, layered:bool, opacity:u32, bounds:RECT, display:String, items:Vec<Item>, groups:Vec<Option<u64>>, members:Vec<Vec<usize>>, order:Vec<String>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, emphasis:StageEmphasis, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews,
     resting:RECT, slide:Option<(std::time::Instant,i32)>, offset:i32, pressed:Option<StageTarget> }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 enum StageTarget { Group(u64), Window(usize,u32,u32), Page(usize) }
@@ -245,8 +245,12 @@ impl Stage {
         if self.hidden{return None;}
         let layout=self.layout?;
         if let Some(i)=layout.hit(x,y) {
-            if let Some(id)=self.groups.get(i).copied().flatten(){return Some(StageTarget::Group(id));}
-            let hwnd=self.items.get(i)?.hwnd;
+            let layer=layout.member_hit(i,x,y)?;
+            if !layout.stack_design||layout.icon_hit(i,x,y){
+                if let Some(id)=self.groups.get(i).copied().flatten(){return Some(StageTarget::Group(id));}
+            }
+            // Old flat compatibility cards draw decorative edges only.
+            let hwnd=*self.members.get(i)?.get(if layout.stack_design{layer}else{0})? as HWND;
             let (pid,tid)=window_owner(hwnd)?;
             return Some(StageTarget::Window(hwnd as usize,pid,tid));
         }
@@ -472,8 +476,25 @@ unsafe extern "system" fn frame_app(hwnd:HWND,out:LPARAM)->i32{
     let app=packaged_identity(process);CloseHandle(process);
     if let Some(app)=app{*(out as *mut String)=app;0}else{1}
 }
+unsafe fn stage_identity(hwnd:HWND,path:&str)->Option<String>{
+    use windows::{core::GUID,Win32::{Foundation::PROPERTYKEY,System::Com::{
+        CoTaskMemFree,StructuredStorage::{PropVariantClear,PropVariantToStringAlloc}
+    },UI::Shell::PropertiesSystem::{IPropertyStore,SHGetPropertyStoreForWindow}}};
+    // Packaged apps already have a verified process/child AUMID. For Win32
+    // windows use the public per-window identity (such as a Chromium PWA).
+    if path.starts_with("shell:AppsFolder"){return None;}
+    const AUMID:PROPERTYKEY=PROPERTYKEY{fmtid:GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),pid:5};
+    let store:IPropertyStore=SHGetPropertyStoreForWindow(windows::Win32::Foundation::HWND(hwnd)).ok()?;
+    let mut value=store.GetValue(&AUMID).ok()?;
+    let id=PropVariantToStringAlloc(&value).ok().and_then(|raw|{
+        let result=raw.to_string().ok().filter(|id|!id.is_empty()&&id.len()<=400);
+        CoTaskMemFree(Some(raw.0.cast()));result
+    });
+    let _=PropVariantClear(&mut value);
+    id
+}
 unsafe extern "system" fn enumerate(hwnd:HWND,param:LPARAM)->i32 {
-    let out=&mut *(param as *mut Vec<AppWindow>);
+    let (out,stage)=&mut *(param as *mut (Vec<AppWindow>,bool));
     // GetWindowTextW sends WM_GETTEXT for another thread in this process.
     // The Settings owner can be waiting for Runtime::new or Drop to join us:
     // skip every own HWND before any title lookup, not just Dock/Shell classes.
@@ -514,11 +535,13 @@ unsafe extern "system" fn enumerate(hwnd:HWND,param:LPARAM)->i32 {
         if GetMonitorInfoW(monitor,&mut info)!=0{rect=info.rcMonitor;}
     }
     if rect.right<=rect.left || rect.bottom<=rect.top {return 1;}
-    out.push(AppWindow{hwnd,title,path,rect});
+    let stage_aumid=if *stage{stage_identity(hwnd,&path)}else{None};
+    out.push(AppWindow{hwnd,title,path,rect,stage_aumid});
     1
 }
-fn windows()->Vec<AppWindow>{
-    let mut v=Vec::new();unsafe {EnumWindows(Some(enumerate),&mut v as *mut _ as LPARAM)};
+fn windows(stage:bool)->Vec<AppWindow>{
+    let mut query=(Vec::new(),stage);unsafe {EnumWindows(Some(enumerate),&mut query as *mut _ as LPARAM)};
+    let (mut v,_)=query;
     if let Some(settings)=internal_app::window(){v.insert(0,settings);}
     v
 }
@@ -570,6 +593,7 @@ unsafe fn sync_appbars(state:&mut State,topology:bool){
     let notify=APPBAR_DIRTY.with(|flag|flag.replace(false));
     let reset=SHELL_RESTARTED.with(|flag|flag.replace(false));
     let mut requests=Vec::new();
+    let monitors=state.screens.iter().map(|screen|screen.bounds).collect::<Vec<_>>();
     for screen in &state.screens {
         let policy=state.prefs.window_policy(&screen.id);
         if policy.dock==WindowMode::Reserve&&state.bars.iter().any(|b|same_rect(b.bounds,screen.bounds)){
@@ -577,8 +601,10 @@ unsafe fn sync_appbars(state:&mut State,topology:bool){
                 side:state.prefs.appearance.position,depth:dock_depth(screen,&state.prefs.appearance,state.prefs.utility_cluster(&screen.id))});
         }
         if policy.stage==WindowMode::Reserve&&state.stages.iter().any(|p|p.display==screen.id){
-            let (cards,_)=state.workspaces.cards(&screen.id,screen.bounds,&state.windows,state.prefs.all_windows);
-            if !cards.is_empty() || (state.suspended&&state.appbars.contains(&screen.id,true)) {
+            // Reserve based on the same monitor assignment as the Stage,
+            // without building groups again just to check for a window.
+            let has_cards=state.workspaces.has_cards(&screen.id,screen.bounds,&monitors,&state.windows,state.prefs.all_windows);
+            if has_cards || (state.suspended&&state.appbars.contains(&screen.id,true)) {
                 let style=state.prefs.stage_style(&screen.id);
                 requests.push(appbar::Request{display:screen.id.clone(),stage:true,monitor:screen.bounds,
                     side:if style.right==Some(true){DockSide::Right}else{DockSide::Left},depth:stage_depth(screen,style)});
@@ -674,7 +700,7 @@ unsafe fn recreate(state:&mut State) {
                     SetWindowLongPtrW(stage_hwnd,GWL_EXSTYLE,GetWindowLongPtrW(stage_hwnd,GWL_EXSTYLE)& !(WS_EX_LAYERED as isize));
                     previews::style_destination(stage_hwnd);
                 }
-                state.stages.push(Stage{hwnd:stage_hwnd,rail:ptr::null_mut(),collapsed:false,auto_hide:false,preview_hwnd,preview_boxes:Vec::new(),preview_visible:false,layered,opacity:style.opacity,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),selected:None,layout:None,page:0,pages:1,hidden:true,hover:None,emphasis:StageEmphasis::default(),keyboard:None,previous_focus:0,previews:previews::Previews::default(),
+                state.stages.push(Stage{hwnd:stage_hwnd,rail:ptr::null_mut(),collapsed:false,auto_hide:false,preview_hwnd,preview_boxes:Vec::new(),preview_visible:false,layered,opacity:style.opacity,bounds:screen.bounds,display:screen.id.clone(),items:Vec::new(),groups:Vec::new(),members:Vec::new(),order:Vec::new(),selected:None,layout:None,page:0,pages:1,hidden:true,hover:None,emphasis:StageEmphasis::default(),keyboard:None,previous_focus:0,previews:previews::Previews::default(),
                     resting:r,slide:None,offset:0,pressed:None});
             } else { emit(Event::Error(format!("Create Stage window: {}",GetLastError()))); }
         }
@@ -692,7 +718,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let material=surface::Material::system(style.theme,style.transparency,style.reduced_motion);
         state.material.replace(material)!=Some(material)
     }else{false};
-    state.windows=if state.suspended||!state.prefs.any_enabled(){Vec::new()}else{windows()};
+    state.windows=if state.suspended||!state.prefs.any_enabled(){Vec::new()}else{windows(state.prefs.stage_enabled&&!crate::trial::benchmark_active()&&!crate::trial::demo_active())};
     recreate(state);
     sync_appbars(state,topology);
     let fullscreen_outputs:HashSet<String>=state.screens.iter().filter(|s|!state.suspended&&display_fullscreen(s.bounds,&state.windows)).map(|s|s.id.clone()).collect();
@@ -757,6 +783,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
     state.workspaces.prune();
     let benchmark_sources=crate::trial::benchmark_stage_sources();
     let mut stage_report=Vec::new();
+    let monitor_bounds=state.screens.iter().map(|d|d.bounds).collect::<Vec<_>>();
     for stage in &mut state.stages {
         let Some(screen)=state.screens.iter().find(|s|s.id==stage.display) else{continue;};
         let style=state.prefs.stage_style(&screen.id);
@@ -768,7 +795,13 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             stage.auto_hide=auto;stage.collapsed=auto;
         }
         if !auto&&!stage.rail.is_null(){DestroyWindow(stage.rail);stage.rail=ptr::null_mut();}
-        let (items,groups)=state.workspaces.cards(&stage.display,stage.bounds,&state.windows,state.prefs.all_windows);
+        let automatic=!crate::trial::benchmark_active()&&!crate::trial::demo_active();
+        let mut cards=state.workspaces.cards(&stage.display,stage.bounds,&monitor_bounds,&state.windows,state.prefs.all_windows,automatic,foreground as HWND);
+        if automatic{cards.sort_by_cached_key(|card|stage.order.iter().position(|key|*key==card.key).unwrap_or(usize::MAX));}
+        stage.order=cards.iter().map(|card|card.key.clone()).collect::<Vec<_>>();
+        let items=cards.iter().map(|card|card.item.clone()).collect::<Vec<_>>();
+        let groups=cards.iter().map(|card|card.manual).collect::<Vec<_>>();
+        let members=cards.into_iter().map(|card|card.members).collect::<Vec<_>>();
         let mut layout=stage_surface::Layout::new(bounds.right-bounds.left,bounds.bottom-bounds.top,screen.dpi,stage_gap(screen,style),
             style.group_limit as usize,items.len(),style.right==Some(true));
         let rows=layout.rows;
@@ -785,9 +818,11 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             items.iter().position(|item| item.hwnd as usize==handle)).collect::<Vec<_>>());
         let items:Vec<_>=items.into_iter().skip(start).take(rows).collect();
         let groups:Vec<_>=groups.into_iter().skip(start).take(rows).collect();
-        let mut changed=stage.items!=items||stage.groups!=groups||stage.selected!=selected||active_changed||material_changed||old_pages!=stage.pages;
+        let members:Vec<_>=members.into_iter().skip(start).take(rows).collect();
+        let mut changed=stage.members!=members||stage.items!=items||stage.groups!=groups||stage.selected!=selected||active_changed||material_changed||old_pages!=stage.pages;
         changed|=stage.opacity!=style.opacity;stage.opacity=style.opacity;
         layout.count=items.len();
+        layout.stack_design=automatic&&style.stack_groups&&stage.layered;
         layout.height=layout.content_height();
         bounds.bottom=bounds.top+layout.height;
         if topology || state.prefs.appearance.reduced_motion {
@@ -802,8 +837,9 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         }
         if style.stack_groups {
             layout.stack=(0..items.len()).filter(|&i|items[i].count>1).fold(0u8,|bits,i|bits|(1<<i));
+            for (index,group) in members.iter().enumerate(){layout.layers[index]=group.len().min(5) as u8;}
         }
-        if stage.items!=items || stage.groups!=groups {
+        if stage.items!=items || stage.groups!=groups || stage.members!=members {
             KillTimer(stage.hwnd,STATUS_TIP_TIMER);close_status_tip(stage.hwnd);
             stage.hover=None;stage.emphasis=StageEmphasis::default();
             if stage.slide.is_none(){KillTimer(stage.hwnd,STAGE_MOTION_TIMER);}
@@ -813,7 +849,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
                     .or_else(||items.len().checked_sub(1).map(|last|index.min(last)))
             });
         }
-        stage.items=items;stage.groups=groups;stage.selected=selected;
+        stage.items=items;stage.groups=groups;stage.members=members;stage.selected=selected;
         if stage.layout!=Some(layout){
             stage.layout=if stage.layered||layout.apply(stage.hwnd){Some(layout)}else{None};
             changed=true;
@@ -852,7 +888,11 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         }
         else if layout.width>0&&layout.height>0{
             let host=if stage.preview_hwnd.is_null(){stage.hwnd}else{stage.preview_hwnd};
-            changed|=stage.previews.update_traced(host,&stage.items,layout,benchmark_sources.map(|_| steps.as_mut_slice()));
+            changed|=if stage.preview_hwnd.is_null()||!automatic||!style.stack_groups{
+                stage.previews.update_traced(host,&stage.items,layout,benchmark_sources.map(|_| steps.as_mut_slice()))
+            }else{
+                stage.previews.update_stacks(host,&stage.members,layout)
+            };
         }
         let mut clip_ok=true;
         if !stage.preview_hwnd.is_null(){
@@ -883,7 +923,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
                 let positioned=GetWindowRect(hwnd,&mut rect)!=0;
                 let on_monitor=|r:RECT| positioned&&rect_intersects(rect,r);
                 let source_display=state.screens.iter().position(|display|on_monitor(display.bounds));
-                let slot=stage.items.iter().position(|item| item.hwnd==hwnd);
+                let slot=stage.members.iter().position(|group|group.contains(&handle));
                 serde_json::json!({"source":i,"sourceOutput":source_display.map(|n| if state.screens[n].primary {"primary"}else{"secondary"}),
                     "visible":IsWindowVisible(hwnd)!=0,"local":on_monitor(screen.bounds),"enumerated":enumerated.is_some(),
                     "eligibility":match previews::preview_pid(hwnd){Ok(_)=>"Eligible".to_owned(),Err(reason)=>format!("{reason:?}")},
@@ -1338,7 +1378,7 @@ unsafe fn activate(hwnd:HWND,item:&Item) {
 enum AppOperation{
     Open, NewWindow, ShowMenu, TogglePin, Close(Vec<WindowIdentity>), Advanced,
 }
-#[derive(Clone,Copy)]
+#[derive(Clone,Copy,PartialEq,Eq,Hash)]
 struct WindowIdentity{hwnd:usize,pid:u32,tid:u32}
 impl WindowIdentity{
     unsafe fn read(hwnd:HWND)->Option<Self>{
@@ -1839,39 +1879,69 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
     let card=STATE.with(|s|{
         let state=s.borrow();
         let stage=state.stages.iter().find(|p|p.hwnd==hwnd)?;
-        let i=stage.layout?.hit(x,y)?;
-        let item=stage.items.get(i)?;
-        let local=stage_window_is_local(item.hwnd,stage.bounds);
+        let layout=stage.layout?;
+        let i=layout.hit(x,y)?;
+        let member=if layout.stack_design{layout.member_hit(i,x,y)?}else{0};
+        let item=*stage.members.get(i)?.get(member)? as HWND;
+        let local=stage_window_is_local(item,stage.bounds);
         let group=stage.groups.get(i).copied().flatten();
-        let members=group.map(|id|state.workspaces.members(id)).unwrap_or_default().into_iter()
+        let members=group.map(|id|state.workspaces.members(id))
+            .unwrap_or_else(||stage.members[i].iter().map(|&h|h as HWND).collect()).into_iter()
             .filter_map(|hwnd|{
-                let owner=window_owner(hwnd)?;
-                state.windows.iter().find(|w|w.hwnd==hwnd).map(|w|(hwnd,owner,w.title.clone()))
+                let identity=WindowIdentity::read(hwnd)?;
+                state.windows.iter().find(|w|w.hwnd==hwnd).map(|w|(identity,w.title.clone()))
             })
             .collect::<Vec<_>>();
-        Some((item.hwnd,window_owner(item.hwnd)?,group,stage.display.clone(),stage.selected,local,state.workspaces.can_create(&stage.display),members))
+        let targets=state.screens.iter().filter(|s|!stage_window_is_local(item,s.bounds)).map(|s|s.id.clone()).collect::<Vec<_>>();
+        Some((WindowIdentity::read(item)?,group,stage.display.clone(),stage.selected,local,state.workspaces.can_create(&stage.display),members,targets))
     });
-    let Some((item,owner,group,display,current,local,can_create,members))=card else{return;};
+    let Some((identity,group,display,current,local,can_create,members,targets))=card else{return;};
+    let item=identity.hwnd as HWND;
     let menu=CreatePopupMenu();
     if menu.is_null(){return;}
-    const DETACH_FIRST:usize=100;
-    let add=|id,title:&str,active|{
-        AppendMenuW(menu,MF_STRING|if active{0}else{MF_GRAYED},id,wide(title).as_ptr());
+    const FOCUS:usize=6;
+    const MINIMIZE:usize=7;
+    const CLOSE:usize=8;
+    const CLOSE_GROUP:usize=9;
+    const ACTIVATE_GROUP:usize=10;
+    const MOVE_FIRST:usize=32;
+    const DETACH_FIRST:usize=256;
+    const SELECT_FIRST:usize=512;
+    let append=|target,id,title:&str,active|{
+        AppendMenuW(target,MF_STRING|if active{0}else{MF_GRAYED},id,wide(title).as_ptr());
     };
-    add(1,"Tạo nhóm từ cửa sổ này",local&&group.is_none()&&can_create);
-    add(2,"Thêm vào nhóm đang mở",local&&group.is_none()&&current.is_some());
-    if !members.is_empty(){
+    let add=|id,title:&str,active|{
+        append(menu,id,title,active);
+    };
+    add(FOCUS,if IsIconic(item)!=0{"Khôi phục cửa sổ"}else{"Đưa cửa sổ lên trước"},true);
+    add(MINIMIZE,"Thu nhỏ cửa sổ",IsIconic(item)==0);
+    add(CLOSE,"Đóng cửa sổ",true);
+    if !targets.is_empty()&&IsIconic(item)==0&&IsZoomed(item)==0{
         let submenu=CreatePopupMenu();
         if !submenu.is_null(){
-            for (index,(_,_,title)) in members.iter().enumerate(){
-                let label=title.replace('&',"&&").chars().take(90).collect::<String>();
-                AppendMenuW(submenu,MF_STRING,DETACH_FIRST+index,wide(&label).as_ptr());
+            for (index,target) in targets.iter().take(DETACH_FIRST-MOVE_FIRST).enumerate(){
+                append(submenu,MOVE_FIRST+index,&target.replace('&',"&&"),true);
             }
-            if AppendMenuW(menu,MF_POPUP,submenu as usize,wide("Tách cửa sổ khỏi nhóm").as_ptr())==0{
-                DestroyMenu(submenu);
-            }
+            if AppendMenuW(menu,MF_POPUP,submenu as usize,wide("Chuyển sang màn hình").as_ptr())==0{DestroyMenu(submenu);}
         }
     }
+    AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
+    add(1,"Tạo nhóm từ cửa sổ này",local&&group.is_none()&&can_create);
+    add(2,"Thêm vào nhóm đang mở",local&&group.is_none()&&current.is_some());
+    for (base,label) in [(SELECT_FIRST,"Tất cả cửa sổ trong nhóm"),(DETACH_FIRST,"Tách cửa sổ khỏi nhóm thủ công")] {
+        if members.len()<2||base==DETACH_FIRST&&group.is_none(){continue;}
+        let submenu=CreatePopupMenu();
+        if !submenu.is_null(){
+            for (index,(_,title)) in members.iter().enumerate(){
+                if base==DETACH_FIRST&&index>=SELECT_FIRST-DETACH_FIRST{break;}
+                let label=title.replace('&',"&&").chars().take(90).collect::<String>();
+                append(submenu,base+index,&label,true);
+            }
+            if AppendMenuW(menu,MF_POPUP,submenu as usize,wide(label).as_ptr())==0{DestroyMenu(submenu);}
+        }
+    }
+    if members.len()>1||group.is_some(){add(ACTIVATE_GROUP,"Kích hoạt nhóm",true);}
+    if members.len()>1{add(CLOSE_GROUP,"Đóng các cửa sổ trong nhóm…",true);}
     add(4,"Giải tán nhóm và khôi phục cửa sổ",group.is_some());
     AppendMenuW(menu,MF_SEPARATOR,0,ptr::null());
     add(5,"Điều hướng Stage bằng bàn phím",true);
@@ -1887,13 +1957,50 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
         let selected=STATE.with(|s|{
             let mut state=s.borrow_mut();
             let Some(p)=state.stages.iter_mut().find(|p|p.hwnd==hwnd&&!p.hidden)else{return false;};
-            let Some(i)=p.items.iter().position(|e|e.hwnd==item)else{return false;};
+            let Some(i)=p.members.iter().position(|members|members.contains(&identity.hwnd))else{return false;};
             p.keyboard=Some(i);p.previous_focus=previous as usize;true
         });
         if selected{SetForegroundWindow(hwnd);SetFocus(hwnd);InvalidateRect(hwnd,ptr::null(),0);}
         return;
     }
     if result==0{return;}
+    if result==CLOSE_GROUP&&MessageBoxW(hwnd,
+        wide(&format!("Gửi yêu cầu đóng tới {} cửa sổ trong nhóm?",members.len())).as_ptr(),
+        wide("Đóng nhóm Stage Manager").as_ptr(),MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2)!=IDYES{return;}
+    let card_index=STATE.with(|s|{
+        let state=s.borrow();
+        let stage=state.stages.iter().find(|stage|stage.hwnd==hwnd&&stage.display==display&&!stage.hidden)?;
+        stage.members.iter().enumerate().find(|(i,m)|stage.groups[*i]==group&&m.contains(&identity.hwnd)&&identity.matches(item))
+            .map(|(i,_)|i)
+    });
+    let Some(index)=card_index else{return;};
+    let valid_member=|target:WindowIdentity|STATE.with(|s|{
+        let state=s.borrow();
+        let Some(stage)=state.stages.iter().find(|p|p.hwnd==hwnd&&!p.hidden)else{return false;};
+        target.matches(target.hwnd as HWND)&&stage.members.get(index).is_some_and(|m|m.contains(&target.hwnd))
+    });
+    match result{
+        FOCUS=>{activate_stage_member(hwnd,index,Some(item));return;}
+        MINIMIZE=>{ShowWindowAsync(item,SW_MINIMIZE);return;}
+        CLOSE=>{PostMessageW(item,WM_CLOSE,0,0);return;}
+        CLOSE_GROUP=>{
+            for (target,_) in members{if valid_member(target){PostMessageW(target.hwnd as HWND,WM_CLOSE,0,0);}}
+            return;
+        }
+        ACTIVATE_GROUP=>{activate_stage(hwnd,index);return;}
+        n if n>=SELECT_FIRST=>{
+            if let Some((target,_))=members.get(n-SELECT_FIRST){
+                let target=*target;
+                if valid_member(target){activate_stage_member(hwnd,index,Some(target.hwnd as HWND));}
+            }
+            return;
+        }
+        n if (MOVE_FIRST..DETACH_FIRST).contains(&n)=>{
+            if let Some(target)=targets.get(n-MOVE_FIRST){move_normal_window(item,target);}
+            return;
+        }
+        _=>{}
+    }
     update_state(|state|{
         // The menu can run a nested loop. Revalidate the original source and
         // display against the current enumeration before changing a workspace.
@@ -1901,8 +2008,8 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
         let current_card=if let Some(id)=group {
             stage.groups.contains(&Some(id))
         }else{
-            window_owner(item)==Some(owner)&&stage.items.iter().enumerate()
-                .any(|(i,entry)|entry.hwnd==item&&stage.groups[i].is_none())
+            stage.members.iter().enumerate()
+                .any(|(i,entries)|entries.contains(&identity.hwnd)&&stage.groups[i].is_none())
         };
         if !current_card{return;}
         let present=state.windows.iter().any(|w|w.hwnd==item);
@@ -1912,8 +2019,9 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
             2 if still_local&&group.is_none()&&current==stage.selected=>state.workspaces.add(&display,item),
             4=>{if let Some(id)=group{state.workspaces.dissolve(id);}},
             id if id>=DETACH_FIRST=>{
-                if let Some((group,(target,owner,_)))=group.zip(members.get(id-DETACH_FIRST)){
-                    if window_owner(*target)==Some(*owner){state.workspaces.remove_from(group,*target);}
+                if let Some((group,(target,_)))=group.zip(members.get(id-DETACH_FIRST)){
+                    let handle=target.hwnd as HWND;
+                    if target.matches(handle){state.workspaces.remove_from(group,handle);}
                 }
             }
             _=>{}
@@ -1922,9 +2030,18 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
     });
 }
 unsafe fn activate_stage(hwnd:HWND,i:usize){
+    activate_stage_member(hwnd,i,None);
+}
+unsafe fn focus_stage_window(hwnd:HWND){
+    if window_owner(hwnd).is_none(){return;}
+    if IsIconic(hwnd)!=0{ShowWindowAsync(hwnd,SW_RESTORE);}
+    SetForegroundWindow(hwnd);
+}
+unsafe fn activate_stage_member(hwnd:HWND,i:usize,member:Option<HWND>){
     let selected=STATE.with(|s|{
         let state=s.borrow();
         let stage=state.stages.iter().find(|p|p.hwnd==hwnd)?;
+        if member.is_some_and(|h|!stage.members.get(i).is_some_and(|members|members.contains(&(h as usize)))){return None;}
         Some((stage.items.get(i)?.clone(),stage.groups.get(i).copied().flatten(),stage.display.clone()))
     });
     if let Some((item,group,display))=selected {
@@ -1936,8 +2053,8 @@ unsafe fn activate_stage(hwnd:HWND,i:usize){
                 if let Some(p)=state.stages.iter_mut().find(|p|p.hwnd==hwnd&&p.selected!=Some(id)){p.begin_slide(reduced);}
                 refresh(state,false);
             });
-            if let Some(hwnd)=focus{SetForegroundWindow(hwnd);}
-        }else{activate(hwnd,&item);}
+            if let Some(hwnd)=member.or(focus){focus_stage_window(hwnd);}
+        }else{focus_stage_window(member.unwrap_or(item.hwnd));}
     }
 }
 unsafe fn turn_stage_page(hwnd:HWND,forward:bool)->bool{
@@ -2383,7 +2500,14 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if let Some((target,item))=stage_hit {
                 match target{
                     Some(StageTarget::Page(page))=>{go_to_stage_page(hwnd,page);}
-                    Some(_)=>{if let Some(i)=item{activate_stage(hwnd,i);}}
+                    Some(StageTarget::Group(_))=>{if let Some(i)=item{activate_stage(hwnd,i);}}
+                    Some(StageTarget::Window(target,pid,tid))=>{
+                        if window_owner(target as HWND)==Some((pid,tid)){
+                            let group=item.and_then(|i|STATE.with(|s|s.borrow().stages.iter().find(|p|p.hwnd==hwnd)?.groups.get(i).copied().flatten()));
+                            if group.is_some(){if let Some(i)=item{activate_stage_member(hwnd,i,Some(target as HWND));}}
+                            else{focus_stage_window(target as HWND);}
+                        }
+                    }
                     None=>{}
                 }
                 return 0;
@@ -2516,7 +2640,7 @@ unsafe fn drain_commands() {
             Command::Stop=>{control_center::inline_config(CONTROL.with(Cell::get),None);EndMenu();PostQuitMessage(0);},
             Command::Focus=>focus_dock(),
             #[cfg(test)] Command::InspectSettings{reply}=>{
-                let all=windows();
+                let all=windows(false);
                 let items=STATE.with(|s|{
                     let s=s.borrow();
                     s.screens.iter().flat_map(|screen|{
@@ -2668,19 +2792,34 @@ mod tests{
         assert!(left.top>=sc.work.top && left.bottom<=sc.work.bottom);
         assert!(right.right-right.left>left.right-left.left);
     }
-    #[test] fn stage_keeps_distinct_windows_even_with_the_same_executable(){
-        let make=|hwnd:usize,r:[i32;4]|AppWindow{
-            hwnd:hwnd as HWND,title:format!("window {hwnd}"),path:"C:\\Apps\\editor.exe".into(),rect:rect(r)};
-        let windows=vec![make(1,[-800,0,-400,800]),make(2,[-700,0,-300,800]),make(3,[50,0,500,800])];
+    #[test] fn stage_groups_same_app_stays_local_and_retains_all_eight_members(){
+        let make=|hwnd:usize,r:[i32;4],path:&str|AppWindow{
+            hwnd:hwnd as HWND,title:format!("window {hwnd}"),path:path.into(),rect:rect(r),stage_aumid:None};
+        let portrait=rect([-1920,0,0,1080]);let primary=rect([0,0,1920,1080]);
+        let screens=[portrait,primary];
+        let mut windows=(1..=8).map(|i|make(i,[-800,0,-300,800],r"C:\Apps\editor.exe")).collect::<Vec<_>>();
+        windows.push(make(9,[50,0,500,800],r"c:\apps\EDITOR.exe"));
+        windows.push(make(10,[-800,0,-300,800],r"C:\Tools\pythonw.exe"));
+        windows.push(make(11,[-800,0,-300,800],r"C:\Tools\pythonw.exe"));
         let stage=workspaces::Workspaces::default();
-        let (local,groups)=stage.cards("portrait",rect([-1920,0,0,1080]),&windows,false);
-        assert_eq!(local.iter().map(|item|item.hwnd as usize).collect::<Vec<_>>(),vec![1,2]);
-        assert_eq!(groups,vec![None,None]);
-        let (global,_)=stage.cards("portrait",rect([-1920,0,0,1080]),&windows,true);
-        assert_eq!(global.len(),3);
+        let local=stage.cards("portrait",portrait,&screens,&windows,false,true,4 as HWND);
+        assert_eq!(local.len(),3);
+        assert_eq!(local[0].item.count,8);
+        assert_eq!(local[0].members.len(),8);
+        assert_eq!(local[0].members[0],4);
+        assert!(local[0].manual.is_none());
+        assert_eq!(local[1].members,vec![10]);
+        assert_eq!(local[2].members,vec![11]);
+        let global=stage.cards("portrait",portrait,&screens,&windows,true,true,ptr::null_mut());
+        assert_eq!(global[0].item.count,9);
+        assert_eq!(global[0].members.last(),Some(&9));
+        windows[9].stage_aumid=Some("AppA".into());windows[10].stage_aumid=Some("AppB".into());
+        assert_eq!(stage.cards("portrait",portrait,&screens,&windows,false,true,ptr::null_mut()).len(),3);
+        windows[10].stage_aumid=Some("appa".into());
+        assert_eq!(stage.cards("portrait",portrait,&screens,&windows,false,true,ptr::null_mut())[1].item.count,2);
     }
     #[test] fn pinned_app_respects_local_monitor_and_deduplicates(){
-        let make=|hwnd:usize,r:[i32;4]|AppWindow{hwnd:hwnd as HWND,title:format!("window {hwnd}"),path:"C:\\\\Apps\\\\alpha.exe".into(),rect:rect(r)};
+        let make=|hwnd:usize,r:[i32;4]|AppWindow{hwnd:hwnd as HWND,title:format!("window {hwnd}"),path:"C:\\\\Apps\\\\alpha.exe".into(),rect:rect(r),stage_aumid:None};
         let windows=vec![make(1,[100,0,700,900]),make(2,[-1800,0,-100,900])];
         let mut prefs=Preferences{pinned:vec!["c:\\\\apps\\\\ALPHA.EXE".into(),"C:\\\\Apps\\\\alpha.exe".into()],all_windows:false,stage_side:"left".into(),..Default::default()};
         let local=item_list(&windows,rect([-1920,0,0,1080]),&prefs);
@@ -2694,9 +2833,9 @@ mod tests{
     #[test] fn settings_serialization(){let p=Preferences{pinned:vec!["C:\\A\\foo.exe".into()],all_windows:true,stage_side:"right".into(),..Default::default()};assert_eq!(Preferences::from_json(&p.json()),p);}
     #[test] fn unpinned_global_dock_prefers_local_window_and_keeps_remote_fallback(){
         let windows=vec![
-            AppWindow{hwnd:1 as HWND,title:"remote".into(),path:"C:\\Apps\\alpha.exe".into(),rect:rect([100,0,700,900])},
-            AppWindow{hwnd:2 as HWND,title:"local".into(),path:"c:\\apps\\ALPHA.EXE".into(),rect:rect([-1800,0,-100,900])},
-            AppWindow{hwnd:3 as HWND,title:"remote beta".into(),path:"C:\\Apps\\beta.exe".into(),rect:rect([100,0,700,900])}];
+            AppWindow{hwnd:1 as HWND,title:"remote".into(),path:"C:\\Apps\\alpha.exe".into(),rect:rect([100,0,700,900]),stage_aumid:None},
+            AppWindow{hwnd:2 as HWND,title:"local".into(),path:"c:\\apps\\ALPHA.EXE".into(),rect:rect([-1800,0,-100,900]),stage_aumid:None},
+            AppWindow{hwnd:3 as HWND,title:"remote beta".into(),path:"C:\\Apps\\beta.exe".into(),rect:rect([100,0,700,900]),stage_aumid:None}];
         let prefs=Preferences{all_windows:true,stage_side:"left".into(),..Default::default()};
         let global=item_list(&windows,rect([-1920,0,0,1080]),&prefs);
         assert_eq!(global.len(),2);assert_eq!(global[0].hwnd,2 as HWND);

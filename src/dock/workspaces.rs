@@ -268,26 +268,92 @@ impl Workspaces{
             .map(|g|g.id).collect::<Vec<_>>();
         for id in detached{self.dissolve(id);}
     }
-    pub fn cards(&self,screen:&str,bounds:RECT,windows:&[AppWindow],global:bool)->(Vec<Item>,Vec<Option<u64>>){
-        let mut items=Vec::new();
-        let mut ids=Vec::new();
+    pub fn has_cards(&self,screen:&str,bounds:RECT,monitors:&[RECT],windows:&[AppWindow],global:bool)->bool{
+        windows.iter().any(|w|{
+            if w.path==super::internal_app::KEY{return false;}
+            if let Some(group)=self.groups.iter().find(|g|g.members.iter().any(|m|m.key.hwnd==w.hwnd as usize)){
+                return group.screen==screen;
+            }
+            global||on_output(w.rect,bounds,monitors)
+        })
+    }
+    pub fn cards(&self,screen:&str,bounds:RECT,monitors:&[RECT],windows:&[AppWindow],global:bool,automatic:bool,foreground:HWND)->Vec<StageGroup>{
+        let mut cards=Vec::new();
         let known:HashSet<_>=self.groups.iter().flat_map(|g|g.members.iter().map(|m|m.key.hwnd)).collect();
-        // Group cards keep creation order across switches. Foreground
-        // changes must not move the remaining targets under the pointer.
+        // Manual membership is authoritative even if the window moves to another monitor.
         for g in self.groups.iter().filter(|g|g.screen==screen){
-            // Use the first available window in current native Z-order.
-            if let Some(window)=windows.iter().find(|w|g.members.iter().any(|m|m.key.hwnd==w.hwnd as usize)){
-                items.push(Item{path:window.path.clone(),title:Self::title(g.id),hwnd:window.hwnd,count:g.members.len(),pinned:false});
-                ids.push(Some(g.id));
+            let mut members=windows.iter().filter(|w|g.members.iter().any(|m|m.key.hwnd==w.hwnd as usize))
+                .map(|w|w.hwnd as usize).collect::<Vec<_>>();
+            if let Some(index)=members.iter().position(|&hwnd|hwnd==foreground as usize){members.rotate_left(index);}
+            if let Some(window)=windows.iter().find(|w|members.first()==Some(&(w.hwnd as usize))){
+                cards.push(StageGroup{key:format!("manual:{}",g.id),manual:Some(g.id),members,
+                    item:Item{path:window.path.clone(),title:Self::title(g.id),hwnd:window.hwnd,count:g.members.len(),pinned:false}});
             }
         }
-        for w in windows.iter().filter(|w|w.path!=super::internal_app::KEY).filter(|w|!known.contains(&(w.hwnd as usize))&&(global||rect_intersects(w.rect,bounds))){
-            items.push(Item{path:w.path.clone(),title:w.title.clone(),hwnd:w.hwnd,count:1,pinned:false});
-            ids.push(None);
+        let mut indices=std::collections::HashMap::new();
+        for w in windows.iter().filter(|w|w.path!=super::internal_app::KEY&&!known.contains(&(w.hwnd as usize))){
+            let local=on_output(w.rect,bounds,monitors);
+            if !global&&!local{continue;}
+            let key=app_key(w,automatic);
+            let index=*indices.entry(key.clone()).or_insert_with(||{
+                cards.push(StageGroup{key,manual:None,members:Vec::new(),
+                    item:Item{path:w.path.clone(),title:w.title.clone(),hwnd:w.hwnd,count:0,pinned:false}});
+                cards.len()-1
+            });
+            let group=&mut cards[index];
+            group.members.push(w.hwnd as usize);
+            group.item.count=group.members.len();
         }
-        (items,ids)
+        for group in cards.iter_mut().filter(|g|g.manual.is_none()){
+            // Foreground wins, then prioritize the Stage output, preserving the
+            // order of enumeration (native Z order) within those categories.
+            group.members.sort_by_cached_key(|&h| {
+                let local=windows.iter().find(|w|w.hwnd as usize==h)
+                    .is_some_and(|w|on_output(w.rect,bounds,monitors));
+                (h!=foreground as usize,!local)
+            });
+            if let Some(w)=windows.iter().find(|w|group.members.first()==Some(&(w.hwnd as usize))){
+                group.item.hwnd=w.hwnd;
+                group.item.path=w.path.clone();
+                group.item.title=w.title.clone();
+            }
+        }
+        cards
     }
 }
+#[derive(Clone)]
+pub(super) struct StageGroup {
+    pub key:String,
+    pub manual:Option<u64>,
+    pub item:Item,
+    pub members:Vec<usize>, // complete; rendering applies the five-preview cap
+}
+
+fn app_key(w:&AppWindow,automatic:bool)->String{
+    if automatic{
+        if let Some(id)=&w.stage_aumid{return format!("aumid:{}",id.to_lowercase());}
+        let path=w.path.to_lowercase();
+        if let Some(id)=path.strip_prefix("shell:appsfolder\\"){return format!("aumid:{id}");}
+        let file=path.rsplit(['\\','/']).next().unwrap_or(&path);
+        let host=matches!(file,"applicationframehost.exe"|"msedgewebview2.exe"|"dllhost.exe"|"rundll32.exe"
+                |"conhost.exe"|"openconsole.exe"|"electron.exe"|"node.exe"|"wscript.exe"|"cscript.exe"|"javaw.exe"|"java.exe"|"dotnet.exe")
+            ||file.starts_with("python")||file.starts_with("chromedriver");
+        if !host&&file!="chrome_proxy.exe"&&file!="msedge_proxy.exe"{return format!("exe:{path}");}
+    }
+    format!("hwnd:{}",w.hwnd as usize)
+}
+
+pub(super) fn on_output(window:RECT,bounds:RECT,monitors:&[RECT])->bool{
+    let area=|output:RECT| {
+        let width=(output.right.min(window.right)-output.left.max(window.left)).max(0) as i64;
+        let height=(output.bottom.min(window.bottom)-output.top.max(window.top)).max(0) as i64;
+        width*height
+    };
+    if monitors.is_empty(){return rect_intersects(window,bounds);}
+    let selected=monitors.iter().max_by_key(|&&r|(area(r),std::cmp::Reverse((r.left,r.top))));
+    selected.is_some_and(|&r|area(r)>0&&super::same_rect(r,bounds))
+}
+
 impl Drop for Workspaces{
     fn drop(&mut self){
         unsafe{self.recover_for_exit();}

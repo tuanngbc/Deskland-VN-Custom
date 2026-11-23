@@ -4,7 +4,7 @@ use super::{Item,same_rect,stage_surface::Layout};
 use std::{collections::HashMap,mem};
 use windows_sys::Win32::{Foundation::*,Graphics::{Dwm::*,Gdi::*},UI::WindowsAndMessaging::*};
 
-pub struct Link { raw:isize, pid:u32, area:RECT }
+pub struct Link { raw:isize, pid:u32, area:RECT, crop:Option<RECT> }
 impl Drop for Link {fn drop(&mut self){unsafe{DwmUnregisterThumbnail(self.raw);}}}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,17 +37,26 @@ impl Previews {
         self.update_traced(dst,items,layout,None)
     }
     pub unsafe fn update_traced(&mut self,dst:HWND,items:&[Item],layout:Layout,mut steps:Option<&mut [PreviewStep]>)->bool{
+        self.update_targets(dst,items.iter().enumerate().map(|(i,item)|(item.hwnd,layout.preview(i),None)),steps.as_deref_mut())
+    }
+    pub unsafe fn update_stacks(&mut self,dst:HWND,groups:&[Vec<usize>],layout:Layout)->bool{
+        let targets=groups.iter().enumerate().flat_map(|(group,members)|members.iter().take(layout.depth(group))
+            .enumerate().map(move |(depth,&handle)|{
+                let (area,clip)=layout.preview_layer(group,depth);
+                (handle as HWND,area,clip)
+            }));
+        self.update_targets(dst,targets,None)
+    }
+    unsafe fn update_targets(&mut self,dst:HWND,targets:impl Iterator<Item=(HWND,RECT,Option<RECT>)>,mut steps:Option<&mut [PreviewStep]>)->bool{
         // A thumbnail is bound to its original DWM destination. Changing
         // hosts must not reuse registrations even if the source list matches.
         let mut changed=self.destination!=dst as usize&&self.clear();
         self.destination=dst as usize;
-        for (i,item) in items.iter().enumerate(){
-            let source=item.hwnd;
+        for (i,(source,slot,clip)) in targets.enumerate(){
             let key=source as usize;
             let mut record=|step|{if let Some(entry)=steps.as_deref_mut().and_then(|entries|entries.get_mut(i)){*entry=step;}};
             if self.next.contains_key(&key){record(PreviewStep::Duplicate);continue;}
             let pid=match preview_pid(source){Ok(pid)=>pid,Err(step)=>{record(step);continue;}};
-            let slot=layout.preview(i);
             if slot.right<=slot.left||slot.bottom<=slot.top{record(PreviewStep::EmptySlot);continue;}
             let existing=self.links.remove(&key);
             let link=match existing{
@@ -59,22 +68,22 @@ impl Previews {
                     if result<0{record(PreviewStep::Register(result));continue;}
                     if raw==0{record(PreviewStep::NullLink);continue;}
                     changed=true;
-                    Link{raw,pid,area:mem::zeroed()}
+                    Link{raw,pid,area:mem::zeroed(),crop:None}
                 }
             };
             let mut size:SIZE=mem::zeroed();
             let result=DwmQueryThumbnailSourceSize(link.raw,&mut size);
             if result<0{record(PreviewStep::SourceSize(result));changed=true;continue;}
-            let Some(area)=fit(slot,size) else{record(PreviewStep::EmptySource);changed=true;continue;};
+            let Some((area,crop))=fit_layer(slot,size,clip) else{record(PreviewStep::EmptySource);changed=true;continue;};
             let mut link=link;
-            if !same_rect(link.area,area){
+            if !same_rect(link.area,area)||!same_crop(link.crop,crop){
                 let properties=DWM_THUMBNAIL_PROPERTIES {
-                    dwFlags:DWM_TNP_RECTDESTINATION|DWM_TNP_VISIBLE|DWM_TNP_OPACITY,
-                    rcDestination:area,rcSource:mem::zeroed(),opacity:255,fVisible:1,fSourceClientAreaOnly:0,
+                    dwFlags:DWM_TNP_RECTDESTINATION|DWM_TNP_VISIBLE|DWM_TNP_OPACITY|if crop.is_some()||link.crop.is_some(){DWM_TNP_RECTSOURCE}else{0},
+                    rcDestination:area,rcSource:crop.unwrap_or_else(||RECT{left:0,top:0,right:size.cx,bottom:size.cy}),opacity:255,fVisible:1,fSourceClientAreaOnly:0,
                 };
                 let result=DwmUpdateThumbnailProperties(link.raw,&properties);
                 if result<0{record(PreviewStep::Update(result));changed=true;continue;}
-                link.area=area;
+                link.area=area;link.crop=crop;
                 changed=true;
             }
             self.next.insert(key,link);
@@ -117,6 +126,28 @@ fn fit(slot:RECT,source:SIZE)->Option<RECT>{
     let th=((source.cy as f32*factor).round() as i32).clamp(1,h);
     let x=slot.left+(w-tw)/2;let y=slot.top+(h-th)/2;
     Some(RECT{left:x,top:y,right:x+tw,bottom:y+th})
+}
+
+fn same_crop(a:Option<RECT>,b:Option<RECT>)->bool{
+    match (a,b){(None,None)=>true,(Some(a),Some(b))=>same_rect(a,b),_=>false}
+}
+fn fit_layer(slot:RECT,source:SIZE,clip:Option<RECT>)->Option<(RECT,Option<RECT>)>{
+    let mut area=fit(slot,source)?;
+    let Some(clip)=clip else{return Some((area,None));};
+    let w=area.right-area.left;let h=area.bottom-area.top;
+    // Aspect-fit first and align to the visible edge. Crop source pixels
+    // rather than shrinking/stretched drawing into the exposed slice.
+    let x=if clip.left<=slot.left{slot.left}else{slot.right-w};
+    area.left=x;area.right=x+w;
+    let visible=RECT{left:area.left.max(clip.left),top:area.top.max(clip.top),
+        right:area.right.min(clip.right),bottom:area.bottom.min(clip.bottom)};
+    if visible.left>=visible.right||visible.top>=visible.bottom{return None;}
+    let sample=|p:i32,origin:i32,extent:i32,pixels:i32|((i64::from(p-origin)*i64::from(pixels))/i64::from(extent)) as i32;
+    let left=sample(visible.left,area.left,w,source.cx);
+    let top=sample(visible.top,area.top,h,source.cy);
+    let right=sample(visible.right,area.left,w,source.cx).max(left+1).min(source.cx);
+    let bottom=sample(visible.bottom,area.top,h,source.cy).max(top+1).min(source.cy);
+    Some((visible,Some(RECT{left,top,right,bottom})))
 }
 
 // This non-layered DWM destination is visible only where a registered

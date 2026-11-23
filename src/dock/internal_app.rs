@@ -51,6 +51,6 @@ pub(super) fn window()->Option<super::AppWindow>{
         let monitor=MonitorFromWindow(hwnd,MONITOR_DEFAULTTONEAREST);
         let mut info=MONITORINFO{cbSize:std::mem::size_of::<MONITORINFO>() as u32,..std::mem::zeroed()};
         if GetMonitorInfoW(monitor,&mut info)==0||current()!=hwnd{return None;}
-        Some(super::AppWindow{hwnd,title:LABEL.into(),path:KEY.into(),rect:info.rcMonitor})
+        Some(super::AppWindow{hwnd,title:LABEL.into(),path:KEY.into(),rect:info.rcMonitor,stage_aumid:None})
     }
 }

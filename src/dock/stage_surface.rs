@@ -41,6 +41,7 @@ pub(super) struct Layout {
     pub width:i32,pub height:i32,pub card_h:i32,pub inset:i32,pub gap:i32,
     pub radius:i32,pub caption:i32,pub rows:usize,pub count:usize,pub paged:bool,
     pub stack:u8,pub nav_h:i32,pub right:bool,
+    pub layers:[u8;8],pub stack_design:bool,
 }
 impl Layout {
     pub fn new(width:i32,height:i32,dpi:u32,gap:i32,limit:usize,total:usize,right:bool)->Self{
@@ -58,24 +59,59 @@ impl Layout {
         let available=(height-2*inset-reserve-(shown-1)*gap)/shown;
         let ideal=((width-4*inset)*3/5+px(42)).clamp(min_h,px(160));
         let card_h=available.min(ideal).max(1);
-        Self{width,height,card_h,inset,gap,radius:px(18),caption:px(37),rows,count:0,paged,stack:0,nav_h,right}
+        Self{width,height,card_h,inset,gap,radius:px(18),caption:px(37),rows,count:0,paged,stack:0,nav_h,right,layers:[0;8],stack_design:false}
     }
     pub fn card(self,i:usize)->Box2 {
         // Reserve the same margin for the stack on every card so thumbnails
         // do not jump sideways when a window joins a group.
-        let room=(self.inset*2).min((self.width-12).max(0)/3);
-        let x=self.inset+if self.right{room}else{0};
-        Box2{x,y:self.inset+i as i32*(self.card_h+self.gap),w:(self.width-2*self.inset-room).max(1),h:self.card_h}
+        let room=if self.stack_design{self.step()*4}else{(self.inset*2).min((self.width-12).max(0)/3)};
+        let icon_room=if self.stack_design{self.icon_size()+self.inset}else{0};
+        let x=self.inset+if self.right{room}else{icon_room};
+        Box2{x,y:self.inset+i as i32*(self.card_h+self.gap),w:(self.width-2*self.inset-room-icon_room).max(1),h:self.card_h}
+    }
+    fn step(self)->i32{(self.inset*4/5).max(3)}
+    fn icon_size(self)->i32{(self.inset*5).min(self.card_h/2).max(1)}
+    pub fn depth(self,i:usize)->usize{
+        if self.stack_design{self.layers.get(i).copied().unwrap_or(0).max(1) as usize}
+        else if self.stack&(1<<i)!=0{3}else{1}
     }
     fn rear(self,i:usize,depth:i32)->Box2{
         let mut c=self.card(i);
-        let d=(self.inset*depth/2).max(1);
+        if depth==0{return c;}
+        let d=if self.stack_design{self.step()*depth}else{(self.inset*(depth+1)/2).max(1)};
         c.x+=if self.right{-d}else{d};
-        c.y+=d/2;c.h=(c.h-d).max(1);c
+        c.y+=d/3;c.h=(c.h-d/2).max(1);c
     }
-    pub fn preview(self,i:usize)->RECT{
-        let c=self.card(i);let p=self.inset.max(2);
-        RECT{left:c.x+p,top:c.y+p,right:c.x+c.w-p,bottom:c.y+c.h-self.caption}
+    fn detached_icon(self,i:usize)->Box2{
+        let card=self.card(i);let size=self.icon_size();
+        Box2{x:if self.right{card.x+card.w+self.inset}else{card.x-size-self.inset},
+            y:card.y+(card.h-size)/2,w:size,h:size}
+    }
+    pub fn icon_hit(self,i:usize,x:i32,y:i32)->bool{self.stack_design&&self.detached_icon(i).hit(x,y)}
+    pub fn preview(self,i:usize)->RECT{self.preview_layer(i,0).0}
+    pub fn preview_layer(self,i:usize,depth:usize)->(RECT,Option<RECT>){
+        let c=self.rear(i,depth as i32);let p=self.inset.max(2);
+        let mut slot=RECT{left:c.x+p,top:c.y+p,right:c.x+c.w-p,bottom:c.y+c.h-self.caption};
+        if depth==0{return (slot,None);}
+        let top=slot.top;let bottom=slot.bottom;
+        let previous=self.rear(i,depth as i32-1);
+        let clip=if self.right{
+            slot.left=c.x;
+            RECT{left:c.x,top,right:previous.x,bottom}
+        }else{
+            slot.right=c.x+c.w;
+            RECT{left:previous.x+previous.w,top,right:c.x+c.w,bottom}
+        };
+        // Avoid covering rounded corners with rectangular DWM content. The
+        // rear panel itself remains rounded and painted below these strips.
+        let margin=(self.radius*2/3).min((bottom-top).max(0)/2);
+        (slot,Some(RECT{top:top+margin,bottom:bottom-margin,..clip}))
+    }
+    pub fn member_hit(self,i:usize,x:i32,y:i32)->Option<usize>{
+        if i>=self.count{return None;}
+        if self.stack_design&&self.detached_icon(i).hit(x,y){return Some(0);}
+        let inside=|b:Box2|b.hit(x,y)&&distance(b.rect(),self.radius.min(b.h/2) as f32,x as f32+0.5,y as f32+0.5)<=0.0;
+        (0..self.depth(i)).find(|&layer|inside(self.rear(i,layer as i32)))
     }
     pub fn nav(self)->Option<Box2>{
         if !self.paged||self.count==0{return None;}
@@ -92,8 +128,7 @@ impl Layout {
         (bottom+self.inset.max(7)).clamp(1,self.height.max(1))
     }
     pub fn hit(self,x:i32,y:i32)->Option<usize>{
-        let inside=|box2:Box2|box2.hit(x,y)&&distance(box2.rect(),self.radius.min(box2.h/2) as f32,x as f32+0.5,y as f32+0.5)<=0.0;
-        (0..self.count).find(|&i|inside(self.card(i))||(self.stack&(1<<i)!=0&&inside(self.rear(i,3))))
+        (0..self.count).find(|&i|self.member_hit(i,x,y).is_some())
     }
     pub unsafe fn apply(self,hwnd:HWND)->bool {
         let region=CreateRectRgn(0,0,0,0);
@@ -108,7 +143,8 @@ impl Layout {
         };
         let mut ok=true;
         for i in 0..self.count{
-            if self.stack&(1<<i)!=0{ok&=add(self.rear(i,3),self.radius);}
+            for layer in 1..self.depth(i){ok&=add(self.rear(i,layer as i32),self.radius);}
+            if self.stack_design{ok&=add(self.detached_icon(i),self.radius/2);}
             ok&=add(self.card(i),self.radius);
         }
         if let Some(nav)=self.nav(){ok&=add(nav,nav.h/2);}
@@ -151,9 +187,10 @@ impl Panel {
                         Some(([6,5,4],58.0*(1.0-d.max(0.0)/k).clamp(0.0,1.0).powi(2)))
                     });
                 }
-                if layout.stack&(1<<i)!=0 {
-                    rounded(data,w,h,layout.rear(i,3).rect(),radius,if look.dark{[78,69,61]}else{[208,202,197]},alpha);
-                    rounded(data,w,h,layout.rear(i,2).rect(),radius,if look.dark{[103,92,80]}else{[238,232,226]},alpha);
+                for layer in (1..layout.depth(i)).rev(){
+                    let v=(layout.depth(i)-layer) as u8*5;
+                    let c=if look.dark{[78+v,69+v,61+v]}else{[208+v,202+v,197+v]};
+                    rounded(data,w,h,layout.rear(i,layer as i32).rect(),radius,c,alpha.max(205));
                 }
                 let active=look.active&(1<<i)!=0;
                 let edge=if active{palette.accent}else if look.dark{[102,92,82]}else{[224,215,208]};
@@ -210,11 +247,12 @@ impl Panel {
         for (i,item) in items.iter().enumerate(){
             let c=layout.card(i);
             let size=(layout.caption*2/3).max(1) as f32;
-            let small=Rect{x:(c.x+layout.inset) as f32,y:(c.y+c.h) as f32-(layout.caption as f32+size)/2.0,w:size,h:size};
+            let small=if layout.stack_design{layout.detached_icon(i).rect()}
+                else{Rect{x:(c.x+layout.inset) as f32,y:(c.y+c.h) as f32-(layout.caption as f32+size)/2.0,w:size,h:size}};
             if let Some(Some(icon))=atlas.get(&item.path){self.icons.paint(data,w,h,small,icon);}
             else{fallback_icon(data,w,h,small,tint);}
             let slot=layout.preview(i);
-            if !ready[i]&&slot.bottom-slot.top>6 {
+            if !layout.stack_design&&!ready[i]&&slot.bottom-slot.top>6 {
                 let s=((slot.bottom-slot.top-5) as f32/1.4).min(size*1.7);
                 let tile=Rect{x:(slot.left+slot.right) as f32/2.0-s*0.69,y:(slot.top+slot.bottom) as f32/2.0-s*0.69,w:s*1.38,h:s*1.38};
                 rounded(data,w,h,tile,tile.w*0.31,palette.accent,if look.dark{42}else{33});
@@ -234,7 +272,7 @@ impl Panel {
                     let small=Box2{y:main.y+main.h,h:r.h-main.h-r.h/5,..r};
                     draw_mask_scaled(data,w,h,mask,self.large_fonts[0],main,title,false,ink,2);
                     let context=if layout.stack&(1<<i)!=0{
-                        format!("Nhóm · {} cửa sổ",items[i].count)
+                        if items[i].count>5&&layout.stack_design{format!("{} cửa sổ · +{}",items[i].count,items[i].count-5)}else{format!("{} cửa sổ",items[i].count)}
                     }else if look.active&(1<<i)!=0{
                         "Đang dùng".to_owned()
                     }else{
@@ -268,7 +306,8 @@ impl Drop for Panel {
 }
 fn caption_box(layout:Layout,i:usize)->Box2{
     let c=layout.card(i);
-    Box2{x:c.x+layout.inset+layout.caption,y:c.y+c.h-layout.caption,w:c.w-2*layout.inset-layout.caption,h:layout.caption}
+    let caption_offset=if layout.stack_design{0}else{layout.caption};
+    Box2{x:c.x+layout.inset+caption_offset,y:c.y+c.h-layout.caption,w:c.w-2*layout.inset-caption_offset,h:layout.caption}
 }
 fn fit_caption(text:&str,mut fits:impl FnMut(&str)->bool)->String {
     if fits(text){return text.to_owned();}
@@ -365,6 +404,23 @@ mod tests {
             assert!(nav.y+nav.h<=l.height);
             assert_eq!(l.hit(nav.x+nav.w/2,nav.y+nav.h/2),None);
         }
+    }
+    #[test]
+    fn stacked_targets_hit_each_exposed_layer_on_both_sides_and_multiple_dpi(){
+        for dpi in [96,120,144]{for right in [false,true]{for count in 1..=5{
+            let mut l=Layout::new(160*dpi as i32/96,600,dpi,8,5,1,right);
+            l.count=1;l.stack_design=true;l.layers[0]=count;
+            let front=l.card(0);
+            let icon=l.detached_icon(0);let (x,y)=icon.center();
+            assert!(l.icon_hit(0,x,y));assert_eq!(l.member_hit(0,x,y),Some(0));
+            for layer in 1..count as usize{
+                let (slot,clip)=l.preview_layer(0,layer);
+                let clip=clip.unwrap();
+                assert!(clip.right>clip.left&&slot.right>slot.left);
+                let x=(clip.left+clip.right)/2;let y=front.y+front.h/2;
+                assert_eq!(l.member_hit(0,x,y),Some(layer),"side={right}, layer={layer}");
+            }
+        }}}
     }
     #[test]
     fn pager_uses_the_same_cells_for_painted_dots_and_page_selection() {
