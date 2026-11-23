@@ -346,10 +346,16 @@ fn utility_hint(widget:Widget,snapshot:&Snapshot)->String{
         _=>String::new(),
     }
 }
-pub(super) unsafe fn show_view(owner:HWND,point:POINT,snapshot:&Snapshot,profile:&Profile,widget:Option<Widget>){
+pub(super) fn available_in_dock_mode(widget:Option<Widget>)->bool{
+    !matches!(widget,Some(Widget::Notifications|Widget::Desktop|Widget::Stats))
+}
+pub(super) fn local_action(action:Action)->bool{
+    !matches!(action,Action::Notifications|Action::QuickSettings|Action::Desktop|Action::Windows|Action::Host(HostAction::SystemMonitor))
+}
+pub(super) unsafe fn show_view(owner:HWND,point:POINT,snapshot:&Snapshot,profile:&Profile,widget:Option<Widget>,dock_mode:bool){
     let anchor=chrome::Anchor::for_owner(owner,point);
     if let Some(w)=widget{
-        if profile.hidden.contains(&w){return;}
+        if profile.hidden.contains(&w)&&!(dock_mode&&matches!(w,Widget::Network|Widget::Bluetooth|Widget::Sound|Widget::Settings|Widget::Windows)){return;}
         match w{
             Widget::Sound if audio_from_snapshot(owner,point,snapshot)=>return,
             Widget::Metrics=>{if profile.metrics.enabled{show_metrics(owner,anchor,profile.metrics);}return;},
@@ -390,7 +396,7 @@ pub(super) unsafe fn show_view(owner:HWND,point:POINT,snapshot:&Snapshot,profile
         let delegated=match widget{
             Widget::Network=>Some(Action::Network),Widget::Bluetooth=>Some(Action::Bluetooth),
             Widget::Sound=>Some(Action::Sound),Widget::Battery=>Some(Action::Battery),
-            Widget::QuickSettings=>Some(Action::QuickSettings),_=>None,
+            Widget::QuickSettings if !dock_mode=>Some(Action::QuickSettings),_=>None,
         };
         if widget==Widget::QuickSettings{
             for w in [Widget::Network,Widget::Sound,Widget::Bluetooth]{
@@ -409,16 +415,53 @@ pub(super) unsafe fn show_view(owner:HWND,point:POINT,snapshot:&Snapshot,profile
         }
         (widget.title().to_owned(),label,cards)
     }else{
-        let cards=profile.order.iter().copied().filter(|w|!profile.hidden.contains(w)
+        let mut cards=profile.order.iter().copied().filter(|w|!dock_mode||available_in_dock_mode(Some(*w))).filter(|w|!profile.hidden.contains(w)
             && (*w!=Widget::Metrics||profile.metrics.enabled)
             && (*w!=Widget::Battery||matches!(snapshot.battery,BatteryState::Present{..})))
             .map(|w|{
                 let hint=if profile.details{utility_hint(w,snapshot)}else{String::new()};
                 make(w.title().into(),hint,Some(w),Some(Command::Widget(w)))
             }).collect::<Vec<_>>();
-        ("Trung tâm điều khiển".into(),"Tiện ích Dock · Chọn một mục để mở".into(),cards)
+        if dock_mode{
+            for w in [Widget::Settings,Widget::Windows,Widget::Bluetooth,Widget::Sound,Widget::Network]{
+                if !profile.order.contains(&w)||profile.hidden.contains(&w){
+                    cards.insert(0,make(w.title().into(),utility_hint(w,snapshot),Some(w),Some(Command::Widget(w))));
+                }
+            }
+        }
+        ("Trung tâm điều khiển".into(),if dock_mode{"Tiện ích Deskland · Các biểu tượng ứng dụng bên thứ ba ở chế độ tương thích"}else{"Tiện ích Dock · Chọn một mục để mở"}.into(),cards)
     };
     if !cards.is_empty(){control_center::show(owner,anchor,View{title,hint,cards,metrics:None});}
+}
+fn week_dates(mut year:u16,mut month:u16,mut day:u16, weekday:u16)->Vec<(u16,u16,u16)>{
+    fn days(year:u16,month:u16)->u16{
+        match month{2 if year%4==0&&(year%100!=0||year%400==0)=>29,2=>28,4|6|9|11=>30,_=>31}
+    }
+    for _ in 0..((weekday+6)%7){
+        if day>1{day-=1;}else{
+            if month==1{month=12;year-=1;}else{month-=1;}
+            day=days(year,month);
+        }
+    }
+    (0..7).map(|_|{
+        let entry=(year,month,day);
+        if day<days(year,month){day+=1;}else{
+            day=1;
+            if month==12{month=1;year+=1;}else{month+=1;}
+        }
+        entry
+    }).collect()
+}
+pub(super) unsafe fn show_calendar(owner:HWND,anchor:chrome::Anchor){
+    let mut t:SYSTEMTIME=mem::zeroed();
+    windows_sys::Win32::System::SystemInformation::GetLocalTime(&mut t);
+    let days=["Thứ Hai","Thứ Ba","Thứ Tư","Thứ Năm","Thứ Sáu","Thứ Bảy","Chủ Nhật"];
+    let cards=week_dates(t.wYear,t.wMonth,t.wDay,t.wDayOfWeek).into_iter().zip(days).map(|((_,m,d),name)|Card{
+        title:format!("{name}  ·  {d:02}/{m:02}"),
+        hint:if (m,d)==(t.wMonth,t.wDay){"Hôm nay".into()}else{String::new()},icon:None,action:None
+    }).collect();
+    control_center::show_list(owner,anchor,View{title:format!("{:02}:{:02}  ·  {:02}/{:02}/{}",t.wHour,t.wMinute,t.wDay,t.wMonth,t.wYear),
+        hint:"Lịch Deskland · Tuần này".into(),cards,metrics:None});
 }
 pub(super) unsafe fn show_metrics(owner:HWND,anchor:chrome::Anchor,cfg:MetricOptions){
     control_center::show(owner,anchor,View{title:"Chỉ số máy".into(),hint:format!("Làm mới mỗi {} giây",cfg.interval),cards:Vec::new(),metrics:Some(cfg)});
@@ -722,5 +765,25 @@ mod tests {
             if let Some(audio)=report.audio{assert!(audio.level<=100);}
             if let BatteryState::Present{level:Some(level),..}=report.battery{assert!(level<=100);}
         }
+    }
+}
+
+#[cfg(test)]
+mod dock_mode_tests{
+    use super::*;
+    #[test]
+    fn dock_mode_has_no_windows_key_delegation_in_its_utilities(){
+        for widget in Widget::ALL{
+            if available_in_dock_mode(Some(widget))&&!matches!(widget,Widget::QuickSettings|Widget::Windows){
+                assert!(widget.simple().is_none_or(local_action),"{:?}",widget);
+            }
+        }
+    }
+    #[test]
+    fn calendar_week_crosses_leap_month_and_year_boundaries(){
+        let leap=week_dates(2024,3,1,5);
+        assert_eq!(leap[0],(2024,2,26));assert_eq!(leap[3],(2024,2,29));assert_eq!(leap[6],(2024,3,3));
+        let new_year=week_dates(2026,1,1,4);
+        assert_eq!(new_year[0],(2025,12,29));assert_eq!(new_year[6],(2026,1,4));
     }
 }

@@ -610,7 +610,7 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
     if !stage {
         let taskbar=UI.with(|u|u.borrow().as_ref().map(|ui|(ui.dock_enabled,ui.taskbar_hidden)));
         if let Some((true,hidden))=taskbar{
-            let label=if hidden{"Hiện lại thanh tác vụ Windows"}else{"Ẩn thanh tác vụ Windows (phiên này)"};
+            let label=if hidden{"Chế độ tương thích Windows (hiện taskbar)"}else{"Chế độ Dock (ẩn taskbar cho phiên này)"};
             AppendMenuW(menu,MF_STRING,2998,wide(label).as_ptr());
         }
     }

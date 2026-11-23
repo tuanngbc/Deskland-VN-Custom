@@ -19,10 +19,23 @@ pub(super) enum Target { Start, Tray, Clock }
 
 impl Target {
     pub const ALL:[Self;3]=[Self::Start,Self::Tray,Self::Clock];
-    pub fn title(self)->&'static str {
+    pub fn title(self,dock_mode:bool)->&'static str {
+        if dock_mode {return match self{Self::Start=>"Start · Tìm kiếm Deskland",Self::Tray=>"Trung tâm điều khiển Deskland",Self::Clock=>"Ngày giờ · Lịch Deskland"};}
         match self {Self::Start=>"Start · Windows",Self::Tray=>"Biểu tượng ẩn · Windows",Self::Clock=>"Ngày giờ · Lịch Windows"}
     }
 }
+
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub(super) enum Route { Native, Launcher, Hub, Calendar }
+pub(super) fn route(dock_mode:bool,target:Target,context:bool)->Route{
+    match (dock_mode,target,context){
+        (true,Target::Start,false)=>Route::Launcher,
+        (true,Target::Start,true)|(true,Target::Tray,_)=>Route::Hub,
+        (true,Target::Clock,_)=>Route::Calendar,
+        _=>Route::Native,
+    }
+}
+pub(super) fn native_busy()->bool{OPENING.load(Ordering::Acquire)}
 
 pub(super) unsafe fn activate(target:Target, context:bool,anchor:Option<Anchor>){
     super::utilities::close_panels();
@@ -192,7 +205,19 @@ unsafe fn open_native(target:Target,anchor:Option<Anchor>){
 
 #[cfg(test)]
 mod tests{
-    use super::is_overflow;
+    use super::*;
+    #[test]
+    fn dock_mode_never_routes_mouse_or_keyboard_shell_buttons_to_explorer(){
+        for target in Target::ALL{
+            for context in [true,false]{
+                assert_eq!(route(false,target,context),Route::Native);
+                assert_ne!(route(true,target,context),Route::Native);
+            }
+        }
+        assert_eq!(route(true,Target::Start,false),Route::Launcher);
+        assert_eq!(route(true,Target::Tray,false),Route::Hub);
+        assert_eq!(route(true,Target::Clock,false),Route::Calendar);
+    }
     #[test]
     fn tray_selection_never_activates_an_application_icon(){
         assert!(is_overflow("SystemTray.ChevronIconView","",""));

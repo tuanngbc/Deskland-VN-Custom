@@ -119,13 +119,15 @@ test('utility order, visibility and reset are isolated to the selected monitor',
 });
 test('taskbar hide is an explicit session command separate from saved Dock settings',()=>{
   context.syncDockSettings({dock:{enabled:true},dockTaskbarHidden:false});
-  const control=$('dockTaskbarHidden');
-  assert.equal(control.checked,false);
+  const control=$('dockShellMode');
+  assert.equal(control.value,'windows');
   assert.equal(control.disabled,false);
-  control.listeners.change({target:{checked:true}});
+  control.listeners.change({target:{value:"dock"}});
   assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'dockTaskbar',hidden:true});
-  context.syncDockTaskbar({dockTaskbarHidden:false,message:'Restored'});
-  assert.equal(control.checked,false);
+  context.syncDockTaskbar({dockTaskbarHidden:false,dockTaskbarPending:true});
+  assert.equal(control.value,'dock');assert.equal(control.disabled,true);
+  context.syncDockTaskbar({dockTaskbarHidden:false,dockTaskbarPending:false,dockTaskbarMessage:'Restored'});
+  assert.equal(control.value,'windows');assert.equal(control.disabled,false);
   assert.equal($('taskbarTakeoverStatus').textContent,'Restored');
   context.syncDockSettings({dock:{enabled:false},dockTaskbarHidden:false});
   assert.equal(control.disabled,true);

@@ -1,7 +1,7 @@
 //! Native Spotlight panel. No child edit/list controls and no RefCell borrow
 //! crosses a Win32 call: synchronous window messages may re-enter this module.
 use crate::desktop::wide;
-use std::cell::RefCell;
+use std::cell::{Cell,RefCell};
 use std::path::{Path, PathBuf};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -100,13 +100,31 @@ struct State {
     icon_requests: std::sync::mpsc::Sender<(PathBuf, i32)>,
     icon_results: std::sync::mpsc::Receiver<((PathBuf, i32), Option<IconPixels>)>,
     pending_icons: usize,
-    history: History, launching: bool,
+    apps_indexed:bool, apps_rx:Option<std::sync::mpsc::Receiver<Vec<Entry>>>,
+    history: History, launching: bool, dock_start:bool,
 }
 #[derive(Clone)]
 pub(crate) struct IconPixels { pub(crate) width: i32, pub(crate) height: i32, pub(crate) pixels: Vec<u8> }
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
+    static DOCK_PINS:RefCell<Vec<String>>=const{RefCell::new(Vec::new())};
+    static PIN_EDIT:RefCell<Option<crate::dock::Edit>>=const{RefCell::new(None)};
+    static IN_ACTION_MENU:Cell<bool>=const{Cell::new(false)};
     static PREFS: RefCell<Appearance> = RefCell::new(Appearance::default());
+}
+pub fn dock_pins(paths:&[String]){
+    DOCK_PINS.with(|v|v.replace(paths.to_vec()));
+    if let Some((hwnd,_,_,_))=handles(){
+        unsafe{if IsWindowVisible(hwnd)!=0{InvalidateRect(hwnd,std::ptr::null(),0);}}
+    }
+}
+pub fn take_dock_edit()->Option<crate::dock::Edit>{PIN_EDIT.with(|edit|edit.borrow_mut().take())}
+fn pinned(path:&Path)->bool{DOCK_PINS.with(|pins|pins.borrow().iter().any(|p|same_path(Path::new(p),path)))}
+fn pin_change(entry:&Entry)->Option<crate::dock::Edit>{
+    (entry.kind=="Application").then(||{
+        let path=entry.path.to_string_lossy().into_owned();
+        if pinned(&entry.path){crate::dock::Edit::Unpin(path)}else{crate::dock::Edit::Pin(path)}
+    })
 }
 unsafe extern "system" { fn SetFocus(hwnd: HWND) -> HWND; }
 
@@ -134,7 +152,7 @@ fn enum_dir(root: &Path, depth: u8, files: bool, out: &mut Vec<Entry>) {
 fn entries() -> Vec<Entry> {
     let mut out = Vec::new();
     // Prefer explicit system commands over duplicate shortcuts.
-    for (name, command) in [("Paint", "mspaint.exe"), ("Notepad", "notepad.exe"), ("Calculator", "calc.exe"), ("File Explorer", "explorer.exe"), ("Settings", "ms-settings:")] {
+    for (name, command) in [("Paint", "mspaint.exe"), ("Notepad", "notepad.exe"), ("Calculator", "calc.exe"), ("File Explorer", "explorer.exe"), ("Settings", "ms-settings:"), ("Task Manager","Taskmgr.exe")] {
         let root = PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into()));
         let system = if command == "explorer.exe" { root.join(command) } else { root.join("System32").join(command) };
         let path = if system.is_file() { system } else { command.into() };
@@ -151,6 +169,48 @@ fn entries() -> Vec<Entry> {
     let mut seen = std::collections::HashSet::new();
     out.retain(|e| seen.insert(if e.kind == "Application" { e.name.to_lowercase() } else { e.path.to_string_lossy().to_lowercase() }));
     out.sort_by_key(|e| (e.kind != "Application", e.name.to_lowercase()));
+    out
+}
+
+fn installed_apps_worker()->Option<std::sync::mpsc::Receiver<Vec<Entry>>>{
+    let (tx,rx)=std::sync::mpsc::channel();
+    std::thread::Builder::new().name("deskland-installed-apps".into()).spawn(move||{
+        use windows::Win32::System::Com::{CoInitializeEx,CoUninitialize,COINIT_APARTMENTTHREADED};
+        unsafe{
+            if CoInitializeEx(None,COINIT_APARTMENTTHREADED).is_err(){return;}
+            let apps=installed_apps();
+            CoUninitialize();
+            let _=tx.send(apps);
+        }
+    }).ok()?;
+    Some(rx)
+}
+unsafe fn installed_apps()->Vec<Entry>{
+    use windows::{core::PCWSTR,Win32::{System::Com::CoTaskMemFree,UI::Shell as shell}};
+    fn canonical_id(raw:&str)->Option<&str>{
+        let id=raw.rsplit('\\').next()?;
+        let (package,app)=id.split_once('!')?;
+        let valid=|s:&str|!s.is_empty()&&s.bytes().all(|b|b.is_ascii_alphanumeric()||b"_.-".contains(&b));
+        (id.len()<=350&&valid(package)&&valid(app)).then_some(id)
+    }
+    let Ok(folder)=shell::SHCreateItemInKnownFolder::<_,shell::IShellItem>(&shell::FOLDERID_AppsFolder,shell::KF_FLAG_DEFAULT,PCWSTR::null())else{return Vec::new();};
+    let Ok(items)=folder.BindToHandler::<_,shell::IEnumShellItems>(None,&shell::BHID_EnumItems)else{return Vec::new();};
+    let display=|item:&shell::IShellItem,kind|{
+        let p=item.GetDisplayName(kind).ok()?;
+        let value=p.to_string().ok();
+        CoTaskMemFree(Some(p.0.cast()));
+        value
+    };
+    let mut out=Vec::new();
+    for _ in 0..1024{
+        let mut row=[None];let mut count=0;
+        if items.Next(&mut row,Some(&mut count)).is_err()||count==0{break;}
+        let [Some(item)]=row else{break;};
+        let Some(id)=[shell::SIGDN_PARENTRELATIVEPARSING,shell::SIGDN_DESKTOPABSOLUTEPARSING].into_iter()
+            .find_map(|kind|display(&item,kind).and_then(|v|canonical_id(&v).map(str::to_owned)))else{continue;};
+        let Some(name)=display(&item,shell::SIGDN_NORMALDISPLAY).filter(|s|!s.trim().is_empty())else{continue;};
+        out.push(Entry{name,path:format!("shell:AppsFolder\\{id}").into(),kind:"Application",detail:"Ứng dụng Windows".into()});
+    }
     out
 }
 
@@ -174,10 +234,27 @@ fn filter(all: &[Entry], query: &str, history: &History) -> Vec<usize> {
 fn handles() -> Option<(HWND, i32, i32, f32)> {
     STATE.with(|c| c.borrow().as_ref().map(|s| (s.hwnd, s.width, s.height, s.scale)))
 }
-fn refresh() {
+fn refresh() {refresh_results(false);}
+fn refresh_results(keep_selection:bool) {
     let hwnd = STATE.with(|c| {
         let mut guard = c.borrow_mut(); let s = guard.as_mut()?;
-        s.matches = filter(&s.all, &s.query, &s.history); s.selected = 0; s.first = 0; s.error.clear(); Some(s.hwnd)
+        let keep=keep_selection.then(||s.matches.get(s.selected).copied()).flatten();
+        s.matches = filter(&s.all, &s.query, &s.history);
+        if s.dock_start&&s.query.trim().is_empty(){
+            for (i,entry) in s.all.iter().enumerate(){
+                if entry.kind=="Application"&&pinned(&entry.path)&&!s.matches.contains(&i){
+                    s.matches.push(i);
+                }
+            }
+            if s.matches.len()<PAGE{
+                for i in s.all.iter().enumerate().filter_map(|(i,e)|(e.kind=="Application").then_some(i)){
+                    if !s.matches.contains(&i){s.matches.push(i);}
+                    if s.matches.len()>=PAGE{break;}
+                }
+            }
+        }
+        s.selected=keep.and_then(|idx|s.matches.iter().position(|&i|i==idx)).unwrap_or(0);
+        s.first=s.first.min(s.selected).max((s.selected+1).saturating_sub(PAGE));if !keep_selection{s.error.clear();} Some(s.hwnd)
     });
     if let Some(hwnd) = hwnd { unsafe { InvalidateRect(hwnd, std::ptr::null(), 0); } }
 }
@@ -432,12 +509,12 @@ unsafe fn paint(hwnd: HWND) {
     let model = STATE.with(|c| c.borrow().as_ref().map(|s| (
         s.width, s.height, s.scale, s.glass.clone(), s.query.clone(),
         s.matches.iter().skip(s.first).take(PAGE).filter_map(|&i| s.all.get(i).cloned()).collect::<Vec<_>>(),
-        s.selected.saturating_sub(s.first), s.matches.len(), s.error.clone(), s.select_all,
+        s.selected.saturating_sub(s.first), s.matches.len(), s.error.clone(), s.select_all,s.dock_start,
     )));
     let appearance = PREFS.with(|c| c.borrow().clone());
     let dark = appearance.theme == "dark";
     let mut ps: PAINTSTRUCT = std::mem::zeroed(); let target = BeginPaint(hwnd, &mut ps);
-    if let Some((w, h, scale, glass, query, rows, selected, count, error, select_all)) = model {
+    if let Some((w, h, scale, glass, query, rows, selected, count, error, select_all,dock_start)) = model {
         let px = |v: i32| (v as f32 * scale).round() as i32;
         let pad = px(12); let ww = w+2*pad; let hh = h+2*pad;
         let mut info: BITMAPINFO = std::mem::zeroed(); info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
@@ -478,7 +555,7 @@ unsafe fn paint(hwnd: HWND) {
         let text = wide(&query); let mut extent: SIZE = std::mem::zeroed(); let oldfont = SelectObject(dc,search);
         GetTextExtentPoint32W(dc,text.as_ptr(),text.len().saturating_sub(1) as i32,&mut extent); SelectObject(dc,oldfont);
         if select_all && !query.is_empty() { let brush=CreateSolidBrush(if dark {0x008B593A} else {0x00ECD5BC}); FillRect(dc,&RECT {left:px(59),top:px(23),right:(px(62)+extent.cx).min(w-px(65)),bottom:px(53)},brush); DeleteObject(brush); }
-        label(dc,if query.is_empty(){"Spotlight Search"}else{&query},RECT {left:px(60),top:px(14),right:w-px(64),bottom:px(61)},search,if query.is_empty(){secondary}else{primary});
+        label(dc,if query.is_empty(){if dock_start{"Tìm ứng dụng, tệp…"}else{"Spotlight Search"}}else{&query},RECT {left:px(60),top:px(14),right:w-px(64),bottom:px(61)},search,if query.is_empty(){secondary}else{primary});
         if GetForegroundWindow() == hwnd { let caret=CreateSolidBrush(primary); let x=(px(60)+extent.cx).min(w-px(65)); FillRect(dc,&RECT{left:x,top:px(25),right:x+px(1).max(1),bottom:px(51)},caret); DeleteObject(caret); }
         label(dc,"esc",RECT {left:w-px(43),top:px(24),right:w-px(14),bottom:px(48)},small,secondary);
         let mut icons = Vec::new();
@@ -487,11 +564,11 @@ unsafe fn paint(hwnd: HWND) {
             if let Some(icon) = icon_for(hwnd,&entry.path,px(36)) { icons.push((icon,px(18),y+px(7))); }
             else { label(dc,if entry.kind=="Application"{"▣"}else{"▤"},RECT{left:px(23),top:y,right:px(52),bottom:y+px(50)},search,secondary); }
             label(dc,&entry.name,RECT {left:px(66),top:y+px(3),right:w-px(77),bottom:y+px(27)},body,primary);
-            label(dc,&format!("{} · {}",entry.kind,entry.detail),RECT {left:px(66),top:y+px(27),right:w-px(24),bottom:y+px(46)},small,secondary);
+            label(dc,&format!("{}{} · {}",if dock_start&&pinned(&entry.path){"Đã ghim · "}else{""},entry.kind,entry.detail),RECT {left:px(66),top:y+px(27),right:w-px(24),bottom:y+px(46)},small,secondary);
             if i==selected { label(dc,"↵",RECT {left:w-px(49),top:y+px(3),right:w-px(22),bottom:y+px(28)},body,secondary); }
         }
         if rows.is_empty(){label(dc,if query.trim().is_empty(){"Type to find apps and files. Recent items will appear here."}else{"No results"},RECT{left:px(28),top:px(105),right:w-px(24),bottom:px(147)},body,secondary);}
-        label(dc,if !error.is_empty(){&error}else if query.trim().is_empty(){"Recent · newest first     ↑ ↓  Select     ↵  Open     Esc  Close"}else{"↑ ↓  Select       ↵  Open       Esc  Close"},RECT{left:px(22),top:h-px(36),right:w-px(80),bottom:h-px(10)},small,secondary);
+        label(dc,if !error.is_empty(){&error}else if dock_start{"↑ ↓  Chọn     ↵  Mở     Chuột phải: ghim vào Dock"}else if query.trim().is_empty(){"Recent · newest first     ↑ ↓  Select     ↵  Open     Esc  Close"}else{"↑ ↓  Select       ↵  Open       Esc  Close"},RECT{left:px(22),top:h-px(36),right:w-px(80),bottom:h-px(10)},small,secondary);
         label(dc,&format!("{count}"),RECT{left:w-px(58),top:h-px(36),right:w-px(15),bottom:h-px(10)},small,secondary);
         GdiFlush();
         for (icon,x,y) in icons { blend_pixels(pixels,ww,pad+x,pad+y,&icon.pixels,icon.width,icon.height,false); }
@@ -511,21 +588,67 @@ unsafe fn paint(hwnd: HWND) {
     EndPaint(hwnd,&ps);
 }
 
+unsafe fn result_menu(hwnd:HWND,mouse:Option<(i32,i32)>){
+    let target=STATE.with(|c|{
+        let mut g=c.borrow_mut();let s=g.as_mut()?;
+        if !s.dock_start{return None;}
+        if let Some((_,y))=mouse{
+            let logical=(y as f32/s.scale).floor() as i32-12;
+            let row=logical.checked_sub(TOP).filter(|v|*v>=0)?/ROW;
+            if row>=PAGE as i32||s.first+row as usize>=s.matches.len(){return None;}
+            s.selected=s.first+row as usize;
+        }
+        Some((s.all.get(*s.matches.get(s.selected)?)?.clone(),s.scale,s.selected.saturating_sub(s.first)))
+    });
+    let Some((entry,scale,row))=target else{return;};
+    let Some(edit)=pin_change(&entry)else{return;};
+    InvalidateRect(hwnd,std::ptr::null(),0);
+    let menu=CreatePopupMenu();
+    if menu.is_null(){return;}
+    let label=if matches!(&edit,crate::dock::Edit::Unpin(_)){"Bỏ ghim khỏi Dock"}else{"Ghim vào Dock"};
+    AppendMenuW(menu,MF_STRING,1,wide("Mở ứng dụng").as_ptr());
+    AppendMenuW(menu,MF_STRING,2,wide(label).as_ptr());
+    let (x,y)=mouse.unwrap_or(((80.0*scale) as i32,((TOP+(row as i32+1)*ROW+12) as f32*scale) as i32));
+    let mut point=POINT{x,y};ClientToScreen(hwnd,&mut point);
+    IN_ACTION_MENU.with(|flag|flag.set(true));
+    let cmd=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON|TPM_NONOTIFY,point.x,point.y,0,hwnd,std::ptr::null());
+    IN_ACTION_MENU.with(|flag|flag.set(false));
+    DestroyMenu(menu);
+    match cmd{
+        1=>{PostMessageW(hwnd,OPEN_SELECTED,0,0);},
+        2=>{PIN_EDIT.with(|pending|pending.replace(Some(edit)));},
+        _=>{}
+    }
+}
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match msg {
         WM_ERASEBKGND => 1,
         WM_PAINT => { paint(hwnd); 0 }
         WM_SETFOCUS | WM_KILLFOCUS => { InvalidateRect(hwnd, std::ptr::null(), 0); 0 }
         WM_TIMER if w == 7 => {
-            let (changed, pending) = STATE.with(|c| {
-                let mut g=c.borrow_mut(); let Some(s)=g.as_mut() else {return (false,false);}; let mut changed=false;
+            let (changed, pending, apps_changed) = STATE.with(|c| {
+                let mut g=c.borrow_mut(); let Some(s)=g.as_mut() else {return (false,false,false);}; let mut changed=false;
                 while let Ok((key,icon))=s.icon_results.try_recv() { s.icons.insert(key,icon); s.pending_icons=s.pending_icons.saturating_sub(1); changed=true; }
-                (changed,s.pending_icons>0)
+                let mut apps_changed=false;
+                if let Some(rx)=&s.apps_rx{
+                    match rx.try_recv(){
+                        Ok(apps)=>{
+                            s.apps_rx=None;
+                            let mut seen=s.all.iter().map(|e|e.path.to_string_lossy().to_ascii_lowercase()).collect::<std::collections::HashSet<_>>();
+                            s.all.extend(apps.into_iter().filter(|e|seen.insert(e.path.to_string_lossy().to_ascii_lowercase())));
+                            apps_changed=true;
+                        },
+                        Err(std::sync::mpsc::TryRecvError::Disconnected)=>s.apps_rx=None,
+                        Err(std::sync::mpsc::TryRecvError::Empty)=>{}
+                    }
+                }
+                (changed,s.pending_icons>0||s.apps_rx.is_some(),apps_changed)
             });
+            if apps_changed{refresh_results(true);}
             if changed { InvalidateRect(hwnd,std::ptr::null(),0); }
             if !pending || IsWindowVisible(hwnd)==0 { KillTimer(hwnd,7); } 0
         }
-        WM_ACTIVATE if w & 0xffff == WA_INACTIVE as usize => { dismiss(hwnd); 0 }
+        WM_ACTIVATE if w & 0xffff == WA_INACTIVE as usize => { if !IN_ACTION_MENU.with(Cell::get){dismiss(hwnd);} 0 }
         WM_CLOSE => { dismiss(hwnd); 0 }
         REFRESH => { refresh(); 0 }
         OPEN_SELECTED => { launch_selected(); 0 }
@@ -554,6 +677,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 return 0;
             }
             match w as u16 {
+                VK_APPS => result_menu(hwnd,None),
+                VK_F10 if GetKeyState(VK_SHIFT as i32)<0=>result_menu(hwnd,None),
                 VK_ESCAPE => { dismiss(hwnd); }
                 VK_RETURN => { PostMessageW(hwnd, OPEN_SELECTED, 0, 0); }
                 VK_DOWN => move_selection(1), VK_UP => move_selection(-1),
@@ -572,6 +697,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             } 0
         }
         WM_MOUSEWHEEL => { move_selection(if (w >> 16) as i16 > 0 { -1 } else { 1 }); 0 }
+        WM_RBUTTONUP=>{result_menu(hwnd,Some((l as i16 as i32,(l>>16) as i16 as i32)));0},
         WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
             let y = (l >> 16) as i16 as i32;
             let clicked = STATE.with(|c| {
@@ -590,7 +716,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
     }
 }
 
-pub fn toggle(_owner: HWND) {
+pub fn toggle(_owner: HWND) {toggle_at(None);}
+pub fn toggle_at(dock:Option<POINT>) {
     unsafe {
         if let Some((hwnd, _, _, _)) = handles() {
             if IsWindowVisible(hwnd) != 0 { dismiss(hwnd); return; }
@@ -602,15 +729,15 @@ pub fn toggle(_owner: HWND) {
             RegisterClassExW(&wc);
             // An independent top-level window receives focus and keyboard input
             // without inheriting the hidden message window's visibility/owner chain.
-            let hwnd = CreateWindowExW(WS_EX_LAYERED, cls.as_ptr(), wide("tuanpc-desk Spotlight").as_ptr(), WS_POPUP, 0, 0, 684, 468, std::ptr::null_mut(), std::ptr::null_mut(), instance, std::ptr::null_mut());
+            let hwnd = CreateWindowExW(WS_EX_LAYERED|WS_EX_TOOLWINDOW, cls.as_ptr(), wide("tuanpc-desk Spotlight").as_ptr(), WS_POPUP, 0, 0, 684, 468, std::ptr::null_mut(), std::ptr::null_mut(), instance, std::ptr::null_mut());
             if hwnd.is_null() { crate::log!("Launcher: CreateWindowEx failed {}", GetLastError()); return; }
             let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED);
             let all = entries();
             let (icon_requests,icon_results)=icon_worker();
-            STATE.with(|c| *c.borrow_mut() = Some(State { hwnd, all, matches: Vec::new(), query: String::new(), selected: 0, first: 0, scale: 1.0, width: 660, height: 444, glass: Vec::new(), backdrop: Vec::new(), error: String::new(), select_all: false, icons:std::collections::HashMap::new(),icon_requests,icon_results,pending_icons:0,history:load_history(),launching:false }));
+            STATE.with(|c| *c.borrow_mut() = Some(State { hwnd, all, matches: Vec::new(), query: String::new(), selected: 0, first: 0, scale: 1.0, width: 660, height: 444, glass: Vec::new(), backdrop: Vec::new(), error: String::new(), select_all: false, icons:std::collections::HashMap::new(),icon_requests,icon_results,pending_icons:0,apps_indexed:false,apps_rx:None,history:load_history(),launching:false,dock_start:false }));
         }
         let Some((hwnd, _, _, _)) = handles() else { return; };
-        let mut mouse: POINT = std::mem::zeroed(); GetCursorPos(&mut mouse);
+        let mouse=dock.unwrap_or_else(||{let mut p=POINT{x:0,y:0};GetCursorPos(&mut p);p});
         let monitor = MonitorFromPoint(mouse, MONITOR_DEFAULTTONEAREST); let mut mi: MONITORINFO = std::mem::zeroed(); mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32; GetMonitorInfoW(monitor, &mut mi);
         let scale = windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd).max(96) as f32 / 96.0;
         let width = (660.0 * scale) as i32; let height = (444.0 * scale) as i32;
@@ -620,7 +747,9 @@ pub fn toggle(_owner: HWND) {
         let backdrop = capture_glass(x+pad, y+pad, width, height);
         let appearance=PREFS.with(|c| c.borrow().clone());
         let glass=frost(&backdrop,width,height,scale,&appearance);
-        STATE.with(|c| if let Some(s) = c.borrow_mut().as_mut() { s.scale = scale; s.width = width; s.height = height; s.glass = glass; s.backdrop=backdrop; s.query.clear(); s.select_all = false; });
+        STATE.with(|c| if let Some(s) = c.borrow_mut().as_mut() { s.scale = scale; s.width = width; s.height = height; s.glass = glass; s.backdrop=backdrop; s.query.clear(); s.select_all = false; s.dock_start=dock.is_some();
+            if s.dock_start&&!s.apps_indexed{s.apps_indexed=true;s.apps_rx=installed_apps_worker();}
+        });
         refresh();
         SetWindowPos(hwnd, HWND_TOP, x, y, width+2*pad, height+2*pad, SWP_NOACTIVATE);
         paint(hwnd);
@@ -652,6 +781,15 @@ mod tests {
         assert_eq!(filter(&all[..2],"",&history),vec![0,1]);
         assert_eq!(filter(&all,"paint",&history),vec![0]);
         assert_eq!(filter(&all,"missing",&history),Vec::<usize>::new());
+    }
+    #[test]
+    fn only_apps_can_be_pinned_and_use_the_shared_dock_list(){
+        let entries=sample_entries();
+        assert!(pin_change(&entries[2]).is_none());
+        assert!(matches!(pin_change(&entries[0]),Some(crate::dock::Edit::Pin(_))));
+        dock_pins(&[entries[0].path.to_string_lossy().to_uppercase()]);
+        assert!(matches!(pin_change(&entries[0]),Some(crate::dock::Edit::Unpin(_))));
+        dock_pins(&[]);
     }
     #[test]
     fn recent_history_is_bounded_and_tolerates_invalid_data() {

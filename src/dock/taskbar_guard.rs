@@ -52,7 +52,7 @@ unsafe extern "system" fn enum_taskbars(hwnd:HWND,raw:LPARAM)->BOOL{
     }
     1
 }
-unsafe fn taskbars()->Option<(WindowId,Vec<WindowId>)>{
+unsafe fn taskbars()->Option<Vec<WindowId>>{
     let shell=WindowId::read(GetShellWindow())?;
     let primary=WindowId::read(FindWindowW(wide("Shell_TrayWnd").as_ptr(),ptr::null())).filter(|v|v.pid==shell.pid)?;
     let mut query=(shell.pid,Vec::new());
@@ -60,50 +60,75 @@ unsafe fn taskbars()->Option<(WindowId,Vec<WindowId>)>{
     query.1.sort_unstable();
     query.1.dedup();
     if query.1.binary_search(&primary).is_err(){return None;}
-    Some((primary,query.1))
+    Some(query.1)
 }
-fn names(pid:u32,token:u128)->([u16;96],[u16;96]){
-    fn name(pid:u32,token:u128,role:&str)->[u16;96]{
-        let mut out=[0;96];
-        let text=format!("Local\\TuanpcDesk_Taskbar_{pid}_{token:032x}_{role}");
-        for (cell,value) in out.iter_mut().zip(text.encode_utf16()){*cell=value;}
-        out
-    }
-    (name(pid,token,"Stop"),name(pid,token,"Ready"))
+fn name(pid:u32,token:u128,role:&str)->Vec<u16>{
+    wide(&format!("Local\\TuanpcDesk_Taskbar_{pid}_{token:032x}_{role}"))
 }
-unsafe fn visible(ids:&[WindowId])->Vec<WindowId>{
-    ids.iter().copied().filter(|id|id.matches()&&IsWindowVisible(id.hwnd())!=0).collect()
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+struct Snapshot {id:WindowId,visible:bool}
+unsafe fn snapshot()->Option<Vec<Snapshot>>{
+    taskbars().map(|ids|ids.into_iter().map(|id|Snapshot{id,visible:IsWindowVisible(id.hwnd())!=0}).collect())
 }
 unsafe fn restore(ids:&[WindowId]){
-    // Never show previously hidden or re-used HWNDs. There are no appbar,
-    // registry, preference or Explorer process changes to undo here.
-    for &id in ids{if id.matches(){ShowWindowAsync(id.hwnd(),SW_SHOWNA);}}
+    for &id in ids{if id.matches()&&IsWindowVisible(id.hwnd())==0{ShowWindowAsync(id.hwnd(),SW_SHOWNA);}}
+}
+
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+#[repr(i32)]
+pub(super) enum Exit { Requested=0, Emergency=20, ExplorerChanged=21, ShellRevealed=22,
+    DockLost=23, HotkeyUnavailable=24, HideFailed=25, LinkLost=26 }
+impl Exit{
+    fn from_code(code:Option<i32>)->Self{
+        match code{Some(0)=>Self::Requested,Some(20)=>Self::Emergency,Some(21)=>Self::ExplorerChanged,
+            Some(22)=>Self::ShellRevealed,Some(23)=>Self::DockLost,Some(24)=>Self::HotkeyUnavailable,
+            Some(25)=>Self::HideFailed,_=>Self::LinkLost}
+    }
+    pub(super) fn message(self)->&'static str{
+        match self{
+            Self::Requested=>"Đã chuyển sang chế độ tương thích Windows.",
+            Self::Emergency=>"Đã hiện thanh tác vụ theo phím khôi phục Ctrl+Alt+Shift+F12.",
+            Self::ExplorerChanged=>"Explorer đã thay đổi thanh tác vụ. Đã về chế độ tương thích; bật lại chế độ Dock nếu cần.",
+            Self::ShellRevealed=>"Windows đã tự hiện thanh tác vụ. Đã về chế độ tương thích.",
+            Self::DockLost=>"Dock không còn phản hồi. Đã khôi phục thanh tác vụ Windows.",
+            Self::HotkeyUnavailable=>"Không đăng ký được Ctrl+Alt+Shift+F12. Giữ thanh tác vụ Windows.",
+            Self::HideFailed=>"Không ẩn được thanh tác vụ Windows an toàn.",
+            Self::LinkLost=>"Mất liên lạc với bộ khôi phục. Đã trả thanh tác vụ cho Windows.",
+        }
+    }
 }
 
 pub(super) struct Watch {
-    child:Child, stop:Handle, ready:Handle, hidden:Vec<WindowId>, started:Instant,
+    child:Child, stop:Handle, ready:Handle, armed:Handle, pulse:Handle, hidden:Vec<WindowId>, started:Instant,
 }
 impl Watch {
     pub(super) unsafe fn start()->Result<Self,String>{
-        let (_,ids)=taskbars().ok_or("Windows taskbar chưa sẵn sàng.")?;
-        let hidden=visible(&ids);
+        let all=snapshot().ok_or("Thanh tác vụ Windows chưa sẵn sàng.")?;
+        let hidden=all.iter().filter(|item|item.visible).map(|item|item.id).collect::<Vec<_>>();
         if hidden.is_empty(){return Err("Không thấy thanh tác vụ để ẩn.".into());}
         let pid=std::process::id();
         let token=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e|e.to_string())?.as_nanos();
-        let (stop,ready)=names(pid,token);
-        let stop=Handle::from_raw(CreateEventW(ptr::null(),1,0,stop.as_ptr())).map_err(|e|e.to_string())?;
-        let ready=Handle::from_raw(CreateEventW(ptr::null(),1,0,ready.as_ptr())).map_err(|e|e.to_string())?;
-        let expected=hidden.iter().map(|v|format!("{}:{}:{}",v.handle,v.pid,v.thread)).collect::<Vec<_>>().join(",");
+        let event=|role,manual|Handle::from_raw(CreateEventW(ptr::null(),manual,0,name(pid,token,role).as_ptr())).map_err(|e|e.to_string());
+        let stop=event("Stop",1)?;
+        let armed=event("Armed",1)?;
+        let ready=event("Ready",1)?;
+        let pulse=event("Pulse",0)?;
+        let expected=all.iter().map(|v|format!("{}:{}:{}:{}",v.id.handle,v.id.pid,v.id.thread,u8::from(v.visible))).collect::<Vec<_>>().join(",");
         let exe=env::current_exe().map_err(|e|e.to_string())?;
         let child=Command::new(exe).arg(ARG).arg(pid.to_string()).arg(format!("{token:032x}")).arg(expected)
             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).creation_flags(QUIET_PROCESS)
             .spawn().map_err(|e|e.to_string())?;
-        Ok(Self{child,stop,ready,hidden,started:Instant::now()})
+        Ok(Self{child,stop,ready,armed,pulse,hidden,started:Instant::now()})
     }
-    pub(super) fn poll(&mut self)->Result<bool,()>{
-        if !matches!(self.child.try_wait(),Ok(None)){return Err(());}
+    pub(super) fn poll(&mut self)->Result<bool,Exit>{
+        match self.child.try_wait(){
+            Ok(Some(status))=>return Err(Exit::from_code(status.code())),
+            Err(_)=>return Err(Exit::LinkLost),
+            Ok(None)=>{}
+        }
+        if unsafe{SetEvent(self.pulse.0)}==0{return Err(Exit::LinkLost);}
         if self.ready.fired(){return Ok(true);}
-        if self.started.elapsed()>Duration::from_secs(3){return Err(());}
+        if self.started.elapsed()>Duration::from_secs(3){return Err(Exit::HideFailed);}
         Ok(false)
     }
 }
@@ -111,7 +136,7 @@ impl Drop for Watch{
     fn drop(&mut self){
         unsafe{
             SetEvent(self.stop.0);
-            restore(&self.hidden);
+            if self.armed.fired(){restore(&self.hidden);}
         }
     }
 }
@@ -128,64 +153,86 @@ pub(crate) fn watchdog(args:&[String])->bool{
     if args.len()!=5{return true;}
     let Some(pid)=args[2].parse::<u32>().ok().filter(|&p|p!=0&&p!=std::process::id())else{return true;};
     let Ok(token)=u128::from_str_radix(&args[3],16)else{return true;};
-    let parse=|id:&str|->Option<WindowId>{
-        let mut fields=id.split(':');
-        let id=WindowId{handle:fields.next()?.parse().ok()?,pid:fields.next()?.parse().ok()?,thread:fields.next()?.parse().ok()?};
-        fields.next().is_none().then_some(id)
+    let parse=|item:&str|->Option<Snapshot>{
+        let mut f=item.split(':');
+        let id=WindowId{handle:f.next()?.parse().ok()?,pid:f.next()?.parse().ok()?,thread:f.next()?.parse().ok()?};
+        let visible=match f.next()?{"0"=>false,"1"=>true,_=>return None};
+        f.next().is_none().then_some(Snapshot{id,visible})
     };
     let Some(expected)=args[4].split(',').map(parse).collect::<Option<Vec<_>>>()else{return true;};
     unsafe{
-        // No public hide/restore CLI: a verified Deskland parent and its
-        // active IPC lease must be acknowledged before touching any window.
         let Ok(parent)=Handle::from_raw(OpenProcess(SYNC|PROCESS_QUERY_LIMITED_INFORMATION,0,pid))else{return true;};
         if !same_executable(parent.0){return true;}
-        let (stop,ready)=names(pid,token);
-        let Ok(stop)=Handle::from_raw(OpenEventW(SYNC,0,stop.as_ptr()))else{return true;};
-        let Ok(ready)=Handle::from_raw(OpenEventW(SIGNAL,0,ready.as_ptr()))else{return true;};
-        watch(parent,stop,ready,&expected);
+        let event=|role,access|Handle::from_raw(OpenEventW(access,0,name(pid,token,role).as_ptr()));
+        let (Ok(stop),Ok(ready),Ok(armed),Ok(pulse))=(event("Stop",SYNC),event("Ready",SIGNAL),
+            event("Armed",SIGNAL),event("Pulse",SYNC))else{return true;};
+        let reason=watch(parent,stop,ready,armed,pulse,&expected);
+        std::process::exit(reason as i32);
     }
-    true
 }
 
-unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,expected:&[WindowId]){
-    let Some((primary,all))=taskbars()else{return;};
-    let starting=visible(&all);
-    if starting.is_empty()||starting!=expected||parent.fired()||stop.fired(){return;}
+fn health(expected:&[Snapshot],current:Option<&[Snapshot]>)->Option<Exit>{
+    let Some(current)=current else{return Some(Exit::ExplorerChanged);};
+    if !current.iter().map(|v|v.id).eq(expected.iter().map(|v|v.id)){Some(Exit::ExplorerChanged)}
+    else if current.iter().any(|v|v.visible){Some(Exit::ShellRevealed)}
+    else{None}
+}
+
+unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle,expected:&[Snapshot])->Exit{
+    let Some(starting)=snapshot()else{return Exit::ExplorerChanged;};
+    if starting!=expected{return Exit::ExplorerChanged;}
+    let hidden=starting.iter().filter(|item|item.visible).map(|item|item.id).collect::<Vec<_>>();
+    if hidden.is_empty()||parent.fired()||stop.fired(){return Exit::Requested;}
     let mut msg:MSG=mem::zeroed();
     PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_NOREMOVE);
-    if RegisterHotKey(ptr::null_mut(),HOTKEY,MOD_CONTROL|MOD_ALT|MOD_SHIFT|MOD_NOREPEAT,VK_F12 as u32)==0{return;}
-    struct Restore<'a>(&'a [WindowId]);
-    impl Drop for Restore<'_>{
-        fn drop(&mut self){unsafe{restore(self.0);UnregisterHotKey(ptr::null_mut(),HOTKEY);}}
+    if RegisterHotKey(ptr::null_mut(),HOTKEY,MOD_CONTROL|MOD_ALT|MOD_SHIFT|MOD_NOREPEAT,VK_F12 as u32)==0{return Exit::HotkeyUnavailable;}
+    struct Restore(Vec<WindowId>);
+    impl Drop for Restore{
+        fn drop(&mut self){unsafe{restore(&self.0);UnregisterHotKey(ptr::null_mut(),HOTKEY);}}
     }
-    let _restore=Restore(&starting);
-    for &id in &starting{
-        if !id.matches()||stop.fired()||parent.fired()||ShowWindowAsync(id.hwnd(),SW_HIDE)==0{return;}
+    let mut rollback=Restore(Vec::new());
+    if SetEvent(armed.0)==0{return Exit::LinkLost;}
+    for &id in &hidden{
+        if parent.fired()||stop.fired(){return Exit::Requested;}
+        if !id.matches(){return Exit::ExplorerChanged;}
+        if ShowWindowAsync(id.hwnd(),SW_HIDE)==0{return Exit::HideFailed;}
+        rollback.0.push(id);
     }
-    let signals=[parent.0,stop.0];
-    for _ in 0..24 {
-        if parent.fired()||stop.fired(){return;}
-        if visible(&starting).is_empty(){break;}
-        thread::sleep(Duration::from_millis(25));
+    for _ in 0..25{
+        if parent.fired()||stop.fired(){return Exit::Requested;}
+        match health(expected,snapshot().as_deref()){
+            None=>break,
+            Some(Exit::ShellRevealed)=>thread::sleep(Duration::from_millis(24)),
+            Some(reason)=>return reason,
+        }
     }
-    if !visible(&starting).is_empty()||SetEvent(ready.0)==0{return;}
-    wait_for_restore(&signals,1000,|| {
-        // Fail open when Explorer recreates a bar, or if Windows shows
-        // one itself. We never chase fresh shell HWNDs to hide.
-        primary.matches()&&starting.iter().all(|id|id.matches()&&IsWindowVisible(id.hwnd())==0)
-    });
+    if let Some(reason)=health(expected,snapshot().as_deref()){
+        return if reason==Exit::ShellRevealed{Exit::HideFailed}else{reason};
+    }
+    if SetEvent(ready.0)==0{return Exit::LinkLost;}
+    let signals=[parent.0,stop.0,pulse.0];
+    wait_for_restore(&signals,1000,Duration::from_secs(6),||health(expected,snapshot().as_deref()))
 }
-unsafe fn wait_for_restore(signals:&[HANDLE;2],interval:u32,mut healthy:impl FnMut()->bool){
+
+unsafe fn wait_for_restore(signals:&[HANDLE;3],interval:u32,lease:Duration,mut health:impl FnMut()->Option<Exit>)->Exit{
     let mut msg:MSG=mem::zeroed();
+    let mut pulse=Instant::now();
+    let mut observed=Instant::now();
     loop{
         match MsgWaitForMultipleObjects(signals.len() as u32,signals.as_ptr(),0,interval,QS_HOTKEY){
-            WAIT_OBJECT_0|WAIT_FAILED=>break,
-            n if n==WAIT_OBJECT_0+1=>break,
-            n if n==WAIT_OBJECT_0+2=>{
-                if PeekMessageW(&mut msg,ptr::null_mut(),WM_HOTKEY,WM_HOTKEY,PM_REMOVE)!=0&&msg.wParam==HOTKEY as usize{break;}
+            WAIT_OBJECT_0=>return Exit::DockLost,
+            n if n==WAIT_OBJECT_0+1=>return Exit::Requested,
+            n if n==WAIT_OBJECT_0+2=>pulse=Instant::now(),
+            n if n==WAIT_OBJECT_0+3=>{
+                if PeekMessageW(&mut msg,ptr::null_mut(),WM_HOTKEY,WM_HOTKEY,PM_REMOVE)!=0&&msg.wParam==HOTKEY as usize{return Exit::Emergency;}
             }
-            WAIT_TIMEOUT=>if !healthy(){break;},
-            _=>break,
+            WAIT_TIMEOUT=>{},
+            _=>return Exit::LinkLost,
+        }
+        if pulse.elapsed()>=lease{return Exit::DockLost;}
+        if observed.elapsed()>=Duration::from_millis(interval as u64){
+            observed=Instant::now();
+            if let Some(reason)=health(){return reason;}
         }
     }
 }
@@ -194,17 +241,28 @@ unsafe fn wait_for_restore(signals:&[HANDLE;2],interval:u32,mut healthy:impl FnM
 mod tests{
     use super::*;
     #[test]
-    fn watchdog_exits_on_either_signal_or_loss_of_shell() {
+    fn distinguishes_explicit_restore_parent_exit_and_missing_dock_heartbeat() {
         unsafe{
-            for index in [0,1,2] {
-                let first=Handle::from_raw(CreateEventW(ptr::null(),1,0,ptr::null())).unwrap();
-                let stop=Handle::from_raw(CreateEventW(ptr::null(),1,0,ptr::null())).unwrap();
-                let handles=[first.0,stop.0];
-                if index<2{assert_ne!(SetEvent(handles[index]),0);}
-                let mut checks=0;
-                wait_for_restore(&handles,1,||{checks+=1;false});
-                assert_eq!(checks,usize::from(index==2));
+            for (index,reason) in [(Some(0),Exit::DockLost),(Some(1),Exit::Requested),(None,Exit::DockLost)]{
+                let events=[1,1,0].map(|manual|Handle::from_raw(CreateEventW(ptr::null(),manual,0,ptr::null())).unwrap());
+                let handles=events.each_ref().map(|event|event.0);
+                if let Some(index)=index{assert_ne!(SetEvent(handles[index]),0);}
+                assert_eq!(wait_for_restore(&handles,1,Duration::from_millis(8),||None),reason);
             }
         }
+    }
+    #[test]
+    fn both_bars_and_previously_hidden_bars_are_checked_without_adopting_new_windows(){
+        let main=Snapshot{id:WindowId{handle:1,pid:4,thread:2},visible:true};
+        let secondary=Snapshot{id:WindowId{handle:2,pid:4,thread:3},visible:false};
+        let expected=[main,secondary];
+        let mut actual=[Snapshot{visible:false,..main},secondary];
+        assert_eq!(health(&expected,Some(&actual)),None);
+        actual[1].visible=true;
+        assert_eq!(health(&expected,Some(&actual)),Some(Exit::ShellRevealed));
+        actual[1].id.thread=8;
+        assert_eq!(health(&expected,Some(&actual)),Some(Exit::ExplorerChanged));
+        assert_eq!(health(&expected,Some(&actual[..1])),Some(Exit::ExplorerChanged));
+        assert_eq!(health(&expected,None),Some(Exit::ExplorerChanged));
     }
 }

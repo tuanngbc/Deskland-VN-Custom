@@ -145,6 +145,15 @@
     <p class="monitor-detail" data-i18n="dockScopeHint">Phạm vi ứng dụng không thay đổi màn hình hiển thị Dock hay Stage.</p>
     <p id="dockRuntimeStatus" class="monitor-detail" role="status" aria-live="polite"></p>
   </section>
+  <section class="setting-card">
+    <h3>Chế độ thanh tác vụ</h3>
+    <label class="setting-row"><b>Chế độ</b><select id="dockShellMode" aria-describedby="taskbarTakeoverStatus">
+      <option value="windows">Tương thích Windows</option><option value="dock">Deskland Dock · Ẩn taskbar</option>
+    </select></label>
+    <p class="dock-section-copy">Tương thích dùng Start và khay của Windows. Chế độ Dock dùng Launcher, tiện ích và lịch của Deskland.</p>
+    <p class="monitor-detail">Chỉ áp dụng cho phiên này. Ctrl+Alt+Shift+F12 để hiện lại thanh Windows.</p>
+    <p class="monitor-detail" id="taskbarTakeoverStatus" role="status" aria-live="polite"></p>
+  </section>
   <section class="setting-card dock-placement">
     <h3>Màn hình và tiện ích Dock</h3><p class="dock-section-copy">Chọn màn hình, sắp xếp tiện ích và chỉ số cho từng Dock.</p>
     <label class="setting-row"><b data-i18n="dockDisplayTarget">Màn hình hiển thị</b><select id="dockDisplayMode">
@@ -189,12 +198,6 @@
       <label class="setting-row"><b>Dock</b><select id="dockPolicy_dock"><option value="default">Dùng cài đặt Dock chung</option><option value="reserve">Giữ chỗ khi phóng to</option><option value="floating">Nổi trên cửa sổ</option><option value="autoHide">Tự ẩn</option></select></label>
       <label class="setting-row"><b>Stage Manager</b><select id="dockPolicy_stage"><option value="default">Mặc định (nổi)</option><option value="reserve">Giữ chỗ khi có thẻ Stage</option><option value="floating">Nổi trên cửa sổ</option><option value="autoHide">Tự ẩn</option></select></label>
     </div>
-  </section>
-  <section class="setting-card">
-    <h3>Thanh tác vụ Windows</h3>
-    <p class="dock-section-copy">Áp dụng cho phiên này. Nhấn Ctrl+Alt+Shift+F12 để hiện lại thanh tác vụ.</p>
-    <p class="dock-section-copy" id="taskbarTakeoverStatus" role="status" aria-live="polite"></p>
-    <label class="setting-row switch-row"><b>Ẩn thanh tác vụ Windows</b><input id="dockTaskbarHidden" type="checkbox" role="switch" aria-describedby="taskbarTakeoverStatus"><i class="switch" aria-hidden="true"></i></label>
   </section>
   <section class="setting-card dock-placement">
     <h3>Stage Manager</h3><p class="dock-section-copy">Chọn cách các thẻ cửa sổ và nhóm xuất hiện trên từng màn hình.</p>
@@ -1066,12 +1069,15 @@ function renderDockPlacement(){
       '</div><b>'+esc(displayLabel(d))+'</b><small>'+esc([app?'Dock':'',stage?'Stage Manager':''].filter(Boolean).join(' · ')||dockText('dockDisplayOff'))+'</small></div>';
   }).join(''):'<p>'+esc(dockText('dockDisplayNone'))+'</p>';
 }
+let shellModePending=false;
 function syncDockTaskbar(m){
-  if(typeof m.dockTaskbarHidden==='boolean')$('dockTaskbarHidden').checked=m.dockTaskbarHidden;
-  $('dockTaskbarHidden').disabled=!dockOptions.enabled;
-  if(typeof m.message==='string')$('taskbarTakeoverStatus').textContent=m.message;
+  const control=$('dockShellMode');
+  if(typeof m.dockTaskbarPending==='boolean')shellModePending=m.dockTaskbarPending;
+  if(typeof m.dockTaskbarHidden==='boolean')control.value=m.dockTaskbarHidden||shellModePending?'dock':'windows';
+  control.disabled=!dockOptions.enabled||shellModePending;
+  if(typeof m.dockTaskbarMessage==='string')$('taskbarTakeoverStatus').textContent=m.dockTaskbarMessage;
 }
-$('dockTaskbarHidden').addEventListener('change',e=>send({t:'dockTaskbar',hidden:e.target.checked}));
+$('dockShellMode').addEventListener('change',e=>send({t:'dockTaskbar',hidden:e.target.value==='dock'}));
 function syncDockSettings(m) {
   dockOptions=Object.assign({},dockOptions,m.dock||{});
   if(Array.isArray(m.dockDisplays))dockDisplays=m.dockDisplays;

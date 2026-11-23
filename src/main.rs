@@ -106,6 +106,9 @@ const CMD_DOCK_FOCUS:usize = 139;
 const CMD_WALLPAPER: usize = 136;
 const WM_OPEN_SETTINGS: u32 = WM_APP + 2;
 const WM_OPEN_LAUNCHER: u32 = WM_APP + 3;
+const WM_OPEN_DOCK_LAUNCHER: u32 = WM_APP + 79;
+const CMD_DOCK_LAUNCHER: usize = 140;
+thread_local!{static DOCK_LAUNCH_POINT: Cell<Option<POINT>>=const{Cell::new(None)};}
 const CMD_EXIT: usize = 199;
 const HOTKEY_SAVER: i32 = 1;
 const HOTKEY_LAUNCHER: i32 = 2;
@@ -292,6 +295,11 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
         }
         WM_HOTKEY if w as i32 == HOTKEY_LAUNCHER => {
             PENDING_CMD.with(|c| c.set(CMD_LAUNCHER));
+            0
+        }
+        WM_OPEN_DOCK_LAUNCHER => {
+            DOCK_LAUNCH_POINT.with(|c|c.set(Some(POINT{x:w as i32,y:l as i32})));
+            PENDING_CMD.with(|c|c.set(CMD_DOCK_LAUNCHER));
             0
         }
         WM_OPEN_LAUNCHER => {
@@ -859,6 +867,8 @@ fn web_init(app: &App) -> serde_json::Value {
         },
     });
     init["dockTaskbarHidden"]=serde_json::Value::Bool(app.dock_taskbar_hidden);
+    init["dockTaskbarPending"]=serde_json::Value::Bool(app.dock_taskbar_pending);
+    init["dockTaskbarMessage"]=serde_json::Value::String(app.dock_taskbar_message.clone());
     init
 }
 
@@ -986,6 +996,8 @@ struct App {
     dock_runtime: Option<dock::Runtime>,
     dock_error: Option<String>,
     dock_taskbar_hidden:bool,
+    dock_taskbar_pending:bool,
+    dock_taskbar_message:String,
     // One cached CPU buffer shared by all outputs, never scaled while GPU-mapped.
     staging: RefCell<Vec<u8>>,
     benchmark_gdi: bool,
@@ -998,8 +1010,11 @@ struct App {
 
 impl App {
     fn configure_dock(&mut self) {
+        launcher::dock_pins(&self.cfg.dock.pinned);
         self.dock_error=None;
-        if self.saver || self.headless || !self.cfg.dock.any_enabled() {self.dock_runtime=None;self.dock_taskbar_hidden=false;}
+        if self.saver || self.headless || !self.cfg.dock.any_enabled() {self.dock_runtime=None;
+            if self.dock_taskbar_hidden||self.dock_taskbar_pending {self.dock_taskbar_message="Đã hiện lại thanh Windows khi tắt Dock.".into();}
+            self.dock_taskbar_hidden=false;self.dock_taskbar_pending=false;}
         else if let Some(runtime)=self.dock_runtime.as_ref() {runtime.configure(self.cfg.dock.clone());}
         else {match dock::Runtime::new(self.cfg.dock.clone(),self.owner as usize) {
             Ok(runtime)=>self.dock_runtime=Some(runtime),
@@ -1010,7 +1025,8 @@ impl App {
     fn post_dock_state(&self) {
         if !web::is_open() { return; }
         web::post(&serde_json::json!({"t":"dockState","dock":self.cfg.dock.json(),"dockDisplays":dock::display_json(),"wallpaperEnabled":self.cfg.wallpaper_enabled,
-            "dockRunning":self.dock_runtime.as_ref().is_some_and(|r|!r.finished()),"dockError":self.dock_error,"dockTaskbarHidden":self.dock_taskbar_hidden}).to_string());
+            "dockRunning":self.dock_runtime.as_ref().is_some_and(|r|!r.finished()),"dockError":self.dock_error,"dockTaskbarHidden":self.dock_taskbar_hidden,
+            "dockTaskbarPending":self.dock_taskbar_pending,"dockTaskbarMessage":self.dock_taskbar_message}).to_string());
     }
     fn set_wallpaper_enabled(&mut self,on:bool)->Result<(),String> {
         if self.cfg.wallpaper_enabled==on{return Ok(());}
@@ -2368,6 +2384,8 @@ fn main() {
         dock_runtime:None,
         dock_error:None,
         dock_taskbar_hidden:false,
+        dock_taskbar_pending:false,
+        dock_taskbar_message:String::new(),
         staging:RefCell::new(Vec::new()),
         benchmark_gdi:headless && args.iter().any(|a|a=="--benchmark-gdi"),
         benchmark_direct_readback:headless && args.iter().any(|a|a=="--benchmark-direct-readback"),
@@ -2574,6 +2592,7 @@ fn main() {
         }
         let dock_events=app.dock_runtime.as_ref().map(|r|r.take_events()).unwrap_or_default();
         let mut dock_edited=false;
+        if let Some(edit)=launcher::take_dock_edit(){edit.apply(&mut app.cfg.dock);dock_edited=true;}
         for event in dock_events {match event {
             dock::Event::Edit(edit)=>{edit.apply(&mut app.cfg.dock);dock_edited=true;}
             dock::Event::Utility(action)=>{
@@ -2584,10 +2603,12 @@ fn main() {
                 };
                 PENDING_CMD.with(|c|c.set(command));
             }
-            dock::Event::Taskbar{hidden,message}=>{
+            dock::Event::Taskbar{hidden,pending,message}=>{
                 app.dock_taskbar_hidden=hidden;
-                settings::sync(&app.settings_state());
-                web::post(&serde_json::json!({"t":"dockTaskbarState","dockTaskbarHidden":hidden,"message":message}).to_string());
+                app.dock_taskbar_pending=pending;
+                app.dock_taskbar_message=message.clone();
+                if settings::hwnd().is_some(){settings::sync(&app.settings_state());}
+                web::post(&serde_json::json!({"t":"dockTaskbarState","dockTaskbarHidden":hidden,"dockTaskbarPending":pending,"dockTaskbarMessage":message}).to_string());
             }
             dock::Event::Error(error)=>{log!("Dock & Stage: {error}");app.dock_error=Some(error);app.post_dock_state();}
         }}
@@ -3001,7 +3022,7 @@ fn main() {
                     if let Some(hidden)=m["hidden"].as_bool(){
                         if let Some(runtime)=app.dock_runtime.as_ref(){runtime.set_taskbar_hidden(hidden);}
                         else{web::post(&serde_json::json!({"t":"dockTaskbarState","dockTaskbarHidden":false,
-                            "message":"Bật Dock để dùng chế độ ẩn thanh tác vụ."}).to_string());}
+                            "dockTaskbarPending":false,"dockTaskbarMessage":"Bật Dock để dùng chế độ ẩn thanh tác vụ."}).to_string());}
                     }
                 }
                 "dockWindowPolicy" => {
@@ -3131,6 +3152,12 @@ fn main() {
                 CMD_WALLPAPER => {
                     if let Err(error)=app.set_wallpaper_enabled(!app.cfg.wallpaper_enabled){app.dock_error=Some(error);}
                     app.post_dock_state();
+                }
+                CMD_DOCK_LAUNCHER => {
+                    if let Some(point)=DOCK_LAUNCH_POINT.with(|c|c.take()){
+                        launcher::configure(app.cfg.launcher_appearance.clone());
+                        launcher::toggle_at(Some(point));
+                    }
                 }
                 CMD_LAUNCHER => {
                     launcher::configure(app.cfg.launcher_appearance.clone());

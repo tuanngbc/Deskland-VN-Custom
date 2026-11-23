@@ -1,0 +1,17 @@
+# Dock mode and Windows compatibility
+
+The taskbar mode is session-only; existing Dock, Stage, wallpaper, pins, appearance and shortcuts stay in their original settings. No Windows settings are written. Compatibility keeps Start, calendar and overflow with Explorer. Enabling Dock mode establishes the independent recovery process and keeps activation of Dock-owned Start, tray and clock on Deskland surfaces, including during the hide handshake.
+
+| Area | Dock mode | Compatibility |
+| --- | --- | --- |
+| Start | Spotlight application search, launch, shared Dock pin/unpin from the result menu. Shortcuts and supported packaged application entries are indexed. | Native Start, Win+X via right-click, subject to the Windows shell. |
+| Clock and utilities | Local weekly calendar; Deskland cards for network, Bluetooth, volume, window switcher, metrics and settings; explicit device settings links as needed. | Windows clock/notification flyout and Explorer overflow. |
+| Third-party tray | `THIRD_PARTY_TRAY_PENDING`: no replay of registrations, icon updates, tooltips or click handlers. | Windows handles original icons, menus and updates. |
+
+The helper compares the original Explorer window identities and visibility, including secondary and previously hidden bars. It only hides once. A shell reveal or replacement ends the lease and records the reason. The independent emergency shortcut is Ctrl+Alt+Shift+F12. Parent exit, a missing Dock heartbeat and a helper fault return control to Windows; no automatic re-hide is attempted. Physical Win, Win+X and Win+N are still handled by Windows and may reveal taskbar or native UI. Explorer restarts and lock/display changes require the user to re-enable Dock mode.
+
+## Owner Windows 11 acceptance
+
+Use the isolated candidate. In Settings > Dock & Stage Manager > Chế độ thanh tác vụ choose Deskland Dock. Confirm both taskbars are hidden. On each display, open Start, search and launch an app, use right-click to pin/unpin, open the clock and the control center, and navigate to Wi-Fi, Bluetooth and audio. In trial, provider rules keep device writes disabled. Test reopening panels, switching apps and Stage groups, then confirm the bars remain hidden. With no unsaved work affected, test Ctrl+Alt+Shift+F12, Dock OFF and Exit separately; taskbars must return. Optionally try the physical Windows keys, lock/unlock or sleep/resume and note who restored them. In Compatibility, verify native Start and Explorer overflow and check pins and monitor settings remain unchanged. Do not restart Explorer on an active production desktop for this test.
+
+Track `TASKBAR_HIDE_WITH_NATIVE_SHELL_PARTIAL` separately from `DESKLAND_DOCK_MODE_SCOPED_PASS`; the latter requires an observed native pass. `OWNER_NATIVE_ACCEPTED_PENDING` until the owner verifies the candidate.
