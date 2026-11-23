@@ -1145,6 +1145,7 @@ $('dockWinKeyStart').onchange=e=>send({t:'dock',winKeyStart:e.target.checked});
 $('dockStartShortcut').onchange=e=>send({t:'dock',startShortcut:e.target.checked});
 $('dockShellButtons').onchange=e=>send({t:'dock',nativeShellButtons:e.target.value==='windows'});
 $('dockPinCommand').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();submitDockPin();}};
+const dockTaskbarActiveModes=['DOCK_HIDDEN_ACTIVE','DOCK_PARKED_ACTIVE','DOCK_EDGE_PEEK'];
 function syncDockTaskbar(m){
   const control=$('dockShellMode');
   if(typeof m.dockTaskbarEffective==='string'){
@@ -1154,7 +1155,7 @@ function syncDockTaskbar(m){
       ? ' ('+windows.visible+'/'+windows.total+' đang hiện'+(windows.parked?', '+windows.parked+' tự ẩn':'')+')' : '';
     taskbarSnapshot={mode:m.dockTaskbarEffective,
       message:[m.dockTaskbarEffectiveLabel,'Windows: '+(m.dockTaskbarActualLabel||'Chưa xác minh')+visible,
-        m.dockTaskbarDesired==='dock'&&m.dockTaskbarEffective!=='DOCK_HIDDEN_ACTIVE'?'Yêu cầu: ẩn thanh tác vụ':'',
+        m.dockTaskbarDesired==='dock'&&!dockTaskbarActiveModes.includes(m.dockTaskbarEffective)?'Yêu cầu: ẩn thanh tác vụ':'',
         m.dockTaskbarMessage].filter(Boolean).join(' · ')};
   }else if(!typedTaskbar){
     if(typeof m.dockTaskbarHidden==='boolean'||typeof m.dockTaskbarPending==='boolean'){
@@ -1162,7 +1163,7 @@ function syncDockTaskbar(m){
     }
     if(typeof m.dockTaskbarMessage==='string')taskbarSnapshot.message=m.dockTaskbarMessage;
   }
-  control.value=taskbarSnapshot.mode==='DOCK_HIDDEN_ACTIVE'?'dock':'windows';
+  control.value=dockTaskbarActiveModes.includes(taskbarSnapshot.mode)?'dock':'windows';
   control.disabled=!dockOptions.enabled||['DOCK_HIDE_PENDING','RESTORING'].includes(taskbarSnapshot.mode);
   $('taskbarTakeoverStatus').textContent=taskbarSnapshot.message;
 }

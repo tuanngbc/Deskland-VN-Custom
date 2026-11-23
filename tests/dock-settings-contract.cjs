@@ -171,6 +171,12 @@ test('taskbar hide is an explicit session command separate from saved Dock setti
   assert.match($('taskbarTakeoverStatus').textContent,/Yêu cầu:/);
   context.syncDockTaskbar({dockTaskbarEffective:'DOCK_HIDDEN_ACTIVE',dockTaskbarDesired:'dock',dockTaskbarActual:'HIDDEN'});
   assert.equal(control.value,'dock');assert.equal(control.disabled,false);
+  for (const [mode,actual] of [['DOCK_PARKED_ACTIVE','AUTO_HIDE_PARKED'],['DOCK_EDGE_PEEK','VISIBLE']]){
+    context.syncDockTaskbar({dockTaskbarEffective:mode,dockTaskbarDesired:'dock',dockTaskbarActual:actual,dockTaskbarHidden:false});
+    assert.equal(control.value,'dock');
+    assert.equal(control.disabled,false);
+    assert.doesNotMatch($('taskbarTakeoverStatus').textContent,/Yêu cầu:/);
+  }
   context.syncDockTaskbar({dockTaskbarEffective:'RESTORING',dockTaskbarActual:'VISIBLE'});
   assert.equal(control.value,'windows');assert.equal(control.disabled,true);
   context.syncDockSettings({dockTaskbarEffective:'RESTORED_BY_WINDOWS',dockTaskbarDesired:'dock',dockTaskbarActual:'VISIBLE',

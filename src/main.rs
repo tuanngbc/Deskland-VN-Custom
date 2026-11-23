@@ -13,6 +13,7 @@ mod settings;
 mod launcher;
 mod native_text;
 mod dock;
+mod app_icons;
 mod mini_tools;
 mod web;
 mod shortcuts;
@@ -1009,12 +1010,13 @@ struct App {
 
 impl App {
     fn configure_dock(&mut self) {
+        if app_icons::set(&self.cfg.dock.app_icons){launcher::start::icons_changed();}
         launcher::dock_pins(&self.cfg.dock.pinned);
         self.dock_error=None;
         let verifying_restore=self.dock_runtime.is_some() && !self.saver && !self.headless
-            && (self.dock_taskbar.effective.hidden()||self.dock_taskbar.effective.pending());
+            && (self.dock_taskbar.effective.engaged()||self.dock_taskbar.effective.pending());
         if self.saver || self.headless || (!self.cfg.dock.any_enabled()&&!verifying_restore) {self.dock_runtime=None;
-            if self.dock_taskbar.effective.hidden()||self.dock_taskbar.effective.pending(){
+            if self.dock_taskbar.effective.engaged()||self.dock_taskbar.effective.pending(){
                 self.dock_taskbar=dock::current_taskbar_status("Đã trả thanh tác vụ cho Windows khi tắt Dock.");
             }
             self.dock_win_key_status="off".into();}
@@ -1037,7 +1039,7 @@ impl App {
         self.dock_taskbar=status;
         // Keep the runtime just long enough to confirm asynchronous Explorer
         // restoration when disabling the last active module.
-        if !self.cfg.dock.any_enabled()&&!self.dock_taskbar.effective.hidden()&&!self.dock_taskbar.effective.pending(){
+        if !self.cfg.dock.any_enabled()&&!self.dock_taskbar.effective.engaged()&&!self.dock_taskbar.effective.pending(){
             self.dock_runtime=None;
             self.dock_win_key_status="off".into();
             self.post_dock_state();

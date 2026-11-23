@@ -34,14 +34,15 @@ impl Drop for Permit {
 struct Job {
     path:String,
     source_size:i32,
-    result:Sender<(String,i32,ResultIcon)>,
+    revision:u64,
+    result:Sender<(String,i32,u64,ResultIcon)>,
     cancelled:Arc<AtomicBool>,
     control:usize,
     permit:Permit,
 }
 unsafe extern "system" fn extract(_:PTP_CALLBACK_INSTANCE,raw:*mut c_void) {
     use windows::Win32::System::Com::{CoInitializeEx,CoUninitialize,COINIT_MULTITHREADED};
-    let Job{path,source_size,result,cancelled,control,permit}=*Box::from_raw(raw.cast());
+    let Job{path,source_size,revision,result,cancelled,control,permit}=*Box::from_raw(raw.cast());
     if cancelled.load(Ordering::Acquire){return;}
     let icon=if path.starts_with(r"\\")&&!path.starts_with(r"\\?\C:\") {
         None
@@ -51,21 +52,22 @@ unsafe extern "system" fn extract(_:PTP_CALLBACK_INSTANCE,raw:*mut c_void) {
             let command=super::command_pin::decode(&path);
             let own=(path==super::internal_app::KEY).then(||std::env::current_exe().ok()).flatten();
             let file=own.as_deref().unwrap_or_else(||Path::new(command.as_ref().map_or(path.as_str(),|c|c.exe.as_str())));
-            let icon=shell_icon(file,source_size).map(Arc::new);
+            let icon=crate::app_icons::load(Path::new(&path)).or_else(||shell_icon(file,source_size)).map(Arc::new);
             CoUninitialize();
             icon
         }else{None}
     };
     // Release before notifying the UI so its next paint can submit another icon.
     drop(permit);
-    if !cancelled.load(Ordering::Acquire)&&result.send((path,source_size,icon)).is_ok(){
+    if !cancelled.load(Ordering::Acquire)&&result.send((path,source_size,revision,icon)).is_ok(){
         PostMessageW(control as _,WM_ICON_CHANGED,0,0);
     }
 }
 
 pub struct Worker {
-    result:Sender<(String,i32,ResultIcon)>,
-    done:Receiver<(String,i32,ResultIcon)>,
+    result:Sender<(String,i32,u64,ResultIcon)>,
+    done:Receiver<(String,i32,u64,ResultIcon)>,
+    revision:u64,
     cache:HashMap<String,(ResultIcon,i32,u64)>,
     source_size:i32,
     pending:bool,
@@ -78,7 +80,7 @@ pub struct Worker {
 impl Worker {
     pub fn new(control:*mut c_void)->Self{
         let (result,done)=mpsc::channel();
-        Self{result,done,cache:HashMap::new(),source_size:96,pending:false,budget_suppressed:HashSet::new(),visible:HashSet::new(),clock:0,
+        Self{result,done,revision:crate::app_icons::revision(),cache:HashMap::new(),source_size:96,pending:false,budget_suppressed:HashSet::new(),visible:HashSet::new(),clock:0,
             cancelled:Arc::new(AtomicBool::new(false)),control:control as usize}
     }
     pub fn restrict_visible<'a>(&mut self,items:impl Iterator<Item=&'a Item>,source_size:i32){
@@ -97,8 +99,9 @@ impl Worker {
         if changed{self.visible=next.into_iter().map(str::to_owned).collect();}
     }
     pub fn receive(&mut self)->bool{
-        let Ok((path,size,icon))=self.done.try_recv()else{return false;};
+        let Ok((path,size,revision,icon))=self.done.try_recv()else{return false;};
         self.pending=false;
+        if revision!=crate::app_icons::revision(){return true;}
         if !self.visible.contains(&path){return true;}
         let entry=self.cache.entry(path).or_insert((None,0,0));
         // A provider may fail a higher-resolution request. Keep the previous
@@ -130,6 +133,8 @@ impl Worker {
         true
     }
     pub fn request(&mut self,items:&[Item])->Atlas{
+        let revision=crate::app_icons::revision();
+        if self.revision!=revision{self.cache.clear();self.budget_suppressed.clear();self.revision=revision;}
         self.clock=self.clock.wrapping_add(1);
         let mut visible=Atlas::new();
         for item in items{
@@ -139,7 +144,7 @@ impl Worker {
                 *size>=self.source_size||self.budget_suppressed.contains(&item.path)
             }else{false};
             if !ready&&self.visible.contains(&item.path)&&!self.pending&&EXTRACTION_ACTIVE.compare_exchange(false,true,Ordering::AcqRel,Ordering::Acquire).is_ok(){
-                let raw=Box::into_raw(Box::new(Job{path:item.path.clone(),source_size:self.source_size,result:self.result.clone(),
+                let raw=Box::into_raw(Box::new(Job{path:item.path.clone(),source_size:self.source_size,revision,result:self.result.clone(),
                     cancelled:self.cancelled.clone(),control:self.control,permit:Permit}));
                 unsafe{
                     if TrySubmitThreadpoolCallback(Some(extract),raw.cast(),ptr::null())!=0{

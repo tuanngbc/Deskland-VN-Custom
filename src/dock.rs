@@ -12,7 +12,7 @@ use windows_sys::Win32::System::Threading::{OpenProcess,QueryFullProcessImageNam
 use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::Win32::UI::Accessibility::*;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent,TRACKMOUSEEVENT,TME_LEAVE,SetFocus,SetCapture,GetCapture,ReleaseCapture,VK_LEFT,VK_RIGHT,VK_UP,VK_DOWN,VK_RETURN,VK_ESCAPE,VK_HOME,VK_END,VK_PRIOR,VK_NEXT,VK_APPS,VK_F10,VK_SHIFT,GetKeyState};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent,TRACKMOUSEEVENT,TME_LEAVE,SetFocus,SetCapture,GetCapture,ReleaseCapture,VK_LEFT,VK_RIGHT,VK_UP,VK_DOWN,VK_RETURN,VK_ESCAPE,VK_HOME,VK_END,VK_PRIOR,VK_NEXT,VK_APPS,VK_F10,VK_SHIFT,VK_SPACE,GetKeyState};
 
 mod options;
 mod runtime;
@@ -75,6 +75,7 @@ const TASKBAR_GUARD_TIMER:usize=12;
 const START_HOTKEY:i32=44;
 const UTILITY_RETRY_TIMER:usize=13;
 const STAGE_CAPTURE_TIMER:usize=14;
+const APP_CLICK_TIMER:usize=15;
 const WM_DOCK_MOUSELEAVE:u32=0x02A3;
 // winuser.h macro: HSHELL_REDRAW | HSHELL_HIGHBIT.
 const HSHELL_FLASH:usize=6 | 0x8000;
@@ -104,6 +105,8 @@ const MENU_EXPAND:usize=519;
 const MENU_ADD_APP:usize=520;
 const MENU_MORE_APPS:usize=521;
 const MENU_TASKBAR:usize=522;
+const MENU_APP_ICON:usize=523;
+const MENU_APP_ICON_RESET:usize=524;
 const MENU_WINDOW_FIRST:usize=2000;
 const MENU_MOVE_FIRST:usize=2100;
 const STAGE_RAIL_CLASS:&str="TuanpcDeskStageReveal";
@@ -128,10 +131,10 @@ struct Bar {
 #[derive(Clone,Debug,PartialEq,Eq)]
 enum DockTarget { App(String), Launcher, Overflow, Utility(UtilityWidget), Shell(shell_access::Target) }
 #[derive(Clone)]
-struct Press { target:DockTarget, x:i32, y:i32, dragged:bool }
+struct Press { target:DockTarget, x:i32, y:i32, dragged:bool, double:bool }
 impl Press {
     fn new(target:DockTarget,x:i32,y:i32)->Self {
-        Self{target,x,y,dragged:false}
+        Self{target,x,y,dragged:false,double:false}
     }
     fn moved(&self,x:f32,y:f32,scale:f32)->bool {
         self.dragged||(x-self.x as f32).abs()+(y-self.y as f32).abs()>9.0*scale
@@ -157,10 +160,10 @@ impl Motion {
         let dt=self.at.replace(now).map_or(0.016,|t|now.duration_since(t).as_secs_f32().clamp(0.001,0.090));
         let speed=speed as f32/100.0;
         let goal=if self.target.is_some(){1.0}else{0.0};
-        let mut unsettled=self.zoom.advance(goal,dt,25.0*speed,0.0025);
+        let mut unsettled=self.zoom.advance(goal,dt,23.0*speed,0.0025);
         if let Some(target)=self.target{
             let focus=self.focus.get_or_insert_with(||motion::Spring::rest(target));
-            unsettled|=focus.advance(target,dt,23.0+20.0*speed,0.18);
+            unsettled|=focus.advance(target,dt,20.0+15.0*speed,0.12);
         }
         if self.target.is_none() && self.zoom.value==0.0 { self.focus=None; }
         unsettled|=reveal.advance(if shown{1.0}else{0.0},dt,28.0*speed,0.003);
@@ -248,14 +251,15 @@ impl StageEmphasis {
     }
 }
 struct Stage { hwnd:HWND, rail:HWND, collapsed:bool, auto_hide:bool, preview_hwnd:HWND, preview_boxes:Vec<RECT>, preview_cutouts:Vec<RECT>, preview_visible:bool, layered:bool, opacity:u32, bounds:RECT, display:String, items:Vec<Item>, keys:Vec<String>, session_heights:HashMap<String,u32>, groups:Vec<Option<u64>>, members:Vec<Vec<usize>>, order:Vec<String>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, emphasis:StageEmphasis, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews,
-    resting:RECT, slide:Option<(std::time::Instant,i32)>, offset:i32, pressed:Option<StageTarget> }
+    resting:RECT, slide:Option<(std::time::Instant,i32)>, offset:i32, pressed:Option<(StageTarget,bool)> }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-enum StageTarget { Group(u64), AppGroup(usize,u32,u32), Window(usize,u32,u32), Close(usize,u32,u32), Page(usize) }
+enum StageTarget { Picker(WindowIdentity), Window(usize,u32,u32), Close(usize,u32,u32), Page(usize) }
 impl Stage {
     fn member_hit(&self,layout:stage_surface::Layout,index:usize,x:i32,y:i32)->Option<usize>{
         if let Some((target,mask))=stage_snapshot::target(self.hwnd as usize,index){
             if layout.icon_hit(index,x,y){return Some(0);}
-            return (0..layout.depth(index)).find(|&layer|if mask&(1<<layer)!=0{target.contains(layer,x,y,self.hover==Some(index))}else{layout.layer_hit(index,layer,x,y)});
+            let strength=if self.emphasis.index==Some(index){self.emphasis.strength}else{0};
+            return (0..layout.depth(index)).find(|&layer|if mask&(1<<layer)!=0{target.contains(layer,x,y,mask,strength)}else{layout.layer_hit(index,layer,x,y)});
         }
         layout.member_hit(index,x,y)
     }
@@ -267,25 +271,25 @@ impl Stage {
     }
     fn hit(&self,layout:stage_surface::Layout,x:i32,y:i32)->Option<usize>{
         (0..layout.count).find(|&i|self.member_hit(layout,i,x,y).is_some()
+            ||self.items[i].count>1&&layout.group_button(i).is_some_and(|r|r.hit(x,y))
             ||self.hover==Some(i)&&self.close_hit(layout,i,x,y))
     }
     unsafe fn target(&self,x:i32,y:i32)->Option<StageTarget>{
         if self.hidden{return None;}
         let layout=self.layout?;
         if let Some(i)=self.hit(layout,x,y) {
+            if self.items[i].count>1&&(layout.icon_hit(i,x,y)||layout.group_button(i).is_some_and(|r|r.hit(x,y))){
+                return WindowIdentity::read(self.items[i].hwnd).map(StageTarget::Picker);
+            }
             if self.hover==Some(i)&&self.close_hit(layout,i,x,y){
                 let hwnd=self.items.get(i)?.hwnd;
                 let (pid,tid)=window_owner(hwnd)?;
                 return Some(StageTarget::Close(hwnd as usize,pid,tid));
             }
             let layer=self.member_hit(layout,i,x,y)?;
-            if !layout.stack_design||layout.icon_hit(i,x,y){
-                if let Some(id)=self.groups.get(i).copied().flatten(){return Some(StageTarget::Group(id));}
-            }
             // Old flat compatibility cards draw decorative edges only.
             let hwnd=*self.members.get(i)?.get(if layout.stack_design{layer}else{0})? as HWND;
             let (pid,tid)=window_owner(hwnd)?;
-            if layout.icon_hit(i,x,y){return Some(StageTarget::AppGroup(hwnd as usize,pid,tid));}
             return Some(StageTarget::Window(hwnd as usize,pid,tid));
         }
         layout.pages(self.pages)?.target(x,y,self.page).map(StageTarget::Page)
@@ -976,7 +980,9 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let mut clip_ok=true;
         if !stage.preview_hwnd.is_null(){
             let areas=stage.previews.areas();
-            let cutouts=layout.icon_cutouts();
+            let mut cutouts=layout.icon_cutouts();
+            cutouts.extend(stage.items.iter().enumerate().filter(|(_,item)|item.count>1)
+                .filter_map(|(i,_)|layout.group_button(i).map(|r|r.win())));
             let differs=|a:&[RECT],b:&[RECT]|a.len()!=b.len()||a.iter().zip(b).any(|(&a,&b)|!same_rect(a,b));
             let reshape=differs(&areas,&stage.preview_boxes)||differs(&cutouts,&stage.preview_cutouts);
             let clipped=!reshape||previews::clip_destination_except(stage.preview_hwnd,&areas,&cutouts);
@@ -1208,9 +1214,9 @@ unsafe fn paint(hwnd:HWND){
         let ready=stage.items.iter().map(|item|(stage.preview_hwnd.is_null()||stage.preview_visible)&&stage.previews.includes(item.hwnd)).collect::<Vec<_>>();
         let dpi=state.screens.iter().find(|s|s.id==stage.display).map_or(96,|s|s.dpi);
         let dark=state.material.is_none_or(|m|m.dark);
-        Some((stage.items.clone(),ready,stage.groups.clone(),stage.selected,stage.layout?,stage.page,stage.pages,state.foreground,dpi,dark,stage.emphasis.highlight(stage.keyboard),stage.hover,stage.layered,stage.opacity))
+        Some((stage.items.clone(),ready,stage.groups.clone(),stage.selected,stage.layout?,stage.page,stage.pages,state.foreground,dpi,dark,stage.emphasis.highlight(stage.keyboard),stage.hover,stage.layered,stage.opacity,state.prefs.appearance.reduced_motion))
     });
-    if let Some((items,ready,groups,active,layout,page,pages,foreground,dpi,dark,emphasis,hover,layered,opacity))=stage {
+    if let Some((items,ready,groups,active,layout,page,pages,foreground,dpi,dark,emphasis,hover,layered,opacity,reduced))=stage {
         let key=hwnd as usize;
         let size=(area.right,area.bottom,dpi);
         let panel=STAGE_SURFACES.with(|s|s.borrow_mut().remove(&key));
@@ -1226,7 +1232,7 @@ unsafe fn paint(hwnd:HWND){
         let mut projected=[0;8];
         for view in &still{projected[view.target.index]=view.mask;}
         let look=stage_surface::Look{dark,layout,active:active_mask,alpha:layered.then_some((opacity*255/100) as u8),
-            projected};
+            projected,reduced};
         if layered{EndPaint(hwnd,&ps);}
         let rendered=panel.as_mut().is_some_and(|p|p.paint(dc,look,&items,&atlas,&ready,emphasis,layered.then_some((hwnd,&labels[..],page,pages,hover)),&still));
         if layered{
@@ -1494,6 +1500,12 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
                 .map(|w|Item{path:w.path.clone(),title:w.title.clone(),hwnd,count:1,pinned:false}));
             if let Some(item)=item{activate(owner,&item);}
         }
+        Command::StageMember(identity)=>{
+            if !identity.matches(identity.hwnd as HWND){return;}
+            let index=STATE.with(|s|s.borrow().stages.iter().find(|p|p.hwnd==owner&&!p.hidden)?
+                .members.iter().position(|members|members.contains(&identity.hwnd)));
+            if let Some(index)=index{activate_stage_member(owner,index,Some(identity.hwnd as HWND));}
+        }
     }
 }
 unsafe fn open_launcher(){
@@ -1532,9 +1544,9 @@ unsafe fn activate(hwnd:HWND,item:&Item) {
 }
 #[derive(Clone)]
 enum AppOperation{
-    Open, NewWindow, ShowMenu, TogglePin, Close(Vec<WindowIdentity>), Advanced,
+    Open, NewWindow, ShowMenu, TogglePin, Close(Vec<WindowIdentity>), Advanced, ChangeIcon, ResetIcon,
 }
-#[derive(Clone,Copy,PartialEq,Eq,Hash)]
+#[derive(Clone,Copy,Debug,PartialEq,Eq,Hash)]
 struct WindowIdentity{hwnd:usize,pid:u32,tid:u32}
 impl WindowIdentity{
     unsafe fn read(hwnd:HWND)->Option<Self>{
@@ -1544,6 +1556,45 @@ impl WindowIdentity{
     unsafe fn matches(self,hwnd:HWND)->bool{
         self.hwnd==hwnd as usize&&window_owner(hwnd)==Some((self.pid,self.tid))
     }
+}
+
+#[derive(PartialEq,Eq)]
+enum ClickKey{Dock(String),Stage(String)}
+struct AppClick{owner:usize,key:ClickKey,window:Option<WindowIdentity>,was_open:bool,at:Instant}
+enum DeferredClick{DockPicker(String),StageMember(WindowIdentity)}
+thread_local!{
+    static APP_CLICK:RefCell<Option<AppClick>>=const{RefCell::new(None)};
+    static DEFERRED_CLICK:RefCell<Option<(usize,DeferredClick)>>=const{RefCell::new(None)};
+}
+// The second click uses the first window's identity and original visibility.
+unsafe fn app_click(owner:HWND,key:ClickKey,target:HWND,double:bool)->Option<AppClick>{
+    let window=WindowIdentity::read(target);
+    APP_CLICK.with(|slot|{
+        let mut slot=slot.borrow_mut();
+        if double{
+            if let Some(first)=slot.take().filter(|p|p.owner==owner as usize&&p.key==key
+                &&(!matches!(&key,ClickKey::Stage(_))||p.window==window)
+                &&p.at.elapsed()<=Duration::from_millis(GetDoubleClickTime() as u64+100)){
+                return Some(first);
+            }
+        }
+        *slot=Some(AppClick{owner:owner as usize,key,window,at:Instant::now(),
+            was_open:!target.is_null()&&IsWindowVisible(target)!=0&&IsIconic(target)==0});
+        None
+    })
+}
+unsafe fn minimize_click(window:WindowIdentity)->bool{
+    let hwnd=window.hwnd as HWND;
+    window.matches(hwnd)&&IsIconic(hwnd)==0&&GetWindowLongPtrW(hwnd,GWL_STYLE)&WS_MINIMIZEBOX as isize!=0
+        &&ShowWindowAsync(hwnd,SW_MINIMIZE)!=0
+}
+unsafe fn finish_double_click(click:AppClick)->Option<FeedbackKind>{
+    let window=click.window?;
+    let hwnd=window.hwnd as HWND;
+    if !window.matches(hwnd){return None;}
+    if click.was_open{minimize_click(window).then_some(FeedbackKind::Minimize)}
+    else if IsIconic(hwnd)!=0{focus_stage_window(hwnd);Some(FeedbackKind::Restore)}
+    else{None}
 }
 
 unsafe fn pin_from_file(hwnd:HWND){
@@ -1565,6 +1616,33 @@ unsafe fn pin_from_file(hwnd:HWND){
     if selected.is_absolute()&&selected.is_file()&&selected.extension().and_then(|e|e.to_str())
         .is_some_and(|v|v.eq_ignore_ascii_case("exe")||v.eq_ignore_ascii_case("lnk")){
         emit(Event::Edit(Edit::Pin(path)));
+    }
+}
+unsafe fn change_app_icon(owner:HWND,path:&str,reset:bool){
+    use windows_sys::Win32::UI::Controls::Dialogs::*;
+    let Some(key)=crate::app_icons::key(path)else{return;};
+    if reset{emit(Event::Edit(Edit::AppIcon{key,file:None}));return;}
+    let capped=STATE.with(|s|{
+        let s=s.borrow();
+        s.prefs.app_icons.len()>=crate::app_icons::MAX_ICONS&&!s.prefs.app_icons.contains_key(&key)
+    });
+    if capped{
+        MessageBoxW(owner,wide("Đã đạt giới hạn icon riêng. Khôi phục icon của một ứng dụng trước.").as_ptr(),
+            wide("Icon ứng dụng").as_ptr(),MB_OK|MB_ICONWARNING);return;
+    }
+    let mut file=[0u16;32768];
+    let filter=wide("Ảnh và icon (*.png;*.ico;*.jpg;*.jpeg;*.bmp;*.webp)\0*.png;*.ico;*.jpg;*.jpeg;*.bmp;*.webp\0\0");
+    let title=wide("Chọn icon cho ứng dụng");
+    let mut dialog:OPENFILENAMEW=mem::zeroed();
+    dialog.lStructSize=mem::size_of::<OPENFILENAMEW>() as u32;
+    dialog.hwndOwner=owner;dialog.lpstrFilter=filter.as_ptr();dialog.lpstrFile=file.as_mut_ptr();
+    dialog.nMaxFile=file.len() as u32;dialog.lpstrTitle=title.as_ptr();
+    dialog.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_NOCHANGEDIR|OFN_EXPLORER;
+    if GetOpenFileNameW(&mut dialog)==0{return;}
+    let name=utf16(&file);
+    match crate::app_icons::import(std::path::Path::new(&name)){
+        Ok(file)=>emit(Event::Edit(Edit::AppIcon{key,file:Some(file)})),
+        Err(error)=>{MessageBoxW(owner,wide(&error).as_ptr(),title.as_ptr(),MB_OK|MB_ICONWARNING);}
     }
 }
 unsafe fn dock_app_anchor(owner:HWND,path:Option<&str>)->panel_chrome::Anchor{
@@ -1628,6 +1706,12 @@ unsafe fn app_menu(owner:HWND,path:&str,picker:bool){
             add("Mở thêm",AppOperation::NewWindow);
         }
         add(if item.pinned{"Bỏ ghim khỏi Dock"}else{"Ghim vào Dock"},AppOperation::TogglePin);
+        if item.path!=internal_app::KEY{
+            add("Đổi icon ứng dụng…",AppOperation::ChangeIcon);
+            if STATE.with(|s|crate::app_icons::has(&s.borrow().prefs.app_icons,&item.path)){
+                add("Khôi phục icon mặc định",AppOperation::ResetIcon);
+            }
+        }
         if advanced&&!windows.is_empty(){
             add("Quản lý cửa sổ…",AppOperation::Advanced);
         }
@@ -1685,10 +1769,42 @@ unsafe fn perform_app_action(owner:HWND,path:&str,operation:AppOperation){
             }
         },
         AppOperation::Advanced=>{if let Some(index)=index{native_menu(owner,bar,index);}},
+        AppOperation::ChangeIcon=>change_app_icon(owner,&item.path,false),
+        AppOperation::ResetIcon=>change_app_icon(owner,&item.path,true),
     }
 }
 unsafe fn open_dock_item(owner:HWND,item:&Item){
     if item.count>1{app_menu(owner,&item.path,true);}else{activate(owner,item);}
+}
+unsafe fn cancel_deferred_click(owner:HWND){
+    DEFERRED_CLICK.with(|p|{
+        let mut pending=p.borrow_mut();
+        if pending.as_ref().is_some_and(|(hwnd,_)|*hwnd==owner as usize){
+            KillTimer(owner,APP_CLICK_TIMER);pending.take();
+        }
+    });
+}
+unsafe fn defer_click(owner:HWND,click:DeferredClick){
+    if let Some((old,_))=DEFERRED_CLICK.with(|p|p.borrow_mut().take()){
+        KillTimer(old as HWND,APP_CLICK_TIMER);
+    }
+    if SetTimer(owner,APP_CLICK_TIMER,GetDoubleClickTime(),None)!=0{
+        DEFERRED_CLICK.with(|p|p.replace(Some((owner as usize,click))));
+    }else{run_deferred_click(owner,click);}
+}
+unsafe fn run_deferred_click(owner:HWND,click:DeferredClick){
+    match click{
+        DeferredClick::DockPicker(path)=>app_menu(owner,&path,true),
+        DeferredClick::StageMember(id) if id.matches(id.hwnd as HWND)=>{
+            let index=STATE.with(|s|{
+                let s=s.borrow();
+                let stage=s.stages.iter().find(|stage|stage.hwnd==owner&&!stage.hidden)?;
+                stage.members.iter().position(|m|m.contains(&id.hwnd))
+            });
+            if let Some(i)=index{activate_stage_member(owner,i,Some(id.hwnd as HWND));}
+        }
+        _=>{}
+    }
 }
 unsafe fn dock_context(owner:HWND,bar:usize,index:usize,advanced:bool){
     let path=STATE.with(|s|s.borrow().bars.get(bar).filter(|b|b.hwnd==owner)
@@ -1707,7 +1823,7 @@ thread_local!{
     static WIN_KEY_FAILED:Cell<bool>=const{Cell::new(false)};
 }
 fn taskbar_active()->bool{TASKBAR_WATCH.with(|w|w.borrow().is_some())}
-fn taskbar_hidden()->bool{TASKBAR_STATUS.with(|s|s.borrow().effective.hidden())}
+fn taskbar_hidden()->bool{TASKBAR_STATUS.with(|s|s.borrow().effective.engaged())}
 fn taskbar_pending()->bool{taskbar_active()&&!taskbar_hidden()}
 fn local_shell_buttons()->bool{
     let opt_in=STATE.with(|s|s.borrow().prefs.native_shell_buttons);
@@ -1904,11 +2020,17 @@ unsafe fn poll_taskbar(hwnd:HWND){
     }
     let status=TASKBAR_WATCH.with(|w|w.borrow_mut().as_mut().map(taskbar_guard::Watch::poll));
     match status{
-        Some(Ok(true)) if !actual.known=>show_taskbar(Exit::ExplorerChanged,Exit::ExplorerChanged.message()),
-        Some(Ok(true)) if actual.visible>0||actual.parked>0=>show_taskbar(Exit::ShellRevealed,Exit::ShellRevealed.message()),
         Some(Ok(true))=>{
             let first=!taskbar_hidden();
-            publish_taskbar(true,TaskbarMode::Hidden,actual,"HideConfirmed","Chế độ Dock đang bật cho phiên này. Ctrl+Alt+Shift+F12 để hiện thanh Windows.");
+            // Parked HWNDs can regain WS_VISIBLE without any visible bar.
+            // Let the watchdog decide a real reveal (including its edge-peek
+            // grace period); the UI still reports the observation immediately.
+            let mode=TaskbarMode::confirmed(actual);
+            let detail=if !actual.known{"Chưa đọc được trạng thái thanh Windows; bộ khôi phục vẫn đang giám sát."}
+                else if actual.visible>0{"Windows đang hiện thanh tác vụ; đang xác minh có phải do rê mép màn hình."}
+                else if actual.parked>0{"Windows đã đẩy thanh tác vụ ra mép tự ẩn; Dock vẫn quản lý phiên này."}
+                else{"Chế độ Dock đang bật cho phiên này. Ctrl+Alt+Shift+F12 để hiện thanh Windows."};
+            publish_taskbar(true,mode,actual,"HideConfirmed",detail);
             if first{
                 queue_refresh();
                 sync_start_hotkey(hwnd,STATE.with(|s|s.borrow().prefs.start_shortcut));
@@ -1998,6 +2120,12 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     let mut owner=None;
     if let Some(item)=selected.as_ref(){
         AppendMenuW(menu,MF_STRING,if item.pinned{MENU_UNPIN}else{MENU_PIN},wide(if item.pinned{"Bỏ ghim"}else{"Ghim ứng dụng"}).as_ptr());
+        if item.path!=internal_app::KEY{
+            AppendMenuW(menu,MF_STRING,MENU_APP_ICON,wide("Đổi icon ứng dụng…").as_ptr());
+            if crate::app_icons::has(&prefs.app_icons,&item.path){
+                AppendMenuW(menu,MF_STRING,MENU_APP_ICON_RESET,wide("Khôi phục icon mặc định").as_ptr());
+            }
+        }
         if !item.hwnd.is_null() {
             owner=window_owner(item.hwnd);
             if choices.len()>1{
@@ -2034,9 +2162,9 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
         let status=TASKBAR_STATUS.with(|s|s.borrow().clone());
         let mode=status.effective;
         let label=if mode==TaskbarMode::Restoring{"Đang khôi phục thanh tác vụ Windows…"}else if mode.pending(){"Hủy yêu cầu ẩn thanh tác vụ"}
-            else if mode.hidden(){"Chế độ tương thích Windows (hiện taskbar)"}else{"Chế độ Dock (ẩn taskbar cho phiên này)"};
+            else if mode.engaged(){"Chế độ tương thích Windows (hiện taskbar)"}else{"Chế độ Dock (ẩn taskbar cho phiên này)"};
         AppendMenuW(menu,MF_STRING|if mode==TaskbarMode::Restoring{MF_GRAYED}else{0},MENU_TASKBAR,wide(label).as_ptr());
-        if !status.message.is_empty()&&!mode.hidden(){
+        if !status.message.is_empty()&&!mode.engaged(){
             AppendMenuW(menu,MF_STRING|MF_GRAYED,0,wide(&status.message).as_ptr());
         }
     }
@@ -2077,6 +2205,7 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
         MENU_TASKBAR=>set_taskbar_hidden(!taskbar_active()),
         MENU_ADD_APP=>pin_from_file(hwnd),
         MENU_MORE_APPS=>more_apps(hwnd),
+        MENU_APP_ICON|MENU_APP_ICON_RESET=>if let Some(item)=selected.as_ref(){change_app_icon(hwnd,&item.path,cmd==MENU_APP_ICON_RESET);},
         MENU_WINDOW_FIRST=>{
             let mut anchor=panel_chrome::Anchor::for_owner(hwnd,point);
             if let Some(at)=STATE.with(|s|{
@@ -2375,6 +2504,30 @@ unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
 unsafe fn activate_stage(hwnd:HWND,i:usize){
     activate_stage_member(hwnd,i,None);
 }
+unsafe fn stage_picker(hwnd:HWND,i:usize){
+    use control_center::{Card,Command,View};
+    let Some((mut point,side,cards))=STATE.with(|s|{
+        let s=s.borrow();let stage=s.stages.iter().find(|p|p.hwnd==hwnd&&!p.hidden)?;
+        let layout=stage.layout?;
+        let r=layout.card(i);
+        let members=stage.members.get(i)?;
+        if members.len()<2{return None;}
+        let foreground=GetForegroundWindow();
+        let cards=members.iter().filter_map(|&handle|{
+            let w=s.windows.iter().find(|w|w.hwnd as usize==handle)?;
+            let identity=WindowIdentity::read(w.hwnd)?;
+            let status=if foreground==w.hwnd{"Đang dùng"}else if IsIconic(w.hwnd)!=0{"Đã thu nhỏ"}else{"Đang mở"};
+            Some(Card{icon:Some(UtilityWidget::Windows),title:if w.title.trim().is_empty(){basename(&w.path)}else{w.title.clone()},
+                hint:status.into(),action:Some(Command::StageMember(identity))})
+        }).collect::<Vec<_>>();
+        let x=if layout.right{r.x}else{r.x+r.w};
+        Some((POINT{x,y:r.y+r.h/2},if layout.right{DockSide::Right}else{DockSide::Left},cards))
+    })else{return;};
+    if cards.is_empty()||ClientToScreen(hwnd,&mut point)==0{return;}
+    let anchor=panel_chrome::Anchor{side,..panel_chrome::Anchor::for_owner(hwnd,point)};
+    control_center::show_list(hwnd,anchor,View{title:"Chọn cửa sổ trong nhóm".into(),
+        hint:format!("{} cửa sổ · Chọn một cửa sổ để đưa lên trước",cards.len()),cards,metrics:None});
+}
 unsafe fn focus_stage_window(hwnd:HWND){
     if window_owner(hwnd).is_none(){return;}
     if IsIconic(hwnd)!=0{ShowWindowAsync(hwnd,SW_RESTORE);}
@@ -2502,6 +2655,8 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_NCDESTROY=>{
+            cancel_deferred_click(hwnd);
+            APP_CLICK.with(|p|{if p.borrow().as_ref().is_some_and(|c|c.owner==hwnd as usize){p.borrow_mut().take();}});
             close_status_tip(hwnd);
             perf::forget(hwnd as usize);
             STAGE_SURFACES.with(|s|s.borrow_mut().remove(&(hwnd as usize)));
@@ -2573,6 +2728,17 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_TIMER if w==STATUS_TIP_TIMER=>{KillTimer(hwnd,STATUS_TIP_TIMER);show_status_tip(hwnd);0},
+        WM_TIMER if w==APP_CLICK_TIMER=>{
+            let click=DEFERRED_CLICK.with(|p|{
+                let mut pending=p.borrow_mut();
+                if pending.as_ref().is_some_and(|(owner,_)|*owner==hwnd as usize){
+                    pending.take().map(|(_,click)|click)
+                }else{None}
+            });
+            KillTimer(hwnd,APP_CLICK_TIMER);
+            if let Some(click)=click{run_deferred_click(hwnd,click);}
+            0
+        }
         WM_TIMER if w==TASKBAR_GUARD_TIMER=>{poll_taskbar(hwnd);0},
         WM_TIMER if w==UTILITY_RETRY_TIMER=>{retry_utility(hwnd);0},
         WM_TIMER if w==FEEDBACK_TIMER=>{
@@ -2584,6 +2750,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             KillTimer(hwnd,HIDE_TIMER);
             let stage=STATE.with(|state|state.borrow().stages.iter().any(|p|p.hwnd==hwnd&&p.auto_hide&&p.keyboard.is_none()));
             if stage{
+                if utilities::panel_open_for(hwnd){return 0;}
                 let mut point=POINT{x:0,y:0};GetCursorPos(&mut point);
                 let mut bounds:RECT=mem::zeroed();GetWindowRect(hwnd,&mut bounds);
                 if point.x>=bounds.left&&point.x<bounds.right&&point.y>=bounds.top&&point.y<bounds.bottom{return 0;}
@@ -2742,7 +2909,8 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if changed{InvalidateRect(hwnd,ptr::null(),0);}
             0
         }
-        WM_LBUTTONDOWN=>{
+        WM_LBUTTONDOWN|WM_LBUTTONDBLCLK=>{
+            cancel_deferred_click(hwnd);
             KillTimer(hwnd,STATUS_TIP_TIMER);close_status_tip(hwnd);
             let (x,y)=(l as i16 as i32,(l>>16) as i16 as i32);
             let mut area:RECT=mem::zeroed();GetClientRect(hwnd,&mut area);
@@ -2750,7 +2918,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             let capture=STATE.with(|s|{
                 let mut state=s.borrow_mut();
                 if let Some(stage)=state.stages.iter_mut().find(|p|p.hwnd==hwnd){
-                    stage.pressed=stage.target(x,y);
+                    stage.pressed=stage.target(x,y).map(|target|(target,msg==WM_LBUTTONDBLCLK));
                     return false;
                 }
                 let Some(bar)=state.bars.iter_mut().find(|b|b.hwnd==hwnd&&!b.hidden&&!b.collapsed)else{return false;};
@@ -2758,7 +2926,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                     else{bar.fallback_target(x,y,area.right,utility)};
                 let capture=target.as_ref().is_some_and(|target|matches!(target,DockTarget::App(path)
                     if bar.items.iter().any(|item|item.pinned&&item.path==*path)));
-                bar.pressed=target.map(|target|Press::new(target,x,y));
+                bar.pressed=target.map(|target|Press{double:msg==WM_LBUTTONDBLCLK,..Press::new(target,x,y)});
                 capture
             });
             if capture{SetCapture(hwnd);}
@@ -2810,6 +2978,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                         STATE.with(|s|{if let Some(p)=s.borrow_mut().stages.iter_mut().find(|p|p.hwnd==hwnd){p.keyboard=Some(0);}});
                     }},
                     VK_RETURN=>activate_stage(hwnd,i),
+                    VK_SPACE=>stage_picker(hwnd,i),
                     VK_APPS|VK_F10 if key==VK_APPS||GetKeyState(VK_SHIFT as i32)<0=>{
                         let point=STATE.with(|s|s.borrow().stages.iter().find(|p|p.hwnd==hwnd)
                             .and_then(|p|p.layout).filter(|l|i<l.count).map(|l|l.card(i).center()));
@@ -2869,23 +3038,31 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let mut a=s.borrow_mut();
                 let stage=a.stages.iter_mut().find(|stage|stage.hwnd==hwnd)?;
                 let pressed=stage.pressed.take();
-                let target=stage.target(px,y).filter(|target|Some(*target)==pressed);
-                Some((target,stage.layout.and_then(|l|l.hit(px,y))))
+                let target=stage.target(px,y).filter(|target|pressed.is_some_and(|(pressed,_)|*target==pressed));
+                let item=stage.layout.and_then(|l|stage.hit(l,px,y));
+                let key=item.and_then(|i|stage.keys.get(i)).cloned();
+                Some((target,item,key,pressed.is_some_and(|(_,double)|double)))
             });
-            if let Some((target,item))=stage_hit {
+            if let Some((target,item,key,double))=stage_hit {
                 match target{
                     Some(StageTarget::Page(page))=>{go_to_stage_page(hwnd,page);}
-                    Some(StageTarget::Group(_))=>{if let Some(i)=item{activate_stage(hwnd,i);}}
-                    Some(StageTarget::AppGroup(target,pid,tid))=>{
-                        if window_owner(target as HWND)==Some((pid,tid)){if let Some(i)=item{activate_stage(hwnd,i);}}
-                    }
+                    Some(StageTarget::Picker(identity))=>{if identity.matches(identity.hwnd as HWND){
+                        if let Some(i)=item{stage_picker(hwnd,i);}
+                    }}
                     Some(StageTarget::Close(target,pid,tid))=>{
                         if window_owner(target as HWND)==Some((pid,tid)){PostMessageW(target as HWND,WM_CLOSE,0,0);}
                     }
                     Some(StageTarget::Window(target,pid,tid))=>{
                         if window_owner(target as HWND)==Some((pid,tid)){
-                            let group=item.and_then(|i|STATE.with(|s|s.borrow().stages.iter().find(|p|p.hwnd==hwnd)?.groups.get(i).copied().flatten()));
-                            if group.is_some(){if let Some(i)=item{activate_stage_member(hwnd,i,Some(target as HWND));}}
+                            if let Some(second)=key.and_then(|key|app_click(hwnd,ClickKey::Stage(key),target as HWND,double)){
+                                if finish_double_click(second).is_some(){queue_refresh();}
+                                return 0;
+                            }
+                            let grouped=item.is_some_and(|i|STATE.with(|s|s.borrow().stages.iter().find(|p|p.hwnd==hwnd)
+                                .is_some_and(|p|p.items.get(i).is_some_and(|item|item.count>1)||p.groups.get(i).is_some_and(Option::is_some))));
+                            // Foreground changes reorder stack layers, so wait for the
+                            // second click before a single click brings a member forward.
+                            if grouped{defer_click(hwnd,DeferredClick::StageMember(WindowIdentity{hwnd:target,pid,tid}));}
                             else{focus_stage_window(target as HWND);}
                         }
                     }
@@ -2921,7 +3098,16 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 }
                 if auto&&(px<0||y<0||px>=area.right||y>=area.bottom){SetTimer(hwnd,HIDE_TIMER,650,None);}
                 match click{
-                    Some(DockTarget::App(_))=>{if let Some(item)=item{open_dock_item(hwnd,&item);}},
+                    Some(DockTarget::App(_))=>{if let Some(item)=item{
+                        match app_click(hwnd,ClickKey::Dock(item.path.to_lowercase()),item.hwnd,press.double){
+                            Some(second)=>{
+                                utilities::close_panels_for(hwnd);
+                                if let Some(kind)=finish_double_click(second){show_feedback(hwnd,&item,kind);queue_refresh();}
+                            }
+                            None if item.count>1=>defer_click(hwnd,DeferredClick::DockPicker(item.path)),
+                            None=>activate(hwnd,&item),
+                        }
+                    }},
                     Some(DockTarget::Launcher)=>open_launcher(),
                     Some(DockTarget::Overflow)=>request_utilities(hwnd,None),
                     Some(DockTarget::Utility(widget))=>request_utilities(hwnd,Some(widget)),
@@ -2932,6 +3118,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         }
         WM_RBUTTONUP=>{
+            cancel_deferred_click(hwnd);
             if STATE.with(|s|s.borrow().stages.iter().any(|stage|stage.hwnd==hwnd)){
                 stage_menu(hwnd,l as i16 as i32,(l>>16) as i16 as i32);return 0;
             }
@@ -3008,13 +3195,15 @@ unsafe fn drain_commands() {
                 if state.prefs.appearance!=options.appearance||state.prefs.utility_profiles!=options.utility_profiles{utilities::close_panels();}
                 for b in &mut state.bars{KillTimer(b.hwnd,STATUS_TIP_TIMER);b.status_hover=None;b.metric_repaint=None;}
                 let repaint=state.prefs.appearance!=options.appearance;
+                let icons_changed=state.prefs.app_icons!=options.app_icons;
                 if repaint{state.material=None;}
                 if repaint { for b in &mut state.bars{
                     KillTimer(b.hwnd,MOTION_TIMER);KillTimer(b.hwnd,HIDE_TIMER);KillTimer(b.hwnd,FEEDBACK_TIMER);
                     b.motion=Motion::default();b.feedback=None;b.reveal=motion::Spring::rest(if b.collapsed{0.0}else{1.0});
                 } }
                 state.prefs=options;refresh(state,false);
-                if repaint{for b in &state.bars{InvalidateRect(b.hwnd,ptr::null(),0);}}
+                if repaint||icons_changed{for b in &state.bars{InvalidateRect(b.hwnd,ptr::null(),0);}}
+                if icons_changed{for stage in &state.stages{InvalidateRect(stage.hwnd,ptr::null(),0);}}
             });sync_win_key();},
             Command::Suspend(on)=>{
                 if on&&taskbar_active(){show_taskbar(taskbar_guard::Exit::Requested,"Đã hiện lại thanh tác vụ khi khóa màn hình.");}
@@ -3078,7 +3267,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         let com=CoInitializeEx(None,COINIT_APARTMENTTHREADED);
         let class=wide(CLASS);
         let mut wc:WNDCLASSEXW=mem::zeroed();
-        wc.cbSize=mem::size_of::<WNDCLASSEXW>() as u32;wc.lpfnWndProc=Some(proc);
+        wc.cbSize=mem::size_of::<WNDCLASSEXW>() as u32;wc.lpfnWndProc=Some(proc);wc.style=CS_DBLCLKS;
         wc.hInstance=GetModuleHandleW(ptr::null());wc.lpszClassName=class.as_ptr();
         wc.hCursor=LoadCursorW(ptr::null_mut(),IDC_ARROW);
         if RegisterClassExW(&wc)==0 && GetLastError()!=ERROR_CLASS_ALREADY_EXISTS{

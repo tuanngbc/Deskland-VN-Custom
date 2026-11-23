@@ -13,9 +13,10 @@ use super::utilities::Action;
 pub(super) const CLASS:&str="TuanpcDeskControlCenter";
 const METRIC_UPDATE:u32=WM_APP+99;
 const METRIC_TIMER:usize=1;
+const ENTRANCE_TIMER:usize=2;
 const SINGLE_LINE:u32=DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS;
 #[derive(Clone)]
-pub(super) enum Command{AddApp,WindowsTray,BackgroundApps,Widget(UtilityWidget),Run(Action),Wifi(super::wifi::Change),App{path:String,operation:super::AppOperation},Window{hwnd:usize,pid:u32,tid:u32}}
+pub(super) enum Command{AddApp,WindowsTray,BackgroundApps,Widget(UtilityWidget),Run(Action),Wifi(super::wifi::Change),App{path:String,operation:super::AppOperation},Window{hwnd:usize,pid:u32,tid:u32},StageMember(super::WindowIdentity)}
 #[derive(Clone)]
 pub(super) struct Card{pub icon:Option<UtilityWidget>,pub title:String,pub hint:String,pub action:Option<Command>}
 pub(super) struct View{pub title:String,pub hint:String,pub cards:Vec<Card>,pub metrics:Option<MetricOptions>}
@@ -95,7 +96,7 @@ struct Panel {
     layered:bool,dirty:bool,
     hwnd:HWND,owner:HWND,tag:usize,anchor:chrome::Anchor,dpi:u32,layer:Layer,ink:Option<Layer>,
     fonts:[HFONT;4], view:View, metrics:Option<Metrics>, index:Option<usize>, pressed:Option<usize>, page:usize,
-    cols:usize,per_page:usize, row_height:i32,list:bool,
+    cols:usize,per_page:usize, row_height:i32,list:bool,entrance:Option<(std::time::Instant,POINT)>,
 }
 impl Drop for Panel {
     fn drop(&mut self){unsafe{for &f in &self.fonts{if !f.is_null(){DeleteObject(f);}}}}
@@ -168,6 +169,19 @@ pub(super) fn inline_readings(cfg:MetricOptions)->Vec<InlineReading>{
     })
 }
 impl Panel{
+    unsafe fn present(&self)->bool{
+        if let Some((start,at))=self.entrance{
+            let remaining=(1.0-(start.elapsed().as_secs_f32()/0.15).clamp(0.0,1.0)).powi(3);
+            let shift=(chrome::scale(self.dpi,8) as f32*remaining).round() as i32;
+            let mut point=at;
+            match self.anchor.side{
+                super::DockSide::Bottom=>point.y+=shift,
+                super::DockSide::Left=>point.x-=shift,
+                super::DockSide::Right=>point.x+=shift,
+            }
+            self.layer.present_at(self.hwnd,Some(point),(255.0-79.0*remaining).round() as u8)
+        }else{self.layer.present(self.hwnd)}
+    }
     fn rect(&self,i:usize)->RECT{
         let pad=chrome::scale(self.dpi,14);
         let gap=chrome::scale(self.dpi,if self.list{3}else{8});
@@ -351,14 +365,18 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool){
     let tag=serial();
     let fonts=[chrome::choose_font(dpi,if list{18}else{21},550),chrome::choose_font(dpi,14,if list{455}else{530}),chrome::choose_font(dpi,12,420),chrome::choose_font(dpi,19,540)];
     let metrics=view.metrics.map(Metrics::new);
-    let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,fonts,view,metrics,index:None,pressed:None,page:0,cols,per_page,row_height,list};
     let start=std::time::Instant::now();
+    let animated=list&&!super::STATE.with(|s|s.borrow().prefs.appearance.reduced_motion);
+    let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,fonts,view,metrics,index:None,pressed:None,page:0,cols,per_page,row_height,list,entrance:None};
     // A hidden HWND can't be relied on to dispatch WM_PAINT. Submit the
     // completed bitmap directly, then show the window with content.
     p.paint();
-    if !p.layer.present(hwnd){
+    if animated&&SetTimer(hwnd,ENTRANCE_TIMER,16,None)!=0{p.entrance=Some((std::time::Instant::now(),POINT{x,y}));}
+    if !p.present(){
         crate::log!("DOCK_PANEL layered submission failed: {}",GetLastError());
         p.layered=false;
+        p.entrance=None;
+        KillTimer(hwnd,ENTRANCE_TIMER);
         SetWindowLongPtrW(hwnd,GWL_EXSTYLE,GetWindowLongPtrW(hwnd,GWL_EXSTYLE)& !(WS_EX_LAYERED as isize));
         chrome::clip_corners(hwnd,width,height,dpi);
         p.paint();
@@ -380,6 +398,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{PostMessageW(hwnd,WM_CLOSE,0,0);0},
         WM_NCDESTROY=>{
             KillTimer(hwnd,METRIC_TIMER);
+            KillTimer(hwnd,ENTRANCE_TIMER);
             let owner=PANE.with(|s|{
                 let mut p=s.borrow_mut();
                 if p.as_ref().is_some_and(|p|p.hwnd==hwnd){p.take().map(|p|p.owner)}else{None}
@@ -397,7 +416,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 if p.dirty{p.paint();p.dirty=false;
                     if p.layered{
                         EndPaint(hwnd,&ps);
-                        let _=p.layer.present(hwnd);
+                        let _=p.present();
                     }else{p.layer.blit(dc);EndPaint(hwnd,&ps);}
                 }else{
                     if !p.layered{p.layer.blit(dc);}
@@ -413,6 +432,18 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             PANE.with(|s|{if let Some(p)=s.borrow().as_ref().filter(|p|p.hwnd==hwnd){
                 if let Some(m)=&p.metrics{m.request(hwnd,p.tag,METRIC_UPDATE);}
             }});0
+        },
+        WM_TIMER if w==ENTRANCE_TIMER=>{
+            let panel=PANE.with(|s|{let mut s=s.borrow_mut();if s.as_ref().is_some_and(|p|p.hwnd==hwnd){s.take()}else{None}});
+            if let Some(mut p)=panel{
+                let _=p.present();
+                if p.entrance.is_none_or(|(start,_)|start.elapsed().as_millis()>=150){
+                    KillTimer(hwnd,ENTRANCE_TIMER);p.entrance=None;
+                }
+                if IsWindow(hwnd)!=0{PANE.with(|s|{let mut s=s.borrow_mut();if s.is_none(){*s=Some(p);}});}
+                else{super::panel_closed(p.owner);}
+            }else{KillTimer(hwnd,ENTRANCE_TIMER);}
+            0
         },
         METRIC_UPDATE=>{
             let ready=PANE.with(|s|{
@@ -530,4 +561,3 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         assert_eq!(c.iter().map(|x|(&*x.title,&*x.hint)).collect::<Vec<_>>(),[("CPU","18%"),("↓ Tải xuống","1.5 MB/s")]);
     }
 }
-

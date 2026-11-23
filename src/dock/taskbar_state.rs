@@ -4,6 +4,8 @@ pub enum Mode {
     #[default] Compatibility,
     HidePending,
     Hidden,
+    Parked,
+    EdgePeek,
     Restoring,
     RestoredByWindows,
     RestoredByWatchdog,
@@ -26,28 +28,45 @@ mod tests {
         assert_eq!(json["dockTaskbarWindows"]["parked"],1);
         assert_eq!(json["dockTaskbarActual"],"VISIBLE");
     }
+
+    #[test]
+    fn parked_and_edge_peek_keep_dock_engaged_without_claiming_a_visible_bar_is_hidden(){
+        for (visible,parked,mode,hidden) in [(0,2,Mode::Parked,true),(1,1,Mode::EdgePeek,false)]{
+            let actual=Observation{known:true,total:2,visible,parked};
+            assert_eq!(Mode::confirmed(actual),mode);
+            assert!(mode.engaged());
+            let mut output=serde_json::json!({});
+            Status{desired:true,effective:mode,actual,..Default::default()}.add_fields(&mut output);
+            assert_eq!(output["dockTaskbarHidden"],hidden);
+            assert_eq!(output["dockTaskbarWatchdog"],"ARMED");
+        }
+    }
 }
 impl Mode{
     pub fn key(self)->&'static str{
         match self{
             Self::Compatibility=>"COMPATIBILITY_ACTIVE",Self::HidePending=>"DOCK_HIDE_PENDING",
-            Self::Hidden=>"DOCK_HIDDEN_ACTIVE",Self::Restoring=>"RESTORING",
+            Self::Hidden=>"DOCK_HIDDEN_ACTIVE",Self::Parked=>"DOCK_PARKED_ACTIVE",Self::EdgePeek=>"DOCK_EDGE_PEEK",Self::Restoring=>"RESTORING",
             Self::RestoredByWindows=>"RESTORED_BY_WINDOWS",Self::RestoredByWatchdog=>"RESTORED_BY_WATCHDOG",
             Self::Error=>"ERROR",
         }
     }
     pub fn pending(self)->bool{matches!(self,Self::HidePending|Self::Restoring)}
-    pub fn hidden(self)->bool{self==Self::Hidden}
+    pub fn confirmed(actual:Observation)->Self{
+        if !actual.known||actual.visible>0{Self::EdgePeek}else if actual.parked>0{Self::Parked}else{Self::Hidden}
+    }
+    pub fn engaged(self)->bool{matches!(self,Self::Hidden|Self::Parked|Self::EdgePeek)}
     fn watchdog(self)->&'static str{
         match self{
-            Self::HidePending=>"STARTING",Self::Hidden=>"ARMED",Self::Restoring=>"STOPPING",
+            Self::HidePending=>"STARTING",Self::Hidden|Self::Parked|Self::EdgePeek=>"ARMED",Self::Restoring=>"STOPPING",
             Self::Compatibility|Self::RestoredByWindows|Self::RestoredByWatchdog|Self::Error=>"INACTIVE",
         }
     }
     pub fn label(self)->&'static str{
         match self{
             Self::Compatibility=>"Tương thích Windows", Self::HidePending=>"Chờ xác nhận ẩn",
-            Self::Hidden=>"Deskland đang ẩn taskbar",Self::Restoring=>"Đang khôi phục",
+            Self::Hidden=>"Deskland đang ẩn thanh tác vụ",Self::Parked=>"Chế độ Dock · thanh Windows đang tự ẩn",
+            Self::EdgePeek=>"Chế độ Dock · đang xác minh thanh Windows",Self::Restoring=>"Đang khôi phục",
             Self::RestoredByWindows=>"Windows đã lấy lại thanh tác vụ",
             Self::RestoredByWatchdog=>"Bộ bảo vệ đã khôi phục",Self::Error=>"Chưa xác minh được chế độ",
         }
@@ -70,7 +89,7 @@ pub struct Status{
 }
 impl Status{
     pub fn add_fields(&self,value:&mut serde_json::Value){
-        value["dockTaskbarHidden"]=self.effective.hidden().into();
+        value["dockTaskbarHidden"]=(self.effective.engaged()&&self.actual.known&&self.actual.visible==0).into();
         value["dockTaskbarPending"]=self.effective.pending().into();
         value["dockTaskbarDesired"]=if self.desired{"dock"}else{"windows"}.into();
         value["dockTaskbarEffective"]=self.effective.key().into();

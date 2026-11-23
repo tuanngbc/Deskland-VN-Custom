@@ -354,8 +354,8 @@ fn icon_worker() -> (std::sync::mpsc::Sender<(PathBuf, i32)>, std::sync::mpsc::R
 
 unsafe fn extract_icon(path: &Path, size: i32) -> Option<IconPixels> {
     let command=path.to_str().and_then(crate::dock::command_pin::decode);
-    let path=command.as_ref().map_or(path,|c|Path::new(&c.exe));
-    let icon = shell_icon(path, (size * 2).clamp(64, 256))?;
+    let icon=crate::app_icons::load(path).or_else(||shell_icon(
+        command.as_ref().map_or(path,|c|Path::new(&c.exe)),(size*2).clamp(64,256)))?;
     let scale = size as f32 / icon.width.max(icon.height) as f32;
     let width = (icon.width as f32 * scale).round().max(1.0) as i32;
     let height = (icon.height as f32 * scale).round().max(1.0) as i32;

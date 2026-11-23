@@ -123,6 +123,7 @@ pub struct Options {
     pub enabled: bool,
     pub stage_enabled: bool,
     pub pinned: Vec<String>,
+    pub app_icons:crate::app_icons::Overrides,
     pub all_windows: bool,
     pub native_shell_buttons: bool,
     pub start_shortcut:bool,
@@ -145,10 +146,22 @@ pub enum Edit {
     StagePresentation(bool), StageCardHeight(u32), StageGroupHeight(String,u32),
     UtilityProfile(String, Profile),
     WindowPolicy(String, WindowPolicy),
+    AppIcon{key:String,file:Option<String>},
 }
 impl Edit {
     pub fn apply(self, options: &mut Options) {
         match self {
+            Self::AppIcon{key,file}=>{
+                let Some(key)=crate::app_icons::normalized(&key)else{return;};
+                match file{
+                    Some(file) if crate::app_icons::valid_file(&file)
+                        &&(options.app_icons.len()<crate::app_icons::MAX_ICONS||options.app_icons.contains_key(&key))=>{
+                        options.app_icons.insert(key,file);
+                    }
+                    None=>{options.app_icons.remove(&key);}
+                    _=>{}
+                }
+            }
             Self::Pin(path)=>{if options.pinned.len()<32 && !path.is_empty() && path.len()<=32760 && !path.contains('\0') && !options.pinned.iter().any(|p|p.eq_ignore_ascii_case(&path)){options.pinned.push(path);}}
             Self::Unpin(path)=>options.pinned.retain(|p|!p.eq_ignore_ascii_case(&path)),
             Self::MovePin{path,anchor,after}=>{
@@ -204,7 +217,7 @@ impl Edit {
 }
 impl Default for Options {
     fn default() -> Self {
-        Self { enabled: false, stage_enabled: false, pinned: Vec::new(), all_windows: false, native_shell_buttons:false, start_shortcut:false, win_key_start:false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), stage_perspective:true,stage_card_height:0,stage_card_overrides:BTreeMap::new(),appearance: Appearance::default(),utility_profiles:BTreeMap::new(),window_policies:BTreeMap::new() }
+        Self { enabled: false, stage_enabled: false, pinned: Vec::new(), app_icons:Default::default(), all_windows: false, native_shell_buttons:false, start_shortcut:false, win_key_start:false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), stage_perspective:true,stage_card_height:0,stage_card_overrides:BTreeMap::new(),appearance: Appearance::default(),utility_profiles:BTreeMap::new(),window_policies:BTreeMap::new() }
     }
 }
 impl Options {
@@ -216,6 +229,11 @@ impl Options {
             pinned: v["pinned"].as_array().map(|a| a.iter().filter_map(Value::as_str)
                 .filter(|s| !s.is_empty() && s.len() <= 32760 && !s.contains('\0'))
                 .filter(|s| seen.insert(s.to_lowercase())).take(32).map(str::to_owned).collect()).unwrap_or_default(),
+            app_icons:v["appIcons"].as_array().into_iter().flatten().filter_map(|entry|{
+                let key=crate::app_icons::normalized(entry["app"].as_str()?)?;
+                let file=entry["image"].as_str()?;
+                crate::app_icons::valid_file(file).then(||(key,file.to_owned()))
+            }).take(crate::app_icons::MAX_ICONS).collect(),
             all_windows: v["allWindows"].as_bool().unwrap_or(false),
             native_shell_buttons:v["nativeShellButtons"].as_bool().unwrap_or(false),
             start_shortcut:v["startShortcut"].as_bool().unwrap_or(false),
@@ -282,6 +300,7 @@ impl Options {
     pub fn json(&self) -> Value {
         json!({"version":2,"enabled":self.enabled,"stageEnabled":self.stage_enabled,
             "pinned":self.pinned,"allWindows":self.all_windows,"nativeShellButtons":self.native_shell_buttons,"startShortcut":self.start_shortcut,"winKeyStart":self.win_key_start,"stageSide":self.stage_side,
+            "appIcons":self.app_icons.iter().map(|(app,image)|json!({"app":app,"image":image})).collect::<Vec<_>>(),
             "stagePresentation":if self.stage_perspective{"perspective"}else{"dwm"},"stageCardHeight":self.stage_card_height,"stageCardOverrides":self.stage_card_overrides,
             "dockDisplay":self.dock_display.json(),"stageDisplay":self.stage_display.json(),"appearance":self.appearance.json(),
             "windowPolicies":self.window_policies.iter().map(|(id,p)|(id.clone(),p.json())).collect::<serde_json::Map<_,_>>(),

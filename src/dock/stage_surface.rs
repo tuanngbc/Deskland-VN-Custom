@@ -150,6 +150,14 @@ impl Layout {
             y:card.y+(card.h-size)/2,w:size,h:size}
     }
     pub fn icon_hit(self,i:usize,x:i32,y:i32)->bool{self.stack_design&&self.detached_icon(i).hit(x,y)}
+    pub(super) fn group_button(self,i:usize)->Option<Box2>{
+        let c=self.card(i);
+        let h=(self.caption-1).clamp(12,28);
+        let w=h*2;
+        (i<self.count&&c.w>=w+2*self.inset&&c.h>=h*2+3).then_some(Box2{
+            x:if self.right{c.x+c.w-self.inset-w}else{c.x+self.inset},
+            y:c.y+(self.inset/2).max(2),w,h})
+    }
     pub fn icon_cutouts(self)->Vec<RECT>{
         if !self.landscape||!self.stack_design{return Vec::new();}
         (0..self.count).map(|i|self.detached_icon(i).win()).collect()
@@ -259,7 +267,7 @@ impl Layout {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Look {pub dark:bool,pub layout:Layout,pub active:u8,pub alpha:Option<u8>,pub projected:[u8;8]}
+pub(super) struct Look {pub dark:bool,pub layout:Layout,pub active:u8,pub alpha:Option<u8>,pub projected:[u8;8],pub reduced:bool}
 
 pub(super) struct Panel {layer:Layer,look:Option<Look>,static_pixels:Vec<u8>,mask:Option<Layer>,font:HFONT,large_fonts:[HFONT;2],dpi:u32,icons:IconRasters}
 impl Panel {
@@ -349,8 +357,8 @@ impl Panel {
         let data=self.layer.pixels();
         data.copy_from_slice(&self.static_pixels);
         for view in snapshots{
-            let hovered=layered.and_then(|(_,_,_,_,h)|h)==Some(view.target.index);
-            view.blend(data,w,h,hovered);
+            let strength=emphasis.filter(|&(i,_)|i==view.target.index).map_or(0,|(_,a)|a);
+            view.blend(data,w,h,strength);
         }
         if let Some((i,strength))=emphasis.filter(|&(i,a)|i<layout.count&&a>0&&look.projected[i]&1==0){
             let b=layout.card(i).rect();
@@ -366,8 +374,12 @@ impl Panel {
         for (i,item) in items.iter().enumerate(){
             let c=layout.card(i);
             let size=(layout.caption*2/3).max(1) as f32;
-            let small=if layout.stack_design{layout.detached_icon(i).rect()}
+            let mut small=if layout.stack_design{layout.detached_icon(i).rect()}
                 else{Rect{x:(c.x+layout.inset) as f32,y:(c.y+c.h) as f32-(layout.caption as f32+size)/2.0,w:size,h:size}};
+            if layout.stack_design&&!look.reduced{
+                let grow=emphasis.filter(|&(n,_)|n==i).map_or(0.0,|(_,a)|small.w*0.05*f32::from(a)/255.0);
+                small.x-=grow/2.0;small.y-=grow/2.0;small.w+=grow;small.h+=grow;
+            }
             if layout.landscape&&layout.stack_design{
                 let k=(small.w*0.16).max(2.0);
                 let shadow=Rect{x:small.x-k,y:small.y-k,w:small.w+2.0*k,h:small.h+2.0*k};
@@ -396,22 +408,16 @@ impl Panel {
                 let ink=palette.ink;
                 for (i,title) in labels.iter().enumerate(){
                     let mut r=caption_box(layout,i);
+                    if let Some(badge)=layout.group_button(i).filter(|_|items[i].count>1){
+                        rounded(data,w,h,badge.rect(),badge.h as f32/2.0,[32,28,24],238);
+                        draw_mask_scaled(data,w,h,mask,self.large_fonts[1],badge,&format!("{} ▾",items[i].count),true,[255,249,245],2);
+                    }
                     if look.projected[i]&1!=0{
                         // No text over the sampled scene. The popup, tooltip
                         // and context menu continue to expose its title.
                         if let Some(button)=hover.filter(|&n|n==i).and_then(|_|layout.projected_close(i)){
                             rounded(data,w,h,button.rect(),button.w as f32/2.0,[110,66,62],255);
                             draw_mask_scaled(data,w,h,mask,self.large_fonts[0],button,"×",true,[255,242,239],2);
-                        }
-                        let extras=items[i].count.saturating_sub(5);
-                        if extras>0{
-                            let card=layout.card(i);
-                            let bw=(layout.inset*4).min(card.w/3).max(1);
-                            let bh=(layout.caption-2).max(1);
-                            let badge=Box2{x:if layout.right{card.x+card.w-layout.inset-bw}else{card.x+layout.inset},
-                                y:card.y+layout.inset,w:bw,h:bh};
-                            rounded(data,w,h,badge.rect(),bh as f32/2.0,[29,25,23],225);
-                            draw_mask_scaled(data,w,h,mask,self.large_fonts[1],badge,&format!("+{extras}"),true,[252,248,245],2);
                         }
                         continue;
                     }
@@ -426,14 +432,6 @@ impl Panel {
                         draw_mask_scaled(data,w,h,mask,self.large_fonts[0],button,"×",true,mark,2);
                     }
                     if layout.landscape{
-                        let extras=items[i].count.saturating_sub(5);
-                        if extras>0&&r.w>layout.inset*6{
-                            let width=(layout.inset*4).min(r.w/2);
-                            let badge=Box2{x:r.x+r.w-width,y:r.y+2,w:width,h:(r.h-4).max(1)};
-                            rounded(data,w,h,badge.rect(),badge.h as f32/2.0,palette.accent,if look.dark{54}else{39});
-                            draw_mask_scaled(data,w,h,mask,self.large_fonts[1],badge,&format!("+{extras}"),true,ink,2);
-                            r.w-=width+layout.inset/2;
-                        }
                         draw_mask_scaled(data,w,h,mask,self.large_fonts[0],r,title,false,ink,2);
                         continue;
                     }
@@ -737,7 +735,7 @@ mod tests {
             let items=(0..3).map(|_|Item{path:String::new(),title:"Fixture".into(),hwnd:null_mut(),count:1,pinned:false}).collect::<Vec<_>>();
             let labels=vec!["Fixture".to_owned();3];
             let mut panel=Panel::new(w,h,96).unwrap();
-            let layer=Look{dark:true,layout:l,active:1,alpha:Some(155),projected:[0;8]};
+            let layer=Look{dark:true,layout:l,active:1,alpha:Some(155),projected:[0;8],reduced:false};
             let presented=panel.paint(null_mut(),layer,&items,&Atlas::new(),&[false,true,false],Some((0,200)),Some((hwnd,&labels,0,3,None)),&[]);
             DestroyWindow(hwnd);
             assert!(presented,"the isolated layered Stage surface must submit pixels successfully");

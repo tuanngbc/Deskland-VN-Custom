@@ -169,13 +169,20 @@ pub(super) struct Target{
 }
 impl Target{
     fn body(self,layer:usize)->Box2{self.layout.rear(self.index,layer as i32)}
-    fn card(self,layer:usize,area:Box2,hover:bool)->Card{
-        let yaw=if hover&&!self.reduced{19.0}else{28.0};
-        Card::new(area,self.layout.right,yaw+layer as f32*0.45)
+    fn card(self,layer:usize,area:Box2)->Card{
+        Card::new(area,self.layout.right,28.0+layer as f32*0.45)
     }
-    pub fn contains(self,layer:usize,x:i32,y:i32,hover:bool)->bool{
-        self.sources.get(layer).is_some_and(Option::is_some)&&self.card(layer,self.body(layer),hover)
-            .contains(x as f32+0.5,y as f32+0.5)
+    fn zoom(self,mask:u8,strength:u8)->f32{
+        // A partial stack shares space with static compatibility layers.
+        let full=(1u8<<self.sources.iter().flatten().count())-1;
+        if self.reduced||mask!=full{1.0}else{1.0+0.055*f32::from(strength)/255.0}
+    }
+    pub fn contains(self,layer:usize,x:i32,y:i32,mask:u8,strength:u8)->bool{
+        let (cx,cy)=self.layout.card(self.index).center();
+        let scale=self.zoom(mask,strength);
+        let unscale=|a:i32,c:i32|c as f32+(a as f32+0.5-c as f32)/scale;
+        self.sources.get(layer).is_some_and(Option::is_some)&&self.card(layer,self.body(layer))
+            .contains(unscale(x,cx),unscale(y,cy))
     }
     fn bounds(self)->Box2{
         let mut b=self.layout.card(self.index);
@@ -194,13 +201,13 @@ impl Target{
 }
 #[derive(Clone)]
 pub(super) struct Preview{
-    pub target:Target, pub mask:u8, bounds:Box2,idle:Arc<[u8]>,hover:Arc<[u8]>,
+    pub target:Target, pub mask:u8, bounds:Box2,idle:Arc<[u8]>,
 }
 impl Preview{
     fn project(target:Target,frames:&[Option<&Frame>;5])->Self{
         let mask=frames.iter().enumerate().fold(0,|m,(i,f)|if f.is_some(){m|(1<<i)}else{m});
         let b=target.bounds();
-        let fit=|hover|{
+        let idle={
             let mut out=vec![0;b.w as usize*b.h as usize*4];
             for (layer,frame) in frames.iter().enumerate().rev(){
                 let base=target.body(layer);
@@ -217,25 +224,53 @@ impl Preview{
                     }
                     continue;
                 };
-                let slab=target.card(layer,Box2{x:base.x-b.x,y:base.y-b.y,..base},hover);
+                let slab=target.card(layer,Box2{x:base.x-b.x,y:base.y-b.y,..base});
                 slab.shadow(&mut out,b.w,b.h,layer);
                 slab.paint_depth(&mut out,b.w,b.h,data,*w,*h,layer);
             }
             Arc::<[u8]>::from(out)
         };
-        let idle=fit(false);
-        let hover=if target.reduced{idle.clone()}else{fit(true)};
-        Self{target,mask,bounds:b,idle,hover}
+        Self{target,mask,bounds:b,idle}
     }
-    pub(super) fn blend(&self,data:&mut[u8],w:i32,h:i32,hover:bool){
+    pub(super) fn blend(&self,data:&mut[u8],w:i32,h:i32,strength:u8){
         let b=self.bounds;
         if b.x<0||b.y<0||b.w<=0||b.h<=0||b.x+b.w>w||b.y+b.h>h{return;}
-        let ink=if hover{&self.hover}else{&self.idle};
-        for (i,line) in ink.chunks_exact(b.w as usize*4).enumerate(){
+        let composite=|s:&[u8],d:&mut[u8]|{
+            let a=u16::from(s[3]);
+            if a!=0{for k in 0..4{d[k]=(u16::from(s[k])+(u16::from(d[k])*(255-a)+127)/255).min(255) as u8;}}
+        };
+        let scale=self.target.zoom(self.mask,strength);
+        if scale!=1.0{
+            let (cx,cy)=self.target.layout.card(self.target.index).center();
+            let cx=(cx-b.x) as f32;let cy=(cy-b.y) as f32;
+            // Bilinear sampling of the existing premultiplied tile. Only the
+            // hovered card is resampled; we never capture at animation rate.
+            let axis=|n:i32,c:f32,max:i32|{
+                let a=(c+(n as f32+0.5-c)/scale-0.5).clamp(0.0,(max-1) as f32);
+                let i=a as i32;(i,(i+1).min(max-1),((a-i as f32)*256.0) as u32)
+            };
+            for y in 0..b.h{
+                let (y0,y1,fy)=axis(y,cy,b.h);
+                for x in 0..b.w{
+                    let (x0,x1,fx)=axis(x,cx,b.w);
+                    let pixel=|x,y|{let at=((y*b.w+x)*4) as usize;&self.idle[at..at+4]};
+                    let [p,q,r,s]=[pixel(x0,y0),pixel(x1,y0),pixel(x0,y1),pixel(x1,y1)];
+                    if p[3]|q[3]|r[3]|s[3]==0{continue;}
+                    let ink:[u8;4]=std::array::from_fn(|k|{
+                        let top=u32::from(p[k])*(256-fx)+u32::from(q[k])*fx;
+                        let bottom=u32::from(r[k])*(256-fx)+u32::from(s[k])*fx;
+                        ((top*(256-fy)+bottom*fy+32768)>>16) as u8
+                    });
+                    let at=(((b.y+y)*w+b.x+x)*4) as usize;
+                    composite(&ink,&mut data[at..at+4]);
+                }
+            }
+            return;
+        }
+        for (i,line) in self.idle.chunks_exact(b.w as usize*4).enumerate(){
             let at=((b.y as usize+i)*w as usize+b.x as usize)*4;
             for (s,d) in line.chunks_exact(4).zip(data[at..at+line.len()].chunks_exact_mut(4)){
-                let a=u16::from(s[3]);
-                if a!=0{for k in 0..4{d[k]=(u16::from(s[k])+(u16::from(d[k])*(255-a)+127)/255).min(255) as u8;}}
+                composite(s,d);
             }
         }
     }
@@ -422,7 +457,7 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
             let frames=target.sources.map(|id|id.and_then(|id|state.sources.get(&id)).filter(|s|s.frame.is_some()));
             let revisions=frames.map(|v|v.map_or(0,|s|s.revision));
             if revisions==[0;5]{continue;}
-            bytes+=b.w as usize*b.h as usize*4*if target.reduced{1}else{2};
+            bytes+=b.w as usize*b.h as usize*4;
             if bytes>MAX_PROJECTION_BYTES{break;}
             if let Some(previous)=old.iter().find(|p|p.preview.target==target&&p.revisions==revisions){
                 next.push(Raster{revisions,preview:previous.preview.clone()});
@@ -538,18 +573,24 @@ mod tests{
             let tgt=Target{owner:9,layout,index:0,reduced:false,sources:[id(1),id(2),id(3),None,None]};
             let textures=[(vec![198;160*90*4],160,90),(vec![215;75*125*4],75,125),(vec![232;92*92*4],92,92)];
             let raster=Preview::project(tgt,&[Some(&textures[0]),Some(&textures[1]),Some(&textures[2]),None,None]);
-            assert_ne!(raster.idle,raster.hover);
+            assert_eq!(tgt.zoom(7,0),1.0);
+            assert!(tgt.zoom(7,128)>1.0&&tgt.zoom(7,128)<tgt.zoom(7,255));
+            assert_eq!(tgt.zoom(5,255),1.0,"partial stacks keep the native layers aligned");
             for layer in 0..3{
                 let b=tgt.body(layer);
                 let x=if right{b.x+2}else{b.x+b.w-3};
                 let y=b.y+b.h/2;
-                assert_eq!((0..3).find(|&i|tgt.contains(i,x,y,false)),Some(layer));
-                assert!(!tgt.contains(layer,x,b.y-2,false));
+                assert_eq!((0..3).find(|&i|tgt.contains(i,x,y,7,0)),Some(layer));
+                assert!(!tgt.contains(layer,x,b.y-2,0,0));
             }
             let mut pixels=vec![0;layout.width as usize*layout.height as usize*4];
-            raster.blend(&mut pixels,layout.width,layout.height,false);
+            raster.blend(&mut pixels,layout.width,layout.height,0);
             assert!(pixels.chunks_exact(4).any(|p|p[3]==255));
             assert!(pixels.chunks_exact(4).any(|p|p[3]==0));
+            let mut zoomed=vec![0;pixels.len()];
+            raster.blend(&mut zoomed,layout.width,layout.height,180);
+            assert_ne!(pixels,zoomed);
+            assert!(zoomed.chunks_exact(4).all(|p|p[..3].iter().all(|&v|v<=p[3])));
         }
     }
 }

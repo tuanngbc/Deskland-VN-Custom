@@ -89,10 +89,13 @@ impl Layer {
         super::surface::draw(self.pixels(),w,h,rect,|x,y|Some((ink,coverage(x,y))));
     }
     pub(super) unsafe fn present(&self, hwnd:HWND) -> bool {
+        self.present_at(hwnd,None,255)
+    }
+    pub(super) unsafe fn present_at(&self,hwnd:HWND,position:Option<POINT>,opacity:u8)->bool{
         let size=SIZE{cx:self.size.0,cy:self.size.1};
         let origin=POINT{x:0,y:0};
-        let blend=BLENDFUNCTION{BlendOp:AC_SRC_OVER as u8,BlendFlags:0,SourceConstantAlpha:255,AlphaFormat:AC_SRC_ALPHA as u8};
-        UpdateLayeredWindow(hwnd,ptr::null_mut(),ptr::null(),&size,self.dc,&origin,0,&blend,ULW_ALPHA)!=0
+        let blend=BLENDFUNCTION{BlendOp:AC_SRC_OVER as u8,BlendFlags:0,SourceConstantAlpha:opacity,AlphaFormat:AC_SRC_ALPHA as u8};
+        UpdateLayeredWindow(hwnd,ptr::null_mut(),position.as_ref().map_or(ptr::null(),|p|p),&size,self.dc,&origin,0,&blend,ULW_ALPHA)!=0
     }
     pub(crate) unsafe fn blit(&self, target:HDC)->bool {
         BitBlt(target,0,0,self.size.0,self.size.1,self.dc,0,0,SRCCOPY)!=0

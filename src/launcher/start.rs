@@ -182,6 +182,16 @@ pub(super) fn pins_changed(){
     let hwnd=START.with(|s|{let mut g=s.borrow_mut();let m=g.as_mut()?;m.pins=pins;Some(m.hwnd)});
     if let Some(hwnd)=hwnd{unsafe{relayout(hwnd);}}
 }
+pub(crate) fn icons_changed(){
+    let hwnd=START.with(|s|{
+        let mut slot=s.borrow_mut();
+        let m=slot.as_mut()?;
+        m.icons.clear();m.loading.clear();
+        (m.icon_tx,m.icon_rx)=icon_worker();
+        Some(m.hwnd)
+    });
+    if let Some(hwnd)=hwnd{unsafe{repaint(hwnd);}}
+}
 unsafe fn fill(dc:HDC,r:&RECT,color:u32){
     let brush=CreateSolidBrush(color);FillRect(dc,r,brush);DeleteObject(brush);
 }
