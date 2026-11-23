@@ -135,4 +135,12 @@ Một cửa sổ **Cài đặt** tập trung Hình nền, Màn hình, Thời ti�
 
 Bản 1.0.0 được đóng gói từ [commit fa234a0](https://github.com/tuanngbc/TLauncher/commit/fa234a03a71807c86fb2587df3e6d1cd74708803). Xem [Windows CI của bản phát hành](https://github.com/tuanngbc/TLauncher/actions/runs/45201316321), [kiến trúc và lệnh kiểm thử](README-rust.md) hoặc [tài liệu](docs/README.md). Dựng trên Windows với Rust stable và Windows SDK: chạy **cargo test --release** và **cargo build --release**.
 
-TLauncher phát triển từ Deskland/Deskland-VN, theo [GPL-3.0](LICENSE). Xem [ghi nhận tác giả](NOTICE), [thông báo bên thứ ba](THIRD_PARTY_NOTICES.md) và [nhãn hiệu](TRADEMARKS.md).
+Dự án dùng [GPL-3.0](LICENSE). Xem [thông báo bên thứ ba](THIRD_PARTY_NOTICES.md) và [ghi chú nhãn hiệu](TRADEMARKS.md).
+
+## Nguồn gốc và ghi nhận phát triển
+
+- **Deskland** — [BLEZZ0102/Deskland](https://github.com/BLEZZ0102/Deskland) là dự án gốc và nền tảng hình nền động.
+- **Deskland-VN** — [nhhoang188/Deskland-VN](https://github.com/nhhoang188/Deskland-VN) là nguồn của các chủ đề được chuyển sang TLauncher và phần bản địa hóa tiếng Việt, với đóng góp về hình nền đa màn hình.
+- **TLauncher** — [tuanngbc](https://github.com/tuanngbc) phát triển và duy trì bản fork [tuanngbc/TLauncher](https://github.com/tuanngbc/TLauncher). Các tính năng bổ sung gồm Dock, Stage Manager, Start, Spotlight, chế độ thanh tác vụ, trung tâm điều khiển, lịch và chỉ số hệ thống, đồng hồ desktop native, chụp và quay màn hình, phím tắt tùy chỉnh và Cài đặt tích hợp. TLauncher cũng phát triển thêm bộ dựng hình nền Rust, thời tiết theo vị trí và bóng đổ theo Mặt Trời trên nền tảng được kế thừa.
+
+Xem [NOTICE](NOTICE), [ghi nhận gốc của Deskland-VN](third_party/deskland-vn/NOTICE) và [nguồn thiết kế đồng hồ](assets/widget/NOTICE.txt).

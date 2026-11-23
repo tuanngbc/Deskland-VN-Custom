@@ -13,3 +13,26 @@ This port keeps the Preview C# host and multi-monitor engine; it does not bundle
 the reference Rust executable or its Windows lock-screen implementation.
 Changes include the shared world clock, renderer pacing, native host bridge,
 paused-layout updates, Vietnamese multi-monitor controls and packaging.
+
+
+TLauncher fork — attribution for v1.0.0 (2026-11-23)
+---------------------------------------------------
+Deskland (https://github.com/BLEZZ0102/Deskland) is the upstream project
+and the foundation for the animated wallpaper. Deskland-VN
+(https://github.com/nhhoang188/Deskland-VN) contributed the Vietnamese
+wallpaper themes and localization used in this fork, and multi-monitor
+wallpaper work. The original upstream and community notices above apply.
+
+TLauncher is developed and maintained by tuanngbc
+(https://github.com/tuanngbc). Source: https://github.com/tuanngbc/TLauncher.
+TLauncher additions include the Dock, Stage Manager, Start menu,
+Spotlight, taskbar modes, Control Center, calendar, system metrics,
+native desktop clock implementation, screenshot and screen recording
+tools, configurable hotkeys, and integrated Settings. The fork also
+extends the inherited wallpaper with a native Rust renderer,
+location-based weather, and shadows that follow the sun.
+
+This attribution covers the TLauncher implementations and does not
+replace the original or third-party credits. The adapted clock skin,
+fonts, and artwork retain their own attribution and terms; see
+assets/widget/NOTICE.txt.
