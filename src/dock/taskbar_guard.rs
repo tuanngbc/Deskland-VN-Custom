@@ -259,6 +259,46 @@ mod tests{
         }
     }
     #[test]
+    #[ignore = "uses an isolated cross-thread Win32 window on the Actions desktop"]
+    fn native_visibility_request_hides_a_window_without_moving_it(){
+        let (send,receive)=std::sync::mpsc::sync_channel(1);
+        let fixture=thread::spawn(move||unsafe{
+            let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,wide("STATIC").as_ptr(),
+                wide("Deskland guard fixture").as_ptr(),WS_POPUP,50,50,260,120,
+                ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),ptr::null());
+            assert!(!hwnd.is_null());
+            ShowWindow(hwnd,SW_SHOWNOACTIVATE);
+            send.send(hwnd as usize).unwrap();
+            let deadline=Instant::now()+Duration::from_secs(4);
+            while Instant::now()<deadline{
+                let mut msg:MSG=mem::zeroed();
+                while PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)!=0{
+                    if msg.message==WM_CLOSE{DestroyWindow(hwnd);return;}
+                    DispatchMessageW(&msg);
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            DestroyWindow(hwnd);
+        });
+        unsafe{
+            let hwnd=receive.recv_timeout(Duration::from_secs(3)).unwrap() as HWND;
+            let mut before:RECT=mem::zeroed();
+            assert_ne!(GetWindowRect(hwnd,&mut before),0);
+            assert_ne!(IsWindowVisible(hwnd),0);
+            assert!(request_hide(hwnd));
+            let started=Instant::now();
+            while IsWindowVisible(hwnd)!=0&&started.elapsed()<Duration::from_secs(2){
+                thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(IsWindowVisible(hwnd),0);
+            let mut after:RECT=mem::zeroed();
+            assert_ne!(GetWindowRect(hwnd,&mut after),0);
+            assert_eq!((before.left,before.top,before.right,before.bottom),(after.left,after.top,after.right,after.bottom));
+            PostMessageW(hwnd,WM_CLOSE,0,0);
+        }
+        fixture.join().unwrap();
+    }
+    #[test]
     fn startup_reports_api_rejection_visibility_failure_and_readiness_timeout_separately(){
         for reason in [Exit::HideRejected,Exit::HideFailed,Exit::ReadyTimeout]{
             assert_eq!(Exit::from_code(Some(reason as i32)),reason);

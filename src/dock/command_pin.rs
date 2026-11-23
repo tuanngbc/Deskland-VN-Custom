@@ -113,7 +113,9 @@ mod tests {
         let proof=directory.join("argv check.txt");
         let fixture=directory.join("fixture command.ps1");
         std::fs::write(&fixture,r#"if ($args.Count -eq 2 -and $args[0] -ceq 'A & B' -and $args[1] -ceq 'CaseSensitive' -and (Get-Location).Path -ieq $PSScriptRoot) {
-    [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'argv check.txt'), 'fixture reached')
+    $temp = Join-Path $PSScriptRoot 'argv partial.txt'
+    [IO.File]::WriteAllText($temp, 'fixture reached')
+    [IO.File]::Move($temp, (Join-Path $PSScriptRoot 'argv check.txt'))
 }"#).unwrap();
         let executable=Path::new(&std::env::var_os("SystemRoot").unwrap()).join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
         let line=format!("\"{}\" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\" \"A & B\" CaseSensitive",
@@ -125,7 +127,17 @@ mod tests {
         assert_eq!(std::fs::read(&proof).unwrap(),b"fixture reached");
         std::fs::remove_file(proof).unwrap();
         std::fs::remove_file(fixture).unwrap();
-        std::fs::remove_dir(directory).unwrap();
+        // Explorer returns before the process exits. Windows keeps the
+        // working directory locked until the child has fully shut down.
+        let cleanup=Instant::now();
+        loop{
+            match std::fs::remove_dir(&directory){
+                Ok(())=>break,
+                Err(err) if matches!(err.raw_os_error(),Some(5|32))&&cleanup.elapsed()<Duration::from_secs(4)=>
+                    std::thread::sleep(Duration::from_millis(25)),
+                Err(err)=>panic!("fixture directory locked: {err}"),
+            }
+        }
     }
     #[test]
     fn validates_quoted_and_unquoted_paths_with_spaces(){
