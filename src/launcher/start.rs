@@ -11,6 +11,10 @@ use layout::*;
 const EDIT_ID:usize=101;
 const APPLY:u32=WM_APP+115;
 const POLL:usize=1;
+const DISMISS_OUTSIDE:u32=WM_APP+116;
+const IDLE_TIMER:usize=2;
+const IDLE_TIMEOUT:Duration=Duration::from_secs(20);
+static VISIBLE_START:std::sync::atomic::AtomicUsize=std::sync::atomic::AtomicUsize::new(0);
 const SETTINGS:&str="deskland:settings";
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
@@ -30,6 +34,8 @@ struct Model {
 thread_local!{
     static START:RefCell<Option<Model>>=const{RefCell::new(None)};
     static EDIT_PROC:Cell<WNDPROC>=const{Cell::new(None)};
+    static POINTER_HOOK:Cell<HHOOK>=const{Cell::new(ptr::null_mut())};
+    static ACTIVITY:Cell<Option<Instant>>=const{Cell::new(None)};
     static MENU:Cell<bool>=const{Cell::new(false)};
     #[cfg(test)] static CAPTURE:RefCell<Option<PathBuf>>=const{RefCell::new(None)};
 }
@@ -415,7 +421,72 @@ unsafe fn paint_start(hwnd:HWND){
     EndPaint(hwnd,&ps);
 }
 
-unsafe fn hide(hwnd:HWND){KillTimer(hwnd,POLL);ShowWindow(hwnd,SW_HIDE);}
+fn touch(){ACTIVITY.set(Some(Instant::now()));}
+
+fn idle_expired(last:Option<Instant>,now:Instant,modal:bool)->bool{
+    !modal&&last.is_some_and(|last|now.saturating_duration_since(last)>=IDLE_TIMEOUT)
+}
+
+/// Observe only mouse presses while Start is visible. Never capture or consume
+/// the click: it must still reach the application, including no-activate panels.
+unsafe extern "system" fn observe_press(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
+    if code==HC_ACTION as i32&&matches!(w as u32,WM_LBUTTONDOWN|WM_RBUTTONDOWN|WM_MBUTTONDOWN|WM_XBUTTONDOWN)
+        && !MENU.get(){
+        let hwnd=VISIBLE_START.load(std::sync::atomic::Ordering::Relaxed) as HWND;
+        if !hwnd.is_null(){
+            let point=(*(l as *const MSLLHOOKSTRUCT)).pt;
+            let hit=WindowFromPoint(point);
+            if hit==hwnd||IsChild(hwnd,hit)!=0{touch();}
+            // Dock/Stage left presses are handled by their own window proc,
+            // so a press on the Start button can still toggle this panel.
+            else if w as u32!=WM_LBUTTONDOWN||!crate::dock::is_input_surface(hit){
+                PostMessageW(hwnd,DISMISS_OUTSIDE,0,0);
+            }
+        }
+    }
+    CallNextHookEx(ptr::null_mut(),code,w,l)
+}
+
+pub(crate) fn dismiss_from_dock(){
+    let hwnd=VISIBLE_START.load(std::sync::atomic::Ordering::Relaxed) as HWND;
+    if !hwnd.is_null(){unsafe{PostMessageW(hwnd,DISMISS_OUTSIDE,0,0);}}
+}
+unsafe fn stop_dismissal(hwnd:HWND){
+    VISIBLE_START.store(0,std::sync::atomic::Ordering::Relaxed);
+    let hook=POINTER_HOOK.replace(ptr::null_mut());
+    if !hook.is_null(){UnhookWindowsHookEx(hook);}
+    KillTimer(hwnd,IDLE_TIMER);
+    KillTimer(hwnd,POLL);
+    ACTIVITY.set(None);
+}
+unsafe fn hide(hwnd:HWND){
+    stop_dismissal(hwnd);
+    ShowWindow(hwnd,SW_HIDE);
+    SetWindowPos(hwnd,HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+}
+unsafe fn show(hwnd:HWND,edit:HWND){
+    let input=super::InputHandoff::capture();
+    if SetWindowPos(hwnd,HWND_TOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW|SWP_NOACTIVATE)==0{return;}
+    // Foreground permission is best effort; TOPMOST still makes Start visible
+    // even when Windows declines focus for an asynchronous Win-key request.
+    SetForegroundWindow(hwnd);
+    if GetForegroundWindow()==hwnd{SetFocus(edit);input.finish(hwnd,"Start");}
+    if IsWindowVisible(hwnd)==0{return;}
+    touch();
+    VISIBLE_START.store(hwnd as usize,std::sync::atomic::Ordering::Relaxed);
+    SetTimer(hwnd,IDLE_TIMER,250,None);
+    if POINTER_HOOK.get().is_null(){
+        let module=windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(ptr::null());
+        let hook=SetWindowsHookExW(WH_MOUSE_LL,Some(observe_press),module,0);
+        if hook.is_null(){crate::log!("DOCK_START outside-click observer unavailable: {}",GetLastError());}
+        POINTER_HOOK.set(hook);
+    }
+}
+unsafe fn restore_after_error(hwnd:HWND){
+    if let Some(edit)=START.with(|s|s.borrow().as_ref().map(|m|m.edit)){
+        relayout(hwnd);show(hwnd,edit);
+    }
+}
 fn hit_at(m:&Model,x:i32,y:i32)->Option<Tile>{
     m.view.tiles.iter().filter(|t|m.query.trim().is_empty()||!matches!(t.hit,Hit::Home|Hit::Apps)).find(|t|x>=t.rect.left&&x<t.rect.right&&y>=t.rect.top&&y<t.rect.bottom).cloned()
 }
@@ -441,7 +512,7 @@ unsafe fn launch(hwnd:HWND,entry:Entry){
         START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){remember(m,&entry.path);});
     }else{
         START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){m.error=format!("Không mở được {} (Windows {code})",entry.name);});
-        relayout(hwnd);ShowWindow(hwnd,SW_SHOW);
+        restore_after_error(hwnd);
     }
 }
 unsafe fn action_menu(hwnd:HWND,point:POINT,actions:&[&str],align:u32)->u32{
@@ -449,7 +520,7 @@ unsafe fn action_menu(hwnd:HWND,point:POINT,actions:&[&str],align:u32)->u32{
     for (i,text) in actions.iter().enumerate(){AppendMenuW(menu,MF_STRING,i+1,wide(text).as_ptr());}
     MENU.with(|flag|flag.set(true));
     let result=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY|TPM_RIGHTBUTTON|align,point.x,point.y,0,hwnd,ptr::null_mut());
-    DestroyMenu(menu);MENU.with(|flag|flag.set(false));
+    DestroyMenu(menu);MENU.with(|flag|flag.set(false));touch();
     result as u32
 }
 unsafe fn power(hwnd:HWND,r:RECT){
@@ -466,7 +537,7 @@ unsafe fn power(hwnd:HWND,r:RECT){
         let title=actions[(choice-1) as usize];
         let confirm=MessageBoxW(hwnd,wide(&format!("{title}? Hãy lưu công việc đang mở trước khi tiếp tục.")).as_ptr(),
             wide("Xác nhận thao tác Windows").as_ptr(),MB_YESNO|MB_ICONWARNING|MB_DEFBUTTON2);
-        MENU.with(|flag|flag.set(false));
+        MENU.with(|flag|flag.set(false));touch();
         if confirm!=IDYES{return;}
     }
     hide(hwnd);
@@ -486,7 +557,7 @@ unsafe fn power(hwnd:HWND,r:RECT){
     };
     if !ok{
         START.with(|s|if let Some(m)=s.borrow_mut().as_mut(){m.error="Windows từ chối thao tác nguồn.".into();});
-        relayout(hwnd);ShowWindow(hwnd,SW_SHOW);
+        restore_after_error(hwnd);
     }
 }
 unsafe fn activate(hwnd:HWND,tile:Tile){
@@ -552,6 +623,7 @@ unsafe fn entry_menu(hwnd:HWND,tile:Tile,mut at:POINT){
 }
 
 unsafe extern "system" fn edit_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
+    if matches!(msg,WM_MOUSEMOVE|WM_KEYDOWN|WM_SYSKEYDOWN|WM_CHAR|WM_IME_COMPOSITION){touch();}
     // Keep Left/Right available for the native edit caret while searching.
     if msg==WM_KEYDOWN&&matches!(w as u16,VK_LEFT|VK_RIGHT)&&
         START.with(|s|s.borrow().as_ref().is_some_and(|m|m.query.trim().is_empty())){
@@ -564,6 +636,7 @@ unsafe extern "system" fn edit_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESUL
     CallWindowProcW(EDIT_PROC.with(Cell::get),hwnd,msg,w,l)
 }
 unsafe extern "system" fn proc_start(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
+    if matches!(msg,WM_MOUSEMOVE|WM_KEYDOWN|WM_SYSKEYDOWN|WM_MOUSEWHEEL|WM_MOUSEHWHEEL|WM_LBUTTONDOWN|WM_RBUTTONUP|APPLY){touch();}
     match msg{
         WM_ERASEBKGND=>1,
         WM_PAINT=>{paint_start(hwnd);0}
@@ -575,8 +648,13 @@ unsafe extern "system" fn proc_start(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
             SetBkColor(w as HDC,color);SetDCBrushColor(w as HDC,color);
             GetStockObject(DC_BRUSH) as LRESULT
         }
-        WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{if !MENU.with(Cell::get){hide(hwnd);}0}
-        WM_CLOSE=>{hide(hwnd);0}
+        WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{if !MENU.get()&&IsWindowVisible(hwnd)!=0{hide(hwnd);}0}
+        WM_CLOSE|DISMISS_OUTSIDE=>{if !MENU.get()&&IsWindowVisible(hwnd)!=0{hide(hwnd);}0}
+        WM_NCDESTROY=>{stop_dismissal(hwnd);DefWindowProcW(hwnd,msg,w,l)}
+        WM_TIMER if w==IDLE_TIMER=>{
+            if idle_expired(ACTIVITY.get(),Instant::now(),MENU.get()){hide(hwnd);}
+            0
+        }
         WM_KEYDOWN|APPLY=>{
             match w as u16{
                 VK_ESCAPE=>hide(hwnd),
@@ -765,10 +843,7 @@ pub(crate) fn toggle(owner:HWND,anchor:DockAnchor){
         DwmSetWindowAttribute(hwnd,34,(&border as *const u32).cast(),4);
         DwmSetWindowAttribute(hwnd,20,(&mode as *const i32).cast(),4);
         relayout(hwnd);
-        let input=super::InputHandoff::capture();
-        SetWindowPos(hwnd,ptr::null_mut(),0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_SHOWWINDOW|SWP_NOACTIVATE);
-        SetForegroundWindow(hwnd);SetFocus(edit);
-        input.finish(hwnd,"Start");
+        show(hwnd,edit);
         repaint(hwnd);
         crate::log!("DOCK_START opened separate panel at ({x},{y}) scale={s:.2}");
     }
@@ -874,6 +949,7 @@ mod tests {
                 assert!(hit_at(m,(power.left+power.right)/2,(power.top+power.bottom)/2).is_some_and(|t|t.hit==Hit::Power));
             });
             assert_ne!(IsWindowVisible(host),0);
+            assert_ne!(GetWindowLongPtrW(host,GWL_EXSTYLE)&WS_EX_TOPMOST as isize,0);
             assert!(handles().is_none(),"opening Start must not start Spotlight");
             let mut rc:RECT=std::mem::zeroed();
             assert_ne!(GetWindowRect(host,&mut rc),0);
@@ -890,6 +966,21 @@ mod tests {
             toggle(ptr::null_mut(),DockAnchor{point:POINT{x:display.bounds.left+90,y:display.bounds.top+150},side:crate::dock::DockSide::Left});
             assert_ne!(GetWindowRect(host,&mut rc),0);
             assert!(rc.left>=display.bounds.left&&rc.top>=display.bounds.top&&rc.right<=display.bounds.right&&rc.bottom<=display.bounds.bottom);
+            ACTIVITY.set(Some(Instant::now()-IDLE_TIMEOUT));
+            MENU.set(true);
+            SendMessageW(host,WM_TIMER,IDLE_TIMER,0);
+            assert_ne!(IsWindowVisible(host),0,"a modal action must survive the idle deadline");
+            MENU.set(false);
+            SendMessageW(host,WM_TIMER,IDLE_TIMER,0);
+            assert_eq!(IsWindowVisible(host),0);
+            assert_eq!(GetWindowLongPtrW(host,GWL_EXSTYLE)&WS_EX_TOPMOST as isize,0);
+            assert!(POINTER_HOOK.get().is_null(),"hidden Start must release the click observer");
+            let anchor=DockAnchor{point,side:crate::dock::DockSide::Bottom};
+            toggle(ptr::null_mut(),anchor);
+            assert_ne!(IsWindowVisible(host),0);
+            SendMessageW(host,DISMISS_OUTSIDE,0,0);
+            assert_eq!(IsWindowVisible(host),0);
+            toggle(ptr::null_mut(),anchor);
             SendMessageW(host,APPLY,VK_ESCAPE as usize,0);
             assert_eq!(IsWindowVisible(host),0);
             DestroyWindow(host);

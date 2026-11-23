@@ -164,13 +164,18 @@ impl Layout {
             y:card.y+(card.h-size)/2,w:size,h:size}
     }
     pub fn icon_hit(self,i:usize,x:i32,y:i32)->bool{self.stack_design&&self.detached_icon(i).hit(x,y)}
-    pub(super) fn group_button(self,i:usize)->Option<Box2>{
+    pub(super) fn group_arrows(self,i:usize)->Option<[Box2;2]>{
+        if i>=self.count{return None;}
         let c=self.card(i);
-        let h=(self.caption-1).clamp(12,28);
-        let w=h*2;
-        (i<self.count&&c.w>=w+2*self.inset&&c.h>=h*2+3).then_some(Box2{
-            x:if self.right{c.x+c.w-self.inset-w}else{c.x+self.inset},
-            y:c.y+(self.inset/2).max(2),w,h})
+        let edge=(self.inset/2).max(3);
+        let size=(self.inset*5/2).clamp(16,40).min((c.h/3).max(1));
+        if c.w<3*size+2*edge||size<12{return None;}
+        let first=Box2{x:c.x+edge,y:c.y+edge,w:size,h:size};
+        Some([first,Box2{x:c.x+c.w-edge-size,..first}])
+    }
+    pub(super) fn group_arrow_hit(self,i:usize,x:i32,y:i32)->Option<bool>{
+        let [left,right]=self.group_arrows(i)?;
+        if left.hit(x,y){Some(false)}else if right.hit(x,y){Some(true)}else{None}
     }
     pub fn icon_cutouts(self)->Vec<RECT>{
         if !self.landscape||!self.stack_design{return Vec::new();}
@@ -440,9 +445,13 @@ impl Panel {
                 let ink=palette.ink;
                 for (i,title) in labels.iter().enumerate(){
                     let mut r=caption_box(layout,i);
-                    if let Some(badge)=layout.group_button(i).filter(|_|items[i].count>1){
-                        rounded(data,w,h,badge.rect(),badge.h as f32/2.0,[32,28,24],238);
-                        draw_mask_scaled(data,w,h,mask,self.large_fonts[1],badge,&format!("{} ▾",items[i].count),true,[255,249,245],2);
+                    if let Some(arrows)=layout.group_arrows(i).filter(|_|items[i].count>1){
+                        for (button,mark) in arrows.into_iter().zip(["‹","›"]){
+                            let over=hover==Some(i);
+                            rounded(data,w,h,button.rect(),button.h as f32/2.0,[31,28,26],if over{176}else{128});
+                            let ink=if over{[247,242,238]}else{[210,205,200]};
+                            draw_mask_scaled(data,w,h,mask,self.large_fonts[1],button,mark,true,ink,2);
+                        }
                     }
                     if look.projected[i]&1!=0{
                         // No text over the sampled scene. The popup, tooltip
@@ -583,6 +592,23 @@ pub(super) unsafe fn nav_label(dc:HDC,b:Box2,label:&str,ink:u32){
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn group_arrow_hit_boxes_stay_on_either_side_at_mixed_dpi(){
+        for dpi in [96,120,144,192]{
+            for right_edge in [false,true]{
+                let mut l=Layout::landscape(320*dpi as i32/96,1000,dpi,10,6,3,right_edge,true);
+                l.count=3;
+                for i in 0..l.count{
+                    let [left,right]=l.group_arrows(i).expect("usable arrows");
+                    let (lx,ly)=left.center();let (rx,ry)=right.center();
+                    assert!(lx<l.card(i).center().0&&rx>l.card(i).center().0);
+                    assert_eq!(l.group_arrow_hit(i,lx,ly),Some(false));
+                    assert_eq!(l.group_arrow_hit(i,rx,ry),Some(true));
+                    assert!(!l.close_button(i).is_some_and(|b|b.hit(lx,ly)||b.hit(rx,ry)));
+                }
+            }
+        }
+    }
     #[test]
     fn mixed_heights_page_and_keep_hit_targets_within_portrait_rail(){
         let requests=[180,72,162,0,90,144,108];

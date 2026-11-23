@@ -161,14 +161,14 @@ impl Surface {
     pub fn set_material(&mut self,value:Material){
         if self.material!=value{self.material=value;self.static_pixels.clear();}
     }
-    pub unsafe fn rail(&mut self,hwnd:HWND,layout:&Layout,rail_face:usize)->bool{
+    pub unsafe fn rail(&mut self,hwnd:HWND,layout:&Layout,rail_face:usize,rail_opacity:f32)->bool{
         let (w,h)=self.layer.size;
         let data=self.layer.pixels();data.fill(0);
-        paint_rail(data,w,h,layout,rail_face,1.0);
+        paint_rail(data,w,h,layout,rail_face,rail_opacity);
         self.layer.present(hwnd)
     }
     pub unsafe fn paint(&mut self,hwnd:HWND,layout:&Layout,items:&[super::Item],atlas:&Atlas,start_icon:super::StartIcon,active:Option<usize>,minimized:u16,attention:u16,
-        hover:Option<usize>,drop_target:Option<usize>,openness:f32,feedback:Option<(usize,FeedbackKind,f32)>,metrics:Option<MetricOptions>,rail_face:usize)->bool{
+        hover:Option<usize>,drop_target:Option<usize>,openness:f32,feedback:Option<(usize,FeedbackKind,f32)>,metrics:Option<MetricOptions>,rail_face:usize,rail_opacity:f32)->bool{
         let (w,h)=self.layer.size;
         let scale=layout.scale;
         if self.glass!=layout.glass||self.static_pixels.is_empty() {
@@ -310,7 +310,7 @@ impl Surface {
         if openness<1.0 {
             let alpha=(openness.clamp(0.0,1.0)*255.0).round() as u16;
             for value in data.iter_mut(){*value=((*value as u16*alpha+127)/255) as u8;}
-            paint_rail(data,w,h,layout,rail_face,1.0-openness);
+            paint_rail(data,w,h,layout,rail_face,rail_opacity*(1.0-openness));
         }
         self.layer.present(hwnd)
     }
