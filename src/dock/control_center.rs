@@ -496,7 +496,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if ready{InvalidateRect(hwnd,ptr::null(),0);}0
         },
         WM_MOUSEMOVE|super::WM_DOCK_MOUSELEAVE|WM_LBUTTONDOWN|WM_LBUTTONUP|WM_CAPTURECHANGED|WM_MOUSEWHEEL|WM_KEYDOWN=>{
-            if msg==WM_KEYDOWN&&w as u16==VK_ESCAPE{PostMessageW(hwnd,WM_CLOSE,0,0);return 0;}
+            if msg==WM_KEYDOWN&&w as u16==VK_ESCAPE{SendMessageW(hwnd,WM_CLOSE,0,0);return 0;}
             let (action,repaint,capture)=PANE.with(|s|{
                 let mut p=s.borrow_mut();
                 let Some(p)=p.as_mut().filter(|p|p.hwnd==hwnd&&!p.entrance.is_some_and(|t|t.to==0.0))else{return (None,false,false);};

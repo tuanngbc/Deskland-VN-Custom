@@ -272,7 +272,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             }
             0
         }
-        WM_KEYDOWN if w as u16==VK_ESCAPE=>{PostMessageW(hwnd,WM_CLOSE,0,0);0}
+        WM_KEYDOWN if w as u16==VK_ESCAPE=>{SendMessageW(hwnd,WM_CLOSE,0,0);0}
         WM_TIMER|WM_MOUSEMOVE|super::WM_DOCK_MOUSELEAVE|WM_LBUTTONDOWN|WM_LBUTTONUP|WM_CAPTURECHANGED|WM_KEYDOWN=>{
             let (dirty,capture)=PANEL.with(|s|{
                 let mut s=s.borrow_mut();
