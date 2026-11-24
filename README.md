@@ -1,8 +1,10 @@
-# TLauncher 1.0.0 · Không gian làm việc cho Windows 11
+# TLauncher · Không gian làm việc cho Windows 11
 
 TLauncher mang **hình nền động, Dock, Stage Manager và Spotlight lấy cảm hứng từ macOS** vào cùng một ứng dụng Rust dành cho Windows 11. Ghim ứng dụng trên Dock, chuyển cửa sổ từ các thẻ Stage và tìm nhanh bằng Spotlight. Hình nền, Dock và Stage có thể bật hoặc tắt riêng.
 
-**[Tải TLauncher 1.0.0 cho Windows 11 x64](https://github.com/tuanngbc/TLauncher/releases/download/v1.0.0/TLauncher-1.0.0-win-x64.zip)** · [Trang phát hành và mã kiểm tra](https://github.com/tuanngbc/TLauncher/releases/tag/v1.0.0)
+**[Tải bản mới nhất cho Windows 11 x64](https://github.com/tuanngbc/TLauncher/releases/latest)** · [Nhật ký thay đổi](CHANGELOG.md)
+
+**Mới trong 1.0.1:** TLauncher tự mở khi đăng nhập Windows nếu đã bật tùy chọn tương ứng. Dock và Stage Manager khởi tạo trước, trong khi hình nền chờ Explorer sẵn sàng.
 
 ![Ảnh thật TLauncher trên màn dọc 1080×1920 và màn ngang 2560×1080, với hình nền Bãi biển toàn cảnh, đồng hồ, Dock và thẻ Stage Manager](docs/images/showcase/dual-monitor-real.webp)
 
@@ -127,13 +129,14 @@ Một cửa sổ **Cài đặt** tập trung Hình nền, Màn hình, Thời ti�
 
 ## Cài đặt và cập nhật
 
-1. Tải **[TLauncher-1.0.0-win-x64.zip](https://github.com/tuanngbc/TLauncher/releases/download/v1.0.0/TLauncher-1.0.0-win-x64.zip)**. Dùng [tệp SHA-256 đi kèm](https://github.com/tuanngbc/TLauncher/releases/download/v1.0.0/TLauncher-1.0.0-win-x64.zip.sha256) để đối chiếu bản tải.
+1. Mở [Release mới nhất](https://github.com/tuanngbc/TLauncher/releases/latest) và tải **TLauncher-1.0.1-win-x64.zip** trong mục **Assets**. Tệp **.zip.sha256** cùng tên dùng để đối chiếu bản tải. **Source code** dùng để đọc hoặc tự build.
 2. Giải nén **toàn bộ** gói vào một thư mục rồi mở **TLauncher.exe**. Giữ **prototype/** và **assets/widget/** cạnh EXE. Mở Cài đặt từ menu Dock hoặc khay hệ thống.
-3. Khi nâng cấp, thoát bản cũ rồi sao lưu thư mục cài đặt và **%USERPROFILE%\.deskland-rs**. Giữ cấu hình để dùng tiếp chủ đề, phím tắt và các mục đã lưu. Muốn quay lại, thoát bản mới và chạy EXE từ bản sao lưu.
+3. Khi nâng cấp, thoát bản cũ, sao lưu thư mục cài đặt và **%USERPROFILE%\.deskland-rs**, rồi giải nén toàn bộ gói mới vào thư mục cài đặt. Giữ thư mục cấu hình để dùng tiếp chủ đề, phím tắt và các mục đã lưu.
+4. Nếu muốn tự mở khi đăng nhập, kiểm tra **Cài đặt → Hệ thống → Khởi động cùng Windows**. Nếu chuyển EXE sang thư mục khác hoặc tùy chọn đã bật nhưng máy không tự mở, tắt rồi bật lại công tắc từ bản mới để đăng ký lại đúng đường dẫn. Xem [cách nâng cấp và quay về 1.0.0](CHANGELOG.md#nâng-cấp-và-quay-lại).
 
 ## Mã nguồn, kiểm thử và giấy phép
 
-Bản 1.0.0 được đóng gói từ [commit fa234a0](https://github.com/tuanngbc/TLauncher/commit/fa234a03a71807c86fb2587df3e6d1cd74708803). Xem [Windows CI của bản phát hành](https://github.com/tuanngbc/TLauncher/actions/runs/45201316321), [kiến trúc và lệnh kiểm thử](README-rust.md) hoặc [tài liệu](docs/README.md). Dựng trên Windows với Rust stable và Windows SDK: chạy **cargo test --release** và **cargo build --release**.
+Mỗi gói Windows có **VERSION.txt** và **BUILD-COMMIT.txt** để đối chiếu phiên bản và mã nguồn. Xem [Release mới nhất](https://github.com/tuanngbc/TLauncher/releases/latest) để tìm bản build đã kiểm tra, hoặc đọc [kiến trúc và lệnh kiểm thử](README-rust.md) và [tài liệu](docs/README.md). Dựng trên Windows với Rust stable và Windows SDK: chạy **cargo test --release** và **cargo build --release**.
 
 Dự án dùng [GPL-3.0](LICENSE). Xem [thông báo bên thứ ba](THIRD_PARTY_NOTICES.md) và [ghi chú nhãn hiệu](TRADEMARKS.md).
 

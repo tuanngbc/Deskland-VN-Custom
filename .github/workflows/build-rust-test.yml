@@ -121,7 +121,15 @@ jobs:
           $short = '${{ github.sha }}'.Substring(0, 7)
           $version = (Get-Item target\release\TLauncher.exe).VersionInfo.ProductVersion
           if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid executable version: $version" }
-          $name = "TLauncher-Rust-$short-win-x64"
+          $cargoVersion = (cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json).packages |
+            Where-Object name -eq 'tlauncher' | Select-Object -ExpandProperty version
+          if ($version -cne $cargoVersion) { throw "TLauncher.exe version $version does not match Cargo $cargoVersion" }
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            if ($env:GITHUB_REF_NAME -cne "v$version") { throw "Tag $env:GITHUB_REF_NAME does not match TLauncher.exe $version" }
+            $name = "TLauncher-$version-win-x64"
+          } else {
+            $name = "TLauncher-Rust-$short-win-x64"
+          }
           $dir = "dist\$name"
           New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item target\release\TLauncher.exe "$dir\TLauncher.exe"
@@ -129,7 +137,7 @@ jobs:
           # gian/thời tiết và tìm vị trí; engine Rust nhận các message tương ứng.
           Copy-Item -Recurse prototype "$dir\prototype"
           Copy-Item -Recurse assets\widget "$dir\assets\widget"
-          foreach ($file in 'README.md','LICENSE','NOTICE','THIRD_PARTY_NOTICES.md','TRADEMARKS.md') {
+          foreach ($file in 'README.md','CHANGELOG.md','LICENSE','NOTICE','THIRD_PARTY_NOTICES.md','TRADEMARKS.md') {
             if (Test-Path $file) { Copy-Item $file $dir }
           }
           Copy-Item README-rust.md "$dir\README-rust.md"
