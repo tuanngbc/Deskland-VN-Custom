@@ -76,7 +76,50 @@ fn native_live_backdrop_retains_color_and_filters_detail() {
             println!("GLASS_POC=BLOCKED synthetic baseline not composited detail={detail:.2} color={spread:.2}");return;
         }
         evidence("glass-reference.png",&reference);
+        // Exercise the same DirectComposition upload used by the real panel.
+        // Sample an opaque patch, then verify a dirty update and an untouched
+        // transparent area over the fixture desktop.
         let (gdi,user,_)=resources();
+        {
+            let c=wide(MATERIAL_CLASS);
+            let wc=WNDCLASSW{lpfnWndProc:Some(backdrop_proc),hInstance:instance,lpszClassName:c.as_ptr(),..std::mem::zeroed()};
+            RegisterClassW(&wc);
+            let front=Owned(CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP|WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW|WS_EX_TOPMOST,
+                c.as_ptr(),ptr::null(),WS_POPUP,X,Y,W,H,ptr::null_mut(),ptr::null_mut(),instance,ptr::null_mut()));
+            if !front.0.is_null(){
+                let check=(||->windows::core::Result<bool>{
+                    let mut fg=Foreground::new(front.0)?;
+                    let frame=Frame::new(ptr::null_mut(),W,H).expect("fixture foreground bitmap");
+                    let pixels=std::slice::from_raw_parts_mut(frame.bits,(W*H*4) as usize);
+                    pixels.fill(0);
+                    let paint=|pixels:&mut[u8],bgrx:[u8;4]|{
+                        for y in 85..99{for x in 88..102{
+                            let at=((y*W+x)*4) as usize;
+                            pixels[at..at+4].copy_from_slice(&bgrx);
+                        }}
+                    };
+                    let sample=|img:&[u8],x:i32,y:i32|-> [u8;3]{
+                        let at=((y*W+x)*4) as usize;
+                        img[at..at+3].try_into().unwrap()
+                    };
+                    paint(pixels,[25,185,245,255]);
+                    fg.upload(&frame,rect(0,0,W,H))?;
+                    ShowWindow(front.0,SW_SHOWNOACTIVATE);
+                    settle();
+                    let Some(first)=screen() else{return Ok(false);};
+                    paint(pixels,[245,180,25,255]);
+                    fg.upload(&frame,rect(88,85,102,99))?;
+                    settle();
+                    let Some(next)=screen() else{return Ok(false);};
+                    evidence("glass-composed-foreground.png",&next);
+                    let opaque=sample(&first,94,90)==[25,185,245]&&sample(&next,94,90)==[245,180,25];
+                    let transparent=sample(&next,140,315)==sample(&reference,140,315);
+                    println!("GLASS_FOREGROUND opaque_dirty_update={opaque} unchanged_transparent_region={transparent}");
+                    Ok(opaque&&transparent)
+                })();
+                println!("GLASS_FOREGROUND fixture={check:?}");
+            }else{println!("GLASS_FOREGROUND=BLOCKED cannot create fixture window");}
+        }
         for (kind, label) in [(BackdropKind::Host,"host"),(BackdropKind::Acrylic,"acrylic")]{
             for dark in [true,false]{
                 let native=match NativeBackdrop::create(kind){
@@ -86,6 +129,12 @@ fn native_live_backdrop_retains_color_and_filters_detail() {
                 native.material(dark,36);
                 native.show_behind(HWND_TOPMOST,rect(X,Y,X+W,Y+H));
                 UpdateWindow(native.hwnd);
+                settle();
+                if let Some(layer)=screen(){
+                    let (d,c)=metrics(&layer);
+                    println!("GLASS_POC host_only backend={label} dark={dark} detail_ratio={:.3} color_ratio={:.3}",d/detail,c/spread);
+                    evidence(&format!("glass-{label}-{}-backdrop-only.png",if dark{"dark"}else{"light"}),&layer);
+                }
                 // Separate premultiplied foreground: glass cannot blur icons
                 // or text because neither is part of its backdrop source.
                 let face=Owned(CreateWindowExW(WS_EX_LAYERED|WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW|WS_EX_TOPMOST,
@@ -126,7 +175,7 @@ fn native_live_backdrop_retains_color_and_filters_detail() {
                 settle();
                 if let Some(after)=screen(){
                     let at=(320*W*4) as usize;
-                    let band=48*4..(W-48)*4;
+                    let band=48usize*4..(W as usize-48)*4;
                     let delta=after[at+band.start..at+band.end].iter().zip(&b[at+band.start..at+band.end])
                         .map(|(&before,&sample)|f64::from(before.abs_diff(sample))).sum::<f64>()/(band.end-band.start) as f64;
                     println!("GLASS_POC backend={label} dark={dark} live_delta={delta:.2}");

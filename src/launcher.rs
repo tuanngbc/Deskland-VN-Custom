@@ -348,8 +348,9 @@ fn start_compact_motion(hwnd:HWND,open:bool)->bool{
     let from=COMPACT_MOTION.get().map_or(if open{0.0}else{1.0},Tween::openness);
     let t=Tween{start:std::time::Instant::now(),duration:if open{fullscreen::OPEN_MS}else{fullscreen::CLOSE_MS},
         from,to:if open{1.0}else{0.0}};
+    if unsafe{SetTimer(hwnd,COMPACT_TWEEN,15,None)}==0{return false;}
     COMPACT_MOTION.set(Some(t));
-    unsafe{SetTimer(hwnd,COMPACT_TWEEN,15,None)!=0}
+    true
 }
 fn close_compact(hwnd:HWND,toggle:bool){
     if COMPACT_MOTION.get().is_some_and(|t|t.to==0.0){
@@ -439,7 +440,7 @@ unsafe fn execute(hwnd: HWND, path: &Path) -> isize {
 type IconKey = (PathBuf, i32);
 type IconResult = (IconKey, Option<Arc<IconPixels>>);
 type IconJob = (IconKey, std::sync::mpsc::Sender<IconResult>);
-type RasterRows=std::collections::VecDeque<(IconKey,Option<Arc<IconPixels>>,u64,std::time::Instant)>;
+type RasterRows=std::collections::VecDeque<(IconKey,Option<Arc<IconPixels>>,u64,std::time::Instant,Option<String>)>;
 static RASTERS:LazyLock<Mutex<RasterRows>>=LazyLock::new(||Mutex::new(RasterRows::new()));
 const RASTER_BUDGET:usize=16*1024*1024;
 static PREFETCH_SIZE:std::sync::atomic::AtomicI32=std::sync::atomic::AtomicI32::new(0);
@@ -448,7 +449,12 @@ pub(crate) fn prewarm_spotlight(icon_size:i32){
     if cfg!(test){return;}
     let dpi=unsafe{windows_sys::Win32::UI::HiDpi::GetDpiForSystem()}.clamp(72,288);
     PREFETCH_SIZE.store(((icon_size*dpi as i32+48)/96).clamp(8,192),Relaxed);
-    let _=catalog::request(false,false);
+    // A Spotlight or Start open during boot may already have populated the
+    // catalog. Consume an immediately available result; otherwise the shared
+    // catalog worker prefetches when it publishes the rows.
+    if let Some(rows)=catalog::request(false,false).and_then(|rx|rx.try_recv().ok()){
+        prefetch_catalog(&rows);
+    }
 }
 fn prefetch_catalog(rows:&[Entry]){
     use std::sync::atomic::Ordering::Relaxed;
@@ -465,21 +471,29 @@ fn prefetch_catalog(rows:&[Entry]){
 fn lookup_raster(key:&IconKey,allow_stale:bool)->Option<(Option<Arc<IconPixels>>,bool)>{
     let mut rows=RASTERS.try_lock().ok()?;
     let revision=crate::app_icons::revision();
-    let at=rows.iter().position(|(k,icon,rev,time)|k==key&&*rev==revision&&
-        ((allow_stale&&icon.is_some())||time.elapsed().as_secs()<if icon.is_some(){300}else{10}))?;
-    let pair=rows.remove(at)?;
-    let result=(pair.1.clone(),pair.3.elapsed().as_secs()<300);
+    let at=rows.iter().position(|row|row.0==*key)?;
+    let mut pair=rows.remove(at)?;
+    if pair.2!=revision{
+        let token=crate::app_icons::override_token(&key.0,&catalog::identity(&key.0));
+        if pair.4!=token{return None;}
+        pair.2=revision;
+    }
+    let elapsed=pair.3.elapsed().as_secs();
+    if !(allow_stale&&pair.1.is_some())&&elapsed>=if pair.1.is_some(){300}else{10}{return None;}
+    let result=(pair.1.clone(),elapsed<300);
     rows.push_back(pair);
     Some(result)
 }
 fn warm_raster(key:&IconKey)->Option<Option<Arc<IconPixels>>>{lookup_raster(key,false).map(|p|p.0)}
 fn retain_raster(key:IconKey,icon:Option<Arc<IconPixels>>,revision:u64){
+    let token=crate::app_icons::override_token(&key.0,&catalog::identity(&key.0));
     let Ok(mut rows)=RASTERS.lock() else{return;};
+    if crate::app_icons::revision()!=revision{return;}
     rows.retain(|r|r.0!=key);
-    rows.push_back((key,icon,revision,std::time::Instant::now()));
+    rows.push_back((key,icon,revision,std::time::Instant::now(),token));
     let mut bytes=rows.iter().filter_map(|r|r.1.as_ref()).map(|icon|icon.pixels.len()).sum::<usize>();
     while rows.len()>512||bytes>RASTER_BUDGET{
-        let Some((_,icon,_,_))=rows.pop_front() else{break;};
+        let Some((_,icon,_,_,_))=rows.pop_front() else{break;};
         bytes=bytes.saturating_sub(icon.as_ref().map_or(0,|v|v.pixels.len()));
     }
 }

@@ -214,7 +214,9 @@ impl Foreground {
             None,D3D11_SDK_VERSION,Some(&mut dev),None,Some(&mut ctx))?;
         let dxgi:IDXGIDevice=dev.expect("D3D device").cast()?;
         let comp:IDCompositionDevice=DCompositionCreateDevice(&dxgi)?;
-        let target=comp.CreateTargetForHwnd(WinHwnd(hwnd),false)?;
+        // The native EDIT remains interactive below this visual. Its GDI
+        // output is supplied by draw_live_edit, so the child must not clip it.
+        let target=comp.CreateTargetForHwnd(WinHwnd(hwnd),true)?;
         let visual=comp.CreateVisual()?;
         let scale=comp.CreateScaleTransform()?;
         let effect=comp.CreateEffectGroup()?;

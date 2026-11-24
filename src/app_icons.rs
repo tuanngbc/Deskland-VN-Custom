@@ -100,6 +100,17 @@ pub fn load(path:&Path)->Option<IconPixels>{
     if width.max(height)>256{return None;}
     Some(IconPixels{width:width as i32,height:height as i32,pixels:premultiply(decoded.into_raw())})
 }
+// Read only the already-known alias; UI cache lookup must not invoke the Shell.
+pub(crate) fn override_token(path:&Path,identity:&str)->Option<String>{
+    let overrides=OVERRIDES.read().ok()?;
+    if overrides.is_empty(){return None;}
+    let raw=normalized(path.to_str()?)?;
+    let alias=if raw.ends_with(".lnk"){
+        SHORTCUTS.lock().ok().and_then(|cache|cache.get(&raw).cloned().flatten())
+    }else{None};
+    overrides.get(alias.as_deref().unwrap_or(&raw)).or_else(||overrides.get(identity)).cloned()
+}
+
 fn override_path(path:&Path)->Option<PathBuf>{
     if OVERRIDES.read().ok()?.is_empty(){return None;}
     let raw=path.to_str()?;
@@ -338,6 +349,27 @@ mod tests{
         assert!(!valid_file("../icon.png"));
         assert!(valid_file("0123456789abcdef0123456789abcdef.png"));
         assert_eq!(premultiply(vec![255,20,80,128,9,22,43,0]),[40,10,128,128,0,0,0,0]);
+    }
+    #[test]
+    fn disk_raster_survives_a_new_process(){
+        const IT:&str="TLAUNCHER_ICON_PROOF_DIR";
+        let key="v1|test-app|96|0|fixture";
+        let pixel=vec![20,40,60,90];
+        if let Some(dir)=std::env::var_os(IT){
+            let path=cache_path(&PathBuf::from(dir),key);
+            assert_eq!(read_raster(&path,key).unwrap().pixels,pixel);
+            return;
+        }
+        let dir=std::env::temp_dir().join(format!("tlauncher-restart-cache-{}-{}",std::process::id(),SERIAL.fetch_add(1,Ordering::Relaxed)));
+        let path=cache_path(&dir,key);
+        write_raster(&path,key,&IconPixels{width:1,height:1,pixels:pixel}).unwrap();
+        let out=std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact","app_icons::tests::disk_raster_survives_a_new_process","--nocapture"])
+            .env(IT,&dir).output().unwrap();
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+        assert!(out.status.success(),"{}",String::from_utf8_lossy(&out.stderr));
+        assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
     }
     #[test]
     fn disk_raster_round_trip_rejects_stale_identity_and_corruption(){
