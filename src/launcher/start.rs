@@ -31,8 +31,8 @@ struct Model {
     hwnd:HWND, edit:HWND, owner:HWND, anchor:DockAnchor, work:RECT, dock_dpi:u32, scale:f32, frame:Frame, dark:bool, area:Area,
     all:Vec<Entry>, pins:Vec<String>, usage:Usage, query:String, page:usize, selected:usize,
     pressed:Option<(Hit,i32,i32)>, hover:Option<Hit>, keyboard:bool, view:StartView, error:String, glass:Rc<[u8]>, glass_height:i32, fonts:Fonts, avatar:Option<IconPixels>, avatar_rx:Option<Receiver<Option<IconPixels>>>, avatar_at:Option<Instant>,
-    icons:HashMap<(PathBuf,i32),Option<IconPixels>>, loading:HashSet<(PathBuf,i32)>,
-    icon_tx:IconRequests,icon_rx:Receiver<((PathBuf,i32),Option<IconPixels>)>,
+    icons:HashMap<(PathBuf,i32),Option<Arc<IconPixels>>>, loading:HashSet<(PathBuf,i32)>,
+    icon_tx:IconRequests,icon_rx:Receiver<IconResult>,
     catalog:Option<Receiver<Vec<Entry>>>, indexed_at:Option<Instant>,
 }
 thread_local!{
@@ -353,7 +353,7 @@ unsafe fn icon(dc:HDC,icon:&IconPixels,x:i32,y:i32){
     }
     DeleteObject(bitmap);
 }
-type TileIcon=Option<IconPixels>;
+type TileIcon=Option<Arc<IconPixels>>;
 unsafe fn paint_start(hwnd:HWND){
     let mut ps:PAINTSTRUCT=std::mem::zeroed();let target=BeginPaint(hwnd,&mut ps);
     // Do not hold a RefCell borrow across window/control calls.
@@ -365,13 +365,13 @@ unsafe fn paint_start(hwnd:HWND){
         for tile in &tiles{
             let entry=tile.entry.as_ref();
             let key=entry.map(|e|(e.path.clone(),px(if tile.compact{LIST_ICON}else{GRID_ICON},m.scale).max(16)));
-            let pixels=key.as_ref().and_then(|key|m.icons.get(key)).cloned().flatten();
+            let cached=key.as_ref().and_then(|key|m.icons.get(key).cloned().or_else(||warm_raster(key)));
             if let Some(key)=key{
-                if key.0!=Path::new(SETTINGS)&&!m.icons.contains_key(&key)&&m.loading.len()<24&&m.loading.insert(key.clone()){
+                if cached.is_none()&&key.0!=Path::new(SETTINGS)&&m.loading.len()<24&&m.loading.insert(key.clone()){
                     if m.icon_tx.send(key.clone()).is_err(){m.loading.remove(&key);}
                 }
             }
-            icons.push(if tile.hit==Hit::Account{m.avatar.clone()}else{pixels});
+            icons.push(if tile.hit==Hit::Account{m.avatar.clone().map(Arc::new)}else{cached.flatten()});
         }
         let selected=selected.filter(|_|m.keyboard||!m.query.is_empty());
         Some((m.scale,m.frame,m.dark,m.glass.clone(),tiles,icons,selected,m.hover.clone(),m.area,m.query.trim().is_empty(),

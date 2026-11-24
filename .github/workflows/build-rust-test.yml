@@ -79,6 +79,8 @@ jobs:
           # Private Win32 desktop with synthetic app names; never switches the input desktop.
           $env:TUANPC_SPOTLIGHT_EVIDENCE = Join-Path $env:RUNNER_TEMP "spotlight-evidence"
           New-Item -ItemType Directory -Force $env:TUANPC_SPOTLIGHT_EVIDENCE | Out-Null
+          cargo test --release launcher::fullscreen::native_tests::native_live_backdrop_retains_color_and_filters_detail -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release launcher::fullscreen::native_tests::native_isolated_library_search_navigation_and_100_toggles -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:TUANPC_DESK_TYPE_EVIDENCE = Join-Path $env:RUNNER_TEMP "typography-evidence"

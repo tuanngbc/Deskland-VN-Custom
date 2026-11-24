@@ -8,6 +8,8 @@ use std::{collections::HashSet, path::Path};
 pub(crate) struct Preferences {
     pub enabled: bool,
     pub dock_fullscreen: bool,
+    pub dock_follow_hotkey: bool,
+    pub hotkey_fullscreen: bool,
     pub theme: String,
     pub icon_size: i32,
     pub spacing: i32,
@@ -22,6 +24,8 @@ impl Default for Preferences {
         Self {
             enabled: true,
             dock_fullscreen: true,
+            dock_follow_hotkey: false,
+            hotkey_fullscreen: false,
             theme: "system".into(),
             icon_size: 86,
             spacing: 18,
@@ -34,6 +38,10 @@ impl Default for Preferences {
     }
 }
 impl Preferences {
+    pub(super) fn fullscreen_for(&self, dock: bool) -> bool {
+        if dock && !self.dock_follow_hotkey { self.dock_fullscreen } else { self.hotkey_fullscreen }
+    }
+
     pub fn from_json(value: &serde_json::Value) -> Self {
         let mut out = serde_json::from_value::<Self>(value.clone()).unwrap_or_default();
         out.icon_size = out.icon_size.clamp(36, 96);
@@ -45,6 +53,24 @@ impl Preferences {
         }
         out
     }
+}
+
+#[cfg(test)]
+#[test]
+fn activation_modes_are_independent_and_migrate_existing_dock_preferences() {
+    let defaults=Preferences::from_json(&serde_json::json!({}));
+    assert!(!defaults.fullscreen_for(false));
+    assert!(defaults.fullscreen_for(true));
+    let mut prefs=Preferences::from_json(&serde_json::json!({"dockFullscreen":false,"iconSize":74}));
+    assert!(!prefs.fullscreen_for(true));
+    prefs.hotkey_fullscreen=true;
+    assert!(prefs.fullscreen_for(false));
+    assert!(!prefs.fullscreen_for(true));
+    prefs.dock_follow_hotkey=true;
+    assert!(prefs.fullscreen_for(true));
+    let restored=Preferences::from_json(&serde_json::to_value(&prefs).unwrap());
+    assert_eq!(restored,prefs);
+    assert_eq!(restored.icon_size,74);
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

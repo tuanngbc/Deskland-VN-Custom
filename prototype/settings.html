@@ -143,7 +143,9 @@
       <h3 data-i18n="spotlightFullTitle">Spotlight toàn màn hình</h3>
       <div class="launcher-options">
         <label><span data-i18n="spotlightEnabled">Bật Spotlight</span><input id="spotlightEnabled" type="checkbox" checked></label>
-        <label><span data-i18n="spotlightDockClick">Khi bấm Spotlight trên Dock</span><select id="spotlightDockClick"><option value="full" data-i18n="spotlightFullMode">Toàn màn hình</option><option value="compact" data-i18n="spotlightCompactMode">Thu gọn</option></select></label>
+        <label><span data-i18n="spotlightHotkeyMode">Chế độ mở bằng phím tắt Spotlight</span><select id="spotlightHotkeyMode" aria-describedby="spotlightActivationHint"><option value="compact" data-i18n="spotlightCompactMode">Thu gọn</option><option value="full" data-i18n="spotlightFullMode">Toàn màn hình</option></select></label>
+        <label><span data-i18n="spotlightDockClick">Khi bấm Spotlight trên Dock</span><select id="spotlightDockClick" aria-describedby="spotlightActivationHint"><option value="full" data-i18n="spotlightFullMode">Toàn màn hình</option><option value="compact" data-i18n="spotlightCompactMode">Thu gọn</option><option value="follow" data-i18n="spotlightFollowHotkey">Giống chế độ phím tắt</option></select></label>
+        <p class="monitor-detail" id="spotlightActivationHint" data-i18n="spotlightActivationHint">Thu gọn mở thanh tìm kiếm giữa màn hình. Toàn màn hình mở tìm kiếm và thư viện ứng dụng trên nền kính mờ. Áp dụng cho Alt + Space hoặc tổ hợp Spotlight đã đặt.</p>
         <label><span data-i18n="launcherTheme">Chế độ màu</span><select id="spotlightFullTheme"><option value="system" data-i18n="spotlightSystemTheme">Theo hệ thống</option><option value="light" data-i18n="launcherLight">Sáng</option><option value="dark" data-i18n="launcherDark">Tối</option></select></label>
         <label><span data-i18n="spotlightIconSize">Cỡ biểu tượng</span><input id="spotlightIconSize" type="range" min="36" max="96" step="2" value="86"></label>
         <label><span data-i18n="spotlightSpacing">Khoảng cách ô</span><input id="spotlightSpacing" type="range" min="8" max="42" step="2" value="18"></label>
@@ -1338,9 +1340,10 @@ for (const id of ['launcherTheme', 'launcherTransparency', 'launcherBlur']) {
   $(id).addEventListener('input', syncLauncherAppearance);
   $(id).addEventListener('change', () => send({ t: 'launcherAppearance', theme: $('launcherTheme').value, transparency: Number($('launcherTransparency').value) / 100, blur: Number($('launcherBlur').value) }));
 }
-const spotlightInputs=['spotlightEnabled','spotlightDockClick','spotlightFullTheme','spotlightIconSize','spotlightSpacing','spotlightGlassStrength','spotlightGlassBlur','spotlightAnimations','spotlightNames','spotlightFavorites'];
+const spotlightInputs=['spotlightEnabled','spotlightHotkeyMode','spotlightDockClick','spotlightFullTheme','spotlightIconSize','spotlightSpacing','spotlightGlassStrength','spotlightGlassBlur','spotlightAnimations','spotlightNames','spotlightFavorites'];
 for(const id of spotlightInputs) $(id).addEventListener('change',()=>send({t:'spotlightPreferences',value:{
-  enabled:$('spotlightEnabled').checked,dockFullscreen:$('spotlightDockClick').value==='full',theme:$('spotlightFullTheme').value,
+  enabled:$('spotlightEnabled').checked,dockFullscreen:$('spotlightDockClick').value!=='compact',
+  dockFollowHotkey:$('spotlightDockClick').value==='follow',hotkeyFullscreen:$('spotlightHotkeyMode').value==='full',theme:$('spotlightFullTheme').value,
   iconSize:Number($('spotlightIconSize').value),spacing:Number($('spotlightSpacing').value),
   glassStrength:Number($('spotlightGlassStrength').value),glassBlur:Number($('spotlightGlassBlur').value),animations:$('spotlightAnimations').checked,
   showNames:$('spotlightNames').checked,favoritesFirst:$('spotlightFavorites').checked
@@ -1573,7 +1576,8 @@ function applyInitMessage(m) {
   if (m.spotlight) {
     const p=m.spotlight;
     $('spotlightEnabled').checked=p.enabled;
-    $('spotlightDockClick').value=p.dockFullscreen?'full':'compact';
+    $('spotlightHotkeyMode').value=p.hotkeyFullscreen?'full':'compact';
+    $('spotlightDockClick').value=p.dockFollowHotkey?'follow':p.dockFullscreen===false?'compact':'full';
     $('spotlightFullTheme').value=p.theme;
     $('spotlightIconSize').value=p.iconSize;
     $('spotlightSpacing').value=p.spacing;

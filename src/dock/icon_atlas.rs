@@ -7,7 +7,7 @@ use std::{
     ptr,
     sync::{Arc,atomic::{AtomicBool,Ordering},mpsc::{self,Receiver,Sender}},
 };
-use crate::launcher::{shell_icon,IconPixels};
+use crate::launcher::IconPixels;
 use super::{Item,WM_ICON_CHANGED,surface::Atlas};
 use windows_sys::Win32::{
     System::Threading::{TrySubmitThreadpoolCallback,PTP_CALLBACK_INSTANCE},
@@ -21,7 +21,7 @@ const SOURCE_BUDGET:usize=5*1024*1024;
 /// buckets so fractional motion doesn't churn extraction or Shell caches.
 pub fn source_request(pixel_edge:f32)->i32{
     let target=(pixel_edge*1.5).ceil() as i32;
-    [96,128,192,256].into_iter().find(|size|*size>=target).unwrap_or(256)
+    crate::app_icons::source_tier(target)
 }
 fn bytes(icon:&ResultIcon)->usize{icon.as_ref().map_or(0,|i|i.pixels.len())}
 // Bound across old and new Dock instances. An unresponsive Shell provider can
@@ -52,7 +52,7 @@ unsafe extern "system" fn extract(_:PTP_CALLBACK_INSTANCE,raw:*mut c_void) {
             let command=super::command_pin::decode(&path);
             let own=(path==super::internal_app::KEY).then(||std::env::current_exe().ok()).flatten();
             let file=own.as_deref().unwrap_or_else(||Path::new(command.as_ref().map_or(path.as_str(),|c|c.exe.as_str())));
-            let icon=crate::app_icons::load(Path::new(&path)).or_else(||shell_icon(file,source_size)).map(Arc::new);
+            let icon=crate::app_icons::shared_source(Path::new(&path),file,Path::new(&path),source_size);
             CoUninitialize();
             icon
         }else{None}

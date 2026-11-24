@@ -3,6 +3,7 @@
 use crate::desktop::wide;
 use std::cell::{Cell,RefCell};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc,LazyLock,Mutex};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::DataExchange::*;
@@ -130,9 +131,9 @@ struct State {
     hwnd: HWND, all: Vec<Entry>, matches: Vec<usize>, query: String,
     selected: usize, first: usize, scale: f32, width: i32, height: i32,
     glass: Vec<u8>, backdrop: Vec<u8>, error: String, select_all: bool,
-    icons: std::collections::HashMap<(PathBuf, i32), Option<IconPixels>>,
+    icons: std::collections::HashMap<(PathBuf, i32), Option<Arc<IconPixels>>>,
     icon_requests: IconRequests,
-    icon_results: std::sync::mpsc::Receiver<((PathBuf, i32), Option<IconPixels>)>,
+    icon_results: std::sync::mpsc::Receiver<IconResult>,
     pending_icons: usize,
     apps_rx:Option<std::sync::mpsc::Receiver<Vec<Entry>>>,
     history: History, launching: bool, dock_start:bool, dock_anchor:Option<DockAnchor>,
@@ -368,8 +369,51 @@ unsafe fn execute(hwnd: HWND, path: &Path) -> isize {
 
 // One bounded icon queue and cache. Popups own only their reply endpoints.
 type IconKey = (PathBuf, i32);
-type IconResult = (IconKey, Option<IconPixels>);
+type IconResult = (IconKey, Option<Arc<IconPixels>>);
 type IconJob = (IconKey, std::sync::mpsc::Sender<IconResult>);
+type RasterRows=std::collections::VecDeque<(IconKey,Option<Arc<IconPixels>>,u64,std::time::Instant)>;
+static RASTERS:LazyLock<Mutex<RasterRows>>=LazyLock::new(||Mutex::new(RasterRows::new()));
+const RASTER_BUDGET:usize=16*1024*1024;
+static PREFETCH_SIZE:std::sync::atomic::AtomicI32=std::sync::atomic::AtomicI32::new(0);
+pub(crate) fn prewarm_spotlight(icon_size:i32){
+    use std::sync::atomic::Ordering::Relaxed;
+    if cfg!(test){return;}
+    let dpi=unsafe{windows_sys::Win32::UI::HiDpi::GetDpiForSystem()}.clamp(72,288);
+    PREFETCH_SIZE.store(((icon_size*dpi as i32+48)/96).clamp(8,192),Relaxed);
+    let _=catalog::request(false,false);
+}
+fn prefetch_catalog(rows:&[Entry]){
+    use std::sync::atomic::Ordering::Relaxed;
+    let size=PREFETCH_SIZE.swap(0,Relaxed);
+    if size==0{return;}
+    let (requests,_rx)=icon_worker();
+    let mut apps=rows.iter().filter(|app|app_entry(app)).collect::<Vec<_>>();
+    apps.sort_by_cached_key(|app|app.name.to_lowercase());
+    for app in apps.into_iter().take(36) {
+        let key=(app.path.clone(),size);
+        if warm_raster(&key).is_none()&&requests.send(key).is_err(){break;}
+    }
+}
+fn warm_raster(key:&IconKey)->Option<Option<Arc<IconPixels>>>{
+    let mut rows=RASTERS.try_lock().ok()?;
+    let revision=crate::app_icons::revision();
+    let at=rows.iter().position(|(k,icon,rev,time)|k==key&&*rev==revision&&
+        time.elapsed().as_secs()<if icon.is_some(){300}else{10})?;
+    let pair=rows.remove(at)?;
+    let result=pair.1.clone();
+    rows.push_back(pair);
+    Some(result)
+}
+fn retain_raster(key:IconKey,icon:Option<Arc<IconPixels>>,revision:u64){
+    let Ok(mut rows)=RASTERS.lock() else{return;};
+    rows.retain(|r|r.0!=key);
+    rows.push_back((key,icon,revision,std::time::Instant::now()));
+    let mut bytes=rows.iter().filter_map(|r|r.1.as_ref()).map(|icon|icon.pixels.len()).sum::<usize>();
+    while rows.len()>512||bytes>RASTER_BUDGET{
+        let Some((_,icon,_,_))=rows.pop_front() else{break;};
+        bytes=bytes.saturating_sub(icon.as_ref().map_or(0,|v|v.pixels.len()));
+    }
+}
 struct IconRequests(std::sync::mpsc::Sender<IconResult>);
 impl IconRequests {
     fn send(&self, key: IconKey) -> Result<(), ()> {
@@ -380,22 +424,13 @@ impl IconRequests {
             std::thread::Builder::new().name("tlauncher-shell-icons".into()).spawn(move || unsafe {
                 use windows::Win32::System::Com::*;
                 let com = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-                let mut cache = std::collections::VecDeque::<(IconKey, Option<IconPixels>)>::new();
-                let mut revision = crate::app_icons::revision();
                 while let Ok((key, reply)) = rx.recv() {
-                    let next = crate::app_icons::revision();
-                    if revision != next { cache.clear(); revision = next; }
-                    let icon = if let Some(i) = cache.iter().position(|(k, _)| *k == key) {
-                        let hit = cache.remove(i).unwrap();
-                        let icon = hit.1.clone();
-                        cache.push_back(hit);
-                        icon
-                    } else {
-                        let icon = extract_icon(&key.0, key.1.clamp(8, 192));
-                        if cache.len() >= 96 { cache.pop_front(); }
-                        cache.push_back((key.clone(), icon.clone()));
-                        icon
-                    };
+                    let revision=crate::app_icons::revision();
+                    let icon=warm_raster(&key).unwrap_or_else(||{
+                        let loaded=extract_icon(&key.0,key.1.clamp(8,192));
+                        retain_raster(key.clone(),loaded.clone(),revision);
+                        loaded
+                    });
                     let _ = reply.send((key, icon));
                 }
                 if com.is_ok() { CoUninitialize(); }
@@ -409,22 +444,21 @@ fn icon_worker() -> (IconRequests, std::sync::mpsc::Receiver<IconResult>) {
     let (tx, rx) = std::sync::mpsc::channel();
     (IconRequests(tx), rx)
 }
-unsafe fn extract_icon(path: &Path, size: i32) -> Option<IconPixels> {
+unsafe fn extract_icon(path: &Path, size: i32) -> Option<Arc<IconPixels>> {
     let command=path.to_str().and_then(crate::dock::command_pin::decode);
-    let icon=crate::app_icons::load(path).or_else(||{
-        let id=catalog::identity(path);
-        if id!=path.to_string_lossy(){crate::app_icons::load(Path::new(&id))}else{None}
-    }).or_else(||shell_icon(
-        command.as_ref().map_or(path,|c|Path::new(&c.exe)),(size*2).clamp(64,256)))?;
+    let id=catalog::identity(path);
+    let source=command.as_ref().map_or(path,|c|Path::new(&c.exe));
+    let icon=crate::app_icons::shared_source(path,source,Path::new(&id),crate::app_icons::source_tier(size*2))?;
     // Do not manufacture detail by enlarging small shell icons. Keep their
     // native raster centred in a larger tile when no large source exists.
     let scale = (size as f32 / icon.width.max(icon.height) as f32).min(1.0);
     let width = (icon.width as f32 * scale).round().max(1.0) as i32;
     let height = (icon.height as f32 * scale).round().max(1.0) as i32;
-    let image = image::RgbaImage::from_raw(icon.width as u32, icon.height as u32, icon.pixels)?;
+    if width==icon.width&&height==icon.height{return Some(icon);}
+    let image = image::RgbaImage::from_raw(icon.width as u32, icon.height as u32, icon.pixels.clone())?;
     let mut pixels = image::imageops::resize(&image, width as u32, height as u32, image::imageops::FilterType::Lanczos3).into_raw();
     for p in pixels.chunks_exact_mut(4) { for c in 0..3 {p[c] = p[c].min(p[3]);} }
-    Some(IconPixels { width, height, pixels })
+    Some(Arc::new(IconPixels { width, height, pixels }))
 }
 
 /// Preserve the shell bitmap dimensions. IconPixels are premultiplied BGRA
@@ -498,11 +532,14 @@ fn shell_pixels_keep_premultiplied_bgra_without_colored_transparent_edges() {
     normalize_shell_alpha(&mut premultiplied);
     assert_eq!(premultiplied,straight);
 }
-fn icon_for(hwnd: HWND, path: &Path, size: i32) -> Option<IconPixels> {
+fn icon_for(hwnd: HWND, path: &Path, size: i32) -> Option<Arc<IconPixels>> {
     let (icon, pending) = STATE.with(|c| {
         let mut g = c.borrow_mut(); let s = g.as_mut()?;
         if s.icon_rev!=crate::app_icons::revision(){s.icons.clear();s.pending_icons=0;(s.icon_requests,s.icon_results)=icon_worker();s.icon_rev=crate::app_icons::revision();}
         let key = (path.to_path_buf(), size);
+        if !s.icons.contains_key(&key){
+            if let Some(icon)=warm_raster(&key){return Some((icon,false));}
+        }
         if !s.icons.contains_key(&key) && s.pending_icons < 24 {
             if s.icons.len() >= 192 { s.icons.retain(|_,icon|icon.is_none()); if s.icons.len()>=192{s.icons.clear();} }
             if s.icon_requests.send(key.clone()).is_ok(){
@@ -843,12 +880,15 @@ fn expand_compact(){
 }
 pub fn open_spotlight_dock(point: POINT) {
     if !fullscreen::enabled(){return;}
-    if fullscreen::dock_fullscreen(){
+    if fullscreen::fullscreen_for(true){
         let prior=unsafe{GetForegroundWindow()};
         let old=compact_handoff();
         fullscreen::open(point,old.as_ref().map(|(_,s,_)|s.clone()).unwrap_or_default(),
             old.map_or(prior,|(_,_,p)|p),false);
-    }else if fullscreen::window().is_some(){fullscreen::dismiss(true);}else{open_compact(Some(point),None);}
+    }else if let Some((_,query,prior))=fullscreen::compact_query(){
+        fullscreen::dismiss(false);
+        toggle_at(Some(point),Some(query),Some(prior));
+    }else{open_compact(Some(point),None);}
 }
 pub fn open_spotlight_hidden(){
     if !fullscreen::enabled(){return;}
@@ -865,7 +905,14 @@ pub fn refresh_spotlight_library(){
 pub fn toggle(_owner: HWND) {
     if !fullscreen::enabled(){return;}
     if fullscreen::window().is_some(){fullscreen::dismiss(true);return;}
-    open_compact(None,None);
+    if let Some((hwnd,_,_,_))=handles(){
+        if unsafe{IsWindowVisible(hwnd)}!=0{dismiss_compact_with_focus(hwnd);return;}
+    }
+    if fullscreen::fullscreen_for(false){
+        let mut point=POINT{x:0,y:0};
+        let prior=unsafe{GetCursorPos(&mut point);GetForegroundWindow()};
+        fullscreen::open(point,String::new(),prior,false);
+    }else{open_compact(None,None);}
 }
 pub(super) fn open_compact(point:Option<POINT>,query:Option<String>){toggle_at(point,query,None);}
 #[derive(Clone,Copy)]

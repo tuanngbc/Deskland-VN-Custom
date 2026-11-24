@@ -356,6 +356,7 @@ fn refresh(revision: u64) {
             *files
         });
     }
+    super::prefetch_catalog(&apps);
     let files: Rows = local_files().into();
     let mut state = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     state.files = Some(files.clone());

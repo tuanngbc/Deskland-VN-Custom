@@ -28,6 +28,130 @@ const CATALOG_CHANGE: u32 = WM_APP + 151;
 // WM_MOUSELEAVE is omitted by this windows-sys version's feature selection.
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
+// Windows 11 24H2 added alpha for the redirection bitmap. Older versions
+// cannot display our current native editor and premultiplied foreground on
+// this pair of HWNDs, so use the explicitly named compatibility material.
+const REDIRECTION_ALPHA:u32=39;
+const MATERIAL_CLASS:&str="TLauncherSpotlightBackdrop";
+#[derive(Clone,Copy,Debug)]
+enum BackdropKind { Host, Acrylic }
+type DesktopTarget=windows::UI::Composition::Desktop::DesktopWindowTarget;
+type Compositor=windows::UI::Composition::Compositor;
+type Sprite=windows::UI::Composition::SpriteVisual;
+struct HostLayer {
+    _target:DesktopTarget,
+    brush:windows::UI::Composition::CompositionColorBrush,
+    sheet:Sprite,
+    compositor:Compositor,
+}
+struct NativeBackdrop {
+    hwnd:HWND,
+    host:Option<HostLayer>,
+}
+thread_local! {
+    static DISPATCHER:RefCell<Option<windows::System::DispatcherQueueController>>=const{RefCell::new(None)};
+}
+unsafe extern "system" fn backdrop_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
+    match msg {
+        WM_NCHITTEST=>HTTRANSPARENT as isize,
+        WM_MOUSEACTIVATE=>MA_NOACTIVATE as isize,
+        WM_ERASEBKGND=>1,
+        WM_PAINT=>{
+            let mut ps:PAINTSTRUCT=std::mem::zeroed();
+            let dc=BeginPaint(hwnd,&mut ps);
+            if GetWindowLongPtrW(hwnd,GWLP_USERDATA)!=0 {
+                FillRect(dc,&ps.rcPaint,GetStockObject(BLACK_BRUSH) as HBRUSH);
+            }
+            EndPaint(hwnd,&ps);0
+        }
+        _=>DefWindowProcW(hwnd,msg,w,l)
+    }
+}
+impl HostLayer {
+    unsafe fn new(hwnd:HWND)->windows::core::Result<Self>{
+        use windows::{core::Interface,Win32::{Foundation::HWND as WinHwnd,System::WinRT::{
+            Composition::ICompositorDesktopInterop,*,},},UI::Color};
+        use windows_numerics::Vector2;
+        use windows::System::DispatcherQueue;
+        if DispatcherQueue::GetForCurrentThread().is_err() {
+            let queue=CreateDispatcherQueueController(DispatcherQueueOptions{
+                dwSize:std::mem::size_of::<DispatcherQueueOptions>() as u32,
+                threadType:DQTYPE_THREAD_CURRENT,apartmentType:DQTAT_COM_NONE,
+            })?;
+            DISPATCHER.with(|s|s.replace(Some(queue)));
+        }
+        let compositor=Compositor::new()?;
+        let api:ICompositorDesktopInterop=compositor.cast()?;
+        let target=api.CreateDesktopWindowTarget(WinHwnd(hwnd),false)?;
+        let root=compositor.CreateContainerVisual()?;
+        let relative=Vector2{X:1.0,Y:1.0};
+        root.SetRelativeSizeAdjustment(relative)?;
+        let material=compositor.CreateSpriteVisual()?;
+        material.SetRelativeSizeAdjustment(relative)?;
+        material.SetBrush(&compositor.CreateHostBackdropBrush()?)?;
+        let sheet=compositor.CreateSpriteVisual()?;
+        sheet.SetRelativeSizeAdjustment(relative)?;
+        let brush=compositor.CreateColorBrushWithColor(Color{A:255,R:24,G:25,B:29})?;
+        sheet.SetBrush(&brush)?;
+        let children=root.Children()?;
+        children.InsertAtTop(&material)?;
+        children.InsertAtTop(&sheet)?;
+        target.SetRoot(&root)?;
+        Ok(Self{_target:target,brush,sheet,compositor})
+    }
+}
+impl NativeBackdrop {
+    unsafe fn create(kind:BackdropKind)->Result<Self,String>{
+        let class=wide(MATERIAL_CLASS);let instance=GetModuleHandleW(ptr::null());
+        let wc=WNDCLASSW{lpfnWndProc:Some(backdrop_proc),hInstance:instance,lpszClassName:class.as_ptr(),..std::mem::zeroed()};
+        RegisterClassW(&wc);
+        let flags=WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|WS_EX_TRANSPARENT|WS_EX_TOPMOST
+            |if matches!(kind,BackdropKind::Host){WS_EX_NOREDIRECTIONBITMAP}else{0};
+        let hwnd=CreateWindowExW(flags,class.as_ptr(),wide("TLauncher Spotlight backdrop").as_ptr(),WS_POPUP,
+            0,0,1,1,ptr::null_mut(),ptr::null_mut(),instance,ptr::null_mut());
+        if hwnd.is_null(){return Err(format!("CreateWindowExW: {}",GetLastError()));}
+        let mut out=Self{hwnd,host:None};
+        let attr=|id:i32,val:i32|DwmSetWindowAttribute(hwnd,id as u32,(&val as *const i32).cast(),4);
+        let _=attr(DWMWA_WINDOW_CORNER_PREFERENCE,DWMWCP_DONOTROUND);
+        let _=attr(DWMWA_BORDER_COLOR,-2);
+        match kind {
+            BackdropKind::Host=>{
+                let hr=attr(DWMWA_USE_HOSTBACKDROPBRUSH,1);
+                if hr<0{return Err(format!("HostBackdrop opt-in: 0x{:08X}",hr as u32));}
+                out.host=Some(HostLayer::new(hwnd).map_err(|e|e.to_string())?);
+            }
+            BackdropKind::Acrylic=>{
+                use windows_sys::Win32::UI::Controls::MARGINS;
+                let margins=MARGINS{cxLeftWidth:-1,cxRightWidth:-1,cyTopHeight:-1,cyBottomHeight:-1};
+                let extend=DwmExtendFrameIntoClientArea(hwnd,&margins);
+                let hr=attr(DWMWA_SYSTEMBACKDROP_TYPE,DWMSBT_TRANSIENTWINDOW);
+                if extend<0||hr<0{return Err(format!("Desktop Acrylic: 0x{:08X}/0x{:08X}",extend as u32,hr as u32));}
+                SetWindowLongPtrW(hwnd,GWLP_USERDATA,1);
+            }
+        }
+        Ok(out)
+    }
+    unsafe fn material(&self,dark:bool,strength:i32){
+        if let Some(host)=&self.host{
+            let tone=if dark {18}else{245};
+            let _=host.brush.SetColor(windows::UI::Color{A:255,R:tone,G:tone,B:tone});
+            let _=host.sheet.SetOpacity((strength as f32/100.0).clamp(0.20,0.48));
+        }else{
+            let value=i32::from(dark);
+            let _=DwmSetWindowAttribute(self.hwnd,DWMWA_USE_IMMERSIVE_DARK_MODE as u32,(&value as *const i32).cast(),4);
+        }
+    }
+    unsafe fn show_behind(&self,foreground:HWND,r:RECT){
+        SetWindowPos(self.hwnd,foreground,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_SHOWWINDOW);
+    }
+}
+impl Drop for NativeBackdrop{
+    fn drop(&mut self){unsafe{
+        drop(self.host.take());
+        DestroyWindow(self.hwnd);
+    }}
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Category {
     All,
@@ -189,7 +313,7 @@ struct Panel {
     pressed: Option<(Hit, POINT)>,
     icon_tx: IconRequests,
     icon_rx: mpsc::Receiver<IconResult>,
-    icons: HashMap<IconKey, Option<IconPixels>>,
+    icons: HashMap<IconKey, Option<Arc<IconPixels>>>,
     pending: HashSet<IconKey>,
     icon_rev: u64,
 }
@@ -280,11 +404,13 @@ fn invalidate_regions(hwnd: HWND, regions: impl IntoIterator<Item=RECT>) {
 }
 pub(super) fn configure(prefs: Preferences) {
     let changed = OPTIONS.with(|o| {
-        if *o.borrow() == prefs {
-            return false;
-        }
+        let mut previous=o.borrow().clone();
+        previous.hotkey_fullscreen=prefs.hotkey_fullscreen;
+        previous.dock_fullscreen=prefs.dock_fullscreen;
+        previous.dock_follow_hotkey=prefs.dock_follow_hotkey;
+        let changed=previous!=prefs;
         o.replace(prefs);
-        true
+        changed
     });
     if changed && enabled() {
         if let Some(hwnd) = window() {
@@ -307,8 +433,8 @@ pub(super) fn window() -> Option<HWND> {
 pub(super) fn enabled() -> bool {
     OPTIONS.with(|s| s.borrow().enabled)
 }
-pub(super) fn dock_fullscreen() -> bool {
-    OPTIONS.with(|s| s.borrow().dock_fullscreen)
+pub(super) fn fullscreen_for(dock: bool) -> bool {
+    OPTIONS.with(|s| s.borrow().fullscreen_for(dock))
 }
 
 fn dark() -> bool {
@@ -767,12 +893,18 @@ unsafe fn draw_icon_alpha(dc:HDC,icon:&IconPixels,x:i32,y:i32,opacity:u8) {
 type PaintTile = (
     Tile,
     RECT,
-    Option<IconPixels>,
-    Vec<Option<IconPixels>>,
+    Option<Arc<IconPixels>>,
+    Vec<Option<Arc<IconPixels>>>,
     bool,
 );
 fn request_icon(p: &mut Panel, path: PathBuf, size: i32) -> IconKey {
     let key = (path, size.clamp(8, 192));
+    if !p.icons.contains_key(&key) {
+        if let Some(icon)=warm_raster(&key){
+            p.icons.insert(key.clone(),icon);
+            return key;
+        }
+    }
     if !key.0.as_os_str().is_empty()
         && !p.icons.contains_key(&key)
         && p.pending.len() < 32
@@ -1325,7 +1457,7 @@ pub(super) fn dismiss(restore: bool) {
     }
 }
 
-fn compact_query() -> Option<(POINT, String, HWND)> {
+pub(super) fn compact_query() -> Option<(POINT, String, HWND)> {
     PANEL.with(|p| {
         p.borrow()
             .as_ref()

@@ -5,6 +5,126 @@ use std::time::{Duration, Instant};
 use windows_sys::Win32::System::StationsAndDesktops::*;
 use windows_sys::Win32::System::Threading::*;
 
+// Run on the GitHub-hosted desktop only: the compositor cannot sample the
+// private non-input desktop used by the deterministic library fixture below.
+#[test]
+#[ignore = "GitHub Actions compositor proof"]
+fn native_live_backdrop_retains_color_and_filters_detail() {
+    if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+    const W:i32=720;
+    const H:i32=400;
+    const X:i32=48;
+    const Y:i32=48;
+    static PATTERN:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
+    unsafe extern "system" fn background(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
+        if msg==WM_ERASEBKGND{return 1;}
+        if msg!=WM_PAINT{return DefWindowProcW(hwnd,msg,w,l);}
+        let mut ps:PAINTSTRUCT=std::mem::zeroed();
+        let dc=BeginPaint(hwnd,&mut ps);
+        let changed=PATTERN.load(std::sync::atomic::Ordering::Relaxed);
+        for x in (0..W).step_by(6) {
+            let colors=[0x005b1545,0x00285b9e,0x009c4f25];
+            let base=colors[(x/(W/3)) as usize];
+            let ink=if (x/6)%2==i32::from(changed){base+0x00474747}else{base};
+            fill(dc,rect(x,0,x+6,H),ink);
+        }
+        EndPaint(hwnd,&ps);0
+    }
+    struct Owned(HWND);
+    impl Drop for Owned{fn drop(&mut self){unsafe{DestroyWindow(self.0);}}}
+    unsafe fn screen()->Option<Vec<u8>>{
+        let mut layer=crate::dock::PopupPixels::new(W,H)?;
+        let dc=GetDC(ptr::null_mut());
+        if dc.is_null(){return None;}
+        let ok=BitBlt(layer.dc(),0,0,W,H,dc,X,Y,SRCCOPY|CAPTUREBLT)!=0;
+        ReleaseDC(ptr::null_mut(),dc);GdiFlush();
+        ok.then(||layer.pixels().to_vec())
+    }
+    fn metrics(b:&[u8])->(f64,f64){
+        let pixel=|x:i32,y:i32,c:usize|b[((y*W+x)*4) as usize+c] as f64;
+        let mut detail=0.0;
+        for x in 48..(W/3-40){
+            for c in 0..3{detail+=(pixel(x,320,c)-pixel(x+6,320,c)).abs();}
+        }
+        let mut spread=0.0;
+        for c in 0..3{
+            spread+=(pixel(W/6,320,c)-pixel(W*5/6,320,c)).abs();
+        }
+        (detail/(3*(W/3-88)) as f64,spread/3.0)
+    }
+    fn evidence(name:&str,raw:&[u8]){
+        if let Some(dir)=std::env::var_os("TUANPC_SPOTLIGHT_EVIDENCE"){
+            let rgb=raw.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0]]).collect::<Vec<_>>();
+            image::save_buffer(PathBuf::from(dir).join(name),&rgb,W as u32,H as u32,image::ColorType::Rgb8).unwrap();
+        }
+    }
+    unsafe{
+        let name=wide("TLauncherGlassEvidenceSource");
+        let instance=GetModuleHandleW(ptr::null());
+        let wc=WNDCLASSW{lpfnWndProc:Some(background),hInstance:instance,lpszClassName:name.as_ptr(),..std::mem::zeroed()};
+        RegisterClassW(&wc);
+        let bg=Owned(CreateWindowExW(WS_EX_TOPMOST|WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW,name.as_ptr(),name.as_ptr(),
+            WS_POPUP,X,Y,W,H,ptr::null_mut(),ptr::null_mut(),instance,ptr::null_mut()));
+        assert!(!bg.0.is_null());
+        ShowWindow(bg.0,SW_SHOWNOACTIVATE);UpdateWindow(bg.0);
+        let settle=||{for _ in 0..5{pump();std::thread::sleep(Duration::from_millis(35));}let _=DwmFlush();};
+        settle();
+        let Some(reference)=screen() else{println!("GLASS_POC=BLOCKED screen capture unavailable");return;};
+        let (detail,spread)=metrics(&reference);
+        if detail<35.0||spread<20.0{
+            println!("GLASS_POC=BLOCKED synthetic baseline not composited detail={detail:.2} color={spread:.2}");return;
+        }
+        evidence("glass-reference.png",&reference);
+        let (gdi,user,_)=resources();
+        for (kind, label) in [(BackdropKind::Host,"host"),(BackdropKind::Acrylic,"acrylic")]{
+            for dark in [true,false]{
+                let native=match NativeBackdrop::create(kind){
+                    Ok(layer)=>layer,
+                    Err(e)=>{println!("GLASS_POC backend={label} unavailable: {e}");break;}
+                };
+                native.material(dark,36);
+                native.show_behind(HWND_TOPMOST,rect(X,Y,X+W,Y+H));
+                UpdateWindow(native.hwnd);
+                // Separate premultiplied foreground: glass cannot blur icons
+                // or text because neither is part of its backdrop source.
+                let face=Owned(CreateWindowExW(WS_EX_LAYERED|WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW|WS_EX_TOPMOST,
+                    wide("STATIC").as_ptr(),ptr::null(),WS_POPUP,X,Y,W,H,ptr::null_mut(),ptr::null_mut(),instance,ptr::null_mut()));
+                assert!(!face.0.is_null());
+                let mut frame=crate::dock::PopupPixels::new(W,H).unwrap();
+                frame.pixels().fill(0);
+                let tint=if dark{0x00302624}else{0x00f2efec};
+                round(frame.dc(),rect(180,32,540,75),20,tint,240);
+                let font=crate::native_text::font_pixels(19,550);
+                text(frame.dc(),"Spotlight · Search",rect(190,32,530,75),font,if dark{0x00ffffff}else{0x00222020},true);
+                DeleteObject(font);
+                for i in 0..6{
+                    let left=95+92*i;
+                    round(frame.dc(),rect(left,152,left+58,210),22,0x0052a2ec+0x00040400*i as u32,255);
+                }
+                let present=||{
+                    let zero=POINT{x:0,y:0};
+                    let size=SIZE{cx:W,cy:H};
+                    let blend=BLENDFUNCTION{BlendOp:AC_SRC_OVER as u8,BlendFlags:0,SourceConstantAlpha:255,AlphaFormat:AC_SRC_ALPHA as u8};
+                    assert_ne!(UpdateLayeredWindow(face.0,ptr::null_mut(),ptr::null(),&size,frame.dc(),&zero,0,&blend,ULW_ALPHA),0);
+                };
+                present();
+                ShowWindow(face.0,SW_SHOWNOACTIVATE);settle();
+                let b=screen().unwrap_or_default();
+                if b.len()!=(W*H*4) as usize{println!("GLASS_POC backend={label} capture unavailable");continue;}
+                let (d,c)=metrics(&b);
+                let filtered=c>spread*0.15&&d/(c.max(1.0))<detail/spread*0.58;
+                println!("GLASS_POC backend={label} dark={dark} detail_ratio={:.3} color_ratio={:.3} optical_blur={filtered}",d/detail,c/spread);
+                evidence(&format!("glass-{label}-{}.png",if dark{"dark"}else{"light"}),&b);
+                round(frame.dc(),rect(175,143,253,220),20,0x007997cc,90);
+                present();settle();
+                if let Some(hover)=screen(){evidence(&format!("glass-{label}-{}-hover.png",if dark{"dark"}else{"light"}),&hover);}
+            }
+        }
+        let (end_gdi,end_user,_)=resources();
+        assert!(end_gdi<=gdi+12&&end_user<=user+12,"compositor fixture leaked GDI/USER resources");
+    }
+}
+
 pub(in crate::launcher) struct Desktop {
     previous: HDESK,
     isolated: HDESK,

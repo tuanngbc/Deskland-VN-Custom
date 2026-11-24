@@ -2641,6 +2641,7 @@ fn main() {
     let mut saver_check_at: Option<f64> = None;
     let mut rebuild_at: Option<f64> = None;
     let mut autostart_check_at = (!saver && !headless).then(|| app.now() + 2500.0);
+    let mut spotlight_warm_at=(!saver&&!headless&&app.cfg.spotlight.enabled).then(||app.now()+3500.0);
     let mut web_changed = false;
     let mut shortcut_capture_started: Option<Instant> = None;
     let mut last_icons_json = String::new();
@@ -3484,6 +3485,10 @@ fn main() {
                 }
             }
         }
+        if spotlight_warm_at.is_some_and(|t|app.now()>=t){
+            spotlight_warm_at=None;
+            if app.cfg.spotlight.enabled{launcher::prewarm_spotlight(app.cfg.spotlight.icon_size);}
+        }
         if autostart_check_at.is_some_and(|t| app.now() >= t) {
             autostart_check_at = None;
             settings::migrate_autostart();
@@ -3611,7 +3616,7 @@ fn main() {
             widget_save_at = None;
         }
         // Rounding down left a sub-millisecond busy loop before every frame.
-        let next_startup = wallpaper_retry.unwrap_or(f64::INFINITY).min(autostart_check_at.unwrap_or(f64::INFINITY));
+        let next_startup = wallpaper_retry.unwrap_or(f64::INFINITY).min(autostart_check_at.unwrap_or(f64::INFINITY)).min(spotlight_warm_at.unwrap_or(f64::INFINITY));
         let wait = (next_frame.min(next_icons).min(next_fg).min(next_startup) - app.now()).ceil().clamp(1.0,500.0) as u32;
         unsafe { MsgWaitForMultipleObjects(0, std::ptr::null(), 0, wait, QS_ALLINPUT) };
     }
