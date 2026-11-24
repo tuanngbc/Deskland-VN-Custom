@@ -239,6 +239,7 @@ fn native_isolated_library_search_navigation_and_100_toggles() {
         let tile=PANEL.with(|p|grid(p.borrow().as_ref().unwrap()).tiles(0));
         let x=tile.left+5; let y=tile.top+5;
         let mouse=|x:i32,y:i32| (x as u16 as usize | ((y as u16 as usize)<<16)) as LPARAM;
+        PANEL.with(|p|{let mut p=p.borrow_mut();let p=p.as_mut().unwrap();p.hover=None;p.hover_from=None;p.hover_started=None;});
         ValidateRect(hwnd,ptr::null());
         SendMessageW(hwnd,WM_MOUSEMOVE,0,mouse(x,y));
         let mut dirty:RECT=std::mem::zeroed();
@@ -247,6 +248,9 @@ fn native_isolated_library_search_navigation_and_100_toggles() {
         UpdateWindow(hwnd);
         SendMessageW(hwnd,WM_MOUSEMOVE,0,mouse(x+1,y+1));
         assert_eq!(GetUpdateRect(hwnd,&mut dirty,0),0);
+        std::thread::sleep(Duration::from_millis(130));
+        pump();
+        assert!(PANEL.with(|p|p.borrow().as_ref().unwrap().hover_started.is_none()));
         screenshot(hwnd,"hover-fixture-light.png");
         SendMessageW(hwnd,WM_MOUSELEAVE,0,0);
         UpdateWindow(hwnd);

@@ -411,7 +411,10 @@ fn icon_worker() -> (IconRequests, std::sync::mpsc::Receiver<IconResult>) {
 }
 unsafe fn extract_icon(path: &Path, size: i32) -> Option<IconPixels> {
     let command=path.to_str().and_then(crate::dock::command_pin::decode);
-    let icon=crate::app_icons::load(path).or_else(||shell_icon(
+    let icon=crate::app_icons::load(path).or_else(||{
+        let id=catalog::identity(path);
+        if id!=path.to_string_lossy(){crate::app_icons::load(Path::new(&id))}else{None}
+    }).or_else(||shell_icon(
         command.as_ref().map_or(path,|c|Path::new(&c.exe)),(size*2).clamp(64,256)))?;
     // Do not manufacture detail by enlarging small shell icons. Keep their
     // native raster centred in a larger tile when no large source exists.

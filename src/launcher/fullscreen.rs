@@ -23,6 +23,8 @@ const SHELL_REFRESH: usize = 3;
 const HOVER_ANIMATION: usize = 4;
 const HOVER_MS:u128=110;
 const CATALOG_CHANGE: u32 = WM_APP + 151;
+// WM_MOUSELEAVE is omitted by this windows-sys version's feature selection.
+const WM_MOUSELEAVE: u32 = 0x02A3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Category {
