@@ -5,7 +5,7 @@
 - Giữ Spotlight thu gọn và phím Alt+Space. F6 chuyển giữa chế độ thu gọn và toàn màn hình, giữ nội dung đang tìm. Nút kính lúp trên Dock mặc định mở thư viện trên màn hình của Dock.
 - Lưới phân trang và bốn bộ lọc cho ứng dụng, tệp và công cụ hệ thống. Start, Dock và Spotlight dùng chung dữ liệu ứng dụng đã phát hiện, gồm Start Menu và Windows AppsFolder.
 - Thêm ứng dụng EXE/LNK, đổi tên và icon, ghim vào Dock, đánh dấu yêu thích, ẩn/khôi phục, sắp xếp và nhóm vào thư mục. Các thay đổi được lưu cùng hồ sơ TLauncher; ẩn hoặc bỏ mục tự thêm giữ nguyên tệp gốc.
-- Thư viện chạy trong TLauncher.exe với cửa sổ Win32 native, yêu cầu hiệu ứng Acrylic từ Windows và dùng nền sáng/tối dự phòng. Xem [hướng dẫn kiểm thử cách ly](docs/unified-spotlight.md).
+- Thư viện chạy trong TLauncher.exe với cửa sổ Win32 native. Sau phản hồi UAT, thay đường vẽ DWM/GDI lỗi bằng nền kính lấy mẫu một lần, làm mờ trong bộ nhớ và vẽ qua bộ đệm RGB. Bổ sung hover cục bộ, icon lớn hơn, lọc shortcut theo đích thực và quy trình thử cách ly có khôi phục production. Xem [hướng dẫn kiểm thử cách ly](docs/unified-spotlight.md). Chất lượng hình ảnh thực tế vẫn chờ OWNER UAT.
 
 ## 1.0.1 — Khởi động cùng Windows, Dock sẵn sàng sớm hơn
 

@@ -57,7 +57,7 @@ Pin and open apps with the Dock, organize windows with Stage Manager, find apps 
 
 **Version 1.0.1:** When startup is enabled, Windows starts TLauncher at sign-in through Task Scheduler. Dock and Stage Manager initialize before the wallpaper. If Explorer is still starting, the wallpaper tries to attach again. See the [verification notes and test conditions](CHANGELOG.md#kiểm-chứng).
 
-**1.0.2 candidate — Unified Spotlight:** Quick search and an app library share the same TLauncher catalog. Use Alt+Space for Compact, F6 to switch modes, or the Dock magnifier for the fullscreen library. Add EXE/LNK entries, pin, hide or restore apps, and organize them into folders. Windows controls Desktop Acrylic, with a solid theme fallback in the candidate. See the [UAT guide](docs/unified-spotlight.md). The public release is still 1.0.1.
+**1.0.2 candidate — Unified Spotlight:** Quick search and an app library share the same TLauncher catalog. Use Alt+Space for Compact, F6 to switch modes, or the Dock magnifier for the fullscreen library. Add EXE/LNK entries, pin, hide or restore apps, and organize them into folders. The frosted backdrop is sampled and blurred in memory on opening, with a solid theme fallback; visual acceptance is pending. See the [UAT guide](docs/unified-spotlight.md). The public release is still 1.0.1.
 
 <!-- product-guide:start -->
 ## Features and screenshots
