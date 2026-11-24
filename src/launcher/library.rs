@@ -11,6 +11,9 @@ pub(crate) struct Preferences {
     pub theme: String,
     pub icon_size: i32,
     pub spacing: i32,
+    pub glass_strength: i32,
+    pub glass_blur: i32,
+    pub animations: bool,
     pub show_names: bool,
     pub favorites_first: bool,
 }
@@ -20,8 +23,11 @@ impl Default for Preferences {
             enabled: true,
             dock_fullscreen: true,
             theme: "system".into(),
-            icon_size: 64,
+            icon_size: 86,
             spacing: 18,
+            glass_strength: 44,
+            glass_blur: 48,
+            animations: true,
             show_names: true,
             favorites_first: true,
         }
@@ -32,6 +38,8 @@ impl Preferences {
         let mut out = serde_json::from_value::<Self>(value.clone()).unwrap_or_default();
         out.icon_size = out.icon_size.clamp(36, 96);
         out.spacing = out.spacing.clamp(8, 42);
+        out.glass_strength = out.glass_strength.clamp(20, 48);
+        out.glass_blur = out.glass_blur.clamp(24,64);
         if !matches!(out.theme.as_str(), "system" | "light" | "dark") {
             out.theme = "system".into();
         }

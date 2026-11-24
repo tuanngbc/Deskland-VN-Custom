@@ -22,6 +22,21 @@ static ALIASES: LazyLock<std::sync::RwLock<HashMap<String, String>>> =
 static LABELS: LazyLock<std::sync::RwLock<HashMap<String, String>>> =
     LazyLock::new(Default::default);
 
+fn system_identity(key: &str) -> String {
+    // Exact Windows identities only. Never merge applications by a translated
+    // display name, or merge an unrelated executable named calc.exe.
+    let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
+    let system=|name:&str| Path::new(&windir).join("System32").join(name).to_string_lossy().to_lowercase();
+    match key {
+        "shell:appsfolder\\microsoft.windowscalculator_8wekyb3d8bbwe!app" | "calc.exe" => system("calc.exe"),
+        "shell:appsfolder\\windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel" | "ms-settings:" => "ms-settings:".into(),
+        "explorer.exe" => Path::new(&windir).join("explorer.exe").to_string_lossy().to_lowercase(),
+        "taskmgr.exe" => system("taskmgr.exe"),
+        "control.exe" => system("control.exe"),
+        _ => key.to_owned(),
+    }
+}
+
 pub(super) fn identity(path: &Path) -> String {
     let value = path.to_string_lossy();
     if let Some(c) = crate::dock::command_pin::decode(&value) {
@@ -41,7 +56,7 @@ pub(super) fn identity(path: &Path) -> String {
         .unwrap_or_else(|e| e.into_inner())
         .get(&key)
         .cloned()
-        .unwrap_or(key)
+        .unwrap_or_else(||system_identity(&key))
 }
 pub(super) fn label(path: &Path) -> Option<String> {
     LABELS
@@ -125,17 +140,77 @@ impl Drop for ShellWatch {
     }
 }
 
+#[derive(Debug,PartialEq,Eq)]
+enum TargetKind { Application, System, Document, Website, Helper, Unknown }
+
+fn target_kind(target:&str, arguments:&str)->TargetKind {
+    let target=target.to_lowercase();
+    if target.starts_with("https:") || target.starts_with("http:") { return TargetKind::Website; }
+    if target=="ms-settings:" { return TargetKind::Application; }
+    let path=Path::new(&target);
+    let ext=path.extension().and_then(|s|s.to_str()).unwrap_or("");
+    if matches!(ext,"msc"|"cpl") { return TargetKind::System; }
+    if ext=="appref-ms" { return TargetKind::Application; }
+    if ext!="exe" { return if ext.is_empty(){TargetKind::Unknown}else{TargetKind::Document}; }
+    let stem=path.file_stem().and_then(|s|s.to_str()).unwrap_or("");
+    let base=stem.trim_end_matches(|c:char|c.is_ascii_digit());
+    let args=arguments.to_lowercase();
+    if matches!(base,"uninstall"|"uninstaller"|"unins"|"uninst"|"update"|"updater"|"javacpl"|"setup"|"installer")
+        || base.ends_with("uninstaller") || base.ends_with("_uninstall") || base.ends_with("_updater")
+        || (stem=="msiexec" && args.split_whitespace().any(|s|s=="/x" || s=="/uninstall"))
+        || (stem=="javaws" && args.split_whitespace().any(|s|s=="-viewer" || s=="-about"))
+    { return TargetKind::Helper; }
+    TargetKind::Application
+}
+
+struct LinkMetadata { target:String, args:String, directory:String }
+unsafe fn link_metadata(path:&Path)->Option<LinkMetadata> {
+    use windows::{core::{Interface,PCWSTR},Win32::{System::Com::{CoCreateInstance,CLSCTX_INPROC_SERVER,IPersistFile,STGM_READ},UI::Shell::{IShellLinkW,ShellLink,SLGP_RAWPATH}}};
+    let link:IShellLinkW=CoCreateInstance(&ShellLink,None,CLSCTX_INPROC_SERVER).ok()?;
+    link.cast::<IPersistFile>().ok()?.Load(PCWSTR(wide(&path.to_string_lossy()).as_ptr()),STGM_READ).ok()?;
+    let read=|buf:&[u16]| String::from_utf16_lossy(&buf[..buf.iter().position(|&c|c==0).unwrap_or(buf.len())]);
+    let mut target=vec![0u16;32768];
+    let mut args=vec![0u16;32768];
+    let mut directory=vec![0u16;32768];
+    link.GetPath(&mut target,std::ptr::null_mut(),SLGP_RAWPATH.0 as u32).ok()?;
+    link.GetArguments(&mut args).ok()?;
+    let _=link.GetWorkingDirectory(&mut directory);
+    Some(LinkMetadata{target:read(&target),args:read(&args),directory:read(&directory)})
+}
+
 fn normalize(rows: Vec<Entry>) -> Vec<Entry> {
     let mut aliases = HashMap::new();
     let mut labels = HashMap::new();
     let mut seen = HashSet::new();
     let mut result = Vec::new();
-    for entry in rows {
+    let mut launches=HashMap::<String,String>::new();
+    for mut entry in rows {
         let path = entry.path.to_string_lossy();
         let Some(raw) = crate::app_icons::normalized(&path) else {
             continue;
         };
-        let id = crate::app_icons::key(&path).unwrap_or_else(|| raw.clone());
+        let mut id = system_identity(&crate::app_icons::key(&path).unwrap_or_else(|| raw.clone()));
+        // Only automatic discovery is filtered. Manual entries and pins are
+        // merged later, retaining the owner's original launch target.
+        if entry.kind=="Application" && raw.ends_with(".lnk") {
+            let Some(link)=(unsafe{link_metadata(&entry.path)}) else { continue; };
+            match target_kind(&link.target,&link.args) {
+                TargetKind::Application => {
+                    if link.args.is_empty() && Path::new(&link.target).is_absolute() {
+                        id=system_identity(&crate::app_icons::normalized(&link.target).unwrap_or_else(||raw.clone()));
+                    } else if !link.target.is_empty() {
+                        let fingerprint=serde_json::json!([link.target.to_lowercase(),link.args,link.directory.to_lowercase()]).to_string();
+                        if let Some(previous)=launches.get(&fingerprint){id=previous.clone();}else{launches.insert(fingerprint,id.clone());}
+                    }
+                }
+                TargetKind::System => entry.kind="System",
+                TargetKind::Document => entry.kind="File",
+                TargetKind::Website => entry.kind="Web shortcut",
+                TargetKind::Helper | TargetKind::Unknown => continue,
+            }
+        } else if entry.kind=="Application" && raw.ends_with(".exe") && target_kind(&raw,"")==TargetKind::Helper {
+            continue;
+        }
         if raw != id {
             aliases.insert(raw, id.clone());
         }
@@ -305,5 +380,14 @@ mod tests {
         assert_eq!(search_rank("Ứng dụng Mới", "ứng mới"), Some(2));
         assert_eq!(search_rank("Ứng dụng Mới", "ứng dụng"), Some(1));
         assert_eq!(search_rank("Ứng dụng Mới", "khác"), None);
+    }
+    #[test]
+    fn automatic_targets_classify_the_resolved_file_not_the_label() {
+        assert_eq!(target_kind(r"C:\Apps\LDUninstaller9.exe",""),TargetKind::Helper);
+        assert_eq!(target_kind(r"C:\Apps\Uninstall Manager.exe",""),TargetKind::Application);
+        assert_eq!(target_kind(r"C:\Apps\manual.pdf",""),TargetKind::Document);
+        assert_eq!(target_kind(r"C:\Windows\System32\eventvwr.msc",""),TargetKind::System);
+        assert_eq!(target_kind(r"C:\Apps\App.exe","--profile work"),TargetKind::Application);
+        assert_eq!(system_identity("shell:appsfolder\\microsoft.windowscalculator_8wekyb3d8bbwe!app"),system_identity("calc.exe"));
     }
 }

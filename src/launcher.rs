@@ -203,9 +203,7 @@ fn enum_dir(root: &Path, depth: u8, files: bool, out: &mut Vec<Entry>) {
         let ext = p.extension().and_then(|x| x.to_str()).unwrap_or_default().to_ascii_lowercase();
         if !files && !matches!(ext.as_str(), "lnk" | "exe" | "url" | "appref-ms") { continue; }
         let name = p.file_stem().and_then(|x| x.to_str()).unwrap_or_default().replace('_', " ");
-        let folded = name.to_ascii_lowercase();
-        if name.is_empty() || name.starts_with('.') || ext == "tmp" || (!files &&
-            (folded.starts_with("uninstall") || folded.starts_with("unins00") || folded.ends_with(" updater"))) { continue; }
+        if name.is_empty() || name.starts_with('.') || ext == "tmp" { continue; }
         let kind = match ext.as_str() { "lnk" | "exe" | "appref-ms" => "Application", "url" => "Web shortcut", _ => "File" };
         let size = md.len();
         let detail = if kind == "File" { format!("{} · {} KB · {}", ext.to_uppercase(), size.div_ceil(1024), p.display()) } else { p.display().to_string() };
@@ -415,7 +413,9 @@ unsafe fn extract_icon(path: &Path, size: i32) -> Option<IconPixels> {
     let command=path.to_str().and_then(crate::dock::command_pin::decode);
     let icon=crate::app_icons::load(path).or_else(||shell_icon(
         command.as_ref().map_or(path,|c|Path::new(&c.exe)),(size*2).clamp(64,256)))?;
-    let scale = size as f32 / icon.width.max(icon.height) as f32;
+    // Do not manufacture detail by enlarging small shell icons. Keep their
+    // native raster centred in a larger tile when no large source exists.
+    let scale = (size as f32 / icon.width.max(icon.height) as f32).min(1.0);
     let width = (icon.width as f32 * scale).round().max(1.0) as i32;
     let height = (icon.height as f32 * scale).round().max(1.0) as i32;
     let image = image::RgbaImage::from_raw(icon.width as u32, icon.height as u32, icon.pixels)?;

@@ -212,10 +212,13 @@ fn native_isolated_library_search_navigation_and_100_toggles() {
             0
         );
         use_fixture_entries(hwnd);
-        let glass = PANEL.with(|p| p.borrow().as_ref().unwrap().acrylic);
-        println!(
-            "SPOTLIGHT_NATIVE dwm_request_accepted={glass} (photo here deliberately uses solid fallback)"
-        );
+        PANEL.with(|p| {
+            let p=p.borrow();let p=p.as_ref().unwrap();
+            assert!(!p.glass.is_empty());
+            assert!(p.glass.chunks_exact(4).all(|v|v[3]==255));
+            assert!(p.glass.chunks_exact(4).any(|v|v[..3]!=p.glass[..3]));
+        });
+        println!("SPOTLIGHT_NATIVE backdrop=static_snapshot_composite fixture=synthetic_gradient opaque=true");
         // Let the real icon service finish on the fixture paths before evidence.
         let until = Instant::now() + Duration::from_secs(2);
         while Instant::now() < until {
@@ -231,6 +234,23 @@ fn native_isolated_library_search_navigation_and_100_toggles() {
             std::thread::sleep(Duration::from_millis(10));
         }
         screenshot(hwnd, "library-fixture-light.png");
+        // Stable hit testing, bounded repaint and no repaint for movement
+        // within the same tile, using the actual native window procedure.
+        let tile=PANEL.with(|p|grid(p.borrow().as_ref().unwrap()).tiles(0));
+        let x=tile.left+5; let y=tile.top+5;
+        let mouse=|x:i32,y:i32| (x as u16 as usize | ((y as u16 as usize)<<16)) as LPARAM;
+        ValidateRect(hwnd,ptr::null());
+        SendMessageW(hwnd,WM_MOUSEMOVE,0,mouse(x,y));
+        let mut dirty:RECT=std::mem::zeroed();
+        assert_ne!(GetUpdateRect(hwnd,&mut dirty,0),0);
+        assert!(dirty.left>=tile.left && dirty.top>=tile.top && dirty.right<=tile.right && dirty.bottom<=tile.bottom);
+        UpdateWindow(hwnd);
+        SendMessageW(hwnd,WM_MOUSEMOVE,0,mouse(x+1,y+1));
+        assert_eq!(GetUpdateRect(hwnd,&mut dirty,0),0);
+        screenshot(hwnd,"hover-fixture-light.png");
+        SendMessageW(hwnd,WM_MOUSELEAVE,0,0);
+        UpdateWindow(hwnd);
+        println!("SPOTLIGHT_NATIVE hover_dirty_region=PASS stable_same_tile=PASS");
         action(hwnd, Hit::Edit);
         screenshot(hwnd, "edit-fixture-light.png");
         action(hwnd, Hit::Edit);

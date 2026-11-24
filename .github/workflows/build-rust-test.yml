@@ -111,6 +111,7 @@ jobs:
           cargo build --release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./tests/trial-isolation.ps1 -Exe (Resolve-Path target/release/TLauncher.exe).Path
+          ./tests/owner-uat-contract.ps1
           node tests/renderer-contract.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/shortcuts-contract.cjs
@@ -146,6 +147,10 @@ jobs:
             if (Test-Path $file) { Copy-Item $file $dir }
           }
           Copy-Item README-rust.md "$dir\README-rust.md"
+          if ($env:GITHUB_REF_TYPE -ne 'tag') {
+            Copy-Item tools\owner-uat.ps1 "$dir\owner-uat.ps1"
+            Copy-Item docs\unified-spotlight.md "$dir\UAT-SPOTLIGHT.md"
+          }
           Copy-Item (Join-Path $env:RUNNER_TEMP "start-native.png") "$dir\START-NATIVE-CI.png"
           $version | Set-Content "$dir\VERSION.txt" -Encoding ascii
           '${{ github.sha }}' | Set-Content "$dir\BUILD-COMMIT.txt" -Encoding ascii
@@ -161,6 +166,7 @@ jobs:
           Compress-Archive -Path $dir -DestinationPath "dist\$name.zip"
           $hash = (Get-FileHash "dist\$name.zip" -Algorithm SHA256).Hash.ToLower()
           "$hash  $name.zip" | Set-Content "dist\$name.zip.sha256" -Encoding ascii
+          Write-Host "CANDIDATE_PACKAGE version=$version commit=${{ github.sha }} sha256=$hash"
 
       - name: Upload Rust artifact
         uses: actions/upload-artifact@v4

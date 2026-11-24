@@ -12,7 +12,7 @@ use std::{
 };
 use windows_sys::Win32::Graphics::Dwm::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::UI::Controls::{Dialogs::*, MARGINS};
+use windows_sys::Win32::UI::Controls::Dialogs::*;
 
 const CLASS: &str = "TLauncherSpotlightLibrary";
 const EDIT: usize = 501;
@@ -20,6 +20,8 @@ const EDIT_KEY: u32 = WM_APP + 150;
 const POLL: usize = 1;
 const SEARCH: usize = 2;
 const SHELL_REFRESH: usize = 3;
+const HOVER_ANIMATION: usize = 4;
+const HOVER_MS:u128=110;
 const CATALOG_CHANGE: u32 = WM_APP + 151;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +59,7 @@ enum Hit {
     Create,
     Hidden,
     Refresh,
+    Settings,
     Back,
     Tab(Category),
     Prev,
@@ -88,14 +91,16 @@ impl Grid {
             .min((area.bottom - area.top - p(28)).max(12))
             .min(w / 4)
             .max(8);
-        let want_x = (icon + p(cfg.spacing + 52)).max(p(108));
-        let want_y = (icon + p(cfg.spacing + 32)).max(p(82));
+        let want_x = (icon + p(cfg.spacing + 58)).max(p(126));
+        let want_y = (icon + p(cfg.spacing + 40)).max(p(102));
         let aw = (area.right - area.left).max(1);
         let ah = (area.bottom - area.top).max(1);
-        let columns = (aw / want_x).clamp(1, 10) as usize;
-        let rows = (ah / want_y).clamp(1, 7) as usize;
-        let dx = (aw / columns as i32).min(p(174)).max(1);
-        let dy = (ah / rows as i32).min(p(150)).max(1);
+        let columns = (aw / want_x).clamp(1, 9) as usize;
+        let rows = (ah / want_y).clamp(1, 6) as usize;
+        let dx = (aw / columns as i32).min(p(204)).max(1);
+        let dy = (ah / rows as i32).min(p(170)).max(1);
+        area.top += (ah - dy * rows as i32).max(0) / 2;
+        area.bottom = area.top + dy * rows as i32;
         let left = area.left + (aw - dx * columns as i32) / 2;
         area.left = left;
         area.right = left + dx * columns as i32;
@@ -146,7 +151,10 @@ struct Panel {
     width: i32,
     height: i32,
     dpi: u32,
-    acrylic: bool,
+    // In-memory, quarter-resolution snapshot; ordinary opaque GDI surface.
+    backdrop: Vec<u8>,
+    glass: std::rc::Rc<[u8]>,
+    bounds: RECT,
     dark: bool,
     font: HFONT,
     apps: Vec<Entry>,
@@ -166,6 +174,12 @@ struct Panel {
     tiles: Vec<Tile>,
     error: String,
     hover: Option<Hit>,
+    hover_from: Option<Hit>,
+    hover_started: Option<std::time::Instant>,
+    motion: bool,
+    tracking: bool,
+    keyboard: bool,
+    wheel:i32,
     pressed: Option<(Hit, POINT)>,
     icon_tx: IconRequests,
     icon_rx: mpsc::Receiver<IconResult>,
@@ -179,6 +193,70 @@ thread_local! {
     static LIBRARY: RefCell<Library> = RefCell::new(Library::default());
     static EDIT_PROC: Cell<WNDPROC> = const { Cell::new(None) };
     static MODAL: Cell<bool> = const { Cell::new(false) };
+    static FRAME: RefCell<Option<Frame>> = const { RefCell::new(None) };
+}
+
+// A persistent compatible bitmap, not an alpha-bearing DWM extended frame.
+// GDI renders RGB into it; only the completed dirty region is presented.
+struct Frame { dc: HDC, bitmap: HBITMAP, old: HGDIOBJ, w: i32, h: i32 }
+impl Frame {
+    unsafe fn new(target: HDC, w: i32, h: i32) -> Option<Self> {
+        if w <= 0 || h <= 0 { return None; }
+        let dc = CreateCompatibleDC(target);
+        if dc.is_null() { return None; }
+        let bitmap = CreateCompatibleBitmap(target, w, h);
+        if bitmap.is_null() { DeleteDC(dc); return None; }
+        let old = SelectObject(dc, bitmap);
+        Some(Self { dc, bitmap, old, w, h })
+    }
+}
+impl Drop for Frame {
+    fn drop(&mut self) { unsafe { SelectObject(self.dc, self.old); DeleteObject(self.bitmap); DeleteDC(self.dc); } }
+}
+
+fn intersects(a: RECT, b: RECT) -> bool {
+    a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
+}
+
+fn target_rect(p: &Panel, target: Hit) -> Option<RECT> {
+    if let Hit::Tile(i) = target {
+        let g = grid(p);
+        let start = p.page * g.capacity();
+        return (i >= start && i < start + g.capacity() && i < p.tiles.len()).then(|| g.tiles(i - start));
+    }
+    controls(p).into_iter().find_map(|(h, r, _)| (h == target).then_some(r))
+}
+
+fn hover_transition(p: &mut Panel, next: Option<Hit>) -> Vec<RECT> {
+    if p.hover == next { return Vec::new(); }
+    let previous = p.hover_from;
+    let old = p.hover;
+    p.hover = next;
+    p.hover_from = if p.motion { old } else { None };
+    p.hover_started = p.motion.then(std::time::Instant::now);
+    previous.into_iter().chain(old).chain(next).filter_map(|h| target_rect(p, h)).collect()
+}
+
+fn motion_allowed() -> bool {
+    let enabled=OPTIONS.with(|p|p.borrow().animations);
+    let mut system=1i32;
+    if !cfg!(test) { unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION,0,(&mut system as *mut i32).cast(),0); } }
+    enabled && system!=0
+}
+
+fn hover_opacity(h:Hit,current:Option<Hit>,previous:Option<Hit>,progress:f32)->f32 {
+    if current==Some(h) { progress } else if previous==Some(h) { 1.0-progress } else { 0.0 }
+}
+
+fn animate_hover(hwnd:HWND,regions:Vec<RECT>) {
+    if !regions.is_empty() && PANEL.with(|p|p.borrow().as_ref().is_some_and(|p|p.hover_started.is_some())) {
+        unsafe {SetTimer(hwnd,HOVER_ANIMATION,16,None);}
+    }
+    invalidate_regions(hwnd,regions);
+}
+
+fn invalidate_regions(hwnd: HWND, regions: impl IntoIterator<Item=RECT>) {
+    for r in regions { unsafe { InvalidateRect(hwnd, &r, 0); } }
 }
 pub(super) fn configure(prefs: Preferences) {
     let changed = OPTIONS.with(|o| {
@@ -352,8 +430,10 @@ impl SearchWork {
             found.sort_by_key(|(rank, (_, e))| (*rank, !app_entry(e)));
             found.into_iter().take(100).map(|(_, t)| t).collect()
         };
+        let mut seen = HashSet::new();
         sorted
             .into_iter()
+            .filter(|(key,_)|seen.insert(match key { TileKey::App(id)=>format!("app:{id}"), TileKey::Folder(id)=>format!("folder:{id}") }))
             .map(|(key, entry)| {
                 let preview = if let TileKey::Folder(id) = key {
                     previews.remove(&id).unwrap_or_default()
@@ -402,6 +482,7 @@ fn apply_rows(hwnd: HWND, generation: u64, tiles: Vec<Tile>) {
         }
         p.search_settled = true;
         p.tiles = tiles;
+        p.hover=None;p.hover_from=None;p.hover_started=None;
         p.page = p.page.min(count_pages(p) - 1);
         p.selected = p.selected.min(p.tiles.len().saturating_sub(1));
         (std::mem::take(&mut p.accept_pending) && !p.tiles.is_empty()).then_some(p.selected)
@@ -511,6 +592,8 @@ fn controls(p: &Panel) -> Vec<(Hit, RECT, &'static str)> {
             ),
             "Mục đã ẩn",
         ));
+    } else {
+        result.push((Hit::Settings,button(side,u(150),u(96)),"Cài đặt"));
     }
     let tab_width = u(106).min(w / 5).max(1);
     for (i, cat) in Category::ALL.into_iter().enumerate() {
@@ -567,13 +650,27 @@ unsafe fn fill(dc: HDC, r: RECT, rgb: u32) {
     SetDCBrushColor(dc, rgb);
     FillRect(dc, &r, GetStockObject(DC_BRUSH) as HBRUSH);
 }
-unsafe fn round(dc: HDC, r: RECT, rad: i32, rgb: u32) {
-    SetDCBrushColor(dc, rgb);
-    let b = SelectObject(dc, GetStockObject(DC_BRUSH));
-    let p = SelectObject(dc, GetStockObject(NULL_PEN));
-    RoundRect(dc, r.left, r.top, r.right, r.bottom, rad, rad);
-    SelectObject(dc, p);
-    SelectObject(dc, b);
+fn rounded_ink(w: i32, h: i32, radius: i32, rgb: u32, alpha: u8) -> IconPixels {
+    let mut pixels = vec![0; (w * h * 4) as usize];
+    let r = (radius as f32 / 2.0).min(w.min(h) as f32 / 2.0);
+    for y in 0..h {
+        for x in 0..w {
+            let (coverage, _) = super::panel_coverage(x as f32 + 0.5, y as f32 + 0.5, w as f32, h as f32, r);
+            let a = (coverage * f32::from(alpha)).round() as u8;
+            let at = ((y * w + x) * 4) as usize;
+            for (i, shift) in [16, 8, 0].into_iter().enumerate() {
+                pixels[at+i] = ((((rgb >> shift) & 255) * u32::from(a) + 127) / 255) as u8;
+            }
+            pixels[at+3] = a;
+        }
+    }
+    IconPixels { width: w, height: h, pixels }
+}
+unsafe fn round(dc: HDC, r: RECT, rad: i32, rgb: u32, alpha: u8) {
+    if r.right > r.left && r.bottom > r.top {
+        let img = rounded_ink(r.right-r.left, r.bottom-r.top, rad, rgb, alpha);
+        draw_icon(dc, &img, r.left, r.top);
+    }
 }
 unsafe fn text(dc: HDC, s: &str, mut r: RECT, f: HFONT, ink: u32, center: bool) {
     let old = SelectObject(dc, f);
@@ -641,7 +738,7 @@ type PaintTile = (
     Vec<Option<IconPixels>>,
     bool,
 );
-fn icon_for_tile(p: &mut Panel, path: PathBuf, size: i32) -> Option<IconPixels> {
+fn request_icon(p: &mut Panel, path: PathBuf, size: i32) -> IconKey {
     let key = (path, size.clamp(8, 192));
     if !key.0.as_os_str().is_empty()
         && !p.icons.contains_key(&key)
@@ -651,15 +748,31 @@ fn icon_for_tile(p: &mut Panel, path: PathBuf, size: i32) -> Option<IconPixels> 
     {
         p.pending.remove(&key);
     }
-    p.icons.get(&key).cloned().flatten()
+    key
 }
 unsafe fn paint_full(hwnd: HWND) {
     let mut ps: PAINTSTRUCT = std::mem::zeroed();
     let dc = BeginPaint(hwnd, &mut ps);
-    render_full(hwnd, dc, false);
+    let size = PANEL.with(|p| p.borrow().as_ref().map(|p| (p.width,p.height)));
+    if let Some((w,h)) = size {
+        FRAME.with(|cell| {
+            let mut slot = cell.borrow_mut();
+            let new = !slot.as_ref().is_some_and(|f| f.w == w && f.h == h);
+            if new { *slot = Frame::new(dc,w,h); }
+            if let Some(f) = slot.as_ref() {
+                let dirty = if new { rect(0,0,w,h) } else { ps.rcPaint };
+                let saved = SaveDC(f.dc);
+                IntersectClipRect(f.dc,dirty.left,dirty.top,dirty.right,dirty.bottom);
+                render_full(hwnd, f.dc, dirty);
+                RestoreDC(f.dc,saved);
+                BitBlt(dc, ps.rcPaint.left, ps.rcPaint.top, ps.rcPaint.right-ps.rcPaint.left,
+                       ps.rcPaint.bottom-ps.rcPaint.top, f.dc, ps.rcPaint.left, ps.rcPaint.top, SRCCOPY);
+            } else { render_full(hwnd,dc,ps.rcPaint); }
+        });
+    }
     EndPaint(hwnd, &ps);
 }
-unsafe fn render_full(hwnd: HWND, dc: HDC, force_fallback: bool) {
+unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
     let view = PANEL.with(|s| {
         let mut s = s.borrow_mut();
         let p = s.as_mut()?;
@@ -681,16 +794,20 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, force_fallback: bool) {
         let tiles = visible
             .into_iter()
             .enumerate()
-            .map(|(i, t)| {
-                let icon = icon_for_tile(p, t.entry.path.clone(), grid.icon);
-                let preview = t
+            .filter_map(|(i, t)| {
+                let r = grid.tiles(i);
+                let key = request_icon(p, t.entry.path.clone(), grid.icon);
+                let preview_keys: Vec<_> = t
                     .preview
                     .iter()
-                    .map(|path| icon_for_tile(p, path.clone(), grid.icon / 3))
+                    .map(|path| request_icon(p, path.clone(), grid.icon / 3))
                     .collect();
-                (t, grid.tiles(i), icon, preview, p.selected == i + start)
+                if !intersects(r,dirty) { return None; }
+                let icon = p.icons.get(&key).cloned().flatten();
+                let preview=preview_keys.iter().map(|k|p.icons.get(k).cloned().flatten()).collect();
+                Some((i + start,(t, r, icon, preview, p.keyboard && p.selected == i + start)))
             })
-            .collect::<Vec<PaintTile>>();
+            .collect::<Vec<(usize,PaintTile)>>();
         let heading = LIBRARY.with(|l| {
             l.borrow()
                 .folders
@@ -703,13 +820,15 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, force_fallback: bool) {
             p.height,
             p.dpi,
             p.dark,
-            p.acrylic,
+            p.glass.clone(),
             p.font,
             grid.icon,
-            start,
             tiles,
             controls(p),
             p.hover,
+            p.hover_from,
+            p.hover_started.map_or(1.0,|t| (t.elapsed().as_millis().min(HOVER_MS) as f32/HOVER_MS as f32).clamp(0.0,1.0)),
+            p.pressed.map(|(h,_)|h),
             p.category,
             p.page,
             count_pages(p),
@@ -726,13 +845,15 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, force_fallback: bool) {
         h,
         dpi,
         dark,
-        acrylic,
+        glass,
         font,
         size,
-        start,
         tiles,
         buttons,
         hover,
+        hover_from,
+        hover_progress,
+        pressed,
         category,
         page,
         pages,
@@ -745,20 +866,22 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, force_fallback: bool) {
     )) = view
     {
         let u = |n| px(n, dpi);
-        let face = if dark { 0x00373230 } else { 0x00f9f6f4 };
-        let ink = if dark { 0x00f8f5f2 } else { 0x0024211d };
-        let secondary = if dark { 0x00d8d0cb } else { 0x005a5048 };
-        let active = if dark { 0x00664c35 } else { 0x00f5e5d5 };
-        let fallback = if dark { 0x002c2624 } else { 0x00e9e3dc };
-        fill(
-            dc,
-            rect(0, 0, w, h),
-            if acrylic && !force_fallback {
-                0
-            } else {
-                fallback
-            },
-        );
+        let face = if dark { 0x003e3531 } else { 0x00e8e4dd };
+        let ink = if dark { 0x00fdfbf8 } else { 0x00191412 };
+        let secondary = if dark { 0x00f1e8df } else { 0x003b312b };
+        let active = if dark { 0x00b7d0d4 } else { 0x005b818d };
+        let fallback = if dark { 0x00352a22 } else { 0x00e4e9de };
+        if glass.is_empty() { fill(dc, rect(0,0,w,h),fallback); }
+        else {
+            let (bw,bh) = ((w/4).max(1),(h/4).max(1));
+            let mut info: BITMAPINFO = std::mem::zeroed();
+            info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+            info.bmiHeader.biWidth = bw; info.bmiHeader.biHeight = -bh;
+            info.bmiHeader.biPlanes = 1; info.bmiHeader.biBitCount = 32;
+            info.bmiHeader.biCompression = BI_RGB;
+            SetStretchBltMode(dc, HALFTONE);
+            StretchDIBits(dc,0,0,w,h,0,0,bw,bh,glass.as_ptr().cast(),&info,DIB_RGB_COLORS,SRCCOPY);
+        }
         let header = crate::native_text::font_pixels(u(21), 600);
         text(
             dc,
@@ -774,24 +897,29 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, force_fallback: bool) {
             false,
         );
         let search_w = u(600).min(w - u(50)).max(1);
-        round(
+        if intersects(rect((w-search_w)/2,u(64),(w+search_w)/2,u(102)),dirty) { round(
             dc,
             rect((w - search_w) / 2, u(64), (w + search_w) / 2, u(102)),
             u(16),
-            face,
+            face, 255,
         );
+        text(dc,"⌕",rect((w-search_w)/2+u(10),u(64),(w-search_w)/2+u(44),u(102)),header,secondary,true);
+        }
         for (action, r, s) in buttons {
+            if !intersects(r,dirty) { continue; }
             let selected = matches!(action,Hit::Tab(c) if c==category);
-            round(
+            let lift=hover_opacity(action,hover,hover_from,hover_progress);
+            if !matches!(action,Hit::Page(_)) { round(
                 dc,
                 r,
                 u(12),
-                if selected || hover == Some(action) {
+                if selected {
                     active
                 } else {
                     face
                 },
-            );
+                if pressed == Some(action) { 230 } else if selected { 104 } else { (150.0+lift*65.0) as u8 },
+            ); }
             text(dc, s, r, font, ink, true);
         }
         let label = if hidden {
@@ -816,10 +944,10 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, force_fallback: bool) {
             true,
         );
         let names = OPTIONS.with(|o| o.borrow().show_names);
-        for (i, (t, r, icon, preview, sel)) in tiles.iter().enumerate() {
-            let hovered = hover == Some(Hit::Tile(start + i));
-            if *sel || hovered {
-                round(dc, *r, u(18), active);
+        for (i, (t, r, icon, preview, sel)) in &tiles {
+            let lift=hover_opacity(Hit::Tile(*i),hover,hover_from,hover_progress);
+            if *sel || lift>0.0 || pressed==Some(Hit::Tile(*i)) {
+                round(dc, *r, u(30), active, if pressed == Some(Hit::Tile(*i)) { 98 } else if *sel { 66 } else { (46.0*lift) as u8 });
             }
             let ix = (r.left + r.right) / 2;
             let iy = r.top + ((r.bottom - r.top - size - u(16)) / 2).max(0);
@@ -835,7 +963,7 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, force_fallback: bool) {
                         active
                     } else {
                         face
-                    },
+                    }, 140,
                 );
                 let letter = if t.entry.kind == "Folder" {
                     "▦".into()
@@ -869,7 +997,7 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, force_fallback: bool) {
                 );
             }
         }
-        if tiles.is_empty() {
+        if PANEL.with(|p|p.borrow().as_ref().is_some_and(|p|p.tiles.is_empty())) {
             let message = if loading {
                 "Đang tải ứng dụng…"
             } else {
@@ -984,24 +1112,61 @@ pub(super) fn update_pins() {
     }
 }
 
-unsafe fn acrylic(hwnd: HWND, dark: bool) -> bool {
+unsafe fn surface_style(hwnd: HWND, dark: bool) {
+    // No extended client glass: GDI does not supply a reliable alpha channel
+    // for DWM glass. Use the same captured/frosted material as Compact.
     let attr = |id: DWMWINDOWATTRIBUTE, value: i32| {
         DwmSetWindowAttribute(hwnd, id as u32, (&value as *const i32).cast(), 4)
     };
     let _ = attr(DWMWA_USE_IMMERSIVE_DARK_MODE, i32::from(dark));
     let _ = attr(DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND);
-    let frame = MARGINS {
-        cxLeftWidth: -1,
-        cxRightWidth: -1,
-        cyTopHeight: -1,
-        cyBottomHeight: -1,
-    };
-    let result = attr(DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_TRANSIENTWINDOW);
-    if result >= 0 && DwmExtendFrameIntoClientArea(hwnd, &frame) >= 0 {
-        return true;
-    }
     let _ = attr(DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_NONE);
-    false
+}
+
+fn transparency_allowed() -> bool {
+    if cfg!(test) { return true; }
+    use windows_sys::Win32::{System::Registry::HKEY_CURRENT_USER, UI::Accessibility::{HIGHCONTRASTW,HCF_HIGHCONTRASTON}};
+    unsafe {
+        let mut hc: HIGHCONTRASTW = std::mem::zeroed();
+        hc.cbSize = std::mem::size_of::<HIGHCONTRASTW>() as u32;
+        if SystemParametersInfoW(SPI_GETHIGHCONTRAST,hc.cbSize,(&mut hc as *mut HIGHCONTRASTW).cast(),0)!=0
+            && hc.dwFlags&HCF_HIGHCONTRASTON!=0 { return false; }
+    }
+    crate::lock::reg_get_dword(HKEY_CURRENT_USER,r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize","EnableTransparency") != Some(0)
+}
+
+fn frosted(raw: &[u8], w:i32,h:i32,dpi:u32,dark:bool, cfg:&Preferences) -> Vec<u8> {
+    if raw.is_empty() { return Vec::new(); }
+    super::frost(raw,w,h,dpi as f32/96.0,&Appearance {
+        theme: if dark { "dark" } else { "light" }.into(),
+        transparency: cfg.glass_strength.clamp(20,48) as f32/100.0,
+        blur: cfg.glass_blur.clamp(24,64) as f32,
+    })
+}
+
+unsafe fn sample_backdrop(r:RECT)->Vec<u8> {
+    let w=r.right-r.left;
+    let h=r.bottom-r.top;
+    if cfg!(test) {
+        let (bw,bh)=((w/4).max(1),(h/4).max(1));
+        let mut raw=Vec::with_capacity((bw*bh*4) as usize);
+        for y in 0..bh { for x in 0..bw {
+            raw.extend_from_slice(&[ (60+170*x/bw) as u8,(110+110*y/bh) as u8,(220-180*x/bw) as u8,255 ]);
+        } }
+        return raw;
+    }
+    capture_glass(r.left,r.top,w,h)
+}
+
+fn refresh_material(hwnd:HWND) {
+    let allowed=transparency_allowed();
+    PANEL.with(|cell| {
+        if let Some(p)=cell.borrow_mut().as_mut() {
+            p.glass=if allowed { OPTIONS.with(|o| frosted(&p.backdrop,p.width,p.height,p.dpi,p.dark,&o.borrow())).into() }
+                else { Vec::<u8>::new().into() };
+        }
+    });
+    refresh(hwnd);
 }
 
 fn estimate(point: POINT) -> Option<(RECT, u32)> {
@@ -1027,6 +1192,19 @@ unsafe fn place(hwnd: HWND, point: POINT) {
     if width <= 0 || height <= 0 {
         return;
     }
+    let changed = PANEL.with(|p| p.borrow().as_ref().is_some_and(|p| {
+        (p.bounds.left,p.bounds.top,p.bounds.right,p.bounds.bottom) != (r.left,r.top,r.right,r.bottom)
+    }));
+    let mut raw = None;
+    let visible = IsWindowVisible(hwnd)!=0;
+    if changed {
+        // Hide only our own overlay before capture. Never capture it back into
+        // itself on monitor change. Take one low-resolution sample, no polling.
+        let was_modal = MODAL.replace(true);
+        if visible { ShowWindow(hwnd,SW_HIDE); }
+        raw=Some(if transparency_allowed() { sample_backdrop(r) } else { Vec::new() });
+        MODAL.set(was_modal);
+    }
     let Some((edit, old_font)) = PANEL.with(|p| {
         let mut p = p.borrow_mut();
         let p = p.as_mut()?;
@@ -1035,6 +1213,8 @@ unsafe fn place(hwnd: HWND, point: POINT) {
         p.dpi = dpi;
         p.width = width;
         p.height = height;
+        p.bounds = r;
+        if let Some(raw)=raw { p.backdrop=raw; }
         p.font = crate::native_text::font_pixels(px(15, dpi), 450);
         Some((p.edit, old))
     }) else {
@@ -1053,9 +1233,9 @@ unsafe fn place(hwnd: HWND, point: POINT) {
     SetWindowPos(
         edit,
         ptr::null_mut(),
-        (width - fw) / 2 + px(14, dpi),
+        (width - fw) / 2 + px(44, dpi),
         px(73, dpi),
-        (fw - px(28, dpi)).max(1),
+        (fw - px(58, dpi)).max(1),
         px(24, dpi),
         SWP_NOZORDER | SWP_NOACTIVATE,
     );
@@ -1065,7 +1245,9 @@ unsafe fn place(hwnd: HWND, point: POINT) {
     if !old_font.is_null() {
         DeleteObject(old_font);
     }
+    refresh_material(hwnd);
     rebuild(hwnd, false);
+    if changed && visible { ShowWindow(hwnd,SW_SHOW); SetForegroundWindow(hwnd); SetFocus(edit); }
 }
 
 pub(super) fn dismiss(restore: bool) {
@@ -1079,8 +1261,10 @@ pub(super) fn dismiss(restore: bool) {
         KillTimer(p.hwnd, POLL);
         KillTimer(p.hwnd, SEARCH);
         KillTimer(p.hwnd, SHELL_REFRESH);
+        KillTimer(p.hwnd,HOVER_ANIMATION);
         drop(p.watch.take());
         DestroyWindow(p.hwnd);
+        FRAME.with(|frame| { frame.borrow_mut().take(); });
         if !p.font.is_null() {
             DeleteObject(p.font);
         }
@@ -1592,6 +1776,11 @@ unsafe fn action(hwnd: HWND, which: Hit) {
         }
         Hit::Add => add_app(hwnd),
         Hit::Refresh => refresh_catalog(hwnd),
+        Hit::Settings => {
+            dismiss(false);
+            let owner=FindWindowW(wide(crate::MSG_CLASS).as_ptr(),ptr::null());
+            if !owner.is_null(){PostMessageW(owner,crate::WM_OPEN_SETTINGS,0,0);}
+        }
         Hit::Edit => rewrite_state(hwnd, |p| p.editing = !p.editing),
         Hit::Hidden => show_hidden(hwnd),
         Hit::Back => internal_view(hwnd, 0, false),
@@ -1616,6 +1805,7 @@ unsafe fn action(hwnd: HWND, which: Hit) {
             let Some((tile, editing)) = PANEL.with(|s| {
                 let s = s.borrow();
                 let p = s.as_ref()?;
+                if !p.search_settled { return None; }
                 Some((p.tiles.get(i)?.clone(), p.editing))
             }) else {
                 return;
@@ -1634,6 +1824,7 @@ fn set_page(hwnd: HWND, page: usize) {
             p.page = page.min(count_pages(p) - 1);
             p.selected = p.page * grid(p).capacity();
             p.hover = None;
+            p.hover_from=None;p.hover_started=None;
         }
     });
     refresh(hwnd);
@@ -1650,6 +1841,7 @@ fn page(hwnd: HWND, delta: isize) {
 fn step(hwnd: HWND, offset: isize) {
     PANEL.with(|s| {
         if let Some(p) = s.borrow_mut().as_mut() {
+            p.keyboard=true;
             p.selected = p
                 .selected
                 .saturating_add_signed(offset)
@@ -1724,13 +1916,14 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         }
         #[cfg(test)]
         WM_PRINTCLIENT => {
-            render_full(hwnd, w as HDC, true);
+            let area = PANEL.with(|p| p.borrow().as_ref().map(|p|rect(0,0,p.width,p.height)));
+            if let Some(area)=area { render_full(hwnd,w as HDC,area); }
             0
         }
         WM_CTLCOLOREDIT => {
             let dark = PANEL.with(|p| p.borrow().as_ref().is_some_and(|s| s.dark));
-            let bg = if dark { 0x00373230 } else { 0x00f9f6f4 };
-            SetTextColor(w as HDC, if dark { 0x00f8f5f2 } else { 0x0024211d });
+            let bg = if dark { 0x003e3531 } else { 0x00e8e4dd };
+            SetTextColor(w as HDC, if dark { 0x00fdfbf8 } else { 0x00191412 });
             SetBkColor(w as HDC, bg);
             SetDCBrushColor(w as HDC, bg);
             GetStockObject(DC_BRUSH) as LRESULT
@@ -1746,10 +1939,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     return false;
                 }
                 p.input = text;
-                p.tiles.clear();
                 p.page = 0;
                 p.selected = 0;
                 p.hover = None;
+                p.hover_from=None;p.hover_started=None;
                 p.error.clear();
                 p.generation = p.generation.wrapping_add(1);
                 p.search_rx = None;
@@ -1784,13 +1977,25 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             rebuild(hwnd, true);
             0
         }
+        WM_TIMER if w == HOVER_ANIMATION => {
+            let (regions,active)=PANEL.with(|s| {
+                let mut s=s.borrow_mut();let Some(p)=s.as_mut() else {return (Vec::new(),false);};
+                let Some(start)=p.hover_started else {return(Vec::new(),false);};
+                let regions=p.hover_from.into_iter().chain(p.hover).filter_map(|h|target_rect(p,h)).collect::<Vec<_>>();
+                let active=start.elapsed().as_millis()<HOVER_MS;
+                if !active {p.hover_started=None;p.hover_from=None;}
+                (regions,active)
+            });
+            if !active {KillTimer(hwnd,HOVER_ANIMATION);}
+            invalidate_regions(hwnd,regions);0
+        }
         WM_TIMER if w == POLL => {
             let (icons, apps, result, busy) = PANEL.with(|s| {
                 let mut s = s.borrow_mut();
                 let Some(p) = s.as_mut() else {
-                    return (false, false, None, false);
+                    return (Vec::new(), false, None, false);
                 };
-                let mut icons = false;
+                let mut icons = Vec::new();
                 let grid_capacity = grid(p).capacity();
                 while let Ok((key, image)) = p.icon_rx.try_recv() {
                     p.pending.remove(&key);
@@ -1803,8 +2008,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                                 .any(|tile| &tile.entry.path == path || tile.preview.contains(path))
                         });
                     }
+                    let g=grid(p);
+                    for (i,t) in p.tiles.iter().skip(p.page*g.capacity()).take(g.capacity()).enumerate() {
+                        if t.entry.path==key.0 || t.preview.contains(&key.0) { icons.push(g.tiles(i)); }
+                    }
                     p.icons.insert(key, image);
-                    icons = true;
                 }
                 let mut apps = false;
                 if let Some(rx) = &p.catalog {
@@ -1843,8 +2051,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 rebuild(hwnd, false);
             } else if let Some((gen, tiles)) = result {
                 apply_rows(hwnd, gen, tiles);
-            } else if icons {
-                refresh(hwnd);
+            } else if !icons.is_empty() {
+                invalidate_regions(hwnd,icons);
             }
             0
         }
@@ -1860,14 +2068,16 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         }
         WM_SETTINGCHANGE | WM_THEMECHANGED | WM_DWMCOMPOSITIONCHANGED => {
             let dark = dark();
-            let glass = acrylic(hwnd, dark);
+            surface_style(hwnd, dark);
+            let motion=motion_allowed();
             PANEL.with(|s| {
                 if let Some(p) = s.borrow_mut().as_mut() {
                     p.dark = dark;
-                    p.acrylic = glass;
+                    p.motion=motion;
                 }
             });
-            refresh(hwnd);
+            refresh_material(hwnd);
+            if let Some(edit)=PANEL.with(|p|p.borrow().as_ref().map(|p|p.edit)){ InvalidateRect(edit,ptr::null(),0); }
             0
         }
         WM_DPICHANGED | WM_DISPLAYCHANGE => {
@@ -1920,23 +2130,34 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             0
         }
         WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
-            page(hwnd, if (w >> 16) as i16 > 0 { -1 } else { 1 });
+            let direction=PANEL.with(|p|{
+                let mut p=p.borrow_mut();let Some(p)=p.as_mut() else{return 0;};
+                p.wheel=(p.wheel+(w>>16) as i16 as i32).clamp(-240,240);
+                if p.wheel.abs()<120 {0}else{let sign=p.wheel.signum();p.wheel=0;-sign}
+            });
+            if direction!=0 {page(hwnd,direction as isize);}
             0
         }
         WM_MOUSEMOVE => {
-            let changed = PANEL.with(|s| {
+            let (regions, track) = PANEL.with(|s| {
                 let mut s = s.borrow_mut();
                 let Some(p) = s.as_mut() else {
-                    return false;
+                    return (Vec::new(),false);
                 };
                 let next = hit_at(p, coords(l));
-                let changed = p.hover != next;
-                p.hover = next;
-                changed
+                let mut regions = hover_transition(p,next);
+                if p.keyboard { if let Some(r)=target_rect(p,Hit::Tile(p.selected)){regions.push(r);} p.keyboard=false; }
+                let track = !p.tracking;
+                p.tracking = true;
+                (regions,track)
             });
-            if changed {
-                refresh(hwnd);
-            }
+            if track { TrackMouseEvent(&mut TRACKMOUSEEVENT { cbSize:std::mem::size_of::<TRACKMOUSEEVENT>() as u32,dwFlags:TME_LEAVE,hwndTrack:hwnd,dwHoverTime:0 }); }
+            animate_hover(hwnd,regions);
+            0
+        }
+        WM_MOUSELEAVE => {
+            let regions=PANEL.with(|s| s.borrow_mut().as_mut().map_or_else(Vec::new,|p|{p.tracking=false;hover_transition(p,None)}));
+            animate_hover(hwnd,regions);
             0
         }
         WM_LBUTTONDOWN => {
@@ -1951,23 +2172,23 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             });
             if pressed {
                 SetCapture(hwnd);
+                if let Some(r)=PANEL.with(|s|s.borrow().as_ref().and_then(|p|p.pressed.and_then(|(h,_)|target_rect(p,h)))){ invalidate_regions(hwnd,[r]); }
             }
             0
         }
         WM_CAPTURECHANGED => {
-            PANEL.with(|s| {
-                if let Some(p) = s.borrow_mut().as_mut() {
-                    p.pressed = None;
-                }
-            });
+            let region=PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut()?;let (h,_)=p.pressed.take()?;target_rect(p,h)});
+            invalidate_regions(hwnd,region);
             0
         }
         WM_LBUTTONUP => {
             let point = coords(l);
+            let mut changed=None;
             let targets = PANEL.with(|s| {
                 let mut s = s.borrow_mut();
                 let p = s.as_mut()?;
                 let (start, origin) = p.pressed.take()?;
+                changed=target_rect(p,start);
                 let end = hit_at(p, point)?;
                 let far = (point.x - origin.x).abs().max((point.y - origin.y).abs()) > px(7, p.dpi);
                 Some((start, end, far, p.editing, p.folder))
@@ -1975,6 +2196,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             if GetCapture() == hwnd {
                 ReleaseCapture();
             }
+            invalidate_regions(hwnd,changed);
             if let Some((start, end, far, editing, folder)) = targets {
                 match (start, end, far) {
                     (Hit::Tile(a), Hit::Tile(b), true) if editing => drop_tile(hwnd, a, b),
@@ -2116,7 +2338,7 @@ fn open_native(point: POINT, query: String, prior: HWND, manage: bool, activate:
             wide("Tìm ứng dụng, tệp, công cụ…").as_ptr() as LPARAM,
         );
         let d = dark();
-        let glass = acrylic(hwnd, d);
+        surface_style(hwnd, d);
         let (icon_tx, icon_rx) = icon_worker();
         let apps = catalog::snapshot(true);
         PANEL.with(|p| {
@@ -2128,7 +2350,9 @@ fn open_native(point: POINT, query: String, prior: HWND, manage: bool, activate:
                 width: 0,
                 height: 0,
                 dpi: 96,
-                acrylic: glass,
+                backdrop:Vec::new(),
+                glass:Vec::<u8>::new().into(),
+                bounds:std::mem::zeroed(),
                 dark: d,
                 font: ptr::null_mut(),
                 apps,
@@ -2148,6 +2372,12 @@ fn open_native(point: POINT, query: String, prior: HWND, manage: bool, activate:
                 tiles: Vec::new(),
                 error: String::new(),
                 hover: None,
+                hover_from:None,
+                hover_started:None,
+                motion:motion_allowed(),
+                tracking:false,
+                keyboard:false,
+                wheel:0,
                 pressed: None,
                 icon_tx,
                 icon_rx,
@@ -2160,11 +2390,13 @@ fn open_native(point: POINT, query: String, prior: HWND, manage: bool, activate:
         place(hwnd, point);
         if activate {
             ShowWindow(hwnd, SW_SHOW);
+            UpdateWindow(hwnd);
             SetForegroundWindow(hwnd);
             SetFocus(edit);
             input.finish(hwnd, "Spotlight library");
         } else {
             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            UpdateWindow(hwnd);
         }
         SendMessageW(edit, 0x00b1, usize::MAX, -1);
         SetTimer(hwnd, POLL, 40, None);
@@ -2180,6 +2412,16 @@ fn open_native(point: POINT, query: String, prior: HWND, manage: bool, activate:
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rounded_material_has_premultiplied_alpha_and_no_white_corner() {
+        let ink=rounded_ink(40,30,24,0x00a05020,100);
+        assert_eq!(&ink.pixels[..4],&[0,0,0,0]);
+        assert!(ink.pixels.chunks_exact(4).all(|p|p[..3].iter().all(|c|*c<=p[3])));
+        let i=(15*40+20)*4;
+        assert_eq!(&ink.pixels[i..i+4],&[63,31,13,100]);
+        assert_eq!(hover_opacity(Hit::Close,Some(Hit::Close),None,0.5),0.5);
+        assert_eq!(hover_opacity(Hit::Close,None,Some(Hit::Close),0.5),0.5);
+    }
     #[test]
     fn layout_keeps_tiles_inside_landscape_portrait_and_high_dpi() {
         for (w, h) in [

@@ -145,12 +145,15 @@
         <label><span data-i18n="spotlightEnabled">Bật Spotlight</span><input id="spotlightEnabled" type="checkbox" checked></label>
         <label><span data-i18n="spotlightDockClick">Khi bấm Spotlight trên Dock</span><select id="spotlightDockClick"><option value="full" data-i18n="spotlightFullMode">Toàn màn hình</option><option value="compact" data-i18n="spotlightCompactMode">Thu gọn</option></select></label>
         <label><span data-i18n="launcherTheme">Chế độ màu</span><select id="spotlightFullTheme"><option value="system" data-i18n="spotlightSystemTheme">Theo hệ thống</option><option value="light" data-i18n="launcherLight">Sáng</option><option value="dark" data-i18n="launcherDark">Tối</option></select></label>
-        <label><span data-i18n="spotlightIconSize">Cỡ biểu tượng</span><input id="spotlightIconSize" type="range" min="36" max="96" step="2" value="64"></label>
+        <label><span data-i18n="spotlightIconSize">Cỡ biểu tượng</span><input id="spotlightIconSize" type="range" min="36" max="96" step="2" value="86"></label>
         <label><span data-i18n="spotlightSpacing">Khoảng cách ô</span><input id="spotlightSpacing" type="range" min="8" max="42" step="2" value="18"></label>
+        <label><span data-i18n="spotlightGlassStrength">Màu nền kính</span><input id="spotlightGlassStrength" type="range" min="20" max="48" step="2" value="44"></label>
+        <label><span data-i18n="spotlightGlassBlur">Độ mờ nền kính</span><input id="spotlightGlassBlur" type="range" min="24" max="64" step="2" value="48"></label>
+        <label><span data-i18n="spotlightAnimations">Chuyển động</span><input id="spotlightAnimations" type="checkbox" checked></label>
         <label><span data-i18n="spotlightNames">Hiện tên ứng dụng</span><input id="spotlightNames" type="checkbox" checked></label>
         <label><span data-i18n="spotlightFavorites">Ưu tiên yêu thích</span><input id="spotlightFavorites" type="checkbox" checked></label>
       </div>
-      <p class="launcher-note" data-i18n="spotlightAcrylicNote">Windows điều khiển kính Acrylic. Nếu không hỗ trợ, Spotlight dùng nền theo màu giao diện. Phím Spotlight hiện tại vẫn mở chế độ thu gọn.</p>
+      <p class="launcher-note" data-i18n="spotlightAcrylicNote">Nền kính lấy mẫu và làm mờ một lần khi mở Spotlight. Khi Windows tắt độ trong suốt, sử dụng nền theo màu giao diện. Phím Spotlight vẫn mở chế độ thu gọn.</p>
       <div class="actions"><button type="button" id="spotlightHidden" data-i18n="spotlightHidden">Mục đã ẩn</button><button type="button" id="spotlightRefresh" data-i18n="spotlightRefresh">Làm mới thư viện</button><button type="button" id="spotlightReset" data-i18n="spotlightReset">Đặt lại bố cục</button></div>
     </section><section class="monitor-panel" aria-label="Mini tools">
       <h3 data-i18n="miniToolsTitle">Chụp và quay</h3>
@@ -1335,10 +1338,11 @@ for (const id of ['launcherTheme', 'launcherTransparency', 'launcherBlur']) {
   $(id).addEventListener('input', syncLauncherAppearance);
   $(id).addEventListener('change', () => send({ t: 'launcherAppearance', theme: $('launcherTheme').value, transparency: Number($('launcherTransparency').value) / 100, blur: Number($('launcherBlur').value) }));
 }
-const spotlightInputs=['spotlightEnabled','spotlightDockClick','spotlightFullTheme','spotlightIconSize','spotlightSpacing','spotlightNames','spotlightFavorites'];
+const spotlightInputs=['spotlightEnabled','spotlightDockClick','spotlightFullTheme','spotlightIconSize','spotlightSpacing','spotlightGlassStrength','spotlightGlassBlur','spotlightAnimations','spotlightNames','spotlightFavorites'];
 for(const id of spotlightInputs) $(id).addEventListener('change',()=>send({t:'spotlightPreferences',value:{
   enabled:$('spotlightEnabled').checked,dockFullscreen:$('spotlightDockClick').value==='full',theme:$('spotlightFullTheme').value,
   iconSize:Number($('spotlightIconSize').value),spacing:Number($('spotlightSpacing').value),
+  glassStrength:Number($('spotlightGlassStrength').value),glassBlur:Number($('spotlightGlassBlur').value),animations:$('spotlightAnimations').checked,
   showNames:$('spotlightNames').checked,favoritesFirst:$('spotlightFavorites').checked
 }}));
 for(const [id,action] of [['spotlightHidden','hidden'],['spotlightRefresh','refresh'],['spotlightReset','reset']])
@@ -1573,6 +1577,9 @@ function applyInitMessage(m) {
     $('spotlightFullTheme').value=p.theme;
     $('spotlightIconSize').value=p.iconSize;
     $('spotlightSpacing').value=p.spacing;
+    $('spotlightGlassStrength').value=p.glassStrength??44;
+    $('spotlightGlassBlur').value=p.glassBlur??48;
+    $('spotlightAnimations').checked=p.animations!==false;
     $('spotlightNames').checked=p.showNames;
     $('spotlightFavorites').checked=p.favoritesFirst;
   }

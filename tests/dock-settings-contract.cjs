@@ -324,12 +324,15 @@ test('unified Spotlight preferences and library actions are independent of Dock 
   $('spotlightFullTheme').value='dark';
   $('spotlightIconSize').value='72';
   $('spotlightSpacing').value='26';
+  $('spotlightGlassStrength').value='42';
+  $('spotlightGlassBlur').value='54';
+  $('spotlightAnimations').checked=true;
   $('spotlightNames').checked=false;
   $('spotlightFavorites').checked=true;
   $('spotlightSpacing').listeners.change();
   assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{
     t:'spotlightPreferences',value:{enabled:true,dockFullscreen:false,theme:'dark',
-      iconSize:72,spacing:26,showNames:false,favoritesFirst:true}
+      iconSize:72,spacing:26,glassStrength:42,glassBlur:54,animations:true,showNames:false,favoritesFirst:true}
   });
   for(const [id,action] of [['spotlightHidden','hidden'],['spotlightRefresh','refresh'],['spotlightReset','reset']]){
     $(id).listeners.click();
