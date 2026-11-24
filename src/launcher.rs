@@ -781,7 +781,10 @@ unsafe fn paint(hwnd: HWND) {
                 }else{color.set_color_rgba8(245,248,252,if GetForegroundWindow()==hwnd{100}else{62});}
                 overlay.stroke_path(&field,&color,&tiny_skia::Stroke{width:scale.max(1.0),..Default::default()},tiny_skia::Transform::identity(),None);
             }
-            color.set_color_rgba8(if dock_start&&!dark{65}else{245},if dock_start&&!dark{70}else{248},if dock_start&&!dark{78}else{252},220);
+            if high{
+                let c=GetSysColor(COLOR_WINDOWTEXT);
+                color.set_color_rgba8(c as u8,(c>>8) as u8,(c>>16) as u8,255);
+            }else{color.set_color_rgba8(if dock_start&&!dark{65}else{245},if dock_start&&!dark{70}else{248},if dock_start&&!dark{78}else{252},220);}
             let mut p = tiny_skia::PathBuilder::new(); p.push_circle(31.0*scale,34.0*scale,8.5*scale); p.move_to(37.2*scale,40.2*scale); p.line_to(44.0*scale,47.0*scale);
             if let Some(path) = p.finish() { overlay.stroke_path(&path, &color, &tiny_skia::Stroke {width:1.8*scale,line_cap:tiny_skia::LineCap::Round,..Default::default()}, tiny_skia::Transform::identity(), None); }
             color.set_color_rgba8(if dark {255} else {25},if dark {255} else {30},if dark {255} else {40},if dark {40} else {30});
@@ -794,8 +797,8 @@ unsafe fn paint(hwnd: HWND) {
         let search_placeholder=if high{search_ink}else if dock_start{secondary}else{0x00d8d4cf};
         let text = wide(&query); let mut extent: SIZE = std::mem::zeroed(); let oldfont = SelectObject(dc,search);
         GetTextExtentPoint32W(dc,text.as_ptr(),text.len().saturating_sub(1) as i32,&mut extent); SelectObject(dc,oldfont);
-        if select_all && !query.is_empty() { let brush=CreateSolidBrush(if dock_start&&!dark{0x00ECD5BC}else{0x009c7048}); FillRect(dc,&RECT {left:px(59),top:px(23),right:(px(62)+extent.cx).min(w-px(99)),bottom:px(47)},brush); DeleteObject(brush); }
-        label(dc,if query.is_empty(){if dock_start{"Tìm ứng dụng, tệp…"}else{"Spotlight Search"}}else{&query},RECT {left:px(60),top:px(10),right:w-px(99),bottom:px(59)},search,if query.is_empty(){search_placeholder}else{search_ink});
+        if select_all && !query.is_empty() { let brush=CreateSolidBrush(if high{GetSysColor(COLOR_HIGHLIGHT)}else if dock_start&&!dark{0x00ECD5BC}else{0x009c7048}); FillRect(dc,&RECT {left:px(59),top:px(23),right:(px(62)+extent.cx).min(w-px(99)),bottom:px(47)},brush); DeleteObject(brush); }
+        label(dc,if query.is_empty(){if dock_start{"Tìm ứng dụng, tệp…"}else{"Spotlight Search"}}else{&query},RECT {left:px(60),top:px(10),right:w-px(99),bottom:px(59)},search,if query.is_empty(){search_placeholder}else if high&&select_all{GetSysColor(COLOR_HIGHLIGHTTEXT)}else{search_ink});
         if !dock_start { label(dc,"▦",RECT{left:w-px(80),top:px(10),right:w-px(48),bottom:px(59)},search,search_ink); }
         if GetForegroundWindow() == hwnd&&!select_all { let caret=CreateSolidBrush(search_ink); let x=(px(60)+extent.cx).min(w-px(99)); FillRect(dc,&RECT{left:x,top:px(24),right:x+px(1).max(1),bottom:px(46)},caret); DeleteObject(caret); }
         label(dc,"esc",RECT {left:w-px(43),top:px(24),right:w-px(14),bottom:px(48)},small,search_placeholder);

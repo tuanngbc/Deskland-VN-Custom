@@ -97,8 +97,13 @@ unsafe fn permitted(id:WindowIdentity)->bool{
         &&super::previews::permitted_pid(h)==Ok(id.pid)
 }
 unsafe fn allowed(id:WindowIdentity)->bool{
-    motion::allowed()&&motion::settings().scale_windows&&permitted(id)
-        &&elevation(id.pid)==Some(false)&&without_native_overlap(id.hwnd as HWND)
+    if !motion::allowed()||!motion::settings().scale_windows{return false;}
+    let reason=if !permitted(id){"source-unavailable-or-protected"}
+        else if elevation(id.pid)!=Some(false){"elevated-or-unverified"}
+        else if !without_native_overlap(id.hwnd as HWND){"native-animation-overlap"}
+        else{return true;};
+    if crate::trial::active(){crate::log!("DOCK_WINDOW_SCALE fallback={reason}");}
+    false
 }
 unsafe fn target(owner:HWND,path:&str)->Option<RECT>{
     let slot=STATE.with(|s|{
@@ -317,15 +322,33 @@ pub(super) unsafe fn probe_owned_window(source:HWND,frame:&stage_snapshot::Frame
     if !valid_pixels(frame,area){println!("WINDOW_SCALE_NATIVE=BLOCKED capture aspect or pixel validation");return;}
     let icon=RECT{left:area.right-48,top:area.bottom-48,right:area.right, bottom:area.bottom};
     let end=icon_fit(area,icon);
-    let before=crate::private_mb();
     let counts=||{let h=GetCurrentProcess();let mut n=0;GetProcessHandleCount(h,&mut n);
         (GetGuiResources(h,0),GetGuiResources(h,1),n)};
-    let handles=counts();
+    // The fixture owns this window, so test the (potentially unreadable)
+    // per-HWND policy without changing another application or the system.
+    let mut prior=0i32;
+    let read=DwmGetWindowAttribute(source,DWMWA_TRANSITIONS_FORCEDISABLED as u32,(&mut prior as *mut i32).cast(),4);
+    let disable=1i32;
+    let write=DwmSetWindowAttribute(source,DWMWA_TRANSITIONS_FORCEDISABLED as u32,(&disable as *const i32).cast(),4);
+    let mut checked=0i32;
+    let verify=DwmGetWindowAttribute(source,DWMWA_TRANSITIONS_FORCEDISABLED as u32,(&mut checked as *mut i32).cast(),4);
+    println!("WINDOW_SCALE_NATIVE_GATE read={read:#x}/{prior} write_owned={write:#x} readback={verify:#x}/{checked}");
+    let cold=crate::private_mb();
+    let cold_handles=counts();
+    let mut before=cold;
+    let mut handles=cold_handles;
     let original=placement(source).unwrap();
     let mut visible_pixels=false;
     let mut peak=before;
     let mut longest=0.0f64;
-    for i in 0..100{
+    let settle=||{
+        GdiFlush();let _=DwmFlush();
+        let mut msg:MSG=mem::zeroed();
+        while PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}
+    };
+    // Warm the system-owned layered HWND and native show-state machinery,
+    // then measure 100 additional cycles from a settled baseline.
+    for i in 0..105{
         let proxy=Proxy::new(frame,area).expect("valid owned WGC proxy");
         let started=Instant::now();
         assert!(proxy.present(area,255));
@@ -360,12 +383,21 @@ pub(super) unsafe fn probe_owned_window(source:HWND,frame:&stage_snapshot::Frame
         let now=crate::private_mb();peak=(peak.0.max(now.0),peak.1.max(now.1));
         longest=longest.max(started.elapsed().as_secs_f64()*1000.0);
         let h=proxy.hwnd;drop(proxy);assert_eq!(IsWindow(h),0);
+        settle();
+        if i==4{
+            for _ in 0..6{settle();std::thread::sleep(Duration::from_millis(40));}
+            before=crate::private_mb();handles=counts();peak=before;longest=0.0;
+            println!("WINDOW_SCALE_NATIVE_WARM handles={cold_handles:?}->{handles:?} memory={cold:?}->{before:?}");
+        }
+        if i>=24&&(i-4)%20==0{println!("WINDOW_SCALE_NATIVE_PROGRESS cycles={} handles={:?} memory={:?}",i-4,counts(),crate::private_mb());}
     }
+    for _ in 0..12{settle();std::thread::sleep(Duration::from_millis(40));}
     let after=crate::private_mb();
     let final_handles=counts();
-    assert!(final_handles.0<=handles.0+2&&final_handles.1<=handles.1+2&&final_handles.2<=handles.2+10);
     println!("WINDOW_SCALE_NATIVE cycles=100 rendered_source_pixels=PASS actual_screen_pixels={} placement=PASS proxy_cleanup=PASS handles={handles:?}->{final_handles:?} memory={before:?}->{after:?} peak={peak:?} max_submit_cycle_ms={longest:.2} native_gate={} overlap=NOT_VERIFIED",
         if visible_pixels{"MATCH"}else{"NOT_VERIFIED"},without_native_overlap(source));
+    assert!(final_handles.0<=handles.0+2&&final_handles.1<=handles.1+2&&final_handles.2<=handles.2+10,"steady-state proxy resources grew: {handles:?} -> {final_handles:?}");
+    assert!(after.0-before.0<12.0,"private bytes did not recover after 100 bounded window proxies");
 }
 
 #[cfg(test)]

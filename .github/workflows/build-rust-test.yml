@@ -90,6 +90,8 @@ jobs:
           New-Item -ItemType Directory -Force $env:TUANPC_SPOTLIGHT_EVIDENCE | Out-Null
           cargo test --release launcher::fullscreen::native_tests::native_live_backdrop_retains_color_and_filters_detail -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release launcher::fullscreen::native_tests::native_actual_search_field_screen_output -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release launcher::fullscreen::native_tests::native_repeated_live_graphics_reuses_factories_without_retaining_surfaces -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release launcher::fullscreen::native_tests::native_activation_modes_apply_live_on_one_overlay -- --ignored --exact --nocapture --test-threads=1

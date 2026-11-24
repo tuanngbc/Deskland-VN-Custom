@@ -519,6 +519,8 @@ thread_local! {
     static EDIT_COMPOSITE: Cell<bool> = const { Cell::new(false) };
     static EDIT_COMPOSING: Cell<bool> = const { Cell::new(false) };
     static EDIT_PRINT: Cell<Option<(u32,u32)>> = const { Cell::new(None) };
+    #[cfg(test)]
+    static LIVE_SEARCH_FIXTURE: Cell<bool> = const { Cell::new(false) };
     static MODAL: Cell<bool> = const { Cell::new(false) };
     static FRAME: RefCell<Option<Frame>> = const { RefCell::new(None) };
 }
@@ -1171,6 +1173,21 @@ unsafe fn draw_live_edit(dc:HDC,edit:HWND,area:RECT,ink:u32,font:HFONT,high_cont
     }
 }
 
+unsafe fn draw_search_box(dc:HDC,edit:HWND,width:i32,dpi:u32,dark:bool,high_contrast:bool,live:bool,font:HFONT){
+    let u=|n|px(n,dpi);
+    let search=search_rect(width,dpi);
+    let field=edit_rect(width,dpi);
+    let Palette{face,ink,secondary,..}=palette(dark,high_contrast);
+    if high_contrast{round(dc,search,u(32),face,255);}
+    else{
+        round(dc,rect(search.left-u(2),search.top,search.right+u(2),search.bottom+u(4)),u(36),0x00151008,48);
+        round(dc,search,u(32),0x00fcf8f5,if GetFocus()==edit{100}else{62});
+        let inner=rect(search.left+1,search.top+1,search.right-1,search.bottom-1);
+        round(dc,inner,u(30),face,if live{140}else if EDIT_COMPOSITE.get(){207}else{255});
+    }
+    search_glyph(dc,search,secondary,dpi);
+    if live||EDIT_COMPOSITE.get(){draw_live_edit(dc,edit,field,ink,font,high_contrast);}
+}
 type PaintTile = (
     Tile,
     RECT,
@@ -1374,17 +1391,7 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
         let search=search_rect(w,dpi);
         let halo=rect(search.left-u(5),search.top-u(5),search.right+u(5),search.bottom+u(7));
         if intersects(halo,dirty){
-            let field=edit_rect(w,dpi);
-            let field_face=face;
-            if high_contrast{round(dc,search,u(32),face,255);}
-            else{
-                round(dc,rect(search.left-u(2),search.top,search.right+u(2),search.bottom+u(4)),u(36),0x00151008,48);
-                round(dc,search,u(32),0x00fcf8f5,if GetFocus()==edit{100}else{62});
-                let inner=rect(search.left+1,search.top+1,search.right-1,search.bottom-1);
-                round(dc,inner,u(30),field_face,if live{140}else if EDIT_COMPOSITE.get(){207}else{255});
-            }
-            search_glyph(dc,search,secondary,dpi);
-            if live||EDIT_COMPOSITE.get(){draw_live_edit(dc,edit,field,ink,search_font,high_contrast);}
+            draw_search_box(dc,edit,w,dpi,dark,high_contrast,live,search_font);
         }
         for (action, r, s) in buttons {
             if !intersects(r,dirty) { continue; }
@@ -1643,7 +1650,9 @@ fn refresh_material(hwnd:HWND) {
 }
 
 fn ensure_live(hwnd:HWND)->bool{
-    if cfg!(test)||!transparency_allowed(){return false;}
+    #[cfg(test)]
+    if !LIVE_SEARCH_FIXTURE.get(){return false;}
+    if !transparency_allowed(){return false;}
     let flags=PANEL.with(|p|p.borrow().as_ref().map(|p|(p.native.is_some(),p.native_rejected)));
     match flags{
         Some((true,_))=>return true,

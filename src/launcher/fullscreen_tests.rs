@@ -222,6 +222,77 @@ fn native_live_backdrop_retains_color_and_filters_detail() {
     }
 }
 
+// Actual screen output of the shipping search panel, not a test label
+// placed on a mock glass. Run only on the hosted Windows runner.
+#[test]
+#[ignore="actual hosted desktop search control composition"]
+fn native_actual_search_field_screen_output(){
+    if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+    unsafe{
+        let point=POINT{x:0,y:0};
+        let Some((bounds,dpi))=estimate(point)else{println!("SPOTLIGHT_SEARCH_SCREEN=NOT_VERIFIED no monitor");return;};
+        let (w,h)=(bounds.right-bounds.left,bounds.bottom-bounds.top);
+        let bg=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|WS_EX_TOPMOST,
+            wide("STATIC").as_ptr(),ptr::null(),WS_POPUP,
+            bounds.left,bounds.top,w,h,ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null_mut());
+        if bg.is_null(){println!("SPOTLIGHT_SEARCH_SCREEN=NOT_VERIFIED no owned background");return;}
+        struct Reset(HWND);
+        impl Drop for Reset{fn drop(&mut self){dismiss(false);LIVE_SEARCH_FIXTURE.set(false);MODAL.set(false);unsafe{DestroyWindow(self.0);}reset_graphics_factories();}}
+        let _reset=Reset(bg);
+        ShowWindow(bg,SW_SHOWNOACTIVATE);UpdateWindow(bg);
+        let bgdc=GetDC(bg);
+        if !bgdc.is_null(){fill(bgdc,rect(0,0,w,h),0x007f6d58);ReleaseDC(bg,bgdc);}
+        let settle=||{for _ in 0..6{pump();std::thread::sleep(Duration::from_millis(35));}let _=DwmFlush();};
+        LIVE_SEARCH_FIXTURE.set(true);
+        MODAL.set(true);
+        let capture=|hwnd:HWND,name:&str,expected_query:bool|->bool{
+            let search=search_rect(w,dpi);
+            let field=edit_rect(w,dpi);
+            let area=rect(search.left-6,search.top-6,search.right+6,search.bottom+9);
+            let (cw,ch)=(area.right-area.left,area.bottom-area.top);
+            let Some(mut pixels)=crate::dock::PopupPixels::new(cw,ch)else{return false;};
+            let dc=GetDC(ptr::null_mut());if dc.is_null(){return false;}
+            let ok=BitBlt(pixels.dc(),0,0,cw,ch,dc,bounds.left+area.left,bounds.top+area.top,SRCCOPY|CAPTUREBLT)!=0;
+            ReleaseDC(ptr::null_mut(),dc);GdiFlush();
+            if !ok||IsWindowVisible(hwnd)==0{return false;}
+            let data=pixels.pixels();
+            let y=(field.top+field.bottom)/2-area.top;
+            let at=|x:i32|((y*cw)+(x-area.left)) as usize*4;
+            let inside=at(field.right-7);let outside=at(field.right+3);
+            let delta=(0..3).map(|c|data[inside+c].abs_diff(data[outside+c])).max().unwrap_or(255);
+            let text_pixel=(field.top..field.bottom).any(|y|{
+                (field.left+4..field.right-8).any(|x|{
+                    let i=(((y-area.top)*cw)+(x-area.left)) as usize*4;
+                    data[i..i+3].iter().all(|&c|c>165)
+                })
+            });
+            let rgb=data.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0]]).collect::<Vec<_>>();
+            if let Some(dir)=std::env::var_os("TUANPC_SPOTLIGHT_EVIDENCE"){
+                image::save_buffer(PathBuf::from(dir).join(name),&rgb,cw as u32,ch as u32,image::ColorType::Rgb8).unwrap();
+            }
+            println!("SPOTLIGHT_SEARCH_SCREEN screenshot={name} native_text_pixel={text_pixel} inner_edge_delta={delta} expected_query={expected_query}");
+            text_pixel&&delta<=18
+        };
+        for (theme,dark) in [("light",false),("dark",true)]{
+            configure(Preferences{theme:theme.into(),animations:false,..Preferences::default()});
+            open_native(point,String::new(),ptr::null_mut(),false,true);
+            let Some(hwnd)=window()else{println!("SPOTLIGHT_SEARCH_SCREEN=NOT_VERIFIED overlay unavailable");return;};
+            let (edit,live)=PANEL.with(|p|{let p=p.borrow();let p=p.as_ref().unwrap();(p.edit,p.native.is_some())});
+            SetFocus(edit);settle();
+            let empty=capture(hwnd,&format!("actual-search-{theme}-empty.png"),false);
+            SetWindowTextW(edit,wide("Tiếng Việt 中文").as_ptr());
+            SendMessageW(edit,0x00b1,usize::MAX,-1);
+            settle();
+            let query=capture(hwnd,&format!("actual-search-{theme}-query.png"),true);
+            SendMessageW(edit,0x00b1,0,-1);settle();
+            let _=capture(hwnd,&format!("actual-search-{theme}-selection.png"),true);
+            println!("SPOTLIGHT_SEARCH_SCREEN theme={theme} dark={dark} dpi={dpi} live_dcomp={live} native_child_layered={} focus={} actual_pixels={} ime=NOT_VERIFIED",
+                EDIT_COMPOSITE.get(),GetFocus()==edit,if empty&&query{"MATCH"}else{"NOT_VERIFIED"});
+            dismiss(false);
+        }
+    }
+}
+
 #[test]
 #[ignore="real DComp/WinRT graphics resource lifecycle on GitHub Actions"]
 fn native_repeated_live_graphics_reuses_factories_without_retaining_surfaces(){
@@ -604,10 +675,42 @@ fn native_isolated_library_search_navigation_and_100_toggles() {
         }
         SendMessageW(edit,0x00b1,0,-1);
         screenshot(hwnd,"native-search-selection.png");
+        // Native HWND, font and production field rendering at three logical
+        // sizes. This validates scaling, not the runner's physical monitors.
+        let original=edit_rect(bounds.right-bounds.left,dpi);
+        for density in [96u32,120,144]{
+            let width=px(650,density);
+            let field=edit_rect(width,density);
+            let font=crate::native_text::font_pixels(px(16,density),500);
+            SetWindowPos(edit,ptr::null_mut(),field.left,field.top,field.right-field.left,field.bottom-field.top,SWP_NOZORDER|SWP_NOACTIVATE);
+            SendMessageW(edit,WM_SETFONT,font as WPARAM,0);
+            for dark in [false,true]{
+                let height=px(110,density);
+                let mut raster=crate::dock::PopupPixels::new(width,height).unwrap();
+                fill(raster.dc(),rect(0,0,width,height),if dark{0x002a2017}else{0x0073695c});
+                SetWindowTextW(edit,wide("Tiếng Việt 中文").as_ptr());
+                SendMessageW(edit,0x00b1,usize::MAX,-1);
+                draw_search_box(raster.dc(),edit,width,density,dark,false,true,font);
+                GdiFlush();
+                let data=raster.pixels();
+                let center=(field.top+field.bottom)/2;
+                let a=((center*width+field.right-7)*4) as usize;
+                let b=((center*width+field.right+3)*4) as usize;
+                assert!((0..3).all(|c|data[a+c].abs_diff(data[b+c])<=6),"inner field edge at {density} DPI");
+                if let Some(dir)=std::env::var_os("TUANPC_SPOTLIGHT_EVIDENCE"){
+                    let rgb=data.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0]]).collect::<Vec<_>>();
+                    image::save_buffer(PathBuf::from(dir).join(format!("search-native-{density}-{}.png",if dark{"dark"}else{"light"})),
+                        &rgb,width as u32,height as u32,image::ColorType::Rgb8).unwrap();
+                }
+            }
+            SendMessageW(edit,WM_SETFONT,real_font as WPARAM,0);
+            DeleteObject(font);
+        }
+        SetWindowPos(edit,ptr::null_mut(),original.left,original.top,original.right-original.left,original.bottom-original.top,SWP_NOZORDER|SWP_NOACTIVATE);
         SetWindowTextW(edit,wide("").as_ptr());
         SendMessageW(hwnd,WM_TIMER,SEARCH,0);
         wait_for(||PANEL.with(|p|p.borrow().as_ref().is_some_and(|p|p.search_rx.is_none())));
-        println!("SPOTLIGHT_SEARCH production_edit_pixels=PASS child_composited={} actual_focus={} ime=NOT_VERIFIED dpi={dpi}",EDIT_COMPOSITE.get(),GetFocus()==edit);
+        println!("SPOTLIGHT_SEARCH production_edit_pixels=PASS logical_dpi=96,120,144 child_composited={} actual_focus={} ime=NOT_VERIFIED physical_dpi={dpi}",EDIT_COMPOSITE.get(),GetFocus()==edit);
         // Stable hit testing, bounded repaint and no repaint for movement
         // within the same tile, using the actual native window procedure.
         let tile=PANEL.with(|p|grid(p.borrow().as_ref().unwrap()).tiles(0));

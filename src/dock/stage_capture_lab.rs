@@ -9,6 +9,8 @@ use windows_sys::Win32::{Foundation::*, Graphics::{Dwm::{DwmFlush,DwmGetWindowAt
 const CLASS: &str = "DesklandOwnedStageWgcFixture";
 const WIDTH: i32 = 432;
 const HEIGHT: i32 = 246;
+#[cfg(test)]
+static WINDOW_VARIANT:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
 
 struct Fixture(HWND);
 impl Drop for Fixture {
@@ -29,6 +31,8 @@ unsafe extern "system" fn fixture_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARA
         (125,132,388,138,0x009e8973),
         (125,154,302,160,0x009e8973),
     ] {
+        #[cfg(test)]
+        let color=if color==0x0071892f&&WINDOW_VARIANT.load(std::sync::atomic::Ordering::Relaxed){0x00305cda}else{color};
         let brush = CreateSolidBrush(color);
         FillRect(dc,&RECT{left,top,right,bottom},brush);
         DeleteObject(brush);
@@ -163,6 +167,19 @@ fn native_scale_proxy_owned_source_100_cycles(){
             Ok(frame)=>frame,
             Err(reason)=>{println!("WINDOW_SCALE_NATIVE=BLOCKED {reason}");return;}
         };
+        WINDOW_VARIANT.store(true,std::sync::atomic::Ordering::Relaxed);
+        InvalidateRect(source.0,std::ptr::null(),0);UpdateWindow(source.0);let _=DwmFlush();
+        match pump_capture(&source){
+            Ok(changed)=>{
+                let orange=changed.0.chunks_exact(4).filter(|p|p[2]>p[1].saturating_add(60)&&p[2]>155).count();
+                let green=frame.0.chunks_exact(4).filter(|p|p[1]>p[2].saturating_add(45)&&p[1]>105).count();
+                println!("WINDOW_SCALE_SOURCE_FRESHNESS={} first_green={green} second_orange={orange}",
+                    if green>100&&orange>100{"PASS"}else{"NOT_VERIFIED"});
+            }
+            Err(reason)=>println!("WINDOW_SCALE_SOURCE_FRESHNESS=NOT_VERIFIED {reason}"),
+        }
+        WINDOW_VARIANT.store(false,std::sync::atomic::Ordering::Relaxed);
+        InvalidateRect(source.0,std::ptr::null(),0);UpdateWindow(source.0);let _=DwmFlush();
         super::window_effect::probe_owned_window(source.0,&frame);
     }
 }

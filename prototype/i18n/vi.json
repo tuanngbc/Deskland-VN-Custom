@@ -306,7 +306,7 @@
   "motionPreview": "Xem thử hiệu ứng",
   "motionReset": "Khôi phục mặc định",
   "motionWindowEffect": "Hiệu ứng thu nhỏ và phục hồi cửa sổ",
-  "motionWindowEffectHint": "Chỉ áp dụng khi thao tác trên Dock. Dùng hiệu ứng Windows nếu không có ảnh hợp lệ hoặc hiệu ứng native có thể chồng lên.",
+  "motionWindowEffectHint": "Chỉ thao tác trên Dock. Scale cần ảnh hợp lệ và hiệu ứng thu nhỏ native Windows đã tắt (hoặc cửa sổ tự tắt hiệu ứng). Trường hợp khác dùng Windows mặc định.",
   "motionWindowWindows": "Windows mặc định",
   "motionWindowScale": "Scale Effect (cửa sổ tương thích)",
   "motionVerySlow": "Rất chậm",

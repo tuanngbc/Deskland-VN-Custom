@@ -306,7 +306,7 @@
   "motionPreview": "Preview animation",
   "motionReset": "Reset defaults",
   "motionWindowEffect": "Minimize and restore window effect",
-  "motionWindowEffectHint": "Dock actions only. Windows animation is used if the preview is unavailable or native animation would overlap.",
+  "motionWindowEffectHint": "Dock actions only. Scale requires a valid preview and native minimize animation already disabled (or disabled by the window). Other cases use Windows default.",
   "motionWindowWindows": "Windows default",
   "motionWindowScale": "Scale Effect (compatible windows)",
   "motionVerySlow": "Very slow",
