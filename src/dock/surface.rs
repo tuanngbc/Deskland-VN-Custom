@@ -204,6 +204,7 @@ impl Surface {
         let control_tint=palette.panel;
         let control_alpha=control_backing((100-self.material.transparency) as f32*2.55).ceil() as u8;
         for (i,(slot,item)) in layout.slots.iter().zip(items).enumerate(){
+            if slot.w<1.0||slot.h<1.0{continue;}
             let front=active==Some(i);
             let asleep=(minimized & (1<<i))!=0;
             let tint=if self.material.dark{[245,248,252]}else{[58,69,78]};

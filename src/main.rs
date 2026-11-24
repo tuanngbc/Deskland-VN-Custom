@@ -119,6 +119,36 @@ const CMD_EXIT: usize = 199;
 const HOTKEY_SAVER: i32 = 1;
 const HOTKEY_LAUNCHER: i32 = 2;
 const WM_WTSSESSION_CHANGE_: u32 = 0x02B1;
+// Session display events are notifications only: no power-plan or Windows
+// setting changes. MS docs recommend this GUID for interactive applications.
+const SESSION_DISPLAY_STATUS:windows_sys::core::GUID=windows_sys::core::GUID::from_u128(0x2b84c20e_ad23_4ddf_93db_05ffbd7efca5);
+const PBT_POWERSETTINGCHANGE_:usize=0x8013;
+#[repr(C)]
+struct SessionDisplayEvent{guid:windows_sys::core::GUID,length:u32,state:u32}
+#[link(name="user32")]
+extern "system"{
+    #[link_name="RegisterPowerSettingNotification"]
+    fn subscribe_display_status(hwnd:HWND,guid:*const windows_sys::core::GUID,flags:u32)->HANDLE;
+    #[link_name="UnregisterPowerSettingNotification"]
+    fn unsubscribe_display_status(handle:HANDLE)->i32;
+}
+struct DisplaySubscription(HANDLE);
+impl Drop for DisplaySubscription{
+    fn drop(&mut self){if !self.0.is_null(){unsafe{unsubscribe_display_status(self.0);}}}
+}
+fn display_off_event(e:&SessionDisplayEvent)->Option<bool>{
+    let g=SESSION_DISPLAY_STATUS;
+    if e.guid.data1!=g.data1||e.guid.data2!=g.data2||e.guid.data3!=g.data3||e.guid.data4!=g.data4||e.length!=4{return None;}
+    match e.state{0=>Some(true),1|2=>Some(false),_=>None}
+}
+#[cfg(test)]
+#[test]
+fn power_display_events_pause_only_for_session_off(){
+    for (state,expected) in [(0,Some(true)),(1,Some(false)),(2,Some(false)),(3,None)]{
+        assert_eq!(display_off_event(&SessionDisplayEvent{guid:SESSION_DISPLAY_STATUS,length:4,state}),expected);
+    }
+    assert_eq!(display_off_event(&SessionDisplayEvent{guid:SESSION_DISPLAY_STATUS,length:0,state:0}),None);
+}
 const WTS_SESSION_LOCK_: usize = 0x7;
 const WTS_SESSION_UNLOCK_: usize = 0x8;
 
@@ -202,6 +232,7 @@ thread_local! {
     static CURRENT_THEME: Cell<usize> = const { Cell::new(102) };
     /// Phiên Windows đang khóa (WM_WTSSESSION_CHANGE): không ai thấy desktop -> ngừng vẽ.
     static SESSION_LOCKED: Cell<bool> = const { Cell::new(false) };
+    static SESSION_DISPLAY_OFF:Cell<bool>=const{Cell::new(false)};
     static SAVER_RECONCILE_PENDING: Cell<bool> = const { Cell::new(false) };
     static SHORTCUT_RECORDING: Cell<bool> = const { Cell::new(false) };
     static HOTKEY_OK: Cell<bool> = const { Cell::new(false) };
@@ -266,6 +297,16 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
             PostQuitMessage(0);
             0
         }
+        WM_POWERBROADCAST if w==PBT_POWERSETTINGCHANGE_&&l!=0=>{
+            // The OS supplies a POWERBROADCAST_SETTING. Check its GUID and
+            // length before consuming the four-byte display-state payload.
+            let event=l as *const SessionDisplayEvent;
+            let length=std::ptr::addr_of!((*event).length).read_unaligned();
+            if length==4{if let Some(off)=display_off_event(&event.read_unaligned()){
+                SESSION_DISPLAY_OFF.with(|c|c.set(off));
+            }}
+            1
+        },
         WM_DISPLAYCHANGE => {
             DISPLAY_CHANGED.with(|c| c.set(true));
             0
@@ -2445,6 +2486,9 @@ fn main() {
         nid.szTip[i] = c;
     }
     let headless = args.iter().any(|a| a == "--headless");
+    let display_subscription=DisplaySubscription(if !saver&&!headless{
+        unsafe{subscribe_display_status(msg_hwnd,&SESSION_DISPLAY_STATUS,0)}
+    }else{std::ptr::null_mut()});
     if !saver && !headless {
         lock::log_saver_state("khởi động");
         if let Err(e) = lock::reconcile_disabled_saver() {
@@ -3567,7 +3611,8 @@ fn main() {
                 let locked = SESSION_LOCKED.with(|c| c.get());
                 let saver_running = lock::saver_running();
                 let default_desktop = lock::input_desktop_is_default();
-                let h = locked || saver_running || !default_desktop;
+                let display_off=SESSION_DISPLAY_OFF.with(|c|c.get());
+                let h = locked || saver_running || !default_desktop || display_off;
                 if h != hidden {
                     hidden = h;
                     if let Some(runtime)=app.dock_runtime.as_ref(){runtime.suspend(h);}
@@ -3676,6 +3721,7 @@ fn main() {
     app.drop_shared();
     app.gpu_device=None;
     app.ctx = None;
+    drop(display_subscription);
     unsafe {
         if let Some((h, dc)) = app.dummy.take() {
             ReleaseDC(h, dc);

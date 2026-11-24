@@ -49,7 +49,89 @@ pub struct Layout {
     pub scale:f32,
     pub side:DockSide,
 }
+/// A temporary union canvas keeps both endpoints inside the same HWND.
+/// Existing icons follow their identity; new icons grow from a zero-width
+/// insertion point. The final HWND is resized only once the motion settles.
+#[derive(Clone)]
+pub(super) struct Resize {
+    from:Layout,to:Layout,final_layout:Layout,span:super::motion::Span,
+}
+impl Resize {
+    pub fn new(old:&Layout,final_layout:Layout,mapping:&[Option<usize>])->Option<Self>{
+        if old.side!=final_layout.side||old.scale!=final_layout.scale||mapping.len()!=final_layout.slots.len()
+            ||old.inline.iter().map(|(id,_)|id).ne(final_layout.inline.iter().map(|(id,_)|id))
+            ||old.cluster.is_some()!=final_layout.cluster.is_some()
+            ||old.divider.is_some()!=final_layout.divider.is_some()
+            ||old.metrics.is_some()!=final_layout.metrics.is_some(){return None;}
+        let order=mapping.iter().flatten().copied().collect::<Vec<_>>();
+        if order.windows(2).any(|x|x[0]>=x[1])||order.iter().any(|&i|i>=old.slots.len()){return None;}
+        let union=RECT{left:old.window.left.min(final_layout.window.left),top:old.window.top.min(final_layout.window.top),
+            right:old.window.right.max(final_layout.window.right),bottom:old.window.bottom.max(final_layout.window.bottom)};
+        // Avoid oversized temporary DIBs if display topology changed.
+        if i64::from(union.right-union.left)*i64::from(union.bottom-union.top)>2_000_000{return None;}
+        let old=old.rebase(union);
+        let to=final_layout.rebase(union);
+        let mut from=old.clone();
+        let horizontal=to.side==DockSide::Bottom;
+        let start=|r:Rect|if horizontal{r.x}else{r.y};
+        let end=|r:Rect|if horizontal{r.x+r.w}else{r.y+r.h};
+        from.slots=mapping.iter().enumerate().map(|(i,index)|{
+            if let Some(index)=index{return old.slots[*index];}
+            let previous=mapping[..i].iter().rev().flatten().next().map(|&j|end(old.slots[j]));
+            let next=mapping[i+1..].iter().flatten().next().map(|&j|start(old.slots[j]));
+            let axis=match (previous,next){
+                (Some(a),Some(b))=>(a+b)*0.5,(Some(a),None)=>a,(None,Some(b))=>b,
+                _=>(start(old.glass)+end(old.glass))*0.5,
+            };
+            let slot=to.slots[i];
+            if horizontal{Rect{x:axis,y:slot.y+slot.h*0.5,w:0.0,h:0.0}}
+            else{Rect{x:slot.x+slot.w*0.5,y:axis,w:0.0,h:0.0}}
+        }).collect();
+        from.indicators=mapping.iter().enumerate().map(|(i,index)|{
+            index.map_or_else(||{
+                let r=from.slots[i];let t=to.indicators[i];
+                if horizontal{(r.x,t.1)}else{(t.0,r.y)}
+            },|i|old.indicators[i])
+        }).collect();
+        Some(Self{from,to,final_layout,span:super::motion::Span::new(220)})
+    }
+    pub fn matches(&self,layout:&Layout)->bool{
+        let end=&self.final_layout;
+        super::same_rect(end.window,layout.window)&&end.glass==layout.glass&&end.slots==layout.slots&&end.inline==layout.inline
+    }
+    pub fn progress(&self)->f32{self.span.progress()}
+    pub fn frame(&self,t:f32)->Layout{
+        if t>=1.0{return self.final_layout.clone();}
+        let k=super::motion::ease(t);
+        let scalar=|a:f32,b:f32|a+(b-a)*k;
+        let blend=|a:Rect,b:Rect|Rect{x:scalar(a.x,b.x),y:scalar(a.y,b.y),w:scalar(a.w,b.w),h:scalar(a.h,b.h)};
+        let optional=|a:Option<Rect>,b:Option<Rect>|a.zip(b).map(|(a,b)|blend(a,b));
+        let (a,b)=(&self.from,&self.to);
+        let mut out=b.clone();
+        out.glass=blend(a.glass,b.glass);
+        out.start=blend(a.start,b.start);out.scan=blend(a.scan,b.scan);
+        out.tray=blend(a.tray,b.tray);out.clock=blend(a.clock,b.clock);
+        out.utility=blend(a.utility,b.utility);
+        out.cluster=optional(a.cluster,b.cluster);out.metrics=optional(a.metrics,b.metrics);out.divider=optional(a.divider,b.divider);
+        for (r,old) in out.slots.iter_mut().zip(&a.slots){*r=blend(*old,*r);}
+        for ((_,r),(_,old)) in out.inline.iter_mut().zip(&a.inline){*r=blend(*old,*r);}
+        for (r,old) in out.indicators.iter_mut().zip(&a.indicators){*r=(scalar(old.0,r.0),scalar(old.1,r.1));}
+        out
+    }
+}
 impl Layout {
+    fn rebase(&self,window:RECT)->Self{
+        let (dx,dy)=((self.window.left-window.left) as f32,(self.window.top-window.top) as f32);
+        let r=|a:Rect|Rect{x:a.x+dx,y:a.y+dy,..a};
+        let mut out=self.clone();
+        out.window=window;out.glass=r(out.glass);
+        out.start=r(out.start);out.scan=r(out.scan);out.clock=r(out.clock);out.tray=r(out.tray);out.utility=r(out.utility);
+        out.cluster=out.cluster.map(r);out.divider=out.divider.map(r);out.metrics=out.metrics.map(r);
+        for x in &mut out.slots{*x=r(*x);}
+        for (_,x) in &mut out.inline{*x=r(*x);}
+        for (x,y) in &mut out.indicators{*x+=dx;*y+=dy;}
+        out
+    }
     pub(super) fn popup_anchor(&self,slot:Rect,leading:bool,openness:f32)->crate::launcher::DockAnchor{
         use windows_sys::Win32::Foundation::POINT;
         let mut x=if leading&&self.side==DockSide::Bottom{slot.x}else{slot.x+slot.w*0.5};
@@ -350,6 +432,30 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn dynamic_count_resize_keeps_same_hit_geometry_and_union_canvas(){
+        let bounds=RECT{left:-1080,top:-731,right:0,bottom:1189};
+        let screen=Display{id:"portrait".into(),name:String::new(),bounds,work:bounds,dpi:120,primary:false};
+        for position in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
+            let style=Appearance{position,..Default::default()};
+            for (before,count,map) in [(3,4,vec![Some(0),None,Some(1),Some(2)]),(4,3,vec![Some(0),Some(2),Some(3)])]{
+                let old=measure(&screen,&style,before,None,0.0);
+                let target=measure(&screen,&style,count,None,0.0);
+                let resize=Resize::new(&old,target.clone(),&map).unwrap();
+                for t in [0.0,0.2,0.5,0.8,1.0]{
+                    let layout=resize.frame(t);
+                    assert_eq!(layout.slots.len(),count);
+                    for (i,r) in layout.slots.iter().enumerate(){
+                        if r.w>0.0&&r.h>0.0{
+                            assert!(r.x>=0.0&&r.y>=0.0&&r.x+r.w<=(layout.window.right-layout.window.left) as f32+1.0&&r.y+r.h<=(layout.window.bottom-layout.window.top) as f32+1.0);
+                            assert_eq!(layout.hit(r.x+r.w*0.5,r.y+r.h*0.5),Some(i));
+                        }
+                    }
+                }
+                assert_eq!(resize.frame(1.0).slots,target.slots);
+            }
+        }
+    }
     #[test]
     fn dock_edge_gap_keeps_dock_centered_on_all_edges(){
         let bounds=RECT{left:-1500,top:-100,right:0,bottom:1000};

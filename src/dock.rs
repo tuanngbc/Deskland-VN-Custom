@@ -160,6 +160,7 @@ struct Feedback { path:String, kind:FeedbackKind, motion:motion::Span }
 #[derive(Clone,Default)]
 struct Motion {
     focus:Option<motion::Spring>, target:Option<f32>, zoom:motion::Spring, start:motion::Spring, at:Option<std::time::Instant>, scheduled:bool,
+    resize:Option<geometry::Resize>,
 }
 impl Motion {
     fn focus_value(&self)->Option<f32>{self.focus.map(|f|f.value)}
@@ -213,6 +214,13 @@ fn dock_motion_tracks_speed_and_reverses_from_displayed_state(){
     }
 }
 impl Bar {
+    fn replace_layout(&mut self,layout:geometry::Layout){
+        if let (Some(previous),Some((x,y)))=(&self.layout,self.pointer){
+            self.pointer=Some((x+(previous.window.left-layout.window.left) as f32,y+(previous.window.top-layout.window.top) as f32));
+        }
+        self.hovered=self.pointer.and_then(|(x,y)|layout.hot(x,y)).map_or(-1,|i|i as i32);
+        self.layout=Some(layout);
+    }
     fn shell_target(&self,x:f32,y:f32)->Option<shell_access::Target>{
         let l=self.layout.as_ref()?;
         if self.hidden||self.collapsed{return None;}
@@ -874,7 +882,9 @@ unsafe fn refresh(state:&mut State, topology:bool) {
     }));
     for b in &mut state.bars {
         let items=item_list(&state.windows,b.bounds,&state.prefs);
-        let mut changed=b.items!=items || active_changed || material_changed;
+        let items_changed=b.items!=items;
+        let resize_mapping=(b.items.len()!=items.len()).then(||items.iter().map(|item|b.items.iter().position(|old|old.path==item.path)).collect::<Vec<_>>());
+        let mut changed=items_changed || active_changed || material_changed;
         b.items=items;
         let active_path=state.windows.iter().find(|w|w.hwnd as isize==foreground
             &&(state.prefs.all_windows||rect_intersects(b.bounds,w.rect))).map(|w|w.path.as_str());
@@ -919,10 +929,27 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             }
             let r=if b.layout.is_some(){
                 b.pinned_widgets=dock_status_widgets(state.prefs.utility_profiles.get(&screen.id));
-                let layout=geometry::measure_cluster(&placed,&state.prefs.appearance,b.items.len(),b.motion.focus_value(),b.motion.zoom.value,
+                let can_resize=!b.hidden&&!b.collapsed&&b.reveal.value>0.997&&b.pressed.is_none()
+                    &&!state.prefs.appearance.motion_reduced();
+                let wants_resize=!topology&&resize_mapping.is_some();
+                let resizing=can_resize&&(wants_resize||b.motion.resize.is_some());
+                let layout=geometry::measure_cluster(&placed,&state.prefs.appearance,b.items.len(),
+                    if resizing{None}else{b.motion.focus_value()},if resizing{0.0}else{b.motion.zoom.value},
                     &b.pinned_widgets,state.prefs.utility_cluster(&screen.id));
+                if let Some(mapping)=resize_mapping.as_ref().filter(|_|can_resize&&wants_resize){
+                    b.motion.resize=b.layout.as_ref().and_then(|old|geometry::Resize::new(old,layout.clone(),mapping));
+                    if b.motion.resize.is_some(){
+                        b.motion.focus=None;b.motion.zoom=motion::Spring::rest(0.0);b.motion.target=None;
+                        if SetTimer(b.hwnd,MOTION_TIMER,16,None)!=0{b.motion.scheduled=true;}
+                        else{b.motion.resize=None;}
+                    }
+                }else if !can_resize||b.motion.resize.as_ref().is_some_and(|old|!old.matches(&layout)||items_changed){
+                    b.motion.resize=None;
+                }
+                let layout=if let Some(resize)=&b.motion.resize{resize.frame(resize.progress())}else{layout};
                 changed|=b.layout.as_ref().is_some_and(|old|old.glass!=layout.glass||old.slots!=layout.slots||old.scan!=layout.scan||old.inline!=layout.inline);
-                let r=layout.window;b.layout=Some(layout);r
+                b.replace_layout(layout);
+                b.layout.as_ref().unwrap().window
             }else{bar_rect(&placed,b.items.len())};
             let mut actual:RECT=mem::zeroed();
             if GetWindowRect(b.hwnd,&mut actual)==0 || !same_rect(r,actual){
@@ -3146,6 +3173,25 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 if b.hidden || b.layout.is_none(){return None;}
                 let display=screens.iter().find(|d|same_rect(d.bounds,b.bounds))?;
                 let now=std::time::Instant::now();
+                if let Some(resize)=&b.motion.resize{
+                    let t=if prefs.appearance.motion_reduced()||b.collapsed{1.0}else{resize.progress()};
+                    let next=resize.frame(t);
+                    let r=next.window;
+                    let reposition=b.layout.as_ref().is_some_and(|old|!same_rect(old.window,r));
+                    b.replace_layout(next);
+                    if reposition{SetWindowPos(hwnd,HWND_TOPMOST,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE);}
+                    if t<1.0{return Some(true);}
+                    b.motion.resize=None;b.motion.at=Some(now);
+                    b.motion.target=if b.collapsed||prefs.appearance.motion_reduced()||prefs.appearance.magnification==0{None}else{
+                        b.pointer.and_then(|(x,y)|b.layout.as_ref()?.magnification_target(x,y))
+                    };
+                    // Continue any freshly requested reveal/hover on the next
+                    // frame. Hit testing always uses the displayed layout.
+                    let again=b.collapsed||b.motion.target.is_some()||b.feedback.is_some();
+                    b.motion.scheduled=again;
+                    if !again{b.motion.at=None;}
+                    return Some(again);
+                }
                 let old_zoom=b.motion.zoom.value;
                 let old_focus=b.motion.focus_value();
                 let goal=if prefs.appearance.motion_reduced(){0.0}else{b.start_goal()};
