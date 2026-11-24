@@ -81,6 +81,8 @@ jobs:
           New-Item -ItemType Directory -Force $env:TUANPC_SPOTLIGHT_EVIDENCE | Out-Null
           cargo test --release launcher::fullscreen::native_tests::native_live_backdrop_retains_color_and_filters_detail -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release launcher::fullscreen::native_tests::native_activation_modes_apply_live_on_one_overlay -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release launcher::fullscreen::native_tests::native_isolated_library_search_navigation_and_100_toggles -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:TUANPC_DESK_TYPE_EVIDENCE = Join-Path $env:RUNNER_TEMP "typography-evidence"
@@ -166,6 +168,14 @@ jobs:
           được quản lý trong cùng TLauncher.exe, bật riêng trong Cài đặt.
           Khi bật Dock, TLauncher ưu tiên chế độ ẩn thanh Windows. Có thể chọn Tương thích Windows trong Cài đặt.
           "@ | Set-Content "$dir\DOC-TRUOC.txt" -Encoding utf8
+          if ($env:GITHUB_REF_TYPE -ne 'tag') {
+            @"
+          TLauncher Windows TEST candidate.
+          Start only with the TLauncher 1.0.2 TEST Desktop shortcut configured for this verified package.
+          Do not run TLauncher.exe directly: the shortcut selects the isolated TEST profile.
+          Exit TLauncher from its menu and leave the launcher window open until production is restored.
+          "@ | Set-Content "$dir\DOC-TRUOC.txt" -Encoding utf8
+          }
           Compress-Archive -Path $dir -DestinationPath "dist\$name.zip"
           $hash = (Get-FileHash "dist\$name.zip" -Algorithm SHA256).Hash.ToLower()
           "$hash  $name.zip" | Set-Content "dist\$name.zip.sha256" -Encoding ascii

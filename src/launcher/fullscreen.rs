@@ -1,5 +1,6 @@
-//! Native fullscreen library. The only HWNDs created here are the overlay and
-//! its child editor; the main process owns the profile and the app catalog.
+//! Native fullscreen library. The input HWND owns its native editor, while
+//! a passive companion can host system glass. The main process owns the
+//! profile and the app catalog.
 use super::{
     catalog,
     library::{Library, Preferences, TileKey},
@@ -13,6 +14,9 @@ use std::{
 use windows_sys::Win32::Graphics::Dwm::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::Dialogs::*;
+use windows::{core::Interface,Win32::{Foundation::{HMODULE,HWND as WinHwnd,RECT as WinRect,POINT as WinPoint},Graphics::{
+    Direct3D::D3D_DRIVER_TYPE_HARDWARE,Direct3D11::*,DirectComposition::*,Dxgi::{IDXGIDevice,IDXGISurface,Common::*},
+}}};
 
 const CLASS: &str = "TLauncherSpotlightLibrary";
 const EDIT: usize = 501;
@@ -24,6 +28,9 @@ const HOVER_ANIMATION: usize = 4;
 const HOVER_MS:u128=110;
 const GRID_ANIMATION:usize=5;
 const GRID_MS:u128=96;
+const TRANSITION_TIMER:usize=6;
+pub(super) const OPEN_MS:u32=248;
+pub(super) const CLOSE_MS:u32=174;
 const CATALOG_CHANGE: u32 = WM_APP + 151;
 // WM_MOUSELEAVE is omitted by this windows-sys version's feature selection.
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -48,8 +55,17 @@ struct NativeBackdrop {
     hwnd:HWND,
     host:Option<HostLayer>,
 }
+struct Dispatcher {
+    queue:windows::System::DispatcherQueueController,
+}
+impl Drop for Dispatcher{
+    fn drop(&mut self){
+        let _=self.queue.ShutdownQueueAsync();
+        unsafe{windows::Win32::System::WinRT::RoUninitialize();}
+    }
+}
 thread_local! {
-    static DISPATCHER:RefCell<Option<windows::System::DispatcherQueueController>>=const{RefCell::new(None)};
+    static DISPATCHER:RefCell<Option<Dispatcher>>=const{RefCell::new(None)};
 }
 unsafe extern "system" fn backdrop_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     match msg {
@@ -74,11 +90,15 @@ impl HostLayer {
         use windows_numerics::Vector2;
         use windows::System::DispatcherQueue;
         if DispatcherQueue::GetForCurrentThread().is_err() {
-            let queue=CreateDispatcherQueueController(DispatcherQueueOptions{
+            RoInitialize(RO_INIT_SINGLETHREADED)?;
+            let queue=match CreateDispatcherQueueController(DispatcherQueueOptions{
                 dwSize:std::mem::size_of::<DispatcherQueueOptions>() as u32,
                 threadType:DQTYPE_THREAD_CURRENT,apartmentType:DQTAT_COM_NONE,
-            })?;
-            DISPATCHER.with(|s|s.replace(Some(queue)));
+            }){
+                Ok(queue)=>queue,
+                Err(e)=>{RoUninitialize();return Err(e);}
+            };
+            DISPATCHER.with(|s|s.replace(Some(Dispatcher{queue})));
         }
         let compositor=Compositor::new()?;
         let api:ICompositorDesktopInterop=compositor.cast()?;
@@ -144,12 +164,126 @@ impl NativeBackdrop {
     unsafe fn show_behind(&self,foreground:HWND,r:RECT){
         SetWindowPos(self.hwnd,foreground,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_SHOWWINDOW);
     }
+    fn transition(&self,t:Transition,strength:i32)->windows::core::Result<()>{
+        let Some(host)=&self.host else{return Ok(());};
+        let opacity=(strength as f32/100.0).clamp(0.20,0.48);
+        let animation=host.compositor.CreateScalarKeyFrameAnimation()?;
+        animation.SetDuration(windows::Foundation::TimeSpan{Duration:i64::from(t.duration)*10_000})?;
+        animation.InsertKeyFrame(0.0,t.from*opacity)?;
+        animation.InsertKeyFrame(1.0,t.to*opacity)?;
+        host.sheet.StartAnimation(&windows::core::HSTRING::from("Opacity"),&animation)
+    }
 }
 impl Drop for NativeBackdrop{
     fn drop(&mut self){unsafe{
         drop(self.host.take());
         DestroyWindow(self.hwnd);
     }}
+}
+
+// GDI shapes and DirectWrite glyphs only rasterize dirty foreground pixels.
+// DirectComposition keeps the uploaded surface and performs the transitions;
+// it does not request app paints or resize either HWND on animation frames.
+struct Foreground {
+    comp:IDCompositionDevice,
+    ctx:ID3D11DeviceContext,
+    target:IDCompositionTarget,
+    visual:IDCompositionVisual,
+    scale:IDCompositionScaleTransform,
+    effect:IDCompositionEffectGroup,
+    surface:Option<(i32,i32,IDCompositionSurface)>,
+}
+#[derive(Clone,Copy)]
+pub(super) struct Transition {
+    pub(super) start:std::time::Instant,
+    pub(super) duration:u32,
+    pub(super) from:f32,
+    pub(super) to:f32,
+}
+impl Transition{
+    pub(super) fn progress(self)->f32 {(self.start.elapsed().as_secs_f32()*1000.0/self.duration as f32).min(1.0)}
+    pub(super) fn openness(self)->f32{
+        let t=self.progress();
+        self.from+(self.to-self.from)*(1.0-(1.0-t).powi(3))
+    }
+}
+impl Foreground {
+    unsafe fn new(hwnd:HWND)->windows::core::Result<Self>{
+        let mut dev=None;let mut ctx=None;
+        D3D11CreateDevice(None,D3D_DRIVER_TYPE_HARDWARE,HMODULE::default(),D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            None,D3D11_SDK_VERSION,Some(&mut dev),None,Some(&mut ctx))?;
+        let dxgi:IDXGIDevice=dev.expect("D3D device").cast()?;
+        let comp:IDCompositionDevice=DCompositionCreateDevice(&dxgi)?;
+        let target=comp.CreateTargetForHwnd(WinHwnd(hwnd),false)?;
+        let visual=comp.CreateVisual()?;
+        let scale=comp.CreateScaleTransform()?;
+        let effect=comp.CreateEffectGroup()?;
+        visual.SetTransform(&scale)?;
+        visual.SetEffect(&effect)?;
+        target.SetRoot(&visual)?;
+        comp.Commit()?;
+        Ok(Self{comp,ctx:ctx.expect("D3D immediate context"),target,visual,scale,effect,surface:None})
+    }
+    unsafe fn upload(&mut self,frame:&Frame,area:RECT)->windows::core::Result<()>{
+        let (w,h)=(frame.w,frame.h);
+        let create=!self.surface.as_ref().is_some_and(|(sw,sh,_)|*sw==w&&*sh==h);
+        if create{
+            let surface=self.comp.CreateSurface(w as u32,h as u32,DXGI_FORMAT_B8G8R8A8_UNORM,DXGI_ALPHA_MODE_PREMULTIPLIED)?;
+            self.visual.SetContent(&surface)?;
+            self.surface=Some((w,h,surface));
+        }
+        let clip=if create{rect(0,0,w,h)}else{rect(area.left.max(0),area.top.max(0),area.right.min(w),area.bottom.min(h))};
+        if clip.left>=clip.right||clip.top>=clip.bottom{return Ok(());}
+        let surface=&self.surface.as_ref().expect("composition surface").2;
+        let bounds=WinRect{left:clip.left,top:clip.top,right:clip.right,bottom:clip.bottom};
+        let mut offset=WinPoint::default();
+        let drawing:IDXGISurface=surface.BeginDraw(Some(&bounds),&mut offset)?;
+        let updated=(||->windows::core::Result<()>{
+            let subresource:ID3D11Texture2D=drawing.cast()?;
+            let bounds=D3D11_BOX{left:offset.x as u32,top:offset.y as u32,front:0,
+                right:(offset.x+clip.right-clip.left) as u32,bottom:(offset.y+clip.bottom-clip.top) as u32,back:1};
+            let source=frame.bits.add(((clip.top as usize*w as usize+clip.left as usize)*4) as usize);
+            self.ctx.UpdateSubresource(&subresource,0,Some(&bounds),source.cast(),w as u32*4,0);
+            Ok(())
+        })();
+        let result=surface.EndDraw();
+        updated?;
+        result?;
+        self.comp.Commit()
+    }
+    unsafe fn motion(&self,t:Transition,w:i32,anchor_y:i32)->windows::core::Result<()>{
+        let curve=|from:f32,to:f32|->windows::core::Result<IDCompositionAnimation>{
+            let seconds=t.duration as f32/1000.0;
+            let d=to-from;
+            let anim=self.comp.CreateAnimation()?;
+            anim.AddCubic(0.0,from,3.0*d/seconds,-3.0*d/seconds.powi(2),d/seconds.powi(3))?;
+            anim.End(seconds as f64,to)?;
+            Ok(anim)
+        };
+        let zoom=|v:f32|0.93+0.07*v;
+        let a=curve(zoom(t.from),zoom(t.to))?;
+        self.scale.SetCenterX2(w as f32*0.5)?;
+        self.scale.SetCenterY2(anchor_y as f32)?;
+        self.scale.SetScaleX(&a)?;
+        self.scale.SetScaleY(&a)?;
+        self.effect.SetOpacity(&curve(t.from,t.to)?)?;
+        self.comp.Commit()
+    }
+    unsafe fn settle(&self)->windows::core::Result<()>{
+        self.scale.SetScaleX2(1.0)?;
+        self.scale.SetScaleY2(1.0)?;
+        self.effect.SetOpacity2(1.0)?;
+        self.comp.Commit()
+    }
+}
+impl Drop for Foreground{
+    fn drop(&mut self){unsafe{let _=self.target.SetRoot(None::<&IDCompositionVisual>);let _=self.comp.Commit();}}
+}
+
+struct LiveMaterial { backdrop:NativeBackdrop, foreground:Foreground }
+fn set_redirection_alpha(hwnd:HWND,enabled:bool)->bool{
+    let value=i32::from(enabled);
+    unsafe{DwmSetWindowAttribute(hwnd,REDIRECTION_ALPHA,(&value as *const i32).cast(),4)>=0}
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -282,6 +416,9 @@ struct Panel {
     // In-memory, quarter-resolution snapshot; ordinary opaque GDI surface.
     backdrop: Vec<u8>,
     glass: std::rc::Rc<[u8]>,
+    native: Option<LiveMaterial>,
+    native_rejected: bool,
+    transition: Option<Transition>,
     bounds: RECT,
     dark: bool,
     high_contrast:bool,
@@ -328,16 +465,21 @@ thread_local! {
 
 // A persistent compatible bitmap, not an alpha-bearing DWM extended frame.
 // GDI renders RGB into it; only the completed dirty region is presented.
-struct Frame { dc: HDC, bitmap: HBITMAP, old: HGDIOBJ, w: i32, h: i32 }
+struct Frame { dc: HDC, bitmap: HBITMAP, old: HGDIOBJ, bits:*mut u8, w: i32, h: i32 }
 impl Frame {
     unsafe fn new(target: HDC, w: i32, h: i32) -> Option<Self> {
         if w <= 0 || h <= 0 { return None; }
         let dc = CreateCompatibleDC(target);
         if dc.is_null() { return None; }
-        let bitmap = CreateCompatibleBitmap(target, w, h);
-        if bitmap.is_null() { DeleteDC(dc); return None; }
+        let mut info:BITMAPINFO=std::mem::zeroed();
+        info.bmiHeader=BITMAPINFOHEADER{biSize:std::mem::size_of::<BITMAPINFOHEADER>() as u32,biWidth:w,biHeight:-h,
+            biPlanes:1,biBitCount:32,biCompression:BI_RGB,..std::mem::zeroed()};
+        let mut bits=ptr::null_mut();
+        let bitmap=CreateDIBSection(dc,&info,DIB_RGB_COLORS,&mut bits,ptr::null_mut(),0);
+        if bitmap.is_null()||bits.is_null() {if !bitmap.is_null(){DeleteObject(bitmap);}DeleteDC(dc);return None;}
         let old = SelectObject(dc, bitmap);
-        Some(Self { dc, bitmap, old, w, h })
+        if old.is_null()||old as isize == -1 {DeleteObject(bitmap);DeleteDC(dc);return None;}
+        Some(Self { dc, bitmap, old, bits:bits.cast(), w, h })
     }
 }
 impl Drop for Frame {
@@ -367,7 +509,7 @@ fn hover_transition(p: &mut Panel, next: Option<Hit>) -> Vec<RECT> {
     previous.into_iter().chain(old).chain(next).filter_map(|h| target_rect(p, h)).collect()
 }
 
-fn motion_allowed() -> bool {
+pub(super) fn motion_allowed() -> bool {
     let enabled=OPTIONS.with(|p|p.borrow().animations);
     let mut system=1i32;
     if !cfg!(test) { unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION,0,(&mut system as *mut i32).cast(),0); } }
@@ -786,6 +928,11 @@ fn controls(p: &Panel) -> Vec<(Hit, RECT, &'static str)> {
 }
 
 fn hit_at(p: &Panel, point: POINT) -> Option<Hit> {
+    let point=if let Some(t)=p.transition{
+        let scale=0.93+0.07*t.openness();
+        let (x,y)=(p.width as f32*0.5,px(83,p.dpi) as f32);
+        POINT{x:(x+(point.x as f32-x)/scale).round() as i32,y:(y+(point.y as f32-y)/scale).round() as i32}
+    }else{point};
     if let Some((action, ..)) = controls(p).into_iter().find(|(_, r, _)| hit(*r, point)) {
         return Some(action);
     }
@@ -845,6 +992,23 @@ unsafe fn text(dc: HDC, s: &str, mut r: RECT, f: HFONT, ink: u32, center: bool) 
     );
     SelectObject(dc, old);
 }
+unsafe fn text_alpha(dc:HDC,s:&str,r:RECT,f:HFONT,ink:u32,center:bool){
+    if s.is_empty()||r.right<=r.left||r.bottom<=r.top||RectVisible(dc,&r)==0{return;}
+    let (w,h)=(r.right-r.left,r.bottom-r.top);
+    let Some(mut mask)=crate::dock::PopupPixels::new(w,h)else{return;};
+    let area=rect(0,0,w,h);
+    if !crate::native_text::draw(mask.dc(),area,s,f,[255;3],center,true) {
+        text(mask.dc(),s,area,f,0x00ffffff,center);
+    }
+    GdiFlush();
+    let mut pixels=vec![0;w as usize*h as usize*4];
+    for (out,input) in pixels.chunks_exact_mut(4).zip(mask.pixels().chunks_exact(4)){
+        let a=u32::from(input[0]);
+        for (c,shift) in [16,8,0].into_iter().enumerate(){out[c]=((((ink>>shift)&255)*a+127)/255) as u8;}
+        out[3]=a as u8;
+    }
+    draw_icon(dc,&IconPixels{width:w,height:h,pixels},r.left,r.top);
+}
 unsafe fn draw_icon(dc: HDC, icon: &IconPixels, x: i32, y: i32) {
     draw_icon_alpha(dc,icon,x,y,255);
 }
@@ -890,6 +1054,34 @@ unsafe fn draw_icon_alpha(dc:HDC,icon:&IconPixels,x:i32,y:i32,opacity:u8) {
     DeleteObject(bm);
 }
 
+unsafe fn draw_live_edit(dc:HDC,edit:HWND,area:RECT,face:u32,ink:u32,font:HFONT){
+    let (w,h)=(area.right-area.left,area.bottom-area.top);
+    let Some(mut raster)=crate::dock::PopupPixels::new(w,h)else{return;};
+    let edc=raster.dc();
+    fill(edc,rect(0,0,w,h),face);
+    CallWindowProcW(EDIT_PROC.get(),edit,WM_PRINTCLIENT,edc as WPARAM,PRF_CLIENT as LPARAM);
+    if GetFocus()==edit{
+        let sel=SendMessageW(edit,0x00b0,0,0) as u32; // EM_GETSEL
+        let start=sel&0xffff;
+        if start==sel>>16{
+            let pos=SendMessageW(edit,0x00d6,start as WPARAM,0); // EM_POSFROMCHAR
+            let x=if pos!=-1{(pos as i16) as i32}else{
+                let mut size:SIZE=std::mem::zeroed();
+                let value=wide(&read_edit(edit,256));
+                let old=SelectObject(edc,font);
+                GetTextExtentPoint32W(edc,value.as_ptr(),value.len().saturating_sub(1) as i32,&mut size);
+                SelectObject(edc,old);
+                size.cx+1
+            };
+            let x=x.clamp(0,w-1);
+            fill(edc,rect(x,2,x+1,(h-2).max(2)),ink);
+        }
+    }
+    GdiFlush();
+    for row in raster.pixels().chunks_exact_mut(4){row[3]=255;}
+    BitBlt(dc,area.left,area.top,w,h,edc,0,0,SRCCOPY);
+}
+
 type PaintTile = (
     Tile,
     RECT,
@@ -900,8 +1092,11 @@ type PaintTile = (
 fn request_icon(p: &mut Panel, path: PathBuf, size: i32) -> IconKey {
     let key = (path, size.clamp(8, 192));
     if !p.icons.contains_key(&key) {
-        if let Some(icon)=warm_raster(&key){
+        if let Some((icon,fresh))=lookup_raster(&key,true){
             p.icons.insert(key.clone(),icon);
+            if !fresh&&p.pending.len()<32&&p.pending.insert(key.clone())&&p.icon_tx.send(key.clone()).is_err(){
+                p.pending.remove(&key);
+            }
             return key;
         }
     }
@@ -918,9 +1113,10 @@ fn request_icon(p: &mut Panel, path: PathBuf, size: i32) -> IconKey {
 unsafe fn paint_full(hwnd: HWND) {
     let mut ps: PAINTSTRUCT = std::mem::zeroed();
     let dc = BeginPaint(hwnd, &mut ps);
-    let size = PANEL.with(|p| p.borrow().as_ref().map(|p| (p.width,p.height)));
-    if let Some((w,h)) = size {
-        FRAME.with(|cell| {
+    let size = PANEL.with(|p| p.borrow().as_ref().map(|p| (p.width,p.height,p.native.is_some())));
+    let mut failed=false;
+    if let Some((w,h,live)) = size {
+        failed=FRAME.with(|cell| {
             let mut slot = cell.borrow_mut();
             let new = !slot.as_ref().is_some_and(|f| f.w == w && f.h == h);
             if new { *slot = Frame::new(dc,w,h); }
@@ -928,14 +1124,36 @@ unsafe fn paint_full(hwnd: HWND) {
                 let dirty = if new { rect(0,0,w,h) } else { ps.rcPaint };
                 let saved = SaveDC(f.dc);
                 IntersectClipRect(f.dc,dirty.left,dirty.top,dirty.right,dirty.bottom);
+                if live{
+                    GdiFlush();
+                    let clipped=rect(dirty.left.max(0),dirty.top.max(0),dirty.right.min(w),dirty.bottom.min(h));
+                    if clipped.left<clipped.right{
+                        for y in clipped.top..clipped.bottom{
+                            let at=(y as usize*w as usize+clipped.left as usize)*4;
+                            ptr::write_bytes(f.bits.add(at),0,(clipped.right-clipped.left) as usize*4);
+                        }
+                    }
+                }
                 render_full(hwnd, f.dc, dirty);
                 RestoreDC(f.dc,saved);
+                if live{
+                    GdiFlush();
+                    PatBlt(dc,ps.rcPaint.left,ps.rcPaint.top,ps.rcPaint.right-ps.rcPaint.left,
+                        ps.rcPaint.bottom-ps.rcPaint.top,BLACKNESS);
+                    return PANEL.with(|p|p.borrow_mut().as_mut().and_then(|p|p.native.as_mut())
+                        .is_none_or(|native| match native.foreground.upload(f,dirty){
+                            Ok(())=>false,
+                            Err(e)=>{crate::log!("Spotlight foreground present: {e}");true}
+                        }));
+                }
                 BitBlt(dc, ps.rcPaint.left, ps.rcPaint.top, ps.rcPaint.right-ps.rcPaint.left,
                        ps.rcPaint.bottom-ps.rcPaint.top, f.dc, ps.rcPaint.left, ps.rcPaint.top, SRCCOPY);
-            } else { render_full(hwnd,dc,ps.rcPaint); }
+            } else if live {return true;} else { render_full(hwnd,dc,ps.rcPaint); }
+            false
         });
     }
     EndPaint(hwnd, &ps);
+    if failed{fallback_material(hwnd);}
 }
 unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
     let view = PANEL.with(|s| {
@@ -973,6 +1191,10 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
                 Some((i + start,(t, r, icon, preview, p.keyboard && p.selected == i + start)))
             })
             .collect::<Vec<(usize,PaintTile)>>();
+        if p.pending.is_empty()&&p.page+1<count_pages(p){
+            let next=p.tiles.iter().skip(start+grid.capacity()).take(8).map(|t|t.entry.path.clone()).collect::<Vec<_>>();
+            for path in next{request_icon(p,path,grid.icon);}
+        }
         let heading = LIBRARY.with(|l| {
             l.borrow()
                 .folders
@@ -987,6 +1209,8 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
             p.dark,
             p.high_contrast,
             p.glass.clone(),
+            p.native.is_some(),
+            p.edit,
             p.font,
             grid.icon,
             tiles,
@@ -1014,6 +1238,8 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
         dark,
         high_contrast,
         glass,
+        live,
+        edit,
         font,
         size,
         tiles,
@@ -1036,8 +1262,8 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
     {
         let u = |n| px(n, dpi);
         let Palette{face,ink,secondary,active,fallback}=palette(dark,high_contrast);
-        if glass.is_empty() { fill(dc, rect(0,0,w,h),fallback); }
-        else {
+        if !live&&glass.is_empty() { fill(dc, rect(0,0,w,h),fallback); }
+        else if !live {
             let (bw,bh) = ((w/4).max(1),(h/4).max(1));
             let mut info: BITMAPINFO = std::mem::zeroed();
             info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
@@ -1047,6 +1273,7 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
             SetStretchBltMode(dc, HALFTONE);
             StretchDIBits(dc,0,0,w,h,0,0,bw,bh,glass.as_ptr().cast(),&info,DIB_RGB_COLORS,SRCCOPY);
         }
+        let text:unsafe fn(HDC,&str,RECT,HFONT,u32,bool)=if live{text_alpha}else{text};
         let header = crate::native_text::font_pixels(u(21), 600);
         text(
             dc,
@@ -1069,6 +1296,10 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
             face, 255,
         );
         text(dc,"⌕",rect((w-search_w)/2+u(10),u(64),(w-search_w)/2+u(44),u(102)),header,secondary,true);
+        if live {
+            let x=(w-search_w)/2+u(44);
+            draw_live_edit(dc,edit,rect(x,u(73),x+(search_w-u(58)).max(1),u(73)+u(24)),face,ink,font);
+        }
         }
         for (action, r, s) in buttons {
             if !intersects(r,dirty) { continue; }
@@ -1344,11 +1575,62 @@ fn refresh_material(hwnd:HWND) {
     let allowed=transparency_allowed();
     PANEL.with(|cell| {
         if let Some(p)=cell.borrow_mut().as_mut() {
+            if let Some(native)=&p.native {
+                unsafe{native.backdrop.material(p.dark,OPTIONS.with(|o|o.borrow().glass_strength));}
+                p.glass=Vec::<u8>::new().into();
+                return;
+            }
             p.glass=if allowed { OPTIONS.with(|o| frosted(&p.backdrop,p.width,p.height,p.dpi,p.dark,&o.borrow())).into() }
                 else { Vec::<u8>::new().into() };
         }
     });
     refresh(hwnd);
+}
+
+fn ensure_live(hwnd:HWND)->bool{
+    if cfg!(test)||!transparency_allowed(){return false;}
+    let flags=PANEL.with(|p|p.borrow().as_ref().map(|p|(p.native.is_some(),p.native_rejected)));
+    match flags{
+        Some((true,_))=>return true,
+        Some((false,false))=>{},
+        _=>return false,
+    }
+    let result=unsafe{
+        if !set_redirection_alpha(hwnd,true){Err("redirection alpha is unavailable".to_owned())}
+        else{(move || {
+            let backdrop=NativeBackdrop::create(BackdropKind::Host)?;
+            let foreground=Foreground::new(hwnd).map_err(|e|e.to_string())?;
+            Ok(LiveMaterial{backdrop,foreground})
+        })()}
+    };
+    match result{
+        Ok(native)=>{
+            PANEL.with(|p|if let Some(panel)=p.borrow_mut().as_mut(){panel.native=Some(native);});
+            crate::log!("Spotlight material: HostBackdrop configured (visual output depends on DWM)");
+            true
+        }
+        Err(e)=>{
+            set_redirection_alpha(hwnd,false);
+            PANEL.with(|p|if let Some(panel)=p.borrow_mut().as_mut(){panel.native_rejected=true;});
+            crate::log!("Spotlight material: compatibility fallback ({e})");
+            false
+        }
+    }
+}
+fn fallback_material(hwnd:HWND){
+    let old=PANEL.with(|p|{
+        let mut panel=p.borrow_mut();let panel=panel.as_mut()?;
+        panel.native_rejected=true;
+        panel.transition=None;
+        // Force a one-shot compatibility capture without sampling ourselves.
+        panel.bounds=rect(0,0,0,0);
+        Some((panel.point,panel.native.take()))
+    });
+    if let Some((point,native))=old{
+        drop(native);
+        set_redirection_alpha(hwnd,false);
+        unsafe{KillTimer(hwnd,TRANSITION_TIMER);place(hwnd,point);}
+    }
 }
 
 fn estimate(point: POINT) -> Option<(RECT, u32)> {
@@ -1379,7 +1661,8 @@ unsafe fn place(hwnd: HWND, point: POINT) {
     }));
     let mut raw = None;
     let visible = IsWindowVisible(hwnd)!=0;
-    if changed {
+    let live=ensure_live(hwnd);
+    if changed&&!live {
         // Hide only our own overlay before capture. Never capture it back into
         // itself on monitor change. Take one low-resolution sample, no polling.
         let was_modal = MODAL.replace(true);
@@ -1412,6 +1695,10 @@ unsafe fn place(hwnd: HWND, point: POINT) {
         height,
         SWP_NOACTIVATE,
     );
+    let backdrop=PANEL.with(|p|p.borrow().as_ref().and_then(|p|p.native.as_ref().map(|n|n.backdrop.hwnd)));
+    if let Some(backdrop)=backdrop{
+        SetWindowPos(backdrop,hwnd,r.left,r.top,width,height,SWP_NOACTIVATE|SWP_SHOWWINDOW);
+    }
     SetWindowPos(
         edit,
         ptr::null_mut(),
@@ -1429,7 +1716,7 @@ unsafe fn place(hwnd: HWND, point: POINT) {
     }
     refresh_material(hwnd);
     rebuild(hwnd, false);
-    if changed && visible { ShowWindow(hwnd,SW_SHOW); SetForegroundWindow(hwnd); SetFocus(edit); }
+    if changed && visible&&!live { ShowWindow(hwnd,SW_SHOW); SetForegroundWindow(hwnd); SetFocus(edit); }
 }
 
 pub(super) fn dismiss(restore: bool) {
@@ -1445,7 +1732,9 @@ pub(super) fn dismiss(restore: bool) {
         KillTimer(p.hwnd, SHELL_REFRESH);
         KillTimer(p.hwnd,HOVER_ANIMATION);
         KillTimer(p.hwnd,GRID_ANIMATION);
+        KillTimer(p.hwnd,TRANSITION_TIMER);
         drop(p.watch.take());
+        drop(p.native.take());
         DestroyWindow(p.hwnd);
         FRAME.with(|frame| { frame.borrow_mut().take(); });
         if !p.font.is_null() {
@@ -1455,6 +1744,52 @@ pub(super) fn dismiss(restore: bool) {
             SetForegroundWindow(p.prior);
         }
     }
+    if crate::trial::active() {
+        let (ram_hits,disk_hits,extractions,ram_bytes,disk_bytes)=crate::app_icons::cache_metrics();
+        crate::log!("Spotlight icon cache: source RAM hits={ram_hits}, disk hits={disk_hits}, shell extractions={extractions}, source RAM bytes={ram_bytes}, disk bytes={disk_bytes}");
+    }
+}
+
+fn start_transition(hwnd:HWND,open:bool)->bool{
+    let transition=PANEL.with(|cell|{
+        let mut panel=cell.borrow_mut();let p=panel.as_mut()?;
+        if !p.motion{return None;}
+        let native=p.native.as_ref()?;
+        let t=Transition{start:std::time::Instant::now(),duration:if open{OPEN_MS}else{CLOSE_MS},
+            from:p.transition.map_or(if open{0.0}else{1.0},Transition::openness),to:if open{1.0}else{0.0}};
+        if unsafe{native.foreground.motion(t,p.width,px(83,p.dpi))}.is_err(){return None;}
+        let _=native.backdrop.transition(t,OPTIONS.with(|o|o.borrow().glass_strength));
+        p.transition=Some(t);
+        Some(t)
+    });
+    if let Some(t)=transition{
+        unsafe{SetTimer(hwnd,TRANSITION_TIMER,t.duration+20,None);}
+        true
+    }else{false}
+}
+fn request_close(){
+    let Some(hwnd)=window()else{return;};
+    let closing=PANEL.with(|p|p.borrow().as_ref().and_then(|p|p.transition).is_some_and(|t|t.to==0.0));
+    if !closing&&!start_transition(hwnd,false){dismiss(true);}
+}
+fn settle_transition(hwnd:HWND){
+    let closing=PANEL.with(|s|{
+        let mut p=s.borrow_mut();
+        let Some(p)=p.as_mut()else{return false;};
+        let Some(t)=p.transition.take()else{return false;};
+        if let Some(n)=&p.native{let _=unsafe{n.foreground.settle()};}
+        t.to==0.0
+    });
+    unsafe{KillTimer(hwnd,TRANSITION_TIMER);}
+    if closing{dismiss(true);}
+}
+pub(super) fn toggle_visible()->bool{
+    let Some(hwnd)=window()else{return false;};
+    let closing=PANEL.with(|p|p.borrow().as_ref().and_then(|p|p.transition).is_some_and(|t|t.to==0.0));
+    if closing {
+        if !start_transition(hwnd,true){dismiss(true);}
+    }else{request_close();}
+    true
 }
 
 pub(super) fn compact_query() -> Option<(POINT, String, HWND)> {
@@ -1950,7 +2285,7 @@ unsafe fn choose_icon(hwnd: HWND, path: &Path) {
 
 unsafe fn action(hwnd: HWND, which: Hit) {
     match which {
-        Hit::Close => dismiss(true),
+        Hit::Close => request_close(),
         Hit::Compact => {
             if let Some((point, query, prior)) = compact_query() {
                 dismiss(false);
@@ -2077,6 +2412,14 @@ unsafe fn drop_tile(hwnd: HWND, from: usize, to: usize) {
 }
 
 unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    let live=PANEL.with(|p|p.try_borrow().ok().is_some_and(|p|p.as_ref().is_some_and(|p|p.edit==hwnd&&p.native.is_some())));
+    if live&&msg==WM_ERASEBKGND{return 1;}
+    if live&&msg==WM_PAINT{
+        let mut ps:PAINTSTRUCT=std::mem::zeroed();
+        BeginPaint(hwnd,&mut ps);
+        EndPaint(hwnd,&ps);
+        return 0;
+    }
     if msg == WM_KEYDOWN {
         let empty = PANEL.with(|s| s.borrow().as_ref().is_some_and(|p| p.input.is_empty()));
         if matches!(
@@ -2091,7 +2434,18 @@ unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
     if msg == WM_CHAR && matches!(w, 13 | 27) {
         return 0;
     }
-    CallWindowProcW(EDIT_PROC.get(), hwnd, msg, w, l)
+    let result=CallWindowProcW(EDIT_PROC.get(), hwnd, msg, w, l);
+    if live&&matches!(msg,WM_SETFOCUS|WM_KILLFOCUS|WM_KEYDOWN|WM_CHAR|WM_LBUTTONDOWN|WM_LBUTTONUP|WM_MOUSEMOVE){
+        if msg==WM_SETFOCUS{HideCaret(hwnd);}
+        if msg!=WM_MOUSEMOVE||w&1!=0{
+            let area=PANEL.with(|p|p.borrow().as_ref().map(|p|{
+                let width=px(600,p.dpi).min(p.width-px(50,p.dpi)).max(1);
+                rect((p.width-width)/2,px(64,p.dpi),(p.width+width)/2,px(102,p.dpi))
+            }));
+            if let Some(area)=area{InvalidateRect(GetParent(hwnd),&area,0);}
+        }
+    }
+    result
 }
 
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -2188,6 +2542,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             if !active{KillTimer(hwnd,GRID_ANIMATION);}
             invalidate_regions(hwnd,region);0
         }
+        WM_TIMER if w == TRANSITION_TIMER => {
+            settle_transition(hwnd);
+            0
+        }
         WM_TIMER if w == POLL => {
             let (icons, apps, result, busy) = PANEL.with(|s| {
                 let mut s = s.borrow_mut();
@@ -2262,7 +2620,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             0
         }
         WM_CLOSE => {
-            dismiss(true);
+            request_close();
             0
         }
         WM_SETTINGCHANGE | WM_THEMECHANGED | WM_DWMCOMPOSITIONCHANGED => {
@@ -2276,6 +2634,13 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     p.motion=motion;
                 }
             });
+            if !motion&&PANEL.with(|s|s.borrow().as_ref().is_some_and(|p|p.transition.is_some())){
+                settle_transition(hwnd);
+                if window().is_none(){return 0;}
+            }
+            if !transparency_allowed()&&PANEL.with(|s|s.borrow().as_ref().is_some_and(|p|p.native.is_some())){
+                fallback_material(hwnd);
+            }
             refresh_material(hwnd);
             if let Some(edit)=PANEL.with(|p|p.borrow().as_ref().map(|p|p.edit)){ InvalidateRect(edit,ptr::null(),0); }
             0
@@ -2299,7 +2664,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             });
             match w as u16 {
                 VK_ESCAPE if escape => internal_view(hwnd, 0, false),
-                VK_ESCAPE => dismiss(true),
+                VK_ESCAPE => request_close(),
                 VK_RETURN => {
                     let waiting = PANEL.with(|p| {
                         let mut s = p.borrow_mut();
@@ -2450,6 +2815,7 @@ pub(super) fn open(point: POINT, query: String, prior: HWND, manage: bool) {
 }
 
 fn open_native(point: POINT, query: String, prior: HWND, manage: bool, activate: bool) {
+    let started=std::time::Instant::now();
     if !enabled() {
         return;
     }
@@ -2466,7 +2832,7 @@ fn open_native(point: POINT, query: String, prior: HWND, manage: bool, activate:
                 return;
             }
             if same {
-                dismiss(true);
+                toggle_visible();
                 return;
             }
             place(hwnd, point);
@@ -2552,6 +2918,9 @@ fn open_native(point: POINT, query: String, prior: HWND, manage: bool, activate:
                 dpi: 96,
                 backdrop:Vec::new(),
                 glass:Vec::<u8>::new().into(),
+                native:None,
+                native_rejected:false,
+                transition:None,
                 bounds:std::mem::zeroed(),
                 dark: d,
                 high_contrast:high_contrast(),
@@ -2590,6 +2959,7 @@ fn open_native(point: POINT, query: String, prior: HWND, manage: bool, activate:
         });
         SetWindowTextW(edit, wide(&query).as_ptr());
         place(hwnd, point);
+        if activate {start_transition(hwnd,true);}
         if activate {
             ShowWindow(hwnd, SW_SHOW);
             UpdateWindow(hwnd);
@@ -2601,6 +2971,15 @@ fn open_native(point: POINT, query: String, prior: HWND, manage: bool, activate:
             UpdateWindow(hwnd);
         }
         SendMessageW(edit, 0x00b1, usize::MAX, -1);
+        if crate::trial::active(){
+            let (ready,total,live)=PANEL.with(|p|p.borrow().as_ref().map_or((0,0,false),|p|{
+                let g=grid(p);
+                let paths=p.tiles.iter().take(g.capacity()).filter(|t|!t.entry.path.as_os_str().is_empty()).collect::<Vec<_>>();
+                let ready=paths.iter().filter(|t|p.icons.get(&(t.entry.path.clone(),g.icon.clamp(8,192))).is_some_and(Option::is_some)).count();
+                (ready,paths.len(),p.native.is_some())
+            }));
+            crate::log!("Spotlight first frame prepared in {:.1} ms, icons ready={ready}/{total}, live host initialized={live}",started.elapsed().as_secs_f64()*1000.0);
+        }
         SetTimer(hwnd, POLL, 40, None);
         let watch = catalog::ShellWatch::new(hwnd, CATALOG_CHANGE);
         PANEL.with(|p| {

@@ -24,8 +24,9 @@ fn native_live_backdrop_retains_color_and_filters_detail() {
         let changed=PATTERN.load(std::sync::atomic::Ordering::Relaxed);
         for x in (0..W).step_by(6) {
             let colors=[0x005b1545,0x00285b9e,0x009c4f25];
-            let base=colors[(x/(W/3)) as usize];
-            let ink=if (x/6)%2==i32::from(changed){base+0x00474747}else{base};
+            let index=(x/(W/3)) as usize;
+            let base=colors[if changed{(index+1)%3}else{index}];
+            let ink=if (x/6)%2==0{base+0x00474747}else{base};
             fill(dc,rect(x,0,x+6,H),ink);
         }
         EndPaint(hwnd,&ps);0
@@ -113,16 +114,80 @@ fn native_live_backdrop_retains_color_and_filters_detail() {
                 if b.len()!=(W*H*4) as usize{println!("GLASS_POC backend={label} capture unavailable");continue;}
                 let (d,c)=metrics(&b);
                 let filtered=c>spread*0.15&&d/(c.max(1.0))<detail/spread*0.58;
-                println!("GLASS_POC backend={label} dark={dark} detail_ratio={:.3} color_ratio={:.3} optical_blur={filtered}",d/detail,c/spread);
+                let pixel=&b[((320*W+W/6)*4) as usize..][..3];
+                println!("GLASS_POC backend={label} dark={dark} detail_ratio={:.3} color_ratio={:.3} optical_blur={filtered} sample_bgr={pixel:?}",d/detail,c/spread);
                 evidence(&format!("glass-{label}-{}.png",if dark{"dark"}else{"light"}),&b);
                 round(frame.dc(),rect(175,143,253,220),20,0x007997cc,90);
                 present();settle();
                 if let Some(hover)=screen(){evidence(&format!("glass-{label}-{}-hover.png",if dark{"dark"}else{"light"}),&hover);}
+                PATTERN.store(true,std::sync::atomic::Ordering::Relaxed);
+                InvalidateRect(bg.0,ptr::null(),0);
+                UpdateWindow(bg.0);
+                settle();
+                if let Some(after)=screen(){
+                    let at=(320*W*4) as usize;
+                    let band=48*4..(W-48)*4;
+                    let delta=after[at+band.start..at+band.end].iter().zip(&b[at+band.start..at+band.end])
+                        .map(|(&before,&sample)|f64::from(before.abs_diff(sample))).sum::<f64>()/(band.end-band.start) as f64;
+                    println!("GLASS_POC backend={label} dark={dark} live_delta={delta:.2}");
+                    if filtered{evidence(&format!("glass-{label}-{}-live.png",if dark{"dark"}else{"light"}),&after);}
+                }
+                PATTERN.store(false,std::sync::atomic::Ordering::Relaxed);
+                InvalidateRect(bg.0,ptr::null(),0);
+                UpdateWindow(bg.0);
             }
         }
         let (end_gdi,end_user,_)=resources();
         assert!(end_gdi<=gdi+12&&end_user<=user+12,"compositor fixture leaked GDI/USER resources");
     }
+}
+
+#[test]
+#[ignore="Windows private desktop Spotlight activation routing"]
+fn native_activation_modes_apply_live_on_one_overlay(){
+    let _desktop=unsafe{Desktop::isolated()};
+    let at=POINT{x:0,y:0};
+    let mut prefs=Preferences{animations:false,..Preferences::default()};
+    let compact_visible=||handles().is_some_and(|(h,_,_,_)|unsafe{IsWindowVisible(h)!=0});
+    configure(prefs.clone());
+    super::super::toggle(ptr::null_mut());
+    assert!(compact_visible()&&window().is_none());
+    super::super::toggle(ptr::null_mut());
+    assert!(!compact_visible()&&window().is_none());
+    prefs.hotkey_fullscreen=true;
+    prefs.dock_fullscreen=false;
+    configure(prefs.clone());
+    super::super::toggle(ptr::null_mut());
+    assert!(!compact_visible()&&window().is_some());
+    super::super::toggle(ptr::null_mut());
+    assert!(window().is_none());
+    super::super::open_spotlight_dock(at);
+    assert!(compact_visible()&&window().is_none());
+    super::super::toggle(ptr::null_mut());
+    prefs.dock_follow_hotkey=true;
+    configure(prefs.clone());
+    super::super::open_spotlight_dock(at);
+    let hwnd=window().expect("Dock follows fullscreen preference");
+    assert!(!compact_visible());
+    let edit=PANEL.with(|p|p.borrow().as_ref().unwrap().edit);
+    unsafe{
+        SetWindowTextW(edit,wide("notepad").as_ptr());
+        SendMessageW(hwnd,EDIT_KEY,VK_F6 as WPARAM,0);
+    }
+    assert!(window().is_none()&&compact_visible());
+    assert_eq!(STATE.with(|c|c.borrow().as_ref().unwrap().query.clone()),"notepad");
+    super::super::expand_compact();
+    assert!(window().is_some()&&!compact_visible());
+    assert_eq!(compact_query().unwrap().1,"notepad");
+    assert!(fullscreen_for(true)&&fullscreen_for(false),"F6 must not rewrite preferences");
+    dismiss(false);
+    prefs.hotkey_fullscreen=false;
+    prefs.dock_follow_hotkey=false;
+    prefs.dock_fullscreen=true;
+    configure(prefs);
+    super::super::open_spotlight_dock(at);
+    assert!(window().is_some());
+    println!("SPOTLIGHT_NATIVE activation_mode_live_apply=PASS toggle=PASS F6_query=PASS");
 }
 
 pub(in crate::launcher) struct Desktop {

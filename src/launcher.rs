@@ -315,6 +315,7 @@ fn dismiss(hwnd: HWND) {
         s.matches.get(s.selected).and_then(|&i| s.all.get(i)).map(|e| e.path.clone())
     });
     if let Some(path) = searched { remember_entry(&path); }
+    stop_compact_motion(hwnd);
     unsafe { KillTimer(hwnd,7); ShowWindow(hwnd, SW_HIDE); }
 }
 
@@ -324,6 +325,72 @@ fn dismiss_compact_with_focus(hwnd: HWND) {
     if let Some(prior) = prior {
         unsafe { if !prior.is_null() && IsWindow(prior) != 0 { SetForegroundWindow(prior); } }
     }
+}
+const COMPACT_TWEEN:usize=8;
+type Tween=fullscreen::Transition;
+struct CompactFrame {
+    source:crate::dock::PopupPixels,
+    target:crate::dock::PopupPixels,
+    width:i32,
+    height:i32,
+}
+thread_local! {
+    static COMPACT_MOTION:Cell<Option<Tween>>=const{Cell::new(None)};
+    static COMPACT_FRAME:RefCell<Option<CompactFrame>>=const{RefCell::new(None)};
+}
+fn stop_compact_motion(hwnd:HWND){
+    COMPACT_MOTION.set(None);
+    COMPACT_FRAME.with(|f|f.borrow_mut().take());
+    unsafe{KillTimer(hwnd,COMPACT_TWEEN);}
+}
+fn start_compact_motion(hwnd:HWND,open:bool)->bool{
+    if !fullscreen::motion_allowed(){return false;}
+    let from=COMPACT_MOTION.get().map_or(if open{0.0}else{1.0},Tween::openness);
+    let t=Tween{start:std::time::Instant::now(),duration:if open{fullscreen::OPEN_MS}else{fullscreen::CLOSE_MS},
+        from,to:if open{1.0}else{0.0}};
+    COMPACT_MOTION.set(Some(t));
+    unsafe{SetTimer(hwnd,COMPACT_TWEEN,15,None)!=0}
+}
+fn close_compact(hwnd:HWND,toggle:bool){
+    if COMPACT_MOTION.get().is_some_and(|t|t.to==0.0){
+        if toggle&&!start_compact_motion(hwnd,true){dismiss_compact_with_focus(hwnd);}
+    }else if start_compact_motion(hwnd,false){
+        unsafe{paint(hwnd);}
+    }else{dismiss_compact_with_focus(hwnd);}
+}
+unsafe fn present_compact_transition(hwnd:HWND,frame:&mut CompactFrame,t:Tween){
+    let k=t.openness();
+    let s=0.93+0.07*k;
+    let (w,h)=(frame.width,frame.height);
+    let (sw,sh)=((w as f32*s).round() as i32,(h as f32*s).round() as i32);
+    GdiFlush();
+    frame.target.pixels().fill(0);
+    let alpha=BLENDFUNCTION{BlendOp:AC_SRC_OVER as u8,BlendFlags:0,SourceConstantAlpha:255,AlphaFormat:AC_SRC_ALPHA as u8};
+    AlphaBlend(frame.target.dc(),(w-sw)/2,(h-sh)/2,sw,sh,frame.source.dc(),0,0,w,h,alpha);
+    let opacity=BLENDFUNCTION{SourceConstantAlpha:(255.0*k).round() as u8,..alpha};
+    let size=SIZE{cx:w,cy:h};
+    let origin=POINT{x:0,y:0};
+    UpdateLayeredWindow(hwnd,std::ptr::null_mut(),std::ptr::null(),&size,frame.target.dc(),&origin,0,&opacity,ULW_ALPHA);
+}
+unsafe fn compact_transition_frame(hwnd:HWND,w:i32,h:i32,pixels:&[u8])->bool{
+    let Some(t)=COMPACT_MOTION.get()else{return false;};
+    COMPACT_FRAME.with(|cache|{
+        let mut cache=cache.borrow_mut();
+        if !cache.as_ref().is_some_and(|f|f.width==w&&f.height==h){
+            *cache=(||Some(CompactFrame{source:crate::dock::PopupPixels::new(w,h)?,target:crate::dock::PopupPixels::new(w,h)?,width:w,height:h}))();
+        }
+        let Some(frame)=cache.as_mut()else{return false;};
+        frame.source.pixels().copy_from_slice(pixels);
+        present_compact_transition(hwnd,frame,t);
+        true
+    })
+}
+fn compact_hit(l:LPARAM)->(i32,i32){
+    let (x,y)=(l as i16 as i32,(l>>16) as i16 as i32);
+    let Some(t)=COMPACT_MOTION.get()else{return(x,y);};
+    let k=0.93+0.07*t.openness();
+    let center=COMPACT_FRAME.with(|p|p.borrow().as_ref().map(|f|(f.width as f32/2.0,f.height as f32/2.0)));
+    center.map_or((x,y),|(cx,cy)|((cx+(x as f32-cx)/k).round() as i32,(cy+(y as f32-cy)/k).round() as i32))
 }
 fn move_selection(delta: i32) {
     let hwnd = STATE.with(|c| {
@@ -344,6 +411,7 @@ fn launch_selected() {
     });
     let Some((hwnd, entry)) = target else { return; };
     STATE.with(|c| if let Some(s) = c.borrow_mut().as_mut() { s.launching = true; });
+    stop_compact_motion(hwnd);
     unsafe {
         // Hide before ShellExecute activates another process (WM_ACTIVATE is synchronous).
         ShowWindow(hwnd, SW_HIDE);
@@ -394,16 +462,17 @@ fn prefetch_catalog(rows:&[Entry]){
         if warm_raster(&key).is_none()&&requests.send(key).is_err(){break;}
     }
 }
-fn warm_raster(key:&IconKey)->Option<Option<Arc<IconPixels>>>{
+fn lookup_raster(key:&IconKey,allow_stale:bool)->Option<(Option<Arc<IconPixels>>,bool)>{
     let mut rows=RASTERS.try_lock().ok()?;
     let revision=crate::app_icons::revision();
     let at=rows.iter().position(|(k,icon,rev,time)|k==key&&*rev==revision&&
-        time.elapsed().as_secs()<if icon.is_some(){300}else{10})?;
+        ((allow_stale&&icon.is_some())||time.elapsed().as_secs()<if icon.is_some(){300}else{10}))?;
     let pair=rows.remove(at)?;
-    let result=pair.1.clone();
+    let result=(pair.1.clone(),pair.3.elapsed().as_secs()<300);
     rows.push_back(pair);
     Some(result)
 }
+fn warm_raster(key:&IconKey)->Option<Option<Arc<IconPixels>>>{lookup_raster(key,false).map(|p|p.0)}
 fn retain_raster(key:IconKey,icon:Option<Arc<IconPixels>>,revision:u64){
     let Ok(mut rows)=RASTERS.lock() else{return;};
     rows.retain(|r|r.0!=key);
@@ -538,7 +607,14 @@ fn icon_for(hwnd: HWND, path: &Path, size: i32) -> Option<Arc<IconPixels>> {
         if s.icon_rev!=crate::app_icons::revision(){s.icons.clear();s.pending_icons=0;(s.icon_requests,s.icon_results)=icon_worker();s.icon_rev=crate::app_icons::revision();}
         let key = (path.to_path_buf(), size);
         if !s.icons.contains_key(&key){
-            if let Some(icon)=warm_raster(&key){return Some((icon,false));}
+            if let Some((icon,fresh))=lookup_raster(&key,true){
+                if !fresh&&s.pending_icons<24&&s.icon_requests.send(key.clone()).is_ok(){
+                    s.icons.insert(key,icon.clone());
+                    s.pending_icons+=1;
+                    return Some((icon,true));
+                }
+                return Some((icon,false));
+            }
         }
         if !s.icons.contains_key(&key) && s.pending_icons < 24 {
             if s.icons.len() >= 192 { s.icons.retain(|_,icon|icon.is_none()); if s.icons.len()>=192{s.icons.clear();} }
@@ -711,7 +787,7 @@ unsafe fn paint(hwnd: HWND) {
         SetViewportOrgEx(dc,0,0,std::ptr::null_mut());
         let size=SIZE {cx:ww,cy:hh}; let origin=POINT{x:0,y:0};
         let blend=BLENDFUNCTION {BlendOp:AC_SRC_OVER as u8,BlendFlags:0,SourceConstantAlpha:255,AlphaFormat:AC_SRC_ALPHA as u8};
-        if UpdateLayeredWindow(hwnd,std::ptr::null_mut(),std::ptr::null(),&size,dc,&origin,0,&blend,ULW_ALPHA)==0 { crate::log!("Launcher: UpdateLayeredWindow failed {}",GetLastError()); }
+        if !compact_transition_frame(hwnd,ww,hh,pixels)&&UpdateLayeredWindow(hwnd,std::ptr::null_mut(),std::ptr::null(),&size,dc,&origin,0,&blend,ULW_ALPHA)==0 { crate::log!("Launcher: UpdateLayeredWindow failed {}",GetLastError()); }
         SelectObject(dc,old); DeleteObject(bitmap); DeleteDC(dc); DeleteObject(body); DeleteObject(small); DeleteObject(search);
     }
     EndPaint(hwnd,&ps);
@@ -753,6 +829,17 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
     match msg {
         WM_ERASEBKGND => 1,
         WM_PAINT => { paint(hwnd); 0 }
+        WM_TIMER if w==COMPACT_TWEEN=>{
+            if let Some(t)=COMPACT_MOTION.get(){
+                if t.progress()>=1.0{
+                    stop_compact_motion(hwnd);
+                    if t.to==0.0{dismiss_compact_with_focus(hwnd);}else{paint(hwnd);}
+                }else{
+                    COMPACT_FRAME.with(|f|if let Some(frame)=f.borrow_mut().as_mut(){present_compact_transition(hwnd,frame,t);});
+                }
+            }else{stop_compact_motion(hwnd);}
+            0
+        }
         WM_SETFOCUS | WM_KILLFOCUS => { InvalidateRect(hwnd, std::ptr::null(), 0); 0 }
         WM_TIMER if w == 7 => {
             let (changed, pending, apps_changed) = STATE.with(|c| {
@@ -810,7 +897,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 VK_F6 => expand_compact(),
                 VK_APPS => result_menu(hwnd,None),
                 VK_F10 if GetKeyState(VK_SHIFT as i32)<0=>result_menu(hwnd,None),
-                VK_ESCAPE => { dismiss_compact_with_focus(hwnd); }
+                VK_ESCAPE => { close_compact(hwnd,false); }
                 VK_RETURN => { PostMessageW(hwnd, OPEN_SELECTED, 0, 0); }
                 VK_DOWN => move_selection(1), VK_UP => move_selection(-1),
                 VK_NEXT => move_selection(PAGE as i32), VK_PRIOR => move_selection(-(PAGE as i32)),
@@ -828,11 +915,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             } 0
         }
         WM_MOUSEWHEEL => { move_selection(if (w >> 16) as i16 > 0 { -1 } else { 1 }); 0 }
-        WM_RBUTTONUP=>{result_menu(hwnd,Some((l as i16 as i32,(l>>16) as i16 as i32)));0},
+        WM_RBUTTONUP=>{result_menu(hwnd,Some(compact_hit(l)));0},
         WM_LBUTTONDOWN | WM_LBUTTONUP | WM_LBUTTONDBLCLK => {
-            let y = (l >> 16) as i16 as i32;
+            let (x,y)=compact_hit(l);
             if msg==WM_LBUTTONUP && STATE.with(|s|s.borrow().as_ref().is_some_and(|p|{
-                let x=(l as i16 as f32/p.scale) as i32-12;
+                let x=(x as f32/p.scale) as i32-12;
                 let y=(y as f32/p.scale) as i32-12;
                 !p.dock_start && x>=612 && x<=648 && (9..=68).contains(&y)
             })){expand_compact();return 0;}
@@ -856,6 +943,13 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
 pub fn configure_spotlight(options: library::Preferences) {
     fullscreen::configure(options);
     if !fullscreen::enabled() { close_spotlight(); }
+    if !fullscreen::motion_allowed(){
+        if let (Some(t),Some((hwnd,_,_,_)))=(COMPACT_MOTION.get(),handles()){
+            stop_compact_motion(hwnd);
+            if t.to==0.0{dismiss_compact_with_focus(hwnd);}
+            else{unsafe{InvalidateRect(hwnd,std::ptr::null(),0);}}
+        }
+    }
 }
 pub fn initialize_spotlight(value: library::Library) { fullscreen::initialize(value); }
 pub fn close_spotlight(){
@@ -868,6 +962,7 @@ fn compact_handoff()->Option<(POINT,String,HWND)> {
     let (hwnd,_,_,_)=handles()?;
     if unsafe{IsWindowVisible(hwnd)}==0{return None;}
     let handoff=STATE.with(|p|p.borrow().as_ref().map(|p|(p.point,p.query.clone(),p.prior)));
+    stop_compact_motion(hwnd);
     IN_ACTION_MENU.with(|cell|cell.set(true));
     unsafe { KillTimer(hwnd,7); ShowWindow(hwnd,SW_HIDE); }
     IN_ACTION_MENU.with(|cell|cell.set(false));
@@ -904,9 +999,9 @@ pub fn refresh_spotlight_library(){
 }
 pub fn toggle(_owner: HWND) {
     if !fullscreen::enabled(){return;}
-    if fullscreen::window().is_some(){fullscreen::dismiss(true);return;}
+    if fullscreen::toggle_visible(){return;}
     if let Some((hwnd,_,_,_))=handles(){
-        if unsafe{IsWindowVisible(hwnd)}!=0{dismiss_compact_with_focus(hwnd);return;}
+        if unsafe{IsWindowVisible(hwnd)}!=0{close_compact(hwnd,true);return;}
     }
     if fullscreen::fullscreen_for(false){
         let mut point=POINT{x:0,y:0};
@@ -947,7 +1042,7 @@ fn toggle_at(at:Option<POINT>, query:Option<String>, prior:Option<HWND>) {
         if let Some((hwnd, _, _, _)) = handles() {
             if IsWindowVisible(hwnd) != 0 {
                 let same=STATE.with(|s|s.borrow().as_ref().is_some_and(|s| at.is_none_or(|p|MonitorFromPoint(p,MONITOR_DEFAULTTONEAREST)==MonitorFromPoint(s.point,MONITOR_DEFAULTTONEAREST))));
-                if same{dismiss_compact_with_focus(hwnd);return;}
+                if same{close_compact(hwnd,true);return;}
                 dismiss(hwnd);
             }
         } else {
@@ -989,6 +1084,7 @@ fn toggle_at(at:Option<POINT>, query:Option<String>, prior:Option<HWND>) {
         });
         refresh();
         SetWindowPos(hwnd, HWND_TOP, x, y, width+2*pad, height+2*pad, SWP_NOACTIVATE);
+        start_compact_motion(hwnd,true);
         paint(hwnd);
         SetTimer(hwnd,7,60,None);
         let input=InputHandoff::capture();

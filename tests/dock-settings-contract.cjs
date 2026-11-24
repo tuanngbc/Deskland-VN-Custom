@@ -331,9 +331,20 @@ test('unified Spotlight preferences and library actions are independent of Dock 
   $('spotlightFavorites').checked=true;
   $('spotlightSpacing').listeners.change();
   assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{
-    t:'spotlightPreferences',value:{enabled:true,dockFullscreen:false,theme:'dark',
+    t:'spotlightPreferences',value:{enabled:true,dockFullscreen:false,dockFollowHotkey:false,hotkeyFullscreen:false,theme:'dark',
       iconSize:72,spacing:26,glassStrength:42,glassBlur:54,animations:true,showNames:false,favoritesFirst:true}
   });
+  $('spotlightHotkeyMode').value='full';
+  $('spotlightHotkeyMode').listeners.change();
+  const distinct=JSON.parse(JSON.stringify(messages.pop()));
+  assert.equal(distinct.value.hotkeyFullscreen,true);
+  assert.equal(distinct.value.dockFullscreen,false);
+  $('spotlightDockClick').value='follow';
+  $('spotlightDockClick').listeners.change();
+  const linked=JSON.parse(JSON.stringify(messages.pop()));
+  assert.equal(linked.value.dockFollowHotkey,true);
+  assert.equal(linked.value.hotkeyFullscreen,true);
+  assert.equal(linked.value.glassBlur,54);
   for(const [id,action] of [['spotlightHidden','hidden'],['spotlightRefresh','refresh'],['spotlightReset','reset']]){
     $(id).listeners.click();
     assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'spotlightLibraryAction',action});

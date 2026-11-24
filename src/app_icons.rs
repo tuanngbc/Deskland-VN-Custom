@@ -120,6 +120,16 @@ type SourceRows=VecDeque<(String,Arc<IconPixels>)>;
 static SOURCES:LazyLock<Mutex<SourceRows>>=LazyLock::new(||Mutex::new(VecDeque::new()));
 static SOURCE_FETCH:Mutex<()>=Mutex::new(());
 static LAST_PRUNE:Mutex<Option<Instant>>=Mutex::new(None);
+static DISK_BYTES:AtomicU64=AtomicU64::new(0);
+static RAM_HITS:AtomicU64=AtomicU64::new(0);
+static DISK_HITS:AtomicU64=AtomicU64::new(0);
+static EXTRACTIONS:AtomicU64=AtomicU64::new(0);
+
+pub(crate) fn cache_metrics()->(u64,u64,u64,u64,u64) {
+    let ram=SOURCES.try_lock().ok().map_or(0,|s|s.iter().map(|(_,icon)|icon.pixels.len() as u64).sum());
+    (RAM_HITS.load(Ordering::Relaxed),DISK_HITS.load(Ordering::Relaxed),EXTRACTIONS.load(Ordering::Relaxed),
+        ram,DISK_BYTES.load(Ordering::Relaxed))
+}
 
 pub(crate) fn source_tier(edge:i32)->i32 {
     [96,128,192,256].into_iter().find(|&tier|tier>=edge).unwrap_or(256)
@@ -231,8 +241,8 @@ fn write_raster(path:&Path,key:&str,icon:&IconPixels)->std::io::Result<()>{
     result
 }
 
-fn prune_cache(dir:&Path,limit:u64){
-    let Ok(list)=std::fs::read_dir(dir) else{return;};
+fn prune_cache(dir:&Path,limit:u64)->u64{
+    let Ok(list)=std::fs::read_dir(dir) else{return 0;};
     let mut rows=list.filter_map(Result::ok).filter_map(|entry|{
         let path=entry.path();
         if path.extension()? != "bgra"{return None;}
@@ -240,18 +250,21 @@ fn prune_cache(dir:&Path,limit:u64){
         meta.is_file().then(||(meta.modified().unwrap_or(SystemTime::UNIX_EPOCH),meta.len(),path))
     }).collect::<Vec<_>>();
     let mut total=rows.iter().map(|row|row.1).sum::<u64>();
-    if total<=limit{return;}
+    if total<=limit{return total;}
     rows.sort_unstable_by_key(|row|row.0);
     for (_,len,path) in rows {
         if std::fs::remove_file(path).is_ok(){total=total.saturating_sub(len);}
-        if total<=limit{return;}
+        if total<=limit{break;}
     }
+    total
 }
 
 pub(crate) fn shared_source(path:&Path,shell_path:&Path,identity:&Path,tier:i32)->Option<Arc<IconPixels>>{
     let _serialize=SOURCE_FETCH.lock().ok()?;
     let custom=override_path(path).or_else(||override_path(identity));
-    let stamp=if let Some(custom)=&custom {stamp(custom)} else{source_stamp(shell_path)};
+    let stamp=if let Some(custom)=&custom {stamp(custom)} else{
+        source_stamp(shell_path).or_else(||if shell_path.is_absolute(){None}else{source_stamp(identity)})
+    };
     let key=stamp.map(|s| {
         // Custom files are already resolution-normalized and identical at all tiers.
         format!("v1|{}|{}|{}|{s}",normalized(identity.to_str().unwrap_or("")).unwrap_or_default(),
@@ -263,19 +276,34 @@ pub(crate) fn shared_source(path:&Path,shell_path:&Path,identity:&Path,tier:i32)
             let pair=ram.remove(index)?;
             let image=pair.1.clone();
             ram.push_back(pair);
+            RAM_HITS.fetch_add(1,Ordering::Relaxed);
             return Some(image);
         }
     }
-    let cache=crate::lock::data_dir().join("cache").join("app-icons-v1");
+    let cache=if cfg!(test){
+        std::env::temp_dir().join(format!("tlauncher-ci-icon-sources-{}",std::process::id()))
+    }else{crate::lock::data_dir().join("cache").join("app-icons-v1")};
     let file=key.as_ref().map(|k|cache_path(&cache,k));
     let mut result=file.as_ref().zip(key.as_ref()).and_then(|(f,k)|read_raster(f,k));
+    if result.is_some(){DISK_HITS.fetch_add(1,Ordering::Relaxed);}
+    if let Ok(mut last)=LAST_PRUNE.lock(){
+        if last.is_none_or(|t|t.elapsed()>Duration::from_secs(30)){
+            DISK_BYTES.store(prune_cache(&cache,SOURCE_DISK),Ordering::Relaxed);*last=Some(Instant::now());
+        }
+    }
     if result.is_none(){
-        result=load(path).or_else(||load(identity)).or_else(||unsafe{crate::launcher::shell_icon(shell_path,tier)});
+        result=load(path).or_else(||load(identity)).or_else(||{
+            EXTRACTIONS.fetch_add(1,Ordering::Relaxed);
+            unsafe{crate::launcher::shell_icon(shell_path,tier)}
+        });
         if let Some(((f,k),icon))=file.as_ref().zip(key.as_ref()).zip(result.as_ref()){
-            let _=write_raster(f,k,icon);
-            if let Ok(mut last)=LAST_PRUNE.lock(){
-                if last.is_none_or(|t|t.elapsed()>Duration::from_secs(20)){
-                    prune_cache(&cache,SOURCE_DISK);*last=Some(Instant::now());
+            let prev=std::fs::metadata(f).map_or(0,|m|m.len());
+            if write_raster(f,k,icon).is_ok(){
+                let size=(24+k.len()+icon.pixels.len()) as u64;
+                let total=DISK_BYTES.load(Ordering::Relaxed).saturating_sub(prev).saturating_add(size);
+                DISK_BYTES.store(total,Ordering::Relaxed);
+                if total>SOURCE_DISK {
+                    DISK_BYTES.store(prune_cache(&cache,SOURCE_DISK*9/10),Ordering::Relaxed);
                 }
             }
         }
