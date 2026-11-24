@@ -1,280 +1,247 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/branding/logo-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/branding/logo-light.png">
     <img src="assets/branding/logo-light.png" alt="TLauncher" width="460">
   </picture>
 </p>
 
 <p align="center"><strong>Your Windows. Your Workspace.</strong></p>
 
+<p align="center">
+  <a href="https://github.com/tuanngbc/TLauncher/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/tuanngbc/TLauncher?label=release"></a>
+  <a href="https://github.com/tuanngbc/TLauncher/releases/latest"><img alt="Windows 11 x64" src="https://img.shields.io/badge/Windows%2011-x64-0078D4"></a>
+  <a href="README-rust.md"><img alt="Rust native" src="https://img.shields.io/badge/Rust-native-000000?logo=rust"></a>
+  <a href="LICENSE"><img alt="GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-blue"></a>
+  <a href="https://github.com/tuanngbc/TLauncher/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/tuanngbc/TLauncher/total"></a>
+  <a href="https://github.com/tuanngbc/TLauncher/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/tuanngbc/TLauncher"></a>
+</p>
+
 [Tiếng Việt](README.md) · **English** · [简体中文](README.zh-CN.md)
 
-# TLauncher — Modern Desktop Workspace for Windows 11
+# Make Windows your own workspace
 
-TLauncher is a native Rust desktop workspace for Windows 11, combining a macOS-inspired Dock, Stage Manager, Spotlight search, interactive live wallpapers, and advanced multi-monitor customization in one integrated application.
+Maybe you like Windows but wish your desktop were a little calmer, your favorite apps easier to reach, or switching between windows less distracting. **TLauncher** is built around that idea.
 
-[![Latest release](https://img.shields.io/github/v/release/tuanngbc/TLauncher?label=release)](https://github.com/tuanngbc/TLauncher/releases/latest) [![Windows 11 x64](https://img.shields.io/badge/Windows%2011-x64-0078D4)](https://github.com/tuanngbc/TLauncher/releases/latest) [![Rust](https://img.shields.io/badge/Rust-native-000000?logo=rust)](README-rust.md) [![GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE) [![GitHub release downloads](https://img.shields.io/github/downloads/tuanngbc/TLauncher/total?label=release%20downloads)](https://github.com/tuanngbc/TLauncher/releases) [![GitHub stars](https://img.shields.io/github/stars/tuanngbc/TLauncher?label=stars)](https://github.com/tuanngbc/TLauncher/stargazers)
+TLauncher is a free, open-source desktop workspace for Windows 11, written primarily in native Rust. It brings together a macOS-inspired Dock and Stage Manager, Spotlight, interactive live wallpapers, and everyday utilities without taking away the familiar Windows environment. Use the whole workspace or enable only the pieces you enjoy.
 
-**[Download the latest release for Windows 11 x64](https://github.com/tuanngbc/TLauncher/releases/latest)** · [Changelog](CHANGELOG.md) · [Report an issue](https://github.com/tuanngbc/TLauncher/issues) · [Source code](https://github.com/tuanngbc/TLauncher)
+**[⬇ Download TLauncher for Windows 11 x64](https://github.com/tuanngbc/TLauncher/releases/latest)** · [What's new in v1.0.2](docs/releases/v1.0.2.en.md) · [Feedback & issues](https://github.com/tuanngbc/TLauncher/issues)
 
-## TLauncher in action
+![TLauncher across landscape and portrait monitors with a Beach panorama, clocks, Dock and Stage Manager](docs/images/showcase/dual-monitor-real.webp)
 
-![TLauncher on a 1080×1920 portrait display and a 2560×1080 landscape display, showing the Beach panorama, desktop clocks, Dock, and Stage Manager cards](docs/images/showcase/dual-monitor-real.webp)
+*An actual Windows 11 desktop from an earlier version, with 2560×1080 landscape and 1080×1920 portrait displays. Personal desktop information has been masked.*
 
-*Real Windows 11 capture. The screens retain their relative scale and placement, and each has its own Dock. Clusters of desktop icons still shape the islands. The Stage cards are visible; desktop icons and filenames have been masked. Some screenshots are from native test builds and show Vietnamese UI labels.*
+## Explore TLauncher
 
-## Contents
-
-- [TLauncher in action](#tlauncher-in-action)
-- [What is TLauncher](#what-is-tlauncher)
-- [Features at a glance](#features-at-a-glance)
-- [Features and screenshots](#features-and-screenshots)
-- [System requirements](#system-requirements)
-- [Install and upgrade](#install-and-upgrade)
-- [Keyboard shortcuts](#keyboard-shortcuts)
-- [Performance and resource use](#performance-and-resource-use)
-- [Architecture and technologies](#architecture-and-technologies)
-- [Privacy and security](#privacy-and-security)
-- [FAQ](#faq)
-- [Build from source](#build-from-source)
-- [Feedback and contributions](#feedback-and-contributions)
-- [Credits and upstream projects](#credits-and-upstream-projects)
-- [License](#license)
-
-## What is TLauncher
-
-Pin and open apps with the Dock, organize windows with Stage Manager, find apps and files with Spotlight, and customize each display. The wallpaper, Dock, and Stage Manager can be turned on or off independently. TLauncher is a Windows desktop app and is unrelated to the Minecraft launcher of the same name.
-
-## Features at a glance
-
-| Area | Available in the public release |
-| --- | --- |
-| Window management | Dock, Stage Manager, Start, Spotlight, and Windows taskbar compatibility mode |
-| Desktop | **16** interactive live themes, time-based lighting, weather by location, three display modes, and two clocks |
-| Utilities | Control Center, monthly calendar, CPU/GPU/RAM/network indicators, screenshot editor, and MP4 screen recording |
-| Personalization | Integrated Settings, per-display layouts, custom shortcuts, and launch at sign-in |
-
-**Version 1.0.1:** When startup is enabled, Windows starts TLauncher at sign-in through Task Scheduler. Dock and Stage Manager initialize before the wallpaper. If Explorer is still starting, the wallpaper tries to attach again. See the [verification notes and test conditions](CHANGELOG.md#kiểm-chứng).
-
-## What's new in v1.0.2
-
-**Unified Spotlight** combines quick search and the app library. **Alt+Space** defaults to Compact and the Dock magnifier defaults to Fullscreen on the Dock's display. Set these independently or let Dock follow the shortcut. **F6** switches modes while retaining your query. Use **Esc** to leave a folder or dismiss Spotlight, click empty space to close Fullscreen, and scroll or use the keyboard to change pages.
-
-The shared catalog finds Win32 apps in Start Menu and packaged apps in Windows AppsFolder, filters helper shortcuts, and searches apps, indexed files and system tools. Add **EXE/LNK** entries, rename or change icons, favorite, pin to Dock, hide/restore, reorder, or drag into folders in layout editing mode. Hiding or removing a manual entry does not uninstall it. A new profile can show the guide on first opening Settings; reopen it under **Shortcuts & Utilities → Unified Spotlight**.
-
-**Materials and motion.** Fullscreen uses native HostBackdrop/Acrylic when available, a one-time in-memory blurred snapshot as a compatibility path, or a solid surface when transparency is disabled or High Contrast is active. Light/dark themes share the search field, ivory text, shadows and grayscale antialiasing. The native editor retains Windows input and selection. Global speed runs from **0.25× to 2.00×** in **0.05×** steps; new profiles start at **0.70×** and saved speeds are preserved. Spotlight, Start, Dock menus, Control Center and Calendar use motion suited to each panel; Dock magnification, reveal and auto-hide share the policy. System reduced motion is honored when configured.
-
-**Resources.** Start, Spotlight and Dock share bounded source icon caches in memory and on disk. Selective invalidation and bounded prefetch avoid unnecessary extraction and preserve custom icons. First paint and icon quality still depend on the source. Spotlight reuses graphics factories and releases surfaces on close; Stage preview retention is bounded. Whole-app RAM (100–150 MiB), GPU (3%) and CPU (1%) targets have not been verified.
-
-**Window transitions:** public builds use **Windows Default**. Scale failed owner acceptance and is hidden in the public release. Genie and Stage Peek are unavailable. Leave Windows minimize animation enabled. Glass and IME behavior can vary with the Windows build, graphics driver and input method.
-
-| Fullscreen Spotlight library in the light theme | Spotlight app folder in the dark theme | Native Spotlight search field with selected text |
+| Work | Personalize | Everyday tools |
 | --- | --- | --- |
-| ![Fullscreen Spotlight library in the light theme](docs/images/showcase/v1.0.2/spotlight-fullscreen-light.png) | ![Spotlight app folder in the dark theme](docs/images/showcase/v1.0.2/spotlight-folder-dark.png) | ![Native Spotlight search field with selected text](docs/images/showcase/v1.0.2/spotlight-search-dark.png) |
+| Spotlight, app library, Dock, Stage Manager, Start Menu | 16 live themes, weather, time-based lighting, multiple monitors, two clocks | Control Center, calendar, system indicators, screenshot editing, MP4 recording |
 
-*Actual Windows native fixture output on GitHub Actions, with example apps and a fixture backdrop. See [image provenance and limits](docs/images/showcase/v1.0.2/README.md).*
-
-[Release notes](docs/releases/v1.0.2.en.md)
-
-
+[Spotlight](#spotlight--find-and-launch-without-the-clutter) · [More features](#dock--your-favorite-apps-within-reach) · [Getting started](#get-started-in-a-few-steps) · [Shortcuts](#handy-keyboard-shortcuts) · [FAQ](#frequently-asked-questions)
 
 <!-- product-guide:start -->
-## Features and screenshots
+## Spotlight — find and launch without the clutter
 
-### Interactive live wallpapers
+The centerpiece of **v1.0.2** is Unified Spotlight. Instead of digging through menus to find an app, search instantly with your keyboard or open a full-screen library to browse your discovered applications.
 
-Choose from **16 themes**, from Beach, Meadow, and Aquarium to Stadium, Ocean, and Summer Veranda. Many scenes arrange elements around groups of desktop icons. Depending on the scene, clicks on empty space create ripples, attract fish, or add clouds; clicking an icon still opens the app. Choose a scene, adjust its settings, or create a layout under **Settings → Wallpaper**.
+![Fullscreen Spotlight app library](docs/images/showcase/v1.0.2/spotlight-fullscreen-light.png)
+
+Two ways to use the same search system:
+
+- **Compact Spotlight:** press `Alt + Space` and type an app name, an indexed file, or a system tool. Select a result with the arrow keys and press Enter.
+- **Fullscreen Spotlight:** click the magnifying glass on your Dock to open the app library on that display. Scroll or use the keyboard to navigate pages, click an app to launch it, and click empty space or press Esc to dismiss.
+
+Press **F6** to move between modes without losing your query. Prefer full-screen search from the keyboard or Compact from the Dock? Configure each independently, or make the Dock follow the keyboard shortcut, in **Settings → Shortcuts & Utilities → Unified Spotlight**.
+
+### An app library that works the way you do
+
+Spotlight discovers apps from the Start Menu and Windows AppsFolder, filters unsuitable shortcuts, and removes duplicates where identities match. You can then organize the library to suit your workflow.
+
+| A folder in the dark theme | Editing the layout |
+| --- | --- |
+| ![Spotlight app folder](docs/images/showcase/v1.0.2/spotlight-folder-dark.png) | ![Spotlight library edit mode](docs/images/showcase/v1.0.2/spotlight-edit-light.png) |
+
+Right-click an app to rename it, customize its icon, favorite it, pin it to the Dock, or hide it. Use the library's management menu to add an `.exe` or `.lnk`, including portable software, and enter layout editing to rearrange apps and drag them into folders. Restore hidden apps from **Hidden items** in Settings. Hiding or removing a manually added entry never uninstalls or deletes the original program.
+
+### Glass, readable type, and motion at your own pace
+
+Spotlight 1.0.2 has light and dark appearances, a unified rounded search field, ivory labels with subtle shadows, and persistent icon caching that reduces repeated icon loading. Frosted glass uses Windows compositing when supported, with compatibility materials otherwise.
+
+| Light search field | Dark search field |
+| --- | --- |
+| ![Light native search field with typed text](docs/images/showcase/v1.0.2/spotlight-search-light.png) | ![Dark native search field with text selection](docs/images/showcase/v1.0.2/spotlight-search-dark.png) |
+
+In **Settings → Motion effects**, choose a speed from **0.25× to 2×**; new profiles start at **0.70×**. The shared speed applies to supported transitions in Spotlight, Dock, Start, menus and utility panels. Turn animations off or have TLauncher respect Windows reduced-motion preferences if you prefer.
+
+*The v1.0.2 Spotlight images show real native Windows UI with test data, not mockups. Library screenshots use a fixture backdrop and do not demonstrate live desktop blur. [Image provenance](docs/images/showcase/v1.0.2/README.md).*
+
+## Dock — your favorite apps within reach
+
+Keep the apps you reach for most in one place. Pin apps, shortcuts, or custom commands with arguments; click an icon to launch or switch windows. Icons magnify on hover, the Dock adjusts to its contents, and it can hide to leave more room for maximized windows.
+
+![Dock with pinned apps, magnification and system indicators](docs/images/showcase/dock.webp)
+
+Under **Settings → Dock & Stage Manager**, choose your display, edge, icon size, spacing, magnification, glass and light/dark appearance. Float the Dock above the desktop, reserve work area, or auto-hide it. Each display can have its own arrangement.
+
+## Stage Manager — switch windows without losing your place
+
+When several apps are open, Stage Manager keeps window previews on cards along the edge of the screen. Click a card to switch windows; use the arrows to browse members of a group. Choose flat or perspective cards, their size, how many appear per page, and where they sit.
+
+![Stage Manager perspective cards and edge smoothing at different DPI settings](docs/images/showcase/stage.webp)
+
+Windows-protected content may not provide a preview. v1.0.2 retains Windows' standard window minimize/restore behavior; Stage Peek and Genie are not part of this release.
+
+## Start Menu — a familiar way in
+
+Start brings pinned, recent and frequently used apps together with account and power options. Its search field is ready for keyboard input when opened. In Dock mode, pressing the Windows key on its own can open TLauncher's Start; choose **Windows compatibility** if you prefer the original Start menu and taskbar.
+
+![Start Menu with pinned and recent applications](docs/images/showcase/start.webp)
+
+## Live wallpapers — bring your desktop to life
+
+Choose from **16 interactive themes**, including Beach, Maldives, Aquarium, Meadow, Stadium, Ocean and Summer Porch. Depending on the scene, clicking empty desktop space can create ripples, attract fish or create clouds; desktop icons remain usable.
 
 | Beach | Maldives | Meadow |
 | --- | --- | --- |
-| ![Waves in the Beach theme](docs/images/beach.webp) | ![Lagoon in the Maldives theme](docs/images/maldives.webp) | ![Clouds over the Meadow theme](docs/images/meadow.webp) |
+| ![Beach waves](docs/images/beach.webp) | ![Maldives lagoon](docs/images/maldives.webp) | ![Clouds over a meadow](docs/images/meadow.webp) |
 
-*Previews from three included themes.*
+Open **Settings → Wallpaper** to select a theme and adjust its parameters. Several scenes are arranged around desktop icon clusters. Prefer a static desktop? Disable the wallpaper engine independently and keep Dock, Stage and Spotlight.
 
-### Weather lighting and solar shadows
+### Weather, lighting and shadows that change with the day
 
-Choose offline simulation or **Live weather by location** under **Settings → Weather & Lighting**. Search for a city or postal code to get cloud cover, rain, snow, and wind from Open-Meteo. You can also select clear, cloudy, rainy, stormy, or snowy conditions manually.
+Let the scene follow daylight or simulate sun, clouds, rain, snow and wind. Under **Settings → Weather & lighting**, choose manual conditions, offline simulation, or search for a city/postal code to use Open-Meteo data. Scenes with solar shadows adjust their direction and length to the sun's position. Time-based lighting and weather effects can be enabled separately.
 
-With **Time-based lighting** on, TLauncher calculates the sun’s position from the time and chosen coordinates. If no location is set, it uses the local system time. In scenes with tree shadows, such as Beach, the shadows change length and direction as the sun moves. Weather effects and time effects have separate switches.
+![Weather settings and time-of-day shadow illustration](docs/images/showcase/weather.webp)
 
-![Weather settings and a morning, noon, and evening shadow diagram](docs/images/showcase/weather.webp)
+## Multiple monitors — more space, more flexibility
 
-*A sample city and a diagram showing shadow direction at different times of day.*
+Whether you have one display, two landscape monitors or a landscape/portrait combination, choose your wallpaper arrangement in **Settings → Displays**:
 
-### Panoramas and multiple displays
+| Mode | How it works |
+| --- | --- |
+| Synchronized | One theme across all displays |
+| Independent | A different theme for each display |
+| Panorama | One scene spanning the actual Windows display layout |
 
-Use **Synchronized** for the same theme on all displays, **Independent** to pick different scenes, or **Panorama** to span the scene using Windows display coordinates. Landscape and portrait layouts and mixed DPI scaling are supported. Pause wallpaper on individual screens, and choose the display, edge, size, and reserved space for the Dock or Stage Manager.
+![Panorama settings for landscape and portrait displays](docs/images/showcase/multi-monitor.webp)
 
-![Panorama settings with a landscape and a portrait display](docs/images/showcase/multi-monitor.webp)
-
-*Example monitors at 100% and 125% scaling.*
+Pause individual wallpapers and place Dock and Stage separately, including on mixed-DPI layouts.
 
 ### Two desktop clocks
 
-The native clock shows the time, weekday, and date behind your windows. Unlock the clock to drag it, then lock it to pass clicks through. Customize its size, opacity, and individual lines. Add a second clock with its own size and position in **Settings → Clock**.
+Add a clock displaying time, weekday and date below your windows. In **Settings → Clocks**, enable a second clock if desired, choose its display, size, opacity and visible lines. Unlock to drag it into place and lock it again for click-through behavior.
 
-![Size and display settings for two clocks](docs/images/showcase/clocks.webp)
+![Two desktop clock settings](docs/images/showcase/clocks.webp)
 
-*The second clock is enabled on the example portrait screen.*
+## Everyday utilities, built into your workspace
 
-### macOS-inspired Dock
+**Control Center:** open it from the Dock arrow to adjust volume and access network/Bluetooth utilities. Click the date and time to open the monthly calendar. Enable the CPU, GPU, RAM, network and status indicators you need.
 
-Pin apps, shortcuts, or commands with arguments. Open and switch windows from their icons. Customize icons, hover magnification, size, spacing, frosted glass, and light, dark, or system colors. The Dock can float, reserve work area, or hide when a window is maximized and return when you move the pointer to the edge. Set these options independently for each screen.
-
-![Dock with pinned apps, hover magnification, and resource indicators](docs/images/showcase/dock.webp)
-
-*Native test capture with a sample profile.*
-
-### Stage Manager and window groups
-
-Preview windows on perspective or flat cards on the left or right. The active card stands out. Use the two arrows to browse windows in a group. Configure the cards per page, card size, and gaps to the screen edge and work area. Version 1.0.0 smooths diagonal edges even during hover magnification. It was tested at **100%, 125%, and 150%** DPI scaling. Windows may prevent previews of protected windows.
-
-![Perspective cards and examples of edge smoothing at several DPI settings](docs/images/showcase/stage.webp)
-
-*Native test capture with sample windows.*
-
-
-### Start and Spotlight
-
-**Start** focuses the search box as it opens and shows pinned, recent, and frequently used apps, along with account and power options. In Dock mode, pressing the **Windows** key on its own can open TLauncher Start. **Spotlight** is a separate search box centered on the screen; open it with the magnifying glass or **Alt+Space**. Search for apps and indexed files, use the arrow keys to select a result, and press Enter to open it.
-
-| Start | Spotlight |
+| Monthly calendar | System indicators on the Dock |
 | --- | --- |
-| ![Start with search, pinned apps, and recent apps](docs/images/showcase/start.webp) | ![Spotlight search with a frosted glass background](docs/images/showcase/spotlight.webp) |
+| ![Calendar in dark mode](docs/images/showcase/calendar.webp) | ![CPU GPU RAM and network indicators](docs/images/showcase/status.webp) |
 
-*Start from 1.0.0 testing; Spotlight from a native trial build before the product was renamed.*
+**Screenshots and editing:** press `Ctrl + Shift + S`, drag a region or press Space to select the display under your pointer. Crop, add arrows, text and numbered steps, pixelate or cover sensitive areas, then copy or save as PNG/JPG.
 
-### Control Center calendar and resource indicators
+**Screen recording:** press `Ctrl + Shift + R`, select a region, and press it again to stop. Record MP4/H.264 at 30 or 60 FPS, optionally with system playback audio. Pause or resume with `Ctrl + Shift + P`. Microphone, webcam and dedicated game capture modes are not currently included.
 
-Open Control Center from the arrow on the Dock to adjust volume or access network and Bluetooth controls. Click the clock to open the calendar and browse months. The Dock can display CPU, GPU, and RAM usage and upload and download speeds. Resource readings and network/volume buttons have separate switches. Use **Windows compatibility** mode for full access to third-party tray icons.
+![Screenshot and recording shortcut settings](docs/images/showcase/capture-shortcuts.webp)
 
-| Monthly calendar | Dock indicators |
-| --- | --- |
-| ![TLauncher’s monthly calendar in dark mode](docs/images/showcase/calendar.webp) | ![Dock showing CPU, RAM, GPU, network, date, and time](docs/images/showcase/status.webp) |
+## Make it yours
 
-*The calendar is from 1.0.0 testing; the indicators are from a Dock test capture and do not represent benchmark results.*
+Integrated Settings in Vietnamese, English and Simplified Chinese let you toggle Wallpaper, Dock and Stage independently, configure displays, themes, shortcuts, motion and Windows startup. Some native UI labels may still use a different language. Explorer continues to run; **Windows compatibility** lets you use the original taskbar and system tray, including third-party tray icons.
 
-### Screenshots and screen recording
+![Settings with independent desktop component toggles](docs/images/showcase/dock-settings.webp)
 
-Capture a selected region or the entire screen under the pointer. The editor supports cropping, arrows, text, step numbers, pixelation, and solid redaction. Copy to the clipboard or save as PNG/JPG. Record a region to MP4 (H.264) at **30 FPS** by default or **60 FPS**, with optional system audio. You can pause and resume. This release does not record a microphone or webcam and has no dedicated game capture mode.
-
-![Capture shortcuts and video quality settings](docs/images/showcase/capture-shortcuts.webp)
-
-*Settings before starting a recording.*
-
-### Settings and taskbar modes
-
-One window groups Wallpaper, Displays, Weather & Lighting, Clock, Dock & Stage Manager, Shortcuts & Utilities, and System. The WebView2 Settings interface supports Tiếng Việt, English, and 简体中文; some native surfaces use separate UI strings. Explorer keeps running. Select **Windows compatibility** to use the original Start menu, taskbar, and tray.
-
-![Settings with independent toggles for Wallpaper, Dock, and Stage](docs/images/showcase/dock-settings.webp)
-
-*Version 1.0.0 Settings with a sample configuration.*
+*Non-Spotlight feature images above come from earlier versions or native test fixtures; layouts and labels may differ slightly in 1.0.2.*
 <!-- product-guide:end -->
 
-## System requirements
+## Get started in a few steps
 
-- **Windows 11 x64** is the target for the public package; Windows 10 support is not guaranteed.
-- An **OpenGL 3.3** driver for native wallpaper rendering. The direct GPU presentation path depends on the driver; GDI is the fallback.
-- **Microsoft Edge WebView2 Runtime** for full Settings. If the runtime or `prototype/` is unavailable, basic Win32 settings are available.
+**Requirements:** Windows 11 x64, a driver supporting OpenGL 3.3 for live wallpapers, and Microsoft Edge WebView2 Runtime for full Settings. No Rust or developer tools are needed.
 
-## Install and upgrade
+1. Download the [Windows x64 package](https://github.com/tuanngbc/TLauncher/releases/latest) under Assets, not Source code. For v1.0.2, the file is `TLauncher-1.0.2-win-x64.zip`; a [SHA-256 checksum](https://github.com/tuanngbc/TLauncher/releases/download/v1.0.2/TLauncher-1.0.2-win-x64.zip.sha256) is available.
+2. Extract the **entire package** into a folder you intend to keep. Leave `prototype/`, `assets/widget/` and the other resources beside the EXE.
+3. Run `TLauncher.exe` and open Settings from the Dock or system tray. Choose a wallpaper and the components you want, then try Alt+Space.
+4. To launch with Windows, enable **Settings → System → Start with Windows**. TLauncher registers a Task Scheduler entry for your account without requiring administrator privileges.
 
-1. Download [TLauncher-1.0.2-win-x64.zip](https://github.com/tuanngbc/TLauncher/releases/download/v1.0.2/TLauncher-1.0.2-win-x64.zip) and optionally verify its [SHA-256](https://github.com/tuanngbc/TLauncher/releases/download/v1.0.2/TLauncher-1.0.2-win-x64.zip.sha256). **Source code** archives are for browsing or building the code.
-2. Extract the whole archive; keep `prototype/` and `assets/widget/` beside the EXE. Run `TLauncher.exe`, then open Settings from Dock or tray to set Spotlight activation, theme, speed and startup.
-3. Use **Alt+Space** to open, **F6** to switch modes and **Esc** to close. Right-click library items to manage, pin or hide. Use **Edit layout** for folders and **Hidden apps** in Settings to restore entries. Use **Exit** in the TLauncher menu, or **Ctrl+Alt+Shift+F12** to restore the Windows taskbar for the session.
-4. **Upgrade from 1.0.1:** Exit the old app and back up the installation and `%USERPROFILE%\.deskland-rs`. Extract the full new bundle and keep the profile for wallpapers, displays, pins and shortcuts. If the EXE path changed, check **Settings → System → Start with Windows**; switch it off and on to update Task Scheduler if needed.
-5. **Roll back to 1.0.1:** Disable startup in the new app, exit, restore the older bundle and the pre-upgrade profile backup if needed, and register startup again in the older app. Do not assume 1.0.1 understands newer library data; back it up before replacing any profile.
+### Recommended settings
 
-### Recommended Windows settings
-
-- **Frosted glass (optional):** Windows 11 **Settings → Personalization → Colors → Transparency effects**, or **Accessibility → Visual effects** (`ms-settings:easeofaccess-visualeffects`). The compositor and driver determine the result. A solid fallback when transparency is off or High Contrast is active is expected.
-- **Motion (optional):** Enable **Animation effects** under **Accessibility → Visual effects** if desired. Keep Windows minimize/maximize animation at its default. To restore it after experimenting, use **Win+R → SystemPropertiesPerformance.exe → Visual Effects**, enable **Animate windows when minimizing and maximizing**, then Apply. Leave font smoothing on if appropriate; no font change, macOS theme or third-party glass utility is needed.
-- **TLauncher:** Start with animations on and **0.70×**, Compact by keyboard, Fullscreen from Dock, and Light, Dark or Follow System as preferred. Choose wallpaper quality for your driver. Startup at sign-in is optional.
-
-
-
-## Keyboard shortcuts
-
-| Default | Action |
+| Setting | Recommendation |
 | --- | --- |
-| **Ctrl+Shift+S** | Capture a region; press Space to select the full screen under the pointer. |
-| **Ctrl+Shift+R** | Select a recording area; press again to stop and save. |
-| **Ctrl+Shift+P** | Pause or resume recording. |
-| **Alt+Space** | Open Spotlight. |
-| **Ctrl+Alt+L** | Lock the session through Windows. |
-| **Ctrl+Alt+Shift+F12** | Restore the Windows taskbar for the current session. |
+| Windows transparency | **Settings → Personalization → Colors → Transparency effects: On** |
+| Windows animations | **Accessibility → Visual effects → Animation effects: On** if desired |
+| TLauncher motion | Enable animations, start at **0.70×**, adjust to taste |
+| Spotlight | Compact from Alt+Space; Fullscreen from the Dock, or your own choices |
+| Theme | Light, Dark, or Follow system |
+| Window transitions | Keep Windows defaults |
 
-Change the Spotlight, capture, recording, and lock shortcuts in **Settings → Shortcuts & Utilities**.
+These are recommendations, not requirements to run the app. Open the Windows visual effects page via Win+R → `ms-settings:easeofaccess-visualeffects`. If you previously disabled native window animation to test Scale, restore **Animate windows when minimizing and maximizing** via Win+R → `SystemPropertiesPerformance.exe` → Visual Effects.
 
-## Performance and resource use
+### Upgrading or rolling back
 
-Wallpapers usually run at about **30 FPS** and may render faster briefly during interaction. An occluded wallpaper stops receiving new frames. If all wallpapers are covered or the session is locked, rendering pauses. WebView2 is used when Settings is open; capture and recording run on demand.
+Exit the old version, back up its installation folder and `%USERPROFILE%\.deskland-rs`, then extract the complete new package. Keep your profile to retain wallpapers, pins, display layout and shortcuts. If the EXE location changes, turn startup off and back on to update Task Scheduler. To return to 1.0.1, disable startup in the new version before exiting, restore the earlier package and appropriate profile backup, then re-enable startup if desired. Older versions may not understand new library data.
 
-**Sample observation from v1.0.0:** Windows 11, Ryzen 5 4600G, GTX 1070, **2560×1080 + 1080×1920** displays, Beach in Panorama mode. Over **25.5 seconds / 18 samples**, logs showed **one occluded wallpaper**; the other ran at about **30 FPS**.
+## Handy keyboard shortcuts
 
-| Metric | Observation |
-| --- | ---: |
-| Main-process CPU, normalized across 12 logical threads | **0.54%** average |
-| Private memory (private bytes) | **279 MiB** |
-| Resident memory (working set) | **174–176 MiB** |
-| TLauncher GPU 3D on the active engine | **1–2%** |
-| DWM GPU 3D on the same engine | **0–1%** |
+| Default shortcut | Action |
+| --- | --- |
+| Alt + Space | Open/dismiss Spotlight |
+| F6 | Switch Compact/Fullscreen while Spotlight is open |
+| Esc | Leave a folder or dismiss Spotlight |
+| ↑ ↓ ← → / Enter | Select and open results |
+| Ctrl + Shift + S | Capture a screenshot |
+| Ctrl + Shift + R | Start or stop recording |
+| Ctrl + Shift + P | Pause or resume recording |
+| Ctrl + Alt + L | Lock Windows |
+| Ctrl + Alt + Shift + F12 | Restore the Windows taskbar for the current session |
 
-![Sample CPU, RAM, and GPU 3D readings with one wallpaper occluded](docs/images/showcase/performance.webp)
+Customize Spotlight, capture, recording and lock shortcuts under **Shortcuts & Utilities**.
 
-*GPU readings are per process and engine, rather than total GPU use. This snapshot is not a controlled comparison or a guarantee for two visible wallpapers, open Settings, or active recording.*
+## Designed to live alongside your desktop
 
+TLauncher uses Rust and Win32 for desktop integration, OpenGL 3.3/WGL for wallpapers, Direct3D 11/DirectComposition where compatible, and GDI as a fallback. WebView2 provides Settings on demand; Windows Graphics Capture and Media Foundation support compatible capture/recording paths.
 
-## Architecture and technologies
+Wallpapers normally run around 30 FPS, can briefly increase during interaction, and reduce or suspend rendering work when occluded, locked or the display is off. v1.0.2 focuses on icon reuse, bounded preview caches, shared graphics factories and releasing Spotlight surfaces when closed. The aim is a responsive desktop without unnecessary graphics work.
 
-- **Rust and Win32** manage the desktop, windows, per-display DPI, and native utilities.
-- **OpenGL 3.3 via WGL** renders the wallpaper. On supported systems, **Direct3D 11 and DirectComposition** present GPU frames; **GDI** is the fallback.
-- **WebView2** provides full Settings on demand; a basic Win32 interface is also available.
-- **Windows Graphics Capture** is used on supported capture paths; **Media Foundation** encodes MP4/H.264.
-- **Windows Task Scheduler** registers per-user startup from 1.0.1 onward. See [the Rust guide](README-rust.md) and [architecture docs](docs/README.md).
+There is not yet a whole-application benchmark establishing 100–150 MiB RAM, 3% GPU or 1% CPU across configurations. See the [resource optimization report](docs/TLAUNCHER_RESOURCE_OPTIMIZATION_REPORT.md) for measurements and their scope. Actual usage depends on scenes, displays, drivers and active features.
 
-## Privacy and security
+## Frequently asked questions
 
-Searching for a place sends a query to Open-Meteo’s geocoding service. Live weather sends the selected place’s coordinates to request the forecast; TLauncher does not retrieve the device’s location for this feature. Offline simulation is available. By default, screenshots and recordings are saved locally in `Pictures/TLauncher` and `Videos/TLauncher`. The user controls when an image is copied to the clipboard.
+**Why isn't glass showing up?** Check Transparency effects. Native glass depends on Windows compositing and drivers; TLauncher can use a blurred snapshot or solid material otherwise. High Contrast is respected.
 
-TLauncher uses Windows session lock and sign-in. The 1.0.1 startup task runs under the current account and does not need administrator rights.
+**Why is an app missing from Spotlight?** Some non-app shortcuts are filtered. Add its EXE/LNK manually or check hidden items.
 
-## FAQ
+**Why do I only see basic Settings?** Check the WebView2 Runtime and the `prototype/` folder beside the EXE.
 
-**Why do I only see basic Settings?** Check for the WebView2 Runtime and the `prototype/` folder beside the EXE. Extract the full package if you previously copied only the executable.
+**Can I return to the original Windows desktop?** Choose Windows compatibility or Ctrl+Alt+Shift+F12 to restore the taskbar for this session. Choose Exit from the TLauncher menu to quit.
 
-**How do I get the Windows taskbar back?** Select **Windows compatibility**, or press **Ctrl+Alt+Shift+F12** to restore it for the current session. Explorer continues running while the Dock is active.
+**Why isn't TLauncher listed in Startup apps?** Since 1.0.1, startup is registered through Task Scheduler. Use TLauncher's Settings toggle.
 
-**Why isn’t TLauncher listed in Windows Startup apps?** Version 1.0.1 uses Task Scheduler. Use the switch in TLauncher Settings. If you moved the EXE, toggle the switch off and back on.
+**Are Scale and Genie available?** No. Scale did not pass real-machine acceptance and is hidden in the public release. Windows handles minimize/restore normally. Glass quality, IME behavior and some preview capabilities still depend on the Windows environment.
 
-**Why can’t I preview or record some windows?** Windows may restrict protected content. Recording supports system audio. This release does not capture microphone audio or a webcam.
+## Privacy
 
-**Profile and rollback:** See Install and upgrade above.
+Live weather sends the selected location query and coordinates to Open-Meteo; it does not automatically obtain your device location for that feature. Offline simulation is available. Screenshots and recordings are saved locally by default in `Pictures/TLauncher` and `Videos/TLauncher`. Windows may block capture of protected content.
 
-## Build from source
+## For developers and the community
 
-On Windows, use stable Rust, the MSVC C++ build tools, and the Windows SDK. From the source directory:
+TLauncher is an independent open-source project, unrelated to the Minecraft launcher of the same name and not an official Apple or Microsoft product.
+
+To build from source, use stable Rust, C++ MSVC tools and the Windows SDK on Windows:
 
 ```powershell
 cargo test --release
 cargo build --release
 ```
 
-See the [Rust build guide](README-rust.md) for resource layout next to the executable. Release packages record the version in `VERSION.txt` and the source commit in `BUILD-COMMIT.txt`.
+See the [Rust guide](README-rust.md), [technical documentation](docs/README.md), [development notes](AGENTS.md) and [changelog](CHANGELOG.md). Release packages include `VERSION.txt` and `BUILD-COMMIT.txt`.
 
-## Feedback and contributions
+Have an idea or found a bug? [Open an issue](https://github.com/tuanngbc/TLauncher/issues) with your version, Windows build, display layout and reproduction steps. Please mask private information in screenshots and logs.
 
-[Report a bug or suggest a feature](https://github.com/tuanngbc/TLauncher/issues) with your TLauncher and Windows versions, display layout if relevant, and steps to reproduce. Remove personal data from screenshots and logs. See the [development notes](AGENTS.md) and the [README translation policy](docs/README.md#quy-ước-readme-đa-ngôn-ngữ).
+## Credits
 
-## Credits and upstream projects
+TLauncher is developed and maintained by [tuanngbc](https://github.com/tuanngbc), building on the live wallpaper foundation of [BLEZZ0102/Deskland](https://github.com/BLEZZ0102/Deskland) and themes and Vietnamese localization from [nhhoang188/Deskland-VN](https://github.com/nhhoang188/Deskland-VN). It extends that foundation with a native Rust renderer, multi-display support, window management, launchers and desktop utilities.
 
-- [BLEZZ0102/Deskland](https://github.com/BLEZZ0102/Deskland) — upstream project and the foundation for live wallpapers.
-- [nhhoang188/Deskland-VN](https://github.com/nhhoang188/Deskland-VN) — ported themes and Vietnamese localization.
-- [tuanngbc/TLauncher](https://github.com/tuanngbc/TLauncher) — [tuanngbc](https://github.com/tuanngbc) develops and maintains the TLauncher fork, including native Rust rendering, desktop improvements, the multi-monitor system (synchronized, independent, and panoramas based on Windows display coordinates), Dock, Stage Manager, Start, Spotlight, taskbar modes, Control Center, calendar, system monitoring, native clocks, screenshot and recording tools, shortcuts, weather and solar shadows, integrated Settings, and the Windows startup improvements.
+Thank you to the authors and open-source community that made this project possible. See [NOTICE](NOTICE), [Deskland-VN NOTICE](third_party/deskland-vn/NOTICE) and [clock design credits](assets/widget/NOTICE.txt).
 
-See [NOTICE](NOTICE), the [original Deskland-VN notice](third_party/deskland-vn/NOTICE), and the [clock design credits](assets/widget/NOTICE.txt).
-
-## License
-
-TLauncher source code is released under [GNU GPL-3.0](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md), [trademarks](TRADEMARKS.md), and the [logo guidelines](assets/branding/BRAND.md). TLauncher is an independent project and is not an official Apple or Microsoft product.
+**License:** [GNU GPL-3.0](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md) · [Trademarks](TRADEMARKS.md) · [Brand guidelines](assets/branding/BRAND.md).
