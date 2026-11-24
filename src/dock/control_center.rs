@@ -5,7 +5,7 @@ use std::{cell::{Cell,RefCell},mem,ptr,sync::{Arc,Mutex,atomic::{AtomicBool,Orde
 use windows_sys::Win32::{
     Foundation::*,Graphics::Gdi::*,
     System::{LibraryLoader::GetModuleHandleW,Threading::{TrySubmitThreadpoolCallback,PTP_CALLBACK_INSTANCE}},
-    UI::{Input::KeyboardAndMouse::{GetKeyState,ReleaseCapture,SetCapture,SetFocus,TrackMouseEvent,TRACKMOUSEEVENT,TME_LEAVE,
+    UI::{Input::KeyboardAndMouse::{GetCapture,GetKeyState,ReleaseCapture,SetCapture,SetFocus,TrackMouseEvent,TRACKMOUSEEVENT,TME_LEAVE,
         VK_DOWN,VK_END,VK_ESCAPE,VK_HOME,VK_LEFT,VK_RETURN,VK_RIGHT,VK_SHIFT,VK_SPACE,VK_TAB,VK_UP},
         WindowsAndMessaging::*},
 };
