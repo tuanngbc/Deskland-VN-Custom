@@ -1,280 +1,247 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/branding/logo-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/branding/logo-light.png">
     <img src="assets/branding/logo-light.png" alt="TLauncher" width="460">
   </picture>
 </p>
 
 <p align="center"><strong>Your Windows. Your Workspace.</strong></p>
 
+<p align="center">
+  <a href="https://github.com/tuanngbc/TLauncher/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/tuanngbc/TLauncher?label=release"></a>
+  <a href="https://github.com/tuanngbc/TLauncher/releases/latest"><img alt="Windows 11 x64" src="https://img.shields.io/badge/Windows%2011-x64-0078D4"></a>
+  <a href="README-rust.md"><img alt="Rust native" src="https://img.shields.io/badge/Rust-native-000000?logo=rust"></a>
+  <a href="LICENSE"><img alt="GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-blue"></a>
+  <a href="https://github.com/tuanngbc/TLauncher/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/tuanngbc/TLauncher/total"></a>
+  <a href="https://github.com/tuanngbc/TLauncher/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/tuanngbc/TLauncher"></a>
+</p>
+
 [Tiếng Việt](README.md) · [English](README.en.md) · **简体中文**
 
-# TLauncher — 专为 Windows 11 打造的现代桌面工作空间
+# 把 Windows 变成属于你的工作空间
 
-TLauncher 是一款专为 Windows 11 打造的开源桌面工作空间工具。它采用原生 Rust 开发，将受 macOS 启发的 Dock、台前调度、Spotlight 搜索、交互式动态壁纸和多显示器管理集成于同一个应用程序中。
+也许你喜欢 Windows 的使用习惯，却希望桌面更清爽一些，常用应用更容易找到，多个窗口之间的切换也更从容。**TLauncher** 正是为这样的需求而设计的。
 
-[![最新发行版](https://img.shields.io/github/v/release/tuanngbc/TLauncher?label=release)](https://github.com/tuanngbc/TLauncher/releases/latest) [![Windows 11 x64](https://img.shields.io/badge/Windows%2011-x64-0078D4)](https://github.com/tuanngbc/TLauncher/releases/latest) [![Rust](https://img.shields.io/badge/Rust-native-000000?logo=rust)](README-rust.md) [![GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE) [![GitHub 发行版下载量](https://img.shields.io/github/downloads/tuanngbc/TLauncher/total?label=release%20downloads)](https://github.com/tuanngbc/TLauncher/releases) [![GitHub 星标](https://img.shields.io/github/stars/tuanngbc/TLauncher?label=stars)](https://github.com/tuanngbc/TLauncher/stargazers)
+TLauncher 是一款面向 Windows 11 的免费开源桌面工具，主要使用 Rust 原生开发。它将受 macOS 启发的 Dock、台前调度（Stage Manager）、Spotlight、交互式动态壁纸和日常小工具融为一体，同时保留熟悉的 Windows 使用环境。你可以使用整套功能，也可以只开启自己喜欢的部分。
 
-**[下载最新版（Windows 11 x64）](https://github.com/tuanngbc/TLauncher/releases/latest)** · [更新日志](CHANGELOG.md) · [报告问题](https://github.com/tuanngbc/TLauncher/issues) · [源代码](https://github.com/tuanngbc/TLauncher)
+**[⬇ 下载 TLauncher（Windows 11 x64）](https://github.com/tuanngbc/TLauncher/releases/latest)** · [v1.0.2 更新内容](docs/releases/v1.0.2.zh-CN.md) · [问题反馈与建议](https://github.com/tuanngbc/TLauncher/issues)
 
-## 实际运行截图
+![横屏与竖屏上的 TLauncher：海滩全景、桌面时钟、Dock 和台前调度](docs/images/showcase/dual-monitor-real.webp)
 
-![TLauncher 在 1080×1920 竖屏和 2560×1080 横屏上的实际效果：海滩全景、桌面时钟、Dock 和台前调度卡片](docs/images/showcase/dual-monitor-real.webp)
+*早期版本的 Windows 11 实际桌面截图，横屏 2560×1080、竖屏 1080×1920，个人桌面信息已遮挡。*
 
-*实拍自 Windows 11。拼接图保留两块屏幕的相对比例和位置，每块屏幕都有自己的 Dock。桌面图标的分组仍塑造了岛屿的轮廓。台前调度卡片保留，桌面图标和文件名已遮盖。部分图片来自原生测试版本，界面标签为越南语。*
+## 探索 TLauncher
 
-## 目录
-
-- [实际运行截图](#实际运行截图)
-- [什么是 TLauncher](#什么是-tlauncher)
-- [主要功能](#主要功能)
-- [功能详情与截图](#功能详情与截图)
-- [系统要求](#系统要求)
-- [安装与升级](#安装与升级)
-- [键盘快捷键](#键盘快捷键)
-- [性能与资源占用](#性能与资源占用)
-- [架构与技术](#架构与技术)
-- [隐私与安全](#隐私与安全)
-- [常见问题](#常见问题)
-- [从源码构建](#从源码构建)
-- [反馈与贡献](#反馈与贡献)
-- [致谢与上游项目](#致谢与上游项目)
-- [许可证](#许可证)
-
-## 什么是 TLauncher
-
-用 Dock 固定和打开应用，用台前调度整理窗口，用 Spotlight 查找应用和文件，也可以分别自定义每块屏幕。壁纸、Dock 和台前调度均可独立开关。TLauncher 是 Windows 桌面应用，与同名 Minecraft 启动器无关。
-
-## 主要功能
-
-| 类别 | 公开版已提供 |
-| --- | --- |
-| 窗口管理 | Dock、台前调度、开始菜单、Spotlight 搜索及 Windows 任务栏兼容模式 |
-| 桌面 | **16 款**交互式动态主题、随时间变化的光照、按地点获取的天气、三种多屏模式和双时钟 |
-| 实用工具 | 控制中心、月历、CPU/GPU/内存/网络指标、截图编辑及 MP4 录屏 |
-| 个性化 | 集成设置、独立显示器布局、自定义快捷键及登录时自动启动 |
-
-**1.0.1 版：**启用自动启动后，Windows 任务计划程序会在用户登录时启动 TLauncher。Dock 和台前调度先于壁纸初始化；若 Explorer 尚未就绪，壁纸稍后会重新尝试挂载。参见[验证记录和测试条件](CHANGELOG.md#kiểm-chứng)。
-
-## v1.0.2 新功能
-
-**统一 Spotlight**结合快速搜索与应用库。**Alt+Space** 默认打开紧凑模式，Dock 放大镜默认在 Dock 所在屏幕打开全屏模式。两者可分别设置，Dock 也可跟随快捷键。按 **F6** 保留查询并切换模式；按 **Esc** 返回上级文件夹或关闭，点击空白区域退出全屏，滚轮和键盘可翻页。
-
-共享目录从开始菜单发现 Win32 应用，从 Windows AppsFolder 发现打包应用，过滤辅助快捷方式，并搜索应用、已索引文件和系统工具。支持添加 **EXE/LNK**、更名、换图标、收藏、固定至 Dock、隐藏/恢复、排序，以及在编辑布局模式下拖入文件夹。隐藏或移除手动添加的项目不会卸载程序。新配置首次打开设置时可显示引导，也可从 **快捷键和实用工具 → 统一 Spotlight** 重新打开。
-
-**材质和动画。** 全屏优先使用兼容 Windows 上的原生 HostBackdrop/Acrylic；必要时使用内存中一次性模糊快照，关闭透明或启用高对比度时使用纯色后备。浅色/深色主题共享搜索框、象牙白文字、阴影和灰度抗锯齿。原生编辑框保留 Windows 文本输入和选择。全局速度为 **0.25×–2.00×**，步长 **0.05×**；新配置默认 **0.70×**，保留已有设置。Spotlight、开始菜单、Dock 菜单、控制中心和日历各自使用合适的动效；Dock 支持放大、显隐和自动隐藏。可选择遵循系统减少动画设置。
-
-**资源管理。** 开始菜单、Spotlight 和 Dock 共享有大小限制的内存和磁盘源图标缓存。选择性更新和有限预取减少反复提取，保留自定义图标。冷启动速度与图标清晰度仍取决于来源。Spotlight 复用图形工厂并在关闭时释放表面；台前调度预览缓存有上限。尚未验证整机应用的内存 100–150 MiB、GPU 3% 与 CPU 1% 目标。
-
-**窗口动画：**公开版使用 **Windows 默认**动画。缩放特效未通过所有者验收，在公开版中隐藏；Genie 和 Stage Peek 暂不可用。无需关闭 Windows 最小化动画。玻璃效果及输入法兼容性会因系统版本、驱动和输入法而异。
-
-| 浅色主题的全屏 Spotlight 应用库 | 深色主题的 Spotlight 应用文件夹 | 原生 Spotlight 搜索框及选中文字 |
+| 高效工作 | 个性化桌面 | 日常工具 |
 | --- | --- | --- |
-| ![浅色主题的全屏 Spotlight 应用库](docs/images/showcase/v1.0.2/spotlight-fullscreen-light.png) | ![深色主题的 Spotlight 应用文件夹](docs/images/showcase/v1.0.2/spotlight-folder-dark.png) | ![原生 Spotlight 搜索框及选中文字](docs/images/showcase/v1.0.2/spotlight-search-dark.png) |
+| Spotlight、应用库、Dock、台前调度、开始菜单 | 16 款动态主题、天气、时间光照、多显示器、双时钟 | 控制中心、月历、系统指标、截图编辑、MP4 录屏 |
 
-*图片为 GitHub Actions 上实际运行的 Windows 原生界面，使用示例应用和测试背景。请参阅[图片来源与限制](docs/images/showcase/v1.0.2/README.md)。*
-
-[发行说明](docs/releases/v1.0.2.zh-CN.md)
-
-
+[Spotlight](#spotlight快速搜索轻松启动) · [更多功能](#dock常用应用触手可及) · [快速上手](#几步即可上手) · [快捷键](#常用快捷键) · [常见问题](#常见问题)
 
 <!-- product-guide:start -->
-## 功能详情与截图
+## Spotlight：快速搜索，轻松启动
 
-### 交互式动态壁纸
+**v1.0.2** 的核心更新是统一的 Spotlight。不必再翻找层层菜单，用键盘即可查找应用，也可以打开全屏应用库，一览已经发现的应用程序。
 
-可从 **16 款主题**中选择，包括海滩、草原、水族箱、体育场、海洋和夏日阳台。许多场景会根据桌面图标分组调整布局。根据场景不同，点击桌面空白处可激起水波、引来游鱼或生成云团；点击图标仍可打开应用。在**设置 → 壁纸**中选择场景、调整参数或创建布局。
+![全屏 Spotlight 应用库](docs/images/showcase/v1.0.2/spotlight-fullscreen-light.png)
+
+同一套搜索系统，两种使用方式：
+
+- **紧凑模式（Compact）：** 按下 `Alt + Space`，输入应用名称、已索引的文件或系统工具，用方向键选择，按 Enter 打开。
+- **全屏模式（Fullscreen）：** 点击 Dock 上的放大镜，在该显示器上打开应用库。滚动鼠标或使用键盘翻页，点击应用启动，点击空白处或按 Esc 关闭。
+
+按 **F6** 可在两种模式之间切换，已输入的关键词不会丢失。在 **设置 → 快捷键与实用工具 → Unified Spotlight** 中，可以分别配置快捷键和 Dock 的打开模式，也可以让 Dock 跟随快捷键设置。
+
+### 按自己的习惯整理应用
+
+Spotlight 自动发现开始菜单和 Windows AppsFolder 中的应用，过滤不适合作为应用入口的快捷方式，并在能识别相同应用时去重。你还可以进一步整理应用库。
+
+| 深色主题中的应用文件夹 | 编辑应用布局 |
+| --- | --- |
+| ![Spotlight 应用文件夹](docs/images/showcase/v1.0.2/spotlight-folder-dark.png) | ![Spotlight 布局编辑模式](docs/images/showcase/v1.0.2/spotlight-edit-light.png) |
+
+右键应用，可执行重命名、更换图标、收藏、固定到 Dock 或隐藏等操作。通过应用库管理菜单添加 `.exe` 或 `.lnk`，包括便携软件；进入布局编辑模式后可调整顺序，并将应用拖入文件夹。在设置中的 **已隐藏项目** 恢复应用。隐藏或移除手动添加的条目不会卸载或删除原程序。
+
+### 磨砂玻璃、清晰文字与可调节动效
+
+Spotlight 1.0.2 提供浅色和深色外观、统一的圆角搜索框、带柔和阴影的象牙白文字，以及减少重复加载的持久图标缓存。在兼容环境下使用 Windows 原生合成效果实现磨砂玻璃，不兼容时提供备用材质。
+
+| 浅色搜索框 | 深色搜索框 |
+| --- | --- |
+| ![浅色原生搜索框与实际输入文字](docs/images/showcase/v1.0.2/spotlight-search-light.png) | ![深色原生搜索框与文字选区](docs/images/showcase/v1.0.2/spotlight-search-dark.png) |
+
+在 **设置 → 动画效果** 中，可将速度调节为 **0.25× 至 2×**，新配置默认 **0.70×**。统一速度适用于 Spotlight、Dock、开始菜单、菜单和工具面板所支持的过渡动画。也可关闭动画，或让 TLauncher 遵循 Windows 的减少动态效果偏好。
+
+*上述 v1.0.2 Spotlight 图片来自原生 Windows 界面的实际测试，使用示例数据，并非设计稿。应用库截图采用测试背景，不代表实时桌面模糊效果。[图片来源](docs/images/showcase/v1.0.2/README.md)。*
+
+## Dock：常用应用触手可及
+
+将最常使用的程序集中在 Dock 上。支持固定应用、快捷方式或带参数的自定义命令；点击图标启动应用或切换窗口。鼠标悬停时图标放大，Dock 随内容调整大小，并可自动隐藏，为最大化窗口腾出空间。
+
+![固定应用、悬停放大图标及系统指标的 Dock](docs/images/showcase/dock.webp)
+
+在 **设置 → Dock 与台前调度** 中选择显示器、停靠边缘、图标大小、间距、放大程度、玻璃材质及明暗外观。Dock 可浮动显示、预留工作区，或在窗口最大化时自动隐藏。每块屏幕可采用独立布局。
+
+## 台前调度：在多个窗口之间从容切换
+
+同时打开多个程序时，台前调度会在屏幕边缘用卡片显示窗口预览。点击卡片切换窗口，使用箭头浏览分组中的其他成员。支持平面或透视卡片，可调整大小、每页卡片数量及位置。
+
+![台前调度透视卡片及不同 DPI 下的边缘抗锯齿](docs/images/showcase/stage.webp)
+
+受 Windows 保护的内容可能无法提供预览。v1.0.2 保留 Windows 标准窗口最小化和恢复效果，暂不包含 Stage Peek 或 Genie。
+
+## 开始菜单：熟悉的应用入口
+
+开始菜单集合固定、最近使用及常用应用，并提供账户和电源选项。打开后搜索框可直接接收键盘输入。在 Dock 模式下，单独按 Windows 键可打开 TLauncher 的开始菜单；如果更喜欢系统原版开始菜单和任务栏，选择 **Windows 兼容模式** 即可。
+
+![包含固定应用和最近应用的开始菜单](docs/images/showcase/start.webp)
+
+## 动态壁纸：让桌面更有生气
+
+内置 **16 款交互式主题**，包括海滩、马尔代夫、水族箱、草原、体育场、海洋和夏日露台等。根据场景不同，点击桌面空白处可以激起水波、吸引鱼群或生成云朵；桌面图标仍可正常使用。
 
 | 海滩 | 马尔代夫 | 草原 |
 | --- | --- | --- |
-| ![海滩主题中的海浪](docs/images/beach.webp) | ![马尔代夫主题中的潟湖](docs/images/maldives.webp) | ![草原主题中的云和草地](docs/images/meadow.webp) |
+| ![海滩上的海浪](docs/images/beach.webp) | ![马尔代夫潟湖](docs/images/maldives.webp) | ![草原上的云朵](docs/images/meadow.webp) |
 
-*三款内置主题的预览图。*
+打开 **设置 → 壁纸** 选择主题并调整参数。部分场景围绕桌面图标区域设计。更喜欢静态桌面？可以单独关闭动态壁纸，继续使用 Dock、台前调度和 Spotlight。
 
-### 天气光照与日照阴影
+### 随时间变化的天气、光照与阴影
 
-在**设置 → 天气与光照**中，可选择离线模拟或**按地点获取实时天气**。搜索城市或邮政编码，即可通过 Open-Meteo 获取云量、降雨、降雪和风况。也可手动选择晴天、多云、雨天、雷暴或雪天。
+让场景随着一天中的光照变化，或模拟晴天、云、雨、雪及风。在 **设置 → 天气与光照** 中选择手动天气、离线模拟，或搜索城市/邮政编码，使用 Open-Meteo 的天气数据。支持日照阴影的场景会根据太阳位置改变阴影方向和长度。天气与时间光照可以分别开启或关闭。
 
-开启**随时间变化的光照**后，TLauncher 根据时间和所选坐标计算太阳的位置。未指定地点时，应用使用本机时间。在海滩等支持树影的场景中，阴影会随太阳移动改变方向和长度。时间效果和天气效果各有独立开关。
+![天气设置和不同时段的阴影示意](docs/images/showcase/weather.webp)
 
-![天气设置和早晨、正午、傍晚的阴影方向示意图](docs/images/showcase/weather.webp)
+## 多显示器：更大的空间，更自由的布局
 
-*示例城市及一天中不同时段的阴影方向。*
+无论使用单屏、双横屏还是横竖屏组合，都可以在 **设置 → 显示器** 中选择壁纸布局：
 
-### 全景壁纸与多显示器
+| 模式 | 使用方式 |
+| --- | --- |
+| 同步 | 所有显示器使用同一主题 |
+| 独立 | 每块显示器选择自己的主题 |
+| 全景 | 按 Windows 中的实际屏幕位置延展场景 |
 
-选择**同步**让所有屏幕使用同一主题，选择**独立**为每块屏幕指定不同场景，或用**全景**按 Windows 显示器坐标铺展同一场景。支持横竖屏混排和不同的 DPI 缩放比例。可单独暂停各屏壁纸，也可设置 Dock 或台前调度所在的屏幕、边缘、尺寸和预留空间。
+![横屏与竖屏组合的全景设置](docs/images/showcase/multi-monitor.webp)
 
-![横屏和竖屏的全景设置](docs/images/showcase/multi-monitor.webp)
-
-*示例中的两块屏幕分别使用 100% 和 125% 缩放。*
+支持暂停单块屏幕的壁纸，分别设置 Dock 和台前调度，包括不同 DPI 缩放的布局。
 
 ### 双桌面时钟
 
-原生时钟在窗口下方显示时间、星期和日期。解锁后可拖动；锁定后鼠标点击可穿透。可调整大小、透明度和各行内容。在**设置 → 时钟**中可启用第二个时钟，并单独设置其位置和大小。
+在窗口下方添加显示时间、星期和日期的时钟。在 **设置 → 时钟** 中，可开启第二个时钟，选择显示器、大小、透明度及显示行。解锁后拖到喜欢的位置，再锁定即可让鼠标点击穿透。
 
-![两个时钟的大小及屏幕设置](docs/images/showcase/clocks.webp)
+![双桌面时钟设置](docs/images/showcase/clocks.webp)
 
-*示例在竖屏上启用了第二个时钟。*
+## 日常小工具，随手可用
 
-### 受 macOS 启发的 Dock
+**控制中心：** 点击 Dock 上的箭头调整音量，访问网络和蓝牙相关工具。点击日期时间打开月历；按需开启 CPU、GPU、内存、网络及状态指标。
 
-可固定应用、快捷方式或带参数的命令，通过图标打开和切换窗口。支持自定义图标、悬停放大、尺寸、间距、磨砂玻璃和浅色、深色或跟随系统外观。Dock 可悬浮、预留工作区，或在窗口最大化时自动隐藏并在鼠标移到屏幕边缘时显示。每块屏幕都可独立设置。
-
-![Dock 上固定的应用、悬停放大的图标和系统指标](docs/images/showcase/dock.webp)
-
-*使用示例配置的原生测试截图。*
-
-### 台前调度与窗口分组
-
-在屏幕左侧或右侧用透视或平面卡片预览窗口。当前卡片会突出显示，可通过两侧箭头浏览同组窗口。支持设置每页卡片数、卡片大小，以及与屏幕边缘和工作区的间距。1.0.0 改善了斜边的抗锯齿效果，悬停放大时也生效。测试覆盖了 **100%、125% 和 150%** DPI 缩放。受 Windows 保护的窗口可能无法预览。
-
-![透视卡片与不同 DPI 下的抗锯齿示例](docs/images/showcase/stage.webp)
-
-*使用示例窗口的原生测试截图。*
-
-
-### 开始菜单与 Spotlight
-
-**开始菜单**打开时会自动聚焦搜索框，并显示固定、最近使用和常用应用，以及账户和电源选项。使用 Dock 模式时，单按 **Windows** 键可打开 TLauncher 的开始菜单。**Spotlight** 是屏幕中央的独立搜索框，可通过放大镜按钮或 **Alt+Space** 打开。它可搜索应用和已建立索引的文件；用方向键选择结果，按 Enter 打开。
-
-| 开始菜单 | Spotlight |
+| 月历 | Dock 系统指标 |
 | --- | --- |
-| ![带搜索、固定应用和最近使用应用的开始菜单](docs/images/showcase/start.webp) | ![带磨砂玻璃背景的 Spotlight 搜索框](docs/images/showcase/spotlight.webp) |
+| ![深色模式月历](docs/images/showcase/calendar.webp) | ![CPU GPU 内存和网络指标](docs/images/showcase/status.webp) |
 
-*开始菜单来自 1.0.0 测试；Spotlight 来自产品更名前的原生试用版。*
+**截图与编辑：** 按 `Ctrl + Shift + S` 拖选区域，或按 Space 选择鼠标所在的整块屏幕。支持裁剪、箭头、文字、步骤编号、像素化及遮盖敏感信息，之后复制到剪贴板或保存 PNG/JPG。
 
-### 控制中心月历与资源指标
+**录屏：** 按 `Ctrl + Shift + R` 选择区域，再按一次停止。支持 30 或 60 FPS 的 MP4/H.264，可选系统播放声音；按 `Ctrl + Shift + P` 暂停或继续。当前不包含麦克风、摄像头或专用游戏录制模式。
 
-点击 Dock 上的箭头可打开控制中心，调节音量或访问网络和蓝牙工具。点击日期和时间可展开月历并切换月份。Dock 可显示 CPU、GPU、内存使用情况和网络上传、下载速率。资源指标和网络/音量按钮各有独立开关。要完整使用第三方应用的托盘图标，请选择**Windows 兼容模式**。
+![截图和录屏快捷键设置](docs/images/showcase/capture-shortcuts.webp)
 
-| 月历 | Dock 指标 |
-| --- | --- |
-| ![深色模式下的 TLauncher 月历](docs/images/showcase/calendar.webp) | ![Dock 上的 CPU、内存、GPU、网络及日期时间](docs/images/showcase/status.webp) |
+## 按自己的喜好设置桌面
 
-*月历来自 1.0.0 测试；指标区域来自 Dock 测试截图，不代表性能测量结果。*
+集成设置提供越南语、英语和简体中文，可独立开启壁纸、Dock 和台前调度，并调整显示器、主题、快捷键、动画和开机启动。部分原生界面的文字可能仍使用其他语言。Explorer 会继续运行；选择 **Windows 兼容模式** 即可使用原生任务栏及系统托盘，包括第三方应用的托盘图标。
 
-### 截图与录屏
+![各桌面组件的独立开关](docs/images/showcase/dock-settings.webp)
 
-可截取框选区域或鼠标所在屏幕的全屏。编辑器支持裁剪、箭头、文字、步骤编号、像素化和实色遮盖；可复制到剪贴板或保存为 PNG/JPG。框选区域可录为 MP4（H.264），默认 **30 FPS**，也可选 **60 FPS**，并可选择是否录入系统播放的声音。支持暂停和继续；当前版本不支持麦克风、摄像头或专用游戏录制模式。
-
-![截图和录屏快捷键及视频画质设置](docs/images/showcase/capture-shortcuts.webp)
-
-*开始录制前的设置界面。*
-
-### 设置与任务栏模式
-
-同一窗口内可管理壁纸、显示器、天气与光照、时钟、Dock 和台前调度、快捷键与工具以及系统设置。WebView2 设置界面提供 Tiếng Việt、English 和简体中文；部分原生界面可能使用单独的文案。Explorer 会继续运行。选择**Windows 兼容模式**即可使用系统原有的开始菜单、任务栏和托盘。
-
-![壁纸、Dock 和台前调度拥有独立开关的设置界面](docs/images/showcase/dock-settings.webp)
-
-*使用示例配置的 1.0.0 设置界面。*
+*以上非 Spotlight 功能的图片来自较早版本或原生测试，1.0.2 的布局和界面文字可能略有不同。*
 <!-- product-guide:end -->
 
-## 系统要求
+## 几步即可上手
 
-- 公开发布包面向 **Windows 11 x64**；不保证支持 Windows 10。
-- 原生壁纸需要支持 **OpenGL 3.3** 的驱动程序。能否直接通过 GPU 呈现取决于驱动；GDI 为后备方案。
-- 完整设置需要 **Microsoft Edge WebView2 Runtime**。如果运行时或 `prototype/` 不可用，应用仍提供基础 Win32 设置。
+**运行要求：** Windows 11 x64；动态壁纸需要支持 OpenGL 3.3 的显卡驱动；完整设置界面需要 Microsoft Edge WebView2 Runtime。普通用户无需安装 Rust 或开发工具。
 
-## 安装与升级
+1. 从 [GitHub Releases](https://github.com/tuanngbc/TLauncher/releases/latest) 的 Assets 下载 Windows x64 压缩包，而不是 Source code。v1.0.2 文件名为 `TLauncher-1.0.2-win-x64.zip`，可使用 [SHA-256 校验文件](https://github.com/tuanngbc/TLauncher/releases/download/v1.0.2/TLauncher-1.0.2-win-x64.zip.sha256) 核对。
+2. 将**整个压缩包**解压到准备长期使用的文件夹。保留 EXE 旁的 `prototype/`、`assets/widget/` 和其他资源。
+3. 运行 `TLauncher.exe`，从 Dock 或系统托盘打开设置，选择壁纸、开启需要的组件，再试试 Alt+Space。
+4. 如希望登录 Windows 后自动运行，在 **设置 → 系统 → 随 Windows 启动** 中开启选项。TLauncher 通过任务计划程序为当前账户注册启动项，无需管理员权限。
 
-1. 下载 [TLauncher-1.0.2-win-x64.zip](https://github.com/tuanngbc/TLauncher/releases/download/v1.0.2/TLauncher-1.0.2-win-x64.zip)，可使用 [SHA-256](https://github.com/tuanngbc/TLauncher/releases/download/v1.0.2/TLauncher-1.0.2-win-x64.zip.sha256) 校验。**Source code** 压缩包用于阅读代码或自行构建。
-2. 完整解压，保留与 EXE 同级的 `prototype/` 和 `assets/widget/`，运行 `TLauncher.exe`。从 Dock 或托盘进入设置，调整 Spotlight、主题、动画速度及自启动。
-3. **Alt+Space** 打开、**F6** 切换、**Esc** 关闭。右键管理、固定或隐藏应用，在 **编辑布局** 中管理文件夹，从设置的 **隐藏应用** 恢复条目。使用 TLauncher 菜单的 **退出**；**Ctrl+Alt+Shift+F12** 可在当前会话恢复 Windows 任务栏。
-4. **从 1.0.1 升级：** 退出旧版，备份安装目录和 `%USERPROFILE%\.deskland-rs`。完整解压新版并保留配置，以继续使用主题、屏幕布局、固定项和快捷键。若 EXE 移动，在 **设置 → 系统 → 随 Windows 启动** 检查，必要时关闭再开启以更新任务计划。
-5. **回退至 1.0.1：** 在新版中关闭自启动并退出，恢复旧安装包，必要时恢复升级前的配置备份，在旧版重新登记自启动。旧版未必读取新版应用库数据；替换配置前先备份。
+### 推荐设置
 
-### 建议的 Windows 设置
-
-- **磨砂玻璃（可选）：** Windows 11 **设置 → 个性化 → 颜色 → 透明效果**，也可从 **辅助功能 → 视觉效果**（`ms-settings:easeofaccess-visualeffects`）打开。效果取决于合成器和驱动；关闭透明度或使用高对比度时会使用后备材质。
-- **动画（可选）：** 可在 **辅助功能 → 视觉效果** 开启动画效果。建议保留 Windows 的最小化/最大化动画。如曾为测试关闭，可通过 **Win+R → SystemPropertiesPerformance.exe → 视觉效果** 勾选 **在最大化和最小化时显示窗口动画**，点击应用。可保留字体平滑；无需更换字体、安装 macOS 主题或第三方玻璃工具。
-- **TLauncher：** 建议以 **0.70×** 开启动画，快捷键打开紧凑模式、Dock 打开全屏；按喜好选择浅色/深色/跟随系统。壁纸质量按驱动能力调整。登录时自动启动为可选项。
-
-
-
-## 键盘快捷键
-
-| 默认按键 | 功能 |
+| 项目 | 建议 |
 | --- | --- |
-| **Ctrl+Shift+S** | 框选截图；按空格键选择鼠标所在的整块屏幕。 |
-| **Ctrl+Shift+R** | 框选录屏区域；再次按下可停止并保存。 |
-| **Ctrl+Shift+P** | 暂停或继续录屏。 |
-| **Alt+Space** | 打开 Spotlight。 |
-| **Ctrl+Alt+L** | 通过 Windows 锁定当前会话。 |
-| **Ctrl+Alt+Shift+F12** | 在当前会话恢复 Windows 任务栏。 |
+| Windows 透明效果 | **设置 → 个性化 → 颜色 → 透明效果：开启** |
+| Windows 动画效果 | 如喜欢动效，在 **辅助功能 → 视觉效果** 中开启动画 |
+| TLauncher 动画 | 开启，从 **0.70×** 开始，按个人喜好调整 |
+| Spotlight | Alt+Space 打开紧凑模式，Dock 打开全屏模式，或自定义 |
+| 主题 | 浅色、深色或跟随系统 |
+| 窗口过渡 | 保留 Windows 默认效果 |
 
-在**设置 → 快捷键与工具**中可更改 Spotlight、截图、录屏和锁定快捷键。
+这些是体验建议，而非软件运行的硬性条件。可按 Win+R 输入 `ms-settings:easeofaccess-visualeffects` 快速打开视觉效果页面。若曾为测试 Scale 关闭系统最小化动画，可按 Win+R 输入 `SystemPropertiesPerformance.exe`，在视觉效果中恢复“在最大化和最小化时动态显示窗口”。
 
-## 性能与资源占用
+### 升级与回退
 
-壁纸通常以约 **30 FPS** 运行，交互时可短暂提高帧率。被遮挡的壁纸不再接收新帧；如果所有壁纸都被遮挡或会话被锁定，则暂停渲染。打开设置时才使用 WebView2，截图和录屏均按需运行。
+退出旧版，备份安装文件夹及 `%USERPROFILE%\.deskland-rs`，再完整解压新版本。保留配置以继续使用壁纸、固定应用、屏幕布局及快捷键。若 EXE 路径有变化，关闭后重新开启自动启动，以更新任务计划。回退到 1.0.1 时，先关闭新版自动启动并退出，再恢复旧版程序和合适的配置备份，按需重新注册启动。旧版可能无法识别新版应用库数据。
 
-**v1.0.0 观察样本：**Windows 11、Ryzen 5 4600G、GTX 1070，显示器分辨率为 **2560×1080 + 1080×1920**，海滩主题使用全景模式。在 **25.5 秒内采集 18 个样本**，日志记录到**一块屏幕的壁纸被遮挡**；另一块约为 **30 FPS**。
+## 常用快捷键
 
-| 指标 | 观察值 |
-| --- | ---: |
-| 主进程 CPU 占用，按 12 个逻辑线程归一化 | 平均 **0.54%** |
-| 私有内存（private bytes） | **279 MiB** |
-| 驻留内存（working set） | **174–176 MiB** |
-| TLauncher 在活跃 3D 引擎上的 GPU 占用 | **1–2%** |
-| DWM 在同一 3D 引擎上的 GPU 占用 | **0–1%** |
+| 默认快捷键 | 操作 |
+| --- | --- |
+| Alt + Space | 打开或关闭 Spotlight |
+| F6 | Spotlight 打开时切换紧凑/全屏模式 |
+| Esc | 退出文件夹或关闭 Spotlight |
+| ↑ ↓ ← → / Enter | 选择并打开结果 |
+| Ctrl + Shift + S | 截图 |
+| Ctrl + Shift + R | 开始或停止录屏 |
+| Ctrl + Shift + P | 暂停或继续录屏 |
+| Ctrl + Alt + L | 锁定 Windows |
+| Ctrl + Alt + Shift + F12 | 恢复当前会话的 Windows 任务栏 |
 
-![一块屏幕的壁纸被遮挡时，CPU、内存和 GPU 3D 占用的测量样本](docs/images/showcase/performance.webp)
+在 **快捷键与实用工具** 中自定义 Spotlight、截图、录屏和锁屏快捷键。
 
-*GPU 数据按进程和引擎统计，并非整块 GPU 的总占用。此处为观察样本，未做对照测试，也不代表两块壁纸均可见、打开设置或正在录屏时的表现。*
+## 为长期运行的桌面而设计
 
+TLauncher 使用 Rust 和 Win32 集成桌面，使用 OpenGL 3.3/WGL 渲染壁纸，在兼容环境下使用 Direct3D 11/DirectComposition，GDI 作为备用路径。设置界面按需使用 WebView2；兼容的捕获与录屏路径使用 Windows Graphics Capture 和 Media Foundation。
 
-## 架构与技术
+动态壁纸通常以约 30 FPS 运行，交互时可短时提高帧率；壁纸被遮挡、会话锁定或显示器关闭时减少或暂停渲染工作。v1.0.2 注重图标复用、有界预览缓存、共享图形工厂和关闭 Spotlight 后释放表面资源，让桌面保持响应，同时避免不必要的图形工作。
 
-- **Rust 和 Win32** 管理桌面、窗口、每块屏幕的 DPI 和原生工具。
-- **OpenGL 3.3（WGL）**渲染壁纸。兼容的系统使用 **Direct3D 11 和 DirectComposition** 呈现 GPU 帧；**GDI** 为后备方案。
-- **WebView2** 按需提供完整设置界面，也可使用基础 Win32 界面。
-- 支持的采集路径使用 **Windows Graphics Capture**；**Media Foundation** 负责 MP4/H.264 编码。
-- 从 1.0.1 起，通过 **Windows 任务计划程序**登记当前账户的自动启动项。参见 [Rust 指南](README-rust.md)和[架构文档](docs/README.md)。
-
-## 隐私与安全
-
-搜索地点时，查询会发送给 Open-Meteo 的地理编码服务。启用实时天气后，所选地点的坐标会用于请求天气预报；此功能不会主动读取设备定位。也可选择离线模拟。截图和录像默认保存在本机的 `Pictures/TLauncher` 和 `Videos/TLauncher`；由用户决定何时将截图复制到剪贴板。
-
-会话锁定和登录由 Windows 处理。1.0.1 的自动启动任务在当前账户下运行，无需管理员权限。
+目前尚无完整应用基准测试能证明所有配置均达到 100–150 MiB 内存、3% GPU 或 1% CPU。[资源优化报告](docs/TLAUNCHER_RESOURCE_OPTIMIZATION_REPORT.md) 记录了测量结果与范围，实际占用取决于场景、显示器、驱动和正在使用的功能。
 
 ## 常见问题
 
-**为什么只显示基础设置？** 请检查 WebView2 Runtime 和 EXE 同目录下的 `prototype/` 文件夹。先前若只复制了 EXE，请解压整个发布包。
+**为什么没有磨砂玻璃效果？** 检查 Windows 透明效果。原生玻璃依赖系统合成器和驱动，不兼容时可使用一次性模糊背景或纯色备用材质，并尊重高对比度设置。
 
-**如何恢复 Windows 任务栏？** 选择 **Windows 兼容模式**，或按 **Ctrl+Alt+Shift+F12** 在当前会话恢复任务栏。Dock 启用时，Explorer 仍会运行。
+**为什么 Spotlight 找不到某个应用？** 部分非应用快捷方式会被过滤。可以手动添加 EXE/LNK 或检查已隐藏项目。
 
-**为什么 Windows 的“启动应用”列表里没有 TLauncher？** 1.0.1 使用任务计划程序，请通过 TLauncher 设置中的开关管理。若 EXE 移动过，请关闭再开启该开关。
+**为什么只显示基础设置界面？** 检查 WebView2 Runtime 以及 EXE 旁的 `prototype/` 文件夹。
 
-**为什么有些窗口无法预览或录制？** Windows 可能限制受保护的内容。录屏支持系统音频；目前不支持麦克风或摄像头。
+**可以恢复原生 Windows 桌面吗？** 选择 Windows 兼容模式，或按 Ctrl+Alt+Shift+F12 恢复当前会话的任务栏。在 TLauncher 菜单中选择退出即可关闭程序。
 
-**配置与回退：** 请参见上文安装与升级。
+**为什么启动应用列表中看不到 TLauncher？** 自 1.0.1 起使用任务计划程序注册自动启动，请使用 TLauncher 设置中的开关。
 
-## 从源码构建
+**支持 Scale 或 Genie 吗？** 当前不支持。Scale 未通过实际机器验收，已在公开版本中隐藏；Windows 正常处理最小化和恢复。玻璃质量、输入法表现和部分窗口预览能力仍与系统环境有关。
 
-在 Windows 上安装 Rust 稳定版、MSVC C++ 构建工具和 Windows SDK。在源码目录中运行：
+## 隐私
+
+使用实时天气时，所选地点的搜索词和坐标会发送给 Open-Meteo；该功能不会自动获取设备位置。也可以使用离线模拟。截图和录像默认保存在本地的 `Pictures/TLauncher` 与 `Videos/TLauncher` 中。Windows 可能限制对受保护内容的捕获。
+
+## 开发者与社区
+
+TLauncher 是独立开源项目，与同名 Minecraft 启动器无关，也不是 Apple 或 Microsoft 的官方产品。
+
+如需从源码构建，请在 Windows 上安装 Rust stable、C++ MSVC 工具及 Windows SDK：
 
 ```powershell
 cargo test --release
 cargo build --release
 ```
 
-参阅 [Rust 构建指南](README-rust.md)，了解可执行文件旁的资源目录结构。发布包在 `VERSION.txt` 中记录版本，在 `BUILD-COMMIT.txt` 中记录源码提交。
+参阅 [Rust 使用指南](README-rust.md)、[技术文档](docs/README.md)、[开发约定](AGENTS.md) 和 [更新日志](CHANGELOG.md)。发行包内含 `VERSION.txt` 和 `BUILD-COMMIT.txt`。
 
-## 反馈与贡献
+有建议或发现问题？欢迎 [提交 Issue](https://github.com/tuanngbc/TLauncher/issues)，附上应用版本、Windows 版本、显示器布局及复现步骤。请先遮挡截图和日志中的个人信息。
 
-[报告问题或提出建议](https://github.com/tuanngbc/TLauncher/issues)时，请提供 TLauncher 版本、Windows 版本、复现步骤和相关的屏幕布局。请遮盖截图和日志中的个人数据。参阅[开发说明](AGENTS.md)和 [README 翻译维护约定](docs/README.md#quy-ước-readme-đa-ngôn-ngữ)。
+## 致谢
 
-## 致谢与上游项目
+TLauncher 由 [tuanngbc](https://github.com/tuanngbc) 开发与维护，基于 [BLEZZ0102/Deskland](https://github.com/BLEZZ0102/Deskland) 的动态壁纸基础，以及 [nhhoang188/Deskland-VN](https://github.com/nhhoang188/Deskland-VN) 的主题和越南语本地化成果，并扩展了 Rust 原生渲染、多显示器、窗口管理、应用启动器和桌面实用工具。
 
-- [BLEZZ0102/Deskland](https://github.com/BLEZZ0102/Deskland) — 上游项目及动态壁纸的基础。
-- [nhhoang188/Deskland-VN](https://github.com/nhhoang188/Deskland-VN) — 移植的主题和越南语本地化。
-- [tuanngbc/TLauncher](https://github.com/tuanngbc/TLauncher) — [tuanngbc](https://github.com/tuanngbc)开发并维护 TLauncher 分支，包括原生 Rust 渲染、桌面改进、多显示器系统（同步、独立和按 Windows 显示器坐标拼接的全景）、Dock、台前调度、开始菜单、Spotlight、任务栏模式、控制中心、月历、系统监控、原生时钟、截图与录屏工具、快捷键、天气与日照阴影、集成设置及 Windows 自动启动改进。
+感谢所有为项目奠定基础的作者和开源社区。参阅 [NOTICE](NOTICE)、[Deskland-VN NOTICE](third_party/deskland-vn/NOTICE) 和 [时钟设计致谢](assets/widget/NOTICE.txt)。
 
-参见 [NOTICE](NOTICE)、[Deskland-VN 原始声明](third_party/deskland-vn/NOTICE)及[时钟设计署名](assets/widget/NOTICE.txt)。
-
-## 许可证
-
-TLauncher 源码以 [GNU GPL-3.0](LICENSE) 发布。参见[第三方声明](THIRD_PARTY_NOTICES.md)、[商标说明](TRADEMARKS.md)和[标志使用指南](assets/branding/BRAND.md)。TLauncher 是独立项目，并非 Apple 或 Microsoft 的官方产品。
+**许可证：** [GNU GPL-3.0](LICENSE) · [第三方声明](THIRD_PARTY_NOTICES.md) · [商标](TRADEMARKS.md) · [品牌指南](assets/branding/BRAND.md)。
