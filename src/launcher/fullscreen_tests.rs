@@ -118,16 +118,25 @@ fn native_live_backdrop_retains_color_and_filters_detail() {
                     if opaque&&transparent{
                         let opening=Transition::new(true,motion::FULL,None);
                         fg.motion(opening,W,90)?;
+                        fg.comp.WaitForCommitCompletion()?;
+                        std::thread::sleep(Duration::from_millis(55));
                         let closing=Transition::new(false,motion::FULL,Some(opening));
                         fg.motion(closing,W,90)?;
+                        fg.comp.WaitForCommitCompletion()?;
                         let deadline=Instant::now()+Duration::from_millis(u64::from(closing.duration)+50);
                         while Instant::now()<deadline{pump();std::thread::sleep(Duration::from_millis(10));}
                         let _=DwmFlush();
                         let faded=screen().is_some_and(|img|sample(&img,94,90)==sample(&reference,94,90));
                         fg.settle()?;
+                        fg.comp.WaitForCommitCompletion()?;
                         settle();
-                        let settled=screen().is_some_and(|img|sample(&img,94,90)==[245,180,25]);
-                        println!("SPOTLIGHT_NATIVE compositor_reversal_transparent_end={faded} settled_foreground_restored={settled}");
+                        let restored=screen().map(|img|{
+                            evidence("glass-composed-foreground-after-reversal.png",&img);
+                            sample(&img,94,90)
+                        });
+                        let settled=restored.is_some_and(|bgr|bgr.into_iter().zip([245u8,180,25]).all(|(a,b)|a.abs_diff(b)<=2));
+                        println!("SPOTLIGHT_NATIVE compositor_reversal_transparent_end={faded} settled_foreground_restored={settled} sample_bgr={restored:?}");
+                        assert!(faded&&settled,"compositor must clear and restore the same foreground after reversal");
                     }
                     Ok(opaque&&transparent)
                 })();

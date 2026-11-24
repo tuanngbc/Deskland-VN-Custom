@@ -213,8 +213,6 @@ impl Foreground {
         let visual=comp.CreateVisual()?;
         let scale=comp.CreateScaleTransform()?;
         let effect=comp.CreateEffectGroup()?;
-        visual.SetTransform(&scale)?;
-        visual.SetEffect(&effect)?;
         target.SetRoot(&visual)?;
         comp.Commit()?;
         Ok(Self{comp,ctx:ctx.expect("D3D immediate context"),target,visual,scale,effect,surface:None})
@@ -262,12 +260,15 @@ impl Foreground {
         self.scale.SetScaleX(&a)?;
         self.scale.SetScaleY(&a)?;
         self.effect.SetOpacity(&curve(t.from,t.to)?)?;
+        self.visual.SetTransform(&self.scale)?;
+        self.visual.SetEffect(&self.effect)?;
         self.comp.Commit()
     }
     unsafe fn settle(&self)->windows::core::Result<()>{
-        self.scale.SetScaleX2(1.0)?;
-        self.scale.SetScaleY2(1.0)?;
-        self.effect.SetOpacity2(1.0)?;
+        // Return to direct composition of the original pixels. Keeping the
+        // completed opacity effect attached would also keep its intermediate surface.
+        self.visual.SetTransform(None::<&IDCompositionTransform>)?;
+        self.visual.SetEffect(None::<&IDCompositionEffect>)?;
         self.comp.Commit()
     }
 }
