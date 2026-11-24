@@ -324,7 +324,7 @@ pub(super) unsafe fn probe_owned_window(source:HWND,frame:&stage_snapshot::Frame
     // Native policy is read-only even in the hosted fixture. The owned
     // transient proxy has its own DWM policy; the source is not modified.
     println!("WINDOW_SCALE_NATIVE_GATE source_policy_already_disabled={}",without_native_overlap(source));
-    
+
     let cold=crate::private_mb();
     let cold_handles=counts();
     let mut before=cold;
