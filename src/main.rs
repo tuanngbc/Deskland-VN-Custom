@@ -941,6 +941,7 @@ fn web_init(app: &App) -> serde_json::Value {
     });
     init["spotlight"]=serde_json::json!(&app.cfg.spotlight);
     init["motion"]=app.cfg.motion.json();
+    init["motionDiagnostics"]=dock::motion_diagnostics();
     init["spotlightGuideSeen"]=serde_json::json!(app.cfg.spotlight_guide_seen);
     app.dock_taskbar.add_fields(&mut init);
     init["dockWinKeyStatus"]=serde_json::json!(app.dock_win_key_status);
@@ -3191,7 +3192,10 @@ fn main() {
                         if policy_changed{app.configure_dock();}
                         save_config(&app.cfg);
                     }
-                    web::post(&serde_json::json!({"t":"motionState","motion":app.cfg.motion.json()}).to_string());
+                    web::post(&serde_json::json!({"t":"motionState","motion":app.cfg.motion.json(),"diagnostics":dock::motion_diagnostics()}).to_string());
+                }
+                "motionDiagnostics" => {
+                    web::post(&serde_json::json!({"t":"motionDiagnostics","diagnostics":dock::motion_diagnostics()}).to_string());
                 }
                 "spotlightGuideSeen" => {
                     if !app.cfg.spotlight_guide_seen {

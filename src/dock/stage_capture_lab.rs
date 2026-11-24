@@ -332,3 +332,35 @@ fn native_stage_worker_keeps_independent_frames_through_minimize(){
     println!("{result}");
     std::fs::write(dir.join("stage-external-fixture-result.txt"),result).unwrap();
 }
+
+#[cfg(test)]
+#[test]
+#[ignore="actual Dock activation, capture worker, compositor and restore on Actions"]
+fn native_scale_production_owned_external_windows(){
+    if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+    use super::WindowIdentity;
+    use std::process::{Child,Command,Stdio};
+    struct FixtureProcess(Child);
+    impl Drop for FixtureProcess{
+        fn drop(&mut self){let _=self.0.kill();let _=self.0.wait();}
+    }
+    let dir=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE").map(std::path::PathBuf::from).unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    let path=dir.join(format!("scale-worker-ready-{}.txt",std::process::id()));
+    let child=FixtureProcess(Command::new(std::env::current_exe().unwrap())
+        .args(["--ignored","--exact","dock::stage_capture_lab::native_worker_fixture_host"])
+        .env("TUANPC_DESK_STAGE_FIXTURE_READY",&path).stdout(Stdio::null()).spawn().unwrap());
+    let started=Instant::now();
+    let handles=loop{
+        if let Ok(text)=std::fs::read_to_string(&path){
+            let _=std::fs::remove_file(&path);
+            break text.split_whitespace().map(|h|h.parse::<usize>().unwrap()).collect::<Vec<_>>();
+        }
+        assert!(started.elapsed()<Duration::from_secs(8),"child fixture did not start");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(handles.len(),2);
+    let ids=handles.iter().map(|&h|unsafe{WindowIdentity::read(h as HWND).unwrap()}).collect::<Vec<_>>();
+    assert!(ids.iter().all(|id|id.pid==child.0.id()));
+    unsafe{super::window_effect::probe_production_path(&ids);}
+}

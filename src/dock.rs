@@ -37,6 +37,7 @@ mod stage_rail;
 mod stage_projection;
 mod stage_snapshot;
 mod window_effect;
+pub(crate) fn motion_diagnostics()->serde_json::Value{window_effect::diagnostics()}
 mod stage_capture_lab;
 pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>{stage_capture_lab::inspect(path,true)}
 mod utilities;
@@ -3079,6 +3080,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if tracked.0{retarget_start(hwnd);InvalidateRect(hwnd,ptr::null(),0);}
             0
         },
+        WM_TIMER if w==window_effect::RELEASE_TIMER&&hwnd==CONTROL.with(Cell::get)=>{window_effect::release_factory();0},
         WM_TIMER if w==window_effect::TIMER&&hwnd==CONTROL.with(Cell::get)=>{
             window_effect::timer();0
         }

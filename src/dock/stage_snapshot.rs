@@ -1,7 +1,7 @@
 //! Bounded WGC source cache for Stage. Frames stay in this process and never
 //! touch the filesystem. Capture is scoped to a permitted top-level window.
 use std::{sync::mpsc,time::{Duration,Instant}};
-use std::{cell::RefCell,collections::HashMap,sync::{Arc,atomic::{AtomicBool,Ordering}},thread::JoinHandle};
+use std::{cell::RefCell,collections::HashMap,sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}},thread::JoinHandle};
 use super::{stage_surface::{Box2,Layout},stage_projection::Card,WindowIdentity};
 use windows_sys::Win32::{Foundation::HWND,UI::WindowsAndMessaging::{WM_APP,PostMessageW}};
 use windows::{
@@ -68,12 +68,12 @@ impl CaptureDevice {
         let winrt=step("IDirect3DDevice",inspectable.cast::<IDirect3DDevice>())?;
         Ok(Self{device,context,winrt})
     }
-    unsafe fn frame(&self,hwnd:HWND,valid:impl Fn()->bool,limit:usize,wait:Duration)->Result<Frame,String>{
+    unsafe fn frame(&self,hwnd:HWND,valid:impl Fn()->bool,limit:usize,wait:Duration,timing:Option<&CaptureTimingHandle>)->Result<Frame,String>{
         if !valid(){return Err("window identity, visibility or affinity denied".into());}
         use windows_sys::Win32::UI::WindowsAndMessaging::{GetAncestor,GA_ROOT};
         if GetAncestor(hwnd,GA_ROOT)!=hwnd{return Err("WGC requires a top-level HWND".into());}
         let Self{device,context,winrt}=self;
-        let interop=step("WGC item factory",factory::<GraphicsCaptureItem,IGraphicsCaptureItemInterop>())?;
+        let init=Instant::now(); let interop=step("WGC item factory",factory::<GraphicsCaptureItem,IGraphicsCaptureItemInterop>())?;
         let item:GraphicsCaptureItem=step("CreateForWindow",interop.CreateForWindow(OwnedWindow(hwnd)))?;
         let size=step("WGC item size",item.Size())?;
         if size.Width<1||size.Height<1||!budget(size.Width,size.Height){return Err("window exceeds capture budget".into());}
@@ -88,18 +88,18 @@ impl CaptureDevice {
                 let token=step("frame event",pool.FrameArrived(&notify))?;
                 let result=(||{
                     step("StartCapture",session.StartCapture())?;
-                    let mut arrived=false;
+                    record(timing,|t|t.capture_init_ms=elapsed(init)); let mut arrived=false;
                     let started=Instant::now();
                     while started.elapsed()<wait{
                         if !valid(){return Err("capture cancelled".into());}
-                        let interval=if wait<=Duration::from_millis(200){25}else{100};
+                        let interval=25;
                         match rx.recv_timeout(Duration::from_millis(interval)){
                             Ok(())=>{arrived=true;break;}
                             Err(mpsc::RecvTimeoutError::Disconnected)=>break,
                             Err(mpsc::RecvTimeoutError::Timeout)=>{},
                         }
                     }
-                    if !arrived{return Err("no WGC frame within capture deadline".into());}
+                    record(timing,|t|t.first_frame_ms=elapsed(started)); if !arrived{return Err("no WGC frame within capture deadline".into());}
                     if !valid(){return Err("window closed, changed or no longer visible".into());}
                     let frame=step("read first frame",pool.TryGetNextFrame())?;
                     let result=(||{
@@ -119,14 +119,14 @@ impl CaptureDevice {
                         }
                         desc.Width=w;desc.Height=h;desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;
                         desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ.0 as _;desc.MiscFlags=0;
-                        let mut staging=None;
+                        let readback=Instant::now(); let mut staging=None;
                         step("WGC staging texture",device.CreateTexture2D(&desc,None,Some(&mut staging)))?;
                         let staging=staging.ok_or("missing staging texture")?;
                         let region=D3D11_BOX{left:0,top:0,front:0,right:w,bottom:h,back:1};
                         context.CopySubresourceRegion(&staging,0,0,0,0,&texture,0,Some(&region));
                         let mut mapped=D3D11_MAPPED_SUBRESOURCE::default();
                         step("WGC readback",context.Map(&staging,0,D3D11_MAP_READ,0,Some(&mut mapped)))?;
-                        let (dw,dh)=thumb_size(w as usize,h as usize,limit);
+                        record(timing,|t|t.readback_ms=elapsed(readback)); let downsample=Instant::now(); let (dw,dh)=thumb_size(w as usize,h as usize,limit);
                         let ptr=mapped.pData as *const u8;
                         if ptr.is_null()||mapped.RowPitch<(w*4){
                             context.Unmap(&staging,0);
@@ -140,7 +140,7 @@ impl CaptureDevice {
                         });
                         context.Unmap(&staging,0);
                         if !valid(){return Err("window changed during capture".into());}
-                        if !bytes.chunks_exact(4).any(|p|p[0]|p[1]|p[2]!=0){return Err("capture was blank".into());}
+                        record(timing,|t|t.downsample_ms=elapsed(downsample)); if !bytes.chunks_exact(4).any(|p|p[0]|p[1]|p[2]!=0){return Err("capture was blank".into());}
                         Ok((bytes,dw as i32,dh as i32))
                     })();
                     let _=frame.Close();
@@ -160,7 +160,7 @@ impl CaptureDevice {
 pub(super) unsafe fn frame(hwnd:HWND,valid:impl Fn()->bool)->Result<Frame,String>{
     if !valid(){return Err("window identity, visibility or affinity denied".into());}
     let _apartment=Apartment::enter()?;
-    CaptureDevice::new()?.frame(hwnd,valid,360,Duration::from_secs(2))
+    CaptureDevice::new()?.frame(hwnd,valid,360,Duration::from_secs(2),None)
 }
 
 pub(super) const READY:u32=WM_APP+58;
@@ -354,7 +354,7 @@ const MAX_AGE:Duration=Duration::from_secs(30*60);
 struct Stamp{i:i32,j:i32,title:String}
 #[derive(Default)]
 struct Source{
-    frame:Option<Frame>, revision:u64, last_used:Option<Instant>,
+    frame:Option<Frame>, revision:u64, transition_revision:Option<u64>, last_used:Option<Instant>,
     stamp:Option<Stamp>, dirty:bool, retry:Option<Instant>, captured_at:Option<Instant>,
 }
 impl Source{
@@ -370,10 +370,20 @@ struct Job{
     source:WindowIdentity, stamp:Stamp, live:Arc<AtomicBool>,
     receiver:mpsc::Receiver<Result<Frame,String>>,
 }
+#[derive(Clone,Default,serde::Serialize)]
+pub(super) struct CaptureTiming{
+    pub queue_ms:u64,pub device_ms:u64,pub capture_init_ms:u64,pub first_frame_ms:u64,
+    pub readback_ms:u64,pub downsample_ms:u64,
+}
+pub(super) type CaptureTimingHandle=Arc<Mutex<CaptureTiming>>;
+fn elapsed(start:Instant)->u64{start.elapsed().as_millis() as u64}
+fn record(timing:Option<&CaptureTimingHandle>,f:impl FnOnce(&mut CaptureTiming)){
+    if let Some(t)=timing{if let Ok(mut t)=t.lock(){f(&mut t);}}
+}
 struct Request{
     source:WindowIdentity, stamp:Stamp, live:Arc<AtomicBool>,
     reply:mpsc::SyncSender<Result<Frame,String>>,
-    limit:usize,wait:Duration,
+    limit:usize,wait:Duration,queued:Instant,timing:Option<CaptureTimingHandle>,
 }
 struct Worker{sender:mpsc::SyncSender<Request>,thread:JoinHandle<()>}
 impl Worker{
@@ -390,14 +400,14 @@ impl Worker{
                         Err(mpsc::RecvTimeoutError::Disconnected)=>break,
                     }
                 }else if let Ok(req)=rx.recv(){req}else{break;};
-                let valid=||req.live.load(Ordering::Relaxed)&&stamp(req.source).as_ref()==Some(&req.stamp);
+                record(req.timing.as_ref(),|t|t.queue_ms=elapsed(req.queued)); let valid=||req.live.load(Ordering::Relaxed)&&stamp(req.source).as_ref()==Some(&req.stamp);
                 let result=(||{
                     if let Err(reason)=&apartment{return Err(reason.clone());}
                     if !valid(){return Err("capture cancelled".into());}
-                    if device.is_none(){device=Some(CaptureDevice::new()?);}
-                    device.as_ref().unwrap().frame(req.source.hwnd as HWND,valid,req.limit,req.wait)
+                    if device.is_none(){let start=Instant::now();let result=CaptureDevice::new();record(req.timing.as_ref(),|t|t.device_ms=elapsed(start));device=Some(result?);}
+                    device.as_ref().unwrap().frame(req.source.hwnd as HWND,valid,req.limit,req.wait,req.timing.as_ref())
                 })();
-                if result.is_err(){device=None;}
+                if result.is_err()&&req.live.load(Ordering::Relaxed){device=None;}
                 let _=req.reply.send(result);
                 PostMessageW(controller as HWND,READY,0,0);
             }
@@ -490,7 +500,7 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
             unsafe{KillTimer(controller,super::STAGE_CAPTURE_TIMER);}
             state.foreground=0;state.visible=false;state.next_capture=None;
             if let Some(j)=&state.job{j.live.store(false,Ordering::Relaxed);}
-            state.sources.clear();
+            state.sources.retain(|&id,s|s.transition_revision.is_some()&&unsafe{retainable(id)&&windows_sys::Win32::UI::WindowsAndMessaging::IsIconic(id.hwnd as HWND)!=0}); state.evict(now);
             let mut changed=Vec::new();
             for raster in state.views.drain(..){mark_changed(&mut changed,raster.preview.target.owner);}
             return changed;
@@ -550,7 +560,7 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
                 let live=Arc::new(AtomicBool::new(true));
                 let (reply,receiver)=mpsc::sync_channel(1);
                 if state.worker.is_none(){state.worker=Worker::new(controller as usize).ok();}
-                let req=Request{source:id,stamp:stamp.clone(),live:live.clone(),reply,limit:360,wait:Duration::from_secs(2)};
+                let req=Request{source:id,stamp:stamp.clone(),live:live.clone(),reply,limit:360,wait:Duration::from_secs(2),queued:Instant::now(),timing:None};
                 if state.worker.as_ref().is_some_and(|w|w.sender.try_send(req).is_ok()){
                     state.job=Some(Job{source:id,stamp,live,receiver});
                 }
@@ -583,34 +593,45 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
     })
 }
 
-// One on-demand frame from the existing worker. Never create a second
-// graphics device/worker for window effects. A busy worker means native fallback.
+// One on-demand frame from the existing worker. A click takes priority over
+// background Stage capture; cancellation releases its session before reuse.
 pub(super) struct TransitionCapture{
     pub receiver:mpsc::Receiver<Result<Frame,String>>,
+    pub timing:CaptureTimingHandle,
+    pub cached:bool,
     live:Arc<AtomicBool>,
 }
 impl Drop for TransitionCapture{fn drop(&mut self){self.live.store(false,Ordering::Relaxed);}}
-pub(super) fn transition_capture(source:WindowIdentity,controller:HWND)->Option<TransitionCapture>{
-    let stamp=unsafe{stamp(source)}?;
+pub(super) fn transition_capture(source:WindowIdentity,controller:HWND)->Result<TransitionCapture,&'static str>{
+    let stamp=unsafe{stamp(source)}.ok_or("source-unavailable")?;
     CURRENT.with(|cell|{
         let mut state=cell.borrow_mut();
-        if state.job.is_some()||state.transition_capture.as_ref().is_some_and(|live|live.load(Ordering::Relaxed)){return None;}
-        if state.worker.is_none(){state.worker=Worker::new(controller as usize).ok();}
+        if state.transition_capture.as_ref().is_some_and(|live|live.load(Ordering::Relaxed)){return Err("capture-worker-busy");}
         let live=Arc::new(AtomicBool::new(true));
         let (reply,receiver)=mpsc::sync_channel(1);
-        state.worker.as_ref()?.sender.try_send(Request{
-            source,stamp,live:live.clone(),reply,limit:768,wait:Duration::from_millis(125)
-        }).ok()?;
+        let timing=Arc::new(Mutex::new(CaptureTiming::default()));
+        if let Some(frame)=state.sources.get(&source).filter(|s|!s.dirty&&s.stamp.as_ref()==Some(&stamp)
+            &&s.captured_at.is_some_and(|t|t.elapsed()<=Duration::from_millis(800))).and_then(|s|s.frame.clone()){
+            let _=reply.send(Ok(frame));
+            return Ok(TransitionCapture{receiver,timing,cached:true,live});
+        }
+        if let Some(job)=state.job.take(){job.live.store(false,Ordering::Relaxed);}
+        if state.worker.is_none(){state.worker=Worker::new(controller as usize).ok();}
+        state.worker.as_ref().ok_or("capture-worker-busy")?.sender.try_send(Request{
+            source,stamp,live:live.clone(),reply,limit:768,wait:Duration::from_millis(350),
+            queued:Instant::now(),timing:Some(timing.clone())
+        }).map_err(|_|"capture-worker-busy")?;
         state.transition_capture=Some(live.clone());
-        Some(TransitionCapture{receiver,live})
+        Ok(TransitionCapture{receiver,timing,cached:false,live})
     })
 }
-// Save only one recent verified last-visible frame in the existing Stage
-// source budget, not in an animation-specific image cache.
+// Transition frames share the Stage cache even when Stage is hidden.
+// Only the newest frame stays at 768px; older minimized sources shrink to
+// 360px. Raster revisions can change without invalidating restore identity.
 pub(super) fn remember_transition(source:WindowIdentity,frame:Frame)->Option<u64>{
     CURRENT.with(|cell|{
         let mut state=cell.borrow_mut();
-        if !state.visible||!unsafe{retainable(source)}{return None;}
+        if !unsafe{retainable(source)}{return None;}
         state.generation=state.generation.wrapping_add(1).max(1);
         let revision=state.generation;
         let now=Instant::now();
@@ -618,20 +639,22 @@ pub(super) fn remember_transition(source:WindowIdentity,frame:Frame)->Option<u64
             if entry.frame.as_mut().is_some_and(shrink_transition_frame){entry.revision^=1u64<<63;}
         }
         let entry=state.sources.entry(source).or_default();
-        entry.frame=Some(frame);entry.revision=revision;entry.captured_at=Some(now);entry.last_used=Some(now);
+        entry.frame=Some(frame);entry.revision=revision;entry.transition_revision=Some(revision);
+        entry.captured_at=Some(now);entry.last_used=Some(now);
         state.evict(now);
-        state.sources.get(&source).filter(|e|e.revision==revision&&e.frame.is_some()).map(|_|revision)
+        state.sources.get(&source).filter(|e|e.transition_revision==Some(revision)&&e.frame.is_some()).map(|_|revision)
     })
 }
-pub(super) fn recent_transition(source:WindowIdentity,revision:u64)->Option<Frame>{
+pub(super) fn recent_transition(source:WindowIdentity,revision:u64)->Result<Frame,&'static str>{
     CURRENT.with(|cell|{
         let mut state=cell.borrow_mut();
-        let entry=state.sources.get_mut(&source)?;
-        if entry.revision!=revision||entry.captured_at.is_none_or(|t|t.elapsed()>Duration::from_secs(15))
-            ||!unsafe{retainable(source)}{return None;}
-        let frame=entry.frame.clone();
+        if !unsafe{retainable(source)}{return Err("protected-window");}
+        let entry=state.sources.get_mut(&source).ok_or("restore-preview-missing")?;
+        if entry.transition_revision!=Some(revision){return Err("restore-preview-replaced");}
+        if entry.captured_at.is_none_or(|t|t.elapsed()>MAX_AGE){return Err("restore-preview-expired");}
+        let frame=entry.frame.clone().ok_or("restore-preview-missing")?;
         if entry.frame.as_mut().is_some_and(shrink_transition_frame){entry.revision^=1u64<<63;}
-        frame
+        Ok(frame)
     })
 }
 pub(super) fn complete(){
@@ -645,7 +668,7 @@ pub(super) fn complete(){
         let generation=state.generation;
         let Some(entry)=state.sources.get_mut(&job.source)else{return;};
         match result{
-            Ok(Ok(f))=>{entry.frame=Some(f);entry.captured_at=Some(Instant::now());entry.revision=generation;entry.dirty=false;entry.retry=None;}
+            Ok(Ok(f))=>{entry.frame=Some(f);entry.captured_at=Some(Instant::now());entry.revision=generation;entry.transition_revision=None;entry.dirty=false;entry.retry=None;}
             _=>entry.retry=Some(Instant::now()+Duration::from_secs(30)),
         }
     });
