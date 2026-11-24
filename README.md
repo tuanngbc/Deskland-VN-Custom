@@ -1,149 +1,247 @@
-# TLauncher · Không gian làm việc cho Windows 11
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/branding/logo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/branding/logo-light.png">
+    <img src="assets/branding/logo-light.png" alt="TLauncher" width="460">
+  </picture>
+</p>
 
-TLauncher mang **hình nền động, Dock, Stage Manager và Spotlight lấy cảm hứng từ macOS** vào cùng một ứng dụng Rust dành cho Windows 11. Ghim ứng dụng trên Dock, chuyển cửa sổ từ các thẻ Stage và tìm nhanh bằng Spotlight. Hình nền, Dock và Stage có thể bật hoặc tắt riêng.
+<p align="center"><strong>Your Windows. Your Workspace.</strong></p>
 
-**[Tải bản mới nhất cho Windows 11 x64](https://github.com/tuanngbc/TLauncher/releases/latest)** · [Nhật ký thay đổi](CHANGELOG.md)
+**Tiếng Việt** · [English](README.en.md) · [简体中文](README.zh-CN.md)
 
-**Mới trong 1.0.1:** TLauncher tự mở khi đăng nhập Windows nếu đã bật tùy chọn tương ứng. Dock và Stage Manager khởi tạo trước, trong khi hình nền chờ Explorer sẵn sàng.
+# TLauncher — Không gian làm việc hiện đại cho Windows 11
 
-![Ảnh thật TLauncher trên màn dọc 1080×1920 và màn ngang 2560×1080, với hình nền Bãi biển toàn cảnh, đồng hồ, Dock và thẻ Stage Manager](docs/images/showcase/dual-monitor-real.webp)
+TLauncher là bộ công cụ quản lý không gian làm việc mã nguồn mở dành cho Windows 11. Ứng dụng viết bằng Rust native, kết hợp Dock lấy cảm hứng từ macOS, Stage Manager, Spotlight, hình nền động tương tác và hệ thống đa màn hình.
 
-*Ảnh chụp trên Windows 11. Hai màn chạy chung cảnh Bãi biển, ghép đúng tỷ lệ và vị trí theo bố trí màn hình trong Windows. Mỗi màn có Dock riêng. Các cụm icon vẫn tạo hình đảo; chỉ biểu tượng và tên tệp trên desktop được che. Các thẻ xem trước của Stage Manager vẫn hiện ở cạnh phải.*
+[![Bản phát hành mới nhất](https://img.shields.io/github/v/release/tuanngbc/TLauncher?label=release)](https://github.com/tuanngbc/TLauncher/releases/latest) [![Windows 11 x64](https://img.shields.io/badge/Windows%2011-x64-0078D4)](https://github.com/tuanngbc/TLauncher/releases/latest) [![Rust](https://img.shields.io/badge/Rust-native-000000?logo=rust)](README-rust.md) [![GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE) [![Lượt tải bản phát hành trên GitHub](https://img.shields.io/github/downloads/tuanngbc/TLauncher/total?label=release%20downloads)](https://github.com/tuanngbc/TLauncher/releases) [![Sao trên GitHub](https://img.shields.io/github/stars/tuanngbc/TLauncher?label=stars)](https://github.com/tuanngbc/TLauncher/stargazers)
+
+**[Tải bản mới nhất cho Windows 11 x64](https://github.com/tuanngbc/TLauncher/releases/latest)** · [Nhật ký thay đổi](CHANGELOG.md) · [Báo lỗi](https://github.com/tuanngbc/TLauncher/issues) · [Mã nguồn](https://github.com/tuanngbc/TLauncher)
+
+## Giao diện thực tế
+
+![TLauncher trên màn dọc 1080×1920 và màn ngang 2560×1080: cảnh Bãi biển toàn cảnh, đồng hồ desktop, Dock và thẻ Stage Manager](docs/images/showcase/dual-monitor-real.webp)
+
+*Ảnh Windows 11 với hai màn ghép đúng tỷ lệ và vị trí. Mỗi màn có Dock riêng. Các cụm icon vẫn tạo hình đảo. Ảnh giữ các thẻ Stage; biểu tượng và tên tệp desktop đã được che. Một số ảnh minh họa chụp từ bản thử native, với nhãn giao diện tiếng Việt.*
+
+## Mục lục
+
+- [Giao diện thực tế](#giao-diện-thực-tế)
+- [TLauncher là gì](#tlauncher-là-gì)
+- [Tính năng chính](#tính-năng-chính)
+- [Chi tiết và ảnh minh họa](#chi-tiết-và-ảnh-minh-họa)
+- [Yêu cầu hệ thống](#yêu-cầu-hệ-thống)
+- [Cài đặt và nâng cấp](#cài-đặt-và-nâng-cấp)
+- [Phím tắt bàn phím](#phím-tắt-bàn-phím)
+- [Hiệu năng và tài nguyên](#hiệu-năng-và-tài-nguyên)
+- [Kiến trúc và công nghệ](#kiến-trúc-và-công-nghệ)
+- [Quyền riêng tư và bảo mật](#quyền-riêng-tư-và-bảo-mật)
+- [FAQ](#faq)
+- [Build từ mã nguồn](#build-từ-mã-nguồn)
+- [Góp ý và đóng góp](#góp-ý-và-đóng-góp)
+- [Ghi nhận và dự án gốc](#ghi-nhận-và-dự-án-gốc)
+- [Giấy phép](#giấy-phép)
+
+## TLauncher là gì
+
+Ghim và mở app bằng Dock, quản lý cửa sổ bằng Stage Manager, tìm app và tệp bằng Spotlight, rồi tùy biến từng màn hình. Có thể bật hoặc tắt hình nền, Dock và Stage riêng. TLauncher là ứng dụng desktop Windows, không liên quan đến trình khởi chạy Minecraft cùng tên.
+
+## Tính năng chính
+
+| Nhóm | Có trong bản công khai |
+| --- | --- |
+| Quản lý cửa sổ | Dock, Stage Manager, Start, tìm kiếm Spotlight và chế độ tương thích thanh tác vụ Windows |
+| Desktop | **16 chủ đề** động tương tác, ánh sáng theo giờ, thời tiết theo vị trí, ba chế độ đa màn hình và hai đồng hồ |
+| Tiện ích | Trung tâm điều khiển, lịch tháng, chỉ số CPU/GPU/RAM/mạng, chụp và sửa ảnh, quay màn hình MP4 |
+| Cá nhân hóa | Cài đặt tích hợp, bố trí theo màn hình, phím tắt tùy chỉnh và tự khởi động khi đăng nhập |
+
+**Bản 1.0.1:** Khi bật tự khởi động, Windows mở TLauncher lúc đăng nhập qua Task Scheduler. Dock và Stage khởi tạo trước hình nền; nếu Explorer chưa sẵn sàng, hình nền thử gắn lại sau. Xem [ghi chú và điều kiện kiểm chứng](CHANGELOG.md#kiểm-chứng).
 
 <!-- product-guide:start -->
-## Hình nền động và tương tác
+## Chi tiết và ảnh minh họa
 
-Chọn trong **16 chủ đề**, từ bãi biển, thảo nguyên và hồ cá đến sân vận động, đại dương và hiên nhà mùa hè. Nhiều cảnh uốn quanh biểu tượng desktop. Tùy cảnh, bấm vùng trống có thể tạo gợn nước, gọi cá hoặc tạo cụm mây; bấm biểu tượng vẫn mở ứng dụng như bình thường. Chọn **Cài đặt → Hình nền** để đổi cảnh, chỉnh tham số hoặc tạo bố cục mới.
+### Hình nền động và tương tác
+
+Chọn trong **16 chủ đề**, từ Bãi biển, Thảo nguyên và Hồ cá đến Sân vận động, Đại dương và Hiên nhà mùa hè. Nhiều cảnh tạo bố cục quanh các cụm icon desktop. Tùy cảnh, bấm vùng trống tạo gợn nước, gọi cá hoặc tạo cụm mây; bấm icon vẫn mở ứng dụng. Đổi cảnh, chỉnh tham số hoặc tạo bố cục trong **Cài đặt → Hình nền**.
 
 | Bãi biển | Đảo Maldives | Thảo nguyên |
 | --- | --- | --- |
-| ![Sóng trên nền Bãi biển](docs/images/beach.webp) | ![Đầm phá xanh của Đảo Maldives](docs/images/maldives.webp) | ![Mây và đồng cỏ của Thảo nguyên](docs/images/meadow.webp) |
+| ![Sóng của cảnh Bãi biển](docs/images/beach.webp) | ![Đầm phá của cảnh Đảo Maldives](docs/images/maldives.webp) | ![Mây và đồng cỏ của cảnh Thảo nguyên](docs/images/meadow.webp) |
 
-*Ảnh xem trước từ ba chủ đề đi kèm.*
+*Ba ảnh xem trước từ các chủ đề đi kèm.*
 
-## Thời tiết thật, ánh sáng và bóng đổ
+### Thời tiết ánh sáng và bóng đổ
 
-Trong **Cài đặt → Thời tiết & ánh sáng**, có thể dùng mô phỏng ngoại tuyến hoặc chọn **Theo vị trí thật**, rồi tìm thành phố hoặc mã bưu chính. Chế độ trực tiếp lấy mây, mưa, tuyết và gió từ Open-Meteo cho địa điểm đã chọn; ứng dụng không tự lấy vị trí thiết bị. Có thể chọn kiểu trời như quang đãng, nhiều mây, mưa, giông hoặc tuyết.
+Chọn mô phỏng ngoại tuyến hoặc **Theo vị trí thật** trong **Cài đặt → Thời tiết & ánh sáng**. Tìm thành phố hoặc mã bưu chính để lấy mây, mưa, tuyết và gió từ Open-Meteo. Có thể chọn thủ công kiểu trời quang, nhiều mây, mưa, giông hoặc tuyết.
 
-Khi bật **Đổi theo thời gian**, TLauncher tính hướng và độ cao Mặt Trời từ thời điểm hiện tại và tọa độ đã chọn. Nếu chưa chọn địa điểm, ứng dụng dùng giờ trên máy. Cảnh có hỗ trợ bóng cây, chẳng hạn **Bãi biển**, dùng hướng nắng để đổi hướng và độ dài bóng; mỗi cảnh có hiệu ứng riêng. Có thể bật hoặc tắt diễn biến theo giờ và theo thời tiết độc lập.
+Khi bật **Đổi theo thời gian**, TLauncher tính vị trí Mặt Trời từ giờ và tọa độ đã chọn; nếu chưa chọn vị trí, ứng dụng dùng giờ trên máy. Cảnh hỗ trợ bóng cây như Bãi biển đổi hướng và độ dài bóng theo nắng. Hiệu ứng theo giờ và theo thời tiết có công tắc riêng.
 
-![Cài đặt thời tiết theo vị trí và minh họa bóng đổ sáng, trưa, chiều](docs/images/showcase/weather.webp)
+![Cài đặt thời tiết và minh họa hướng bóng sáng trưa chiều](docs/images/showcase/weather.webp)
 
-*Ảnh giao diện với thành phố mẫu. Sơ đồ bên dưới minh họa hướng bóng đổi theo giờ.*
+*Giao diện với thành phố mẫu và sơ đồ hướng bóng theo giờ.*
 
-## Nhiều màn hình: đồng bộ, độc lập hoặc toàn cảnh
+### Toàn cảnh và nhiều màn hình
 
-Dùng **Đồng bộ** để dùng cùng chủ đề trên các màn, **Độc lập** để chọn cảnh riêng hoặc **Toàn cảnh** để trải một cảnh liên tục qua các màn. Sơ đồ đọc bố trí từ Windows, kể cả cặp ngang–dọc và các màn có mức thu phóng khác nhau. Có thể tạm dừng nền từng màn và chọn màn nào hiển thị Dock hoặc Stage với kích cỡ, cạnh và cách giữ chỗ riêng.
+Dùng **Đồng bộ** để dùng một chủ đề trên mọi màn, **Độc lập** để chọn cảnh riêng, hoặc **Toàn cảnh** để trải cảnh theo tọa độ màn hình của Windows. Hỗ trợ bố trí ngang/dọc và mức thu phóng DPI khác nhau. Có thể tạm dừng nền riêng từng màn và chọn màn, cạnh, kích cỡ và cách giữ chỗ cho Dock hoặc Stage.
 
-![Sơ đồ màn hình ngang và dọc ở chế độ Toàn cảnh](docs/images/showcase/multi-monitor.webp)
+![Cài đặt Toàn cảnh với một màn ngang và một màn dọc](docs/images/showcase/multi-monitor.webp)
 
-*Ảnh Cài đặt với hai màn hình mẫu ở mức 100% và 125%.*
+*Hai màn hình mẫu dùng mức thu phóng 100% và 125%.*
 
-## Hai đồng hồ trên desktop
+### Hai đồng hồ desktop
 
-Đồng hồ native hiển thị giờ, thứ và ngày trên desktop, phía sau cửa sổ ứng dụng. Mở khóa để kéo đồng hồ, rồi khóa vị trí để chuột đi xuyên qua. Chỉnh kích cỡ và độ trong mờ hoặc tinh chỉnh từng dòng. Có thể bật đồng hồ thứ hai trên màn còn lại và chỉnh kích cỡ, vị trí riêng ở **Cài đặt → Đồng hồ**.
+Đồng hồ native hiện giờ, thứ và ngày bên dưới các cửa sổ. Mở khóa để kéo, rồi khóa lại để chuột đi xuyên qua. Chỉnh kích cỡ, độ trong mờ và từng dòng. Có thể bật đồng hồ thứ hai, đặt vị trí và kích cỡ riêng trong **Cài đặt → Đồng hồ**.
 
-![Cài đặt kích cỡ, độ trong và màn hình cho hai đồng hồ](docs/images/showcase/clocks.webp)
+![Cài đặt kích cỡ và màn hình cho hai đồng hồ](docs/images/showcase/clocks.webp)
 
-*Ảnh Cài đặt với đồng hồ thứ hai bật trên màn dọc mẫu.*
+*Đồng hồ thứ hai được bật trên màn dọc mẫu.*
 
-## Dock kiểu macOS
+### Dock lấy cảm hứng từ macOS
 
-Ghim ứng dụng, shortcut hoặc lệnh có đối số; mở và chuyển cửa sổ từ biểu tượng trên Dock. Có tùy chọn đổi icon, kích cỡ, khoảng cách, mức phóng khi rê chuột, kính mờ và màu sáng, tối hoặc theo hệ thống. Dock có thể nổi trên cửa sổ, giữ chỗ để cửa sổ phóng lớn không che thanh, hoặc tự ẩn khi cửa sổ phóng tối đa rồi hiện lại khi rê vào cạnh. Bố trí chỉnh riêng theo màn hình.
+Ghim app, shortcut hoặc lệnh có đối số; mở và chuyển cửa sổ từ icon. Tùy chỉnh icon, độ phóng khi rê chuột, kích cỡ, khoảng cách, kính mờ và màu sáng, tối hoặc theo hệ thống. Dock có thể nổi, giữ vùng làm việc riêng hoặc tự ẩn khi cửa sổ phóng tối đa rồi hiện lại khi rê vào cạnh. Cấu hình có thể khác nhau theo từng màn.
 
-![Dock Windows với nhóm ứng dụng, icon đang phóng và vùng chỉ số](docs/images/showcase/dock.webp)
+![Dock với ứng dụng ghim, icon phóng khi rê và chỉ số hệ thống](docs/images/showcase/dock.webp)
 
-*Ảnh chụp native từ lượt thử Dock, dùng hồ sơ mẫu.*
+*Ảnh thử nghiệm native với hồ sơ mẫu.*
 
-## Stage Manager: nhóm và chuyển cửa sổ bằng thẻ
+### Stage Manager và nhóm cửa sổ
 
-Stage xếp ảnh xem trước ở cạnh trái hoặc phải, dạng thẻ phối cảnh hoặc phẳng. Thẻ của cửa sổ đang làm việc được làm nổi bật. Khi nhiều cửa sổ chung một thẻ, hai mũi tên cho phép chọn cửa sổ cần mở. Có thể chỉnh số thẻ mỗi trang, cỡ thẻ, khoảng cách đến cạnh màn và vùng làm việc. Bản 1.0.0 khử răng cưa viền chéo, kể cả khi rê chuột phóng thẻ; kiểm thử Windows bao phủ DPI **100%, 125% và 150%**. Windows có thể giới hạn ảnh xem trước của cửa sổ được bảo vệ.
+Xem trước cửa sổ trên các thẻ phối cảnh hoặc phẳng ở cạnh trái hoặc phải. Thẻ đang hoạt động nổi bật; hai mũi tên cho phép duyệt thành viên trong nhóm. Chỉnh số thẻ mỗi trang, kích cỡ, khoảng cách đến mép và vùng làm việc. Bản 1.0.0 khử răng cưa viền chéo cả khi rê chuột phóng thẻ; kiểm thử bao phủ DPI **100%, 125% và 150%**. Cửa sổ được Windows bảo vệ có thể không cho xem trước.
 
-![Thẻ cửa sổ phối cảnh và hai ví dụ thẻ Stage ở các mức DPI khác nhau](docs/images/showcase/stage.webp)
+![Thẻ Stage phối cảnh và ví dụ viền ở các mức DPI khác nhau](docs/images/showcase/stage.webp)
 
-*Ảnh kiểm thử native của bản phát hành với các cửa sổ mẫu.*
+*Ảnh kiểm thử native với cửa sổ mẫu.*
 
-## Start và Spotlight
+### Start và Spotlight
 
-**Start** có ô tìm kiếm tự nhận bàn phím, ứng dụng ghim, mục mở gần đây và dùng nhiều nhất. Từ đây có thể mở tùy chọn tài khoản và nguồn. Trong chế độ Dock, có thể dùng một lần nhấn phím **Windows** để mở Start của TLauncher. **Spotlight** là ô tìm kiếm riêng, mở giữa màn hình bằng nút kính lúp hoặc **Alt+Space** mặc định. Spotlight tìm ứng dụng và tệp từ các vị trí được lập chỉ mục; dùng mũi tên để chọn và Enter để mở.
+**Start** tự đưa bàn phím vào ô tìm kiếm, hiện ứng dụng ghim, gần đây và dùng nhiều, cùng tùy chọn tài khoản và nguồn. Ở chế độ Dock, nhấn riêng phím **Windows** có thể mở Start của TLauncher. **Spotlight** là ô tìm riêng ở giữa màn hình, mở bằng kính lúp hoặc **Alt+Space**. Spotlight tìm ứng dụng và các tệp đã được lập chỉ mục; dùng mũi tên để chọn và Enter để mở.
 
-| Start của TLauncher | Spotlight |
+| Start | Spotlight |
 | --- | --- |
-| ![Start với ô tìm kiếm, ứng dụng ghim, gần đây và dùng nhiều](docs/images/showcase/start.webp) | ![Ô tìm kiếm Spotlight với hiệu ứng kính mờ](docs/images/showcase/spotlight.webp) |
+| ![Start với tìm kiếm, ứng dụng ghim và gần đây](docs/images/showcase/start.webp) | ![Ô tìm kiếm Spotlight kính mờ](docs/images/showcase/spotlight.webp) |
 
-*Start chụp từ kiểm thử 1.0.0; Spotlight chụp từ lượt thử native trước khi đổi tên sản phẩm.*
+*Start từ kiểm thử 1.0.0; Spotlight từ bản thử native trước khi đổi tên sản phẩm.*
 
-## Trung tâm điều khiển, lịch và chỉ số hệ thống
+### Trung tâm điều khiển lịch và tài nguyên
 
-Mở **Trung tâm điều khiển** bằng mũi tên trên Dock để xem tiện ích, điều chỉnh âm lượng và truy cập mạng, Bluetooth. Bấm ngày giờ để mở **lịch tháng** và chuyển tháng. Dock có thể hiện **CPU, RAM, GPU và tốc độ tải lên/xuống**; chỉ số và cụm nút mạng/âm lượng có công tắc hiển thị riêng. Chọn **Tương thích Windows** nếu cần thao tác đầy đủ với biểu tượng khay của ứng dụng bên thứ ba.
+Mở Trung tâm điều khiển từ mũi tên trên Dock để chỉnh âm lượng và truy cập tiện ích mạng/Bluetooth. Bấm ngày giờ để mở lịch và chuyển tháng. Dock hiện CPU, GPU, RAM và tốc độ tải lên/xuống; có công tắc riêng cho các chỉ số và cụm mạng/âm lượng. Dùng **Tương thích Windows** để thao tác đầy đủ với khay của ứng dụng bên thứ ba.
 
-| Lịch tháng | Vùng chỉ số và tiện ích |
+| Lịch tháng | Chỉ số trên Dock |
 | --- | --- |
-| ![Lịch tháng của TLauncher trong chế độ tối](docs/images/showcase/calendar.webp) | ![CPU, RAM, GPU, mạng và ngày giờ trên Dock](docs/images/showcase/status.webp) |
+| ![Lịch tháng của TLauncher ở giao diện tối](docs/images/showcase/calendar.webp) | ![CPU, RAM, GPU, mạng và ngày giờ trên Dock](docs/images/showcase/status.webp) |
 
-*Lịch chụp từ kiểm thử 1.0.0; vùng chỉ số cắt từ ảnh Dock thử nghiệm. Các số trong ảnh giao diện không phải số đo bên dưới.*
+*Lịch từ kiểm thử 1.0.0; vùng chỉ số từ một ảnh thử Dock, không phải số liệu benchmark.*
 
-## Chụp ảnh và quay màn hình
+### Chụp ảnh và quay màn hình
 
-| Phím mặc định | Tác vụ |
+Chụp vùng kéo chọn hoặc cả màn hình dưới con trỏ. Trình sửa có cắt, mũi tên, chữ, số bước, che kiểu pixel và tô kín; sao chép vào clipboard hoặc lưu PNG/JPG. Quay vùng chọn thành MP4 (H.264), **30 FPS** mặc định hoặc **60 FPS**, có hoặc không có tiếng phát từ máy. Có tạm dừng/tiếp tục; bản hiện tại chưa có mic, webcam hay chế độ quay game riêng.
+
+![Cài đặt phím tắt chụp quay và chất lượng video](docs/images/showcase/capture-shortcuts.webp)
+
+*Giao diện cấu hình trước khi bắt đầu ghi.*
+
+### Cài đặt và chế độ thanh tác vụ
+
+Một cửa sổ nhóm Hình nền, Màn hình, Thời tiết & ánh sáng, Đồng hồ, Dock & Stage Manager, Phím tắt & tiện ích và Hệ thống. WebView2 Settings có Tiếng Việt, English và 简体中文; một số giao diện native có thể dùng văn bản riêng. Explorer vẫn chạy. Chọn **Tương thích Windows** để dùng Start, taskbar và khay gốc.
+
+![Cài đặt với công tắc Hình nền Dock và Stage độc lập](docs/images/showcase/dock-settings.webp)
+
+*Giao diện 1.0.0 với cấu hình mẫu.*
+<!-- product-guide:end -->
+
+## Yêu cầu hệ thống
+
+- **Windows 11 x64** là nền tảng của gói công khai; không có cam kết hỗ trợ Windows 10.
+- Driver hỗ trợ **OpenGL 3.3** cho hình nền native. Đường hiển thị GPU trực tiếp tùy driver; GDI là đường dự phòng.
+- **Microsoft Edge WebView2 Runtime** cho Cài đặt đầy đủ. Nếu Runtime hoặc `prototype/` không khả dụng, TLauncher có Cài đặt Win32 cơ bản.
+
+## Cài đặt và nâng cấp
+
+1. Mở [Release mới nhất](https://github.com/tuanngbc/TLauncher/releases/latest). Trong **Assets**, tải **TLauncher-…-win-x64.zip**; dùng tệp `.zip.sha256` tương ứng để đối chiếu. **Source code** dành để xem hoặc tự build.
+2. Giải nén cả gói vào một thư mục rồi chạy `TLauncher.exe`. Giữ `prototype/` cho Cài đặt, shader và ảnh xem trước; giữ `assets/widget/` cho đồng hồ. Mở Cài đặt từ Dock hoặc khay hệ thống.
+3. Khi nâng cấp, thoát bản cũ và sao lưu thư mục cài đặt cùng `%USERPROFILE%\.deskland-rs`. Giữ hồ sơ này để dùng tiếp chủ đề, bố trí, mục ghim và phím tắt.
+4. Bật hoặc tắt tự mở tại **Cài đặt → Hệ thống → Khởi động cùng Windows**. Nếu đổi đường dẫn EXE, tắt rồi bật lại để đăng ký vị trí mới. Xem [các bước quay lại 1.0.0](CHANGELOG.md#nâng-cấp-và-quay-lại).
+
+## Phím tắt bàn phím
+
+| Mặc định | Tác vụ |
 | --- | --- |
-| **Ctrl+Shift+S** | Kéo chọn vùng chụp; Space chọn cả màn hình dưới con trỏ. Trình sửa ảnh có cắt, mũi tên, chữ, số bước, che kiểu pixel và tô kín. Sao chép vào clipboard hoặc lưu PNG/JPG. |
-| **Ctrl+Shift+R** | Chọn vùng quay và lưu MP4 (H.264), **30 FPS** mặc định hoặc **60 FPS**. Chọn thu tiếng máy hoặc quay im lặng; nhấn lại để dừng và lưu. |
-| **Ctrl+Shift+P** | Tạm dừng hoặc tiếp tục bản quay đang chạy. |
+| **Ctrl+Shift+S** | Chụp vùng chọn; nhấn Space để chọn cả màn hình dưới con trỏ. |
+| **Ctrl+Shift+R** | Chọn vùng quay; nhấn lại để dừng và lưu. |
+| **Ctrl+Shift+P** | Tạm dừng hoặc tiếp tục bản quay. |
 | **Alt+Space** | Mở Spotlight. |
-| **Ctrl+Alt+L** | Khóa bằng cơ chế khóa của Windows. |
+| **Ctrl+Alt+L** | Khóa phiên qua Windows. |
 | **Ctrl+Alt+Shift+F12** | Hiện lại thanh tác vụ Windows trong phiên hiện tại. |
 
-Đổi phím Spotlight, chụp, quay và khóa trong **Cài đặt → Phím tắt & tiện ích**. Ảnh và video lưu cục bộ, mặc định trong **Pictures/TLauncher** và **Videos/TLauncher**. Bản quay hỗ trợ tiếng phát từ máy; mic và webcam không nằm trong bản 1.0.0. Nội dung có bảo vệ có thể không được ghi.
+Đổi phím Spotlight, chụp, quay và khóa trong **Cài đặt → Phím tắt & tiện ích**.
 
-![Cài đặt phím tắt chụp, quay và chất lượng video](docs/images/showcase/capture-shortcuts.webp)
+## Hiệu năng và tài nguyên
 
-*Ảnh Cài đặt của bộ chụp và quay; chưa bắt đầu phiên ghi.*
+Hình nền thường chạy khoảng **30 FPS** và có thể tăng ngắn khi tương tác. Nền bị che ngừng nhận khung mới; khi tất cả bị che hoặc phiên bị khóa, bộ dựng hình tạm dừng. WebView2 dùng khi mở Cài đặt; chụp và quay chạy theo yêu cầu.
 
-## Hiệu năng: CPU, GPU và RAM
-
-Hình nền dựng bằng Rust/Win32 và OpenGL. Trên driver tương thích, TLauncher đưa khung từ GPU lên desktop qua D3D11/DirectComposition; GDI là đường dự phòng. Nhịp nền thường khoảng **30 FPS** và có thể tăng ngắn khi tương tác. Màn bị che ngừng nhận khung mới; khi tất cả bị che hoặc khi khóa máy, hình nền tạm dừng dựng. WebView2 dùng khi mở Cài đặt; công cụ chụp và quay chạy theo yêu cầu.
-
-**Mẫu quan sát bản 1.0.0** trên Windows 11, Ryzen 5 4600G, GTX 1070 và hai màn **2560×1080 + 1080×1920**, cảnh Bãi biển ở chế độ Toàn cảnh. Trong **25,5 giây / 18 mẫu**, nhật ký cho thấy **một nền đang bị che**, nền còn lại chạy khoảng **30 FPS**:
+**Mẫu quan sát v1.0.0:** Windows 11, Ryzen 5 4600G, GTX 1070, hai màn **2560×1080 + 1080×1920**, cảnh Bãi biển ở chế độ Toàn cảnh. Trong **25,5 giây / 18 mẫu**, nhật ký ghi nhận **một nền bị che**; nền còn lại chạy khoảng **30 FPS**.
 
 | Chỉ số | Quan sát |
 | --- | ---: |
-| CPU của tiến trình chính TLauncher, chuẩn hóa theo 12 luồng logic | **0,54%** trung bình |
+| CPU tiến trình chính, chuẩn hóa theo 12 luồng logic | **0,54%** trung bình |
 | RAM riêng (private bytes) | **279 MiB** |
 | RAM đang lưu trú (working set) | **174–176 MiB** |
-| GPU 3D của TLauncher, trên engine đang hoạt động | **1–2%** |
-| GPU 3D của DWM, trên cùng engine | **0–1%** |
+| GPU 3D của TLauncher trên engine hoạt động | **1–2%** |
+| GPU 3D của DWM trên cùng engine | **0–1%** |
 
-![Tóm tắt số đo CPU, RAM và GPU 3D khi một nền bị che](docs/images/showcase/performance.webp)
+![Mẫu đo CPU, RAM và GPU 3D khi một nền bị che](docs/images/showcase/performance.webp)
 
-*GPU là chỉ số theo tiến trình và engine, không phải GPU tổng. Đây là một mẫu quan sát, không phải phép đo đối chứng hay cam kết khi hai nền cùng lộ, đang mở Cài đặt hoặc đang quay.*
+*GPU tính theo tiến trình và engine, không phải GPU tổng. Đây là mẫu quan sát, không phải phép đo đối chứng hay cam kết cho hai nền cùng lộ, lúc mở Cài đặt hoặc đang quay.*
 
-## Cá nhân hóa và chế độ thanh tác vụ
+## Kiến trúc và công nghệ
 
-Một cửa sổ **Cài đặt** tập trung Hình nền, Màn hình, Thời tiết & ánh sáng, Đồng hồ, Dock & Stage Manager, Phím tắt & tiện ích và Hệ thống. Ở chế độ Dock, **Explorer vẫn chạy**. Chuyển sang **Tương thích Windows** để dùng Start, thanh tác vụ và khay gốc; phím khôi phục ở bảng trên hiện lại thanh Windows ngay trong phiên. Windows vẫn quản lý đăng nhập và màn hình khóa.
+- **Rust + Win32** quản lý desktop, cửa sổ, DPI theo màn hình và tiện ích native.
+- **OpenGL 3.3 qua WGL** dựng hình nền. Khi tương thích, **Direct3D 11 / DirectComposition** trình chiếu khung GPU; **GDI** là đường dự phòng.
+- **WebView2** hiển thị Cài đặt đầy đủ khi cần; có giao diện Win32 cơ bản.
+- **Windows Graphics Capture** dùng cho các đường lấy ảnh có hỗ trợ; **Media Foundation** mã hóa MP4/H.264.
+- **Windows Task Scheduler** đăng ký tự mở theo tài khoản từ 1.0.1. Xem [hướng dẫn bản Rust](README-rust.md) và [tài liệu kiến trúc](docs/README.md).
 
-![Cài đặt phân nhóm với các công tắc Hình nền, Dock và Stage](docs/images/showcase/dock-settings.webp)
+## Quyền riêng tư và bảo mật
 
-*Ảnh giao diện 1.0.0 với cấu hình minh họa.*
-<!-- product-guide:end -->
+Tìm địa điểm gửi truy vấn đến dịch vụ geocoding của Open-Meteo. Khi dùng thời tiết trực tiếp, tọa độ của địa điểm đã chọn được gửi để lấy dự báo; ứng dụng không tự lấy vị trí thiết bị cho tính năng này. Có mô phỏng ngoại tuyến. Ảnh và video mặc định lưu trên máy trong `Pictures/TLauncher` và `Videos/TLauncher`; người dùng chọn khi sao chép ảnh vào clipboard.
 
-## Cài đặt và cập nhật
+TLauncher dùng cơ chế khóa và đăng nhập của Windows. Tác vụ tự khởi động 1.0.1 chạy theo tài khoản hiện tại và không yêu cầu quyền quản trị.
 
-1. Mở [Release mới nhất](https://github.com/tuanngbc/TLauncher/releases/latest) và tải **TLauncher-1.0.1-win-x64.zip** trong mục **Assets**. Tệp **.zip.sha256** cùng tên dùng để đối chiếu bản tải. **Source code** dùng để đọc hoặc tự build.
-2. Giải nén **toàn bộ** gói vào một thư mục rồi mở **TLauncher.exe**. Giữ **prototype/** và **assets/widget/** cạnh EXE. Mở Cài đặt từ menu Dock hoặc khay hệ thống.
-3. Khi nâng cấp, thoát bản cũ, sao lưu thư mục cài đặt và **%USERPROFILE%\.deskland-rs**, rồi giải nén toàn bộ gói mới vào thư mục cài đặt. Giữ thư mục cấu hình để dùng tiếp chủ đề, phím tắt và các mục đã lưu.
-4. Nếu muốn tự mở khi đăng nhập, kiểm tra **Cài đặt → Hệ thống → Khởi động cùng Windows**. Nếu chuyển EXE sang thư mục khác hoặc tùy chọn đã bật nhưng máy không tự mở, tắt rồi bật lại công tắc từ bản mới để đăng ký lại đúng đường dẫn. Xem [cách nâng cấp và quay về 1.0.0](CHANGELOG.md#nâng-cấp-và-quay-lại).
+## FAQ
 
-## Mã nguồn, kiểm thử và giấy phép
+**Vì sao chỉ thấy Cài đặt cơ bản?** Kiểm tra WebView2 Runtime và `prototype/` cạnh EXE. Giải nén cả gói nếu trước đó chỉ lấy EXE.
 
-Mỗi gói Windows có **VERSION.txt** và **BUILD-COMMIT.txt** để đối chiếu phiên bản và mã nguồn. Xem [Release mới nhất](https://github.com/tuanngbc/TLauncher/releases/latest) để tìm bản build đã kiểm tra, hoặc đọc [kiến trúc và lệnh kiểm thử](README-rust.md) và [tài liệu](docs/README.md). Dựng trên Windows với Rust stable và Windows SDK: chạy **cargo test --release** và **cargo build --release**.
+**Làm sao lấy lại thanh tác vụ Windows?** Chọn **Tương thích Windows** hoặc nhấn **Ctrl+Alt+Shift+F12** để hiện lại trong phiên hiện tại. Explorer vẫn hoạt động khi dùng Dock.
 
-Dự án dùng [GPL-3.0](LICENSE). Xem [thông báo bên thứ ba](THIRD_PARTY_NOTICES.md) và [ghi chú nhãn hiệu](TRADEMARKS.md).
+**Vì sao không thấy startup trong trang Ứng dụng khởi động của Windows?** Bản 1.0.1 dùng Task Scheduler. Dùng công tắc trong Cài đặt TLauncher; nếu EXE đã chuyển chỗ, tắt rồi bật lại công tắc.
 
-## Nguồn gốc và ghi nhận phát triển
+**Vì sao một số cửa sổ không có ảnh xem trước hoặc không quay được?** Windows có thể hạn chế nội dung được bảo vệ. Quay hỗ trợ tiếng phát từ máy; không có thu mic hoặc webcam trong bản hiện tại.
 
-- **Deskland** — [BLEZZ0102/Deskland](https://github.com/BLEZZ0102/Deskland) là dự án gốc và nền tảng hình nền động.
-- **Deskland-VN** — [nhhoang188/Deskland-VN](https://github.com/nhhoang188/Deskland-VN) là nguồn của các chủ đề được chuyển sang TLauncher và phần bản địa hóa tiếng Việt.
-- **TLauncher** — [tuanngbc](https://github.com/tuanngbc) phát triển và duy trì bản fork [tuanngbc/TLauncher](https://github.com/tuanngbc/TLauncher). Các tính năng bổ sung gồm Dock, Stage Manager, Start, Spotlight, chế độ thanh tác vụ, trung tâm điều khiển, lịch và chỉ số hệ thống, đồng hồ desktop native, chụp và quay màn hình, phím tắt tùy chỉnh và Cài đặt tích hợp. Trên nền hình nền được kế thừa, tuanngbc phát triển bộ dựng hình Rust và hệ thống đa màn hình của TLauncher: đồng bộ, cảnh riêng từng màn, toàn cảnh nối qua các màn, và bố trí Dock, Stage, đồng hồ theo từng màn. Thời tiết theo vị trí và bóng đổ theo Mặt Trời cũng là phần TLauncher phát triển thêm.
+**Hồ sơ lưu ở đâu? Quay lại bản cũ thế nào?** Hồ sơ nằm ở `%USERPROFILE%\.deskland-rs`. Sao lưu hồ sơ và thư mục cài đặt trước khi nâng cấp. Để về 1.0.0, tắt startup trong 1.0.1 trước khi thoát, khôi phục gói cũ, rồi bật lại startup trong bản cũ nếu muốn.
+
+## Build từ mã nguồn
+
+Dùng Rust stable, công cụ C++ MSVC và Windows SDK trên Windows. Trong thư mục mã nguồn:
+
+```powershell
+cargo test --release
+cargo build --release
+```
+
+Xem [hướng dẫn chạy bản Rust](README-rust.md) để bố trí tài nguyên cạnh EXE. Gói Release ghi phiên bản trong `VERSION.txt` và commit trong `BUILD-COMMIT.txt`.
+
+## Góp ý và đóng góp
+
+[Báo lỗi hoặc đề xuất](https://github.com/tuanngbc/TLauncher/issues) kèm phiên bản TLauncher, phiên bản Windows, bố trí màn hình (nếu liên quan) và các bước tái hiện. Che dữ liệu cá nhân trong ảnh/log. Xem [ghi chú phát triển](AGENTS.md) và [quy ước đồng bộ README](docs/README.md#quy-ước-readme-đa-ngôn-ngữ).
+
+## Ghi nhận và dự án gốc
+
+- [BLEZZ0102/Deskland](https://github.com/BLEZZ0102/Deskland) — dự án gốc và nền tảng hình nền động.
+- [nhhoang188/Deskland-VN](https://github.com/nhhoang188/Deskland-VN) — các chủ đề được chuyển sang và phần bản địa hóa tiếng Việt.
+- [tuanngbc/TLauncher](https://github.com/tuanngbc/TLauncher) — [tuanngbc](https://github.com/tuanngbc) phát triển và duy trì bản fork TLauncher, gồm bộ dựng hình Rust native, cải tiến desktop, hệ thống đa màn hình (đồng bộ, độc lập, toàn cảnh theo tọa độ Windows), Dock, Stage Manager, Start, Spotlight, chế độ thanh tác vụ, Trung tâm điều khiển, lịch, chỉ số hệ thống, đồng hồ native, chụp/quay, phím tắt, thời tiết và bóng đổ theo Mặt Trời, Cài đặt tích hợp và cải tiến khởi động Windows.
 
 Xem [NOTICE](NOTICE), [ghi nhận gốc của Deskland-VN](third_party/deskland-vn/NOTICE) và [nguồn thiết kế đồng hồ](assets/widget/NOTICE.txt).
+
+## Giấy phép
+
+Mã nguồn TLauncher phát hành theo [GNU GPL-3.0](LICENSE). Xem [thông báo bên thứ ba](THIRD_PARTY_NOTICES.md), [nhãn hiệu](TRADEMARKS.md) và [quy chuẩn logo](assets/branding/BRAND.md). TLauncher là dự án độc lập, không phải sản phẩm chính thức của Apple hay Microsoft.
