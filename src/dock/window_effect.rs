@@ -79,16 +79,13 @@ unsafe fn elevation(pid:u32)->Option<bool>{
     CloseHandle(token);
     (ok!=0).then_some(data.TokenIsElevated!=0)
 }
-// Do not mutate a foreign HWND's transition attributes: a crash between
-// mutation and restoration could leave the other app's policy changed.
-// A documented, readable already-disabled per-window transition or an
-// already-disabled Windows minimize animation is required.
-unsafe fn without_native_overlap(hwnd:HWND)->bool{
+// DWMWA_TRANSITIONS_FORCEDISABLED is documented for Set, not Get.
+// Do not probe the unsupported getter or change a foreign HWND's policy.
+// Only an already-disabled Windows minimize animation can be certified.
+unsafe fn without_native_overlap(_hwnd:HWND)->bool{
     let mut info:ANIMATIONINFO=mem::zeroed();
     info.cbSize=mem::size_of::<ANIMATIONINFO>() as u32;
-    if SystemParametersInfoW(SPI_GETANIMATION,info.cbSize,(&mut info as *mut ANIMATIONINFO).cast(),0)!=0&&info.iMinAnimate==0{return true;}
-    let mut disabled=0i32;
-    DwmGetWindowAttribute(hwnd,DWMWA_TRANSITIONS_FORCEDISABLED as u32,(&mut disabled as *mut i32).cast(),4)>=0&&disabled!=0
+    SystemParametersInfoW(SPI_GETANIMATION,info.cbSize,(&mut info as *mut ANIMATIONINFO).cast(),0)!=0&&info.iMinAnimate==0
 }
 unsafe fn permitted(id:WindowIdentity)->bool{
     let h=id.hwnd as HWND;
@@ -324,15 +321,10 @@ pub(super) unsafe fn probe_owned_window(source:HWND,frame:&stage_snapshot::Frame
     let end=icon_fit(area,icon);
     let counts=||{let h=GetCurrentProcess();let mut n=0;GetProcessHandleCount(h,&mut n);
         (GetGuiResources(h,0),GetGuiResources(h,1),n)};
-    // The fixture owns this window, so test the (potentially unreadable)
-    // per-HWND policy without changing another application or the system.
-    let mut prior=0i32;
-    let read=DwmGetWindowAttribute(source,DWMWA_TRANSITIONS_FORCEDISABLED as u32,(&mut prior as *mut i32).cast(),4);
-    let disable=1i32;
-    let write=DwmSetWindowAttribute(source,DWMWA_TRANSITIONS_FORCEDISABLED as u32,(&disable as *const i32).cast(),4);
-    let mut checked=0i32;
-    let verify=DwmGetWindowAttribute(source,DWMWA_TRANSITIONS_FORCEDISABLED as u32,(&mut checked as *mut i32).cast(),4);
-    println!("WINDOW_SCALE_NATIVE_GATE read={read:#x}/{prior} write_owned={write:#x} readback={verify:#x}/{checked}");
+    // Native policy is read-only even in the hosted fixture. The owned
+    // transient proxy has its own DWM policy; the source is not modified.
+    println!("WINDOW_SCALE_NATIVE_GATE source_policy_already_disabled={}",without_native_overlap(source));
+    
     let cold=crate::private_mb();
     let cold_handles=counts();
     let mut before=cold;

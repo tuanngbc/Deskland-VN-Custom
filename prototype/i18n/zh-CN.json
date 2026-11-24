@@ -227,7 +227,7 @@
   "motionPreview": "预览动效",
   "motionReset": "恢复默认",
   "motionWindowEffect": "窗口最小化和还原效果",
-  "motionWindowEffectHint": "仅适用于 Dock 操作。缩放需要有效的预览，并且 Windows 原生最小化动画已关闭（或窗口自行关闭动画）。其他情况使用 Windows 默认动画。",
+  "motionWindowEffectHint": "仅适用于 Dock 操作。缩放需要有效的预览，并且 Windows 原生最小化动画已关闭。其他情况使用 Windows 默认动画。",
   "motionWindowWindows": "Windows 默认",
   "motionWindowScale": "缩放效果（兼容窗口）",
   "motionVerySlow": "极慢",

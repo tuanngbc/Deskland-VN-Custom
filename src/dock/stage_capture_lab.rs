@@ -163,23 +163,20 @@ fn native_scale_proxy_owned_source_100_cycles(){
     if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
     unsafe{
         let source=window(true).unwrap();
+        // Repaint the actual owned HWND before the one-shot WGC request.
+        // Never create a second separate capture device on the fixture.
+        WINDOW_VARIANT.store(true,std::sync::atomic::Ordering::Relaxed);
+        InvalidateRect(source.0,std::ptr::null(),0);UpdateWindow(source.0);let _=DwmFlush();
+        WINDOW_VARIANT.store(false,std::sync::atomic::Ordering::Relaxed);
+        InvalidateRect(source.0,std::ptr::null(),0);UpdateWindow(source.0);let _=DwmFlush();
+        println!("WINDOW_SCALE_NATIVE requesting_current_owned_frame");
         let frame=match pump_capture(&source){
             Ok(frame)=>frame,
             Err(reason)=>{println!("WINDOW_SCALE_NATIVE=BLOCKED {reason}");return;}
         };
-        WINDOW_VARIANT.store(true,std::sync::atomic::Ordering::Relaxed);
-        InvalidateRect(source.0,std::ptr::null(),0);UpdateWindow(source.0);let _=DwmFlush();
-        match pump_capture(&source){
-            Ok(changed)=>{
-                let orange=changed.0.chunks_exact(4).filter(|p|p[2]>p[1].saturating_add(60)&&p[2]>155).count();
-                let green=frame.0.chunks_exact(4).filter(|p|p[1]>p[2].saturating_add(45)&&p[1]>105).count();
-                println!("WINDOW_SCALE_SOURCE_FRESHNESS={} first_green={green} second_orange={orange}",
-                    if green>100&&orange>100{"PASS"}else{"NOT_VERIFIED"});
-            }
-            Err(reason)=>println!("WINDOW_SCALE_SOURCE_FRESHNESS=NOT_VERIFIED {reason}"),
-        }
-        WINDOW_VARIANT.store(false,std::sync::atomic::Ordering::Relaxed);
-        InvalidateRect(source.0,std::ptr::null(),0);UpdateWindow(source.0);let _=DwmFlush();
+        let green=frame.0.chunks_exact(4).filter(|p|p[1]>p[2].saturating_add(45)&&p[1]>105).count();
+        assert!(green>100,"one-shot capture must contain the currently repainted source");
+        println!("WINDOW_SCALE_SOURCE_FRESHNESS current_repaint_marker=PASS green={green} repeated_capture=NOT_VERIFIED");
         super::window_effect::probe_owned_window(source.0,&frame);
     }
 }

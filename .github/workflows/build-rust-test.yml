@@ -65,8 +65,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_capture_lab::native_wgc_projects_one_owned_hwnd_or_reports_blocked -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --release dock::stage_capture_lab::native_scale_proxy_owned_source_100_cycles -- --ignored --exact --nocapture --test-threads=1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_surface::tests::native_slide_keeps_live_preview_host_aligned_without_activating_either_window -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:TUANPC_DESK_STAGE_COMPOSITION_LAB = '1'
@@ -97,6 +95,8 @@ jobs:
           cargo test --release launcher::fullscreen::native_tests::native_activation_modes_apply_live_on_one_overlay -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release launcher::fullscreen::native_tests::native_isolated_library_search_navigation_and_100_toggles -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::stage_capture_lab::native_scale_proxy_owned_source_100_cycles -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:TUANPC_DESK_TYPE_EVIDENCE = Join-Path $env:RUNNER_TEMP "typography-evidence"
           cargo test --release native_text::tests::grayscale_typography_sheet_at_96_120_144 -- --ignored --exact --nocapture --test-threads=1
@@ -208,6 +208,7 @@ jobs:
           retention-days: 14
 
       - name: Upload native visual fixture evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: native-visual-fixtures
