@@ -1217,9 +1217,35 @@ mod tests {
         assert!(light.chunks_exact(4).chain(dark.chunks_exact(4)).chain(clear.chunks_exact(4)).all(|p| p[3]==255));
     }
     #[test]
+    fn native_compact_close_reverses_and_settles_without_losing_query() {
+        unsafe {
+            let _desktop=fullscreen::native_tests::Desktop::isolated();
+            configure_spotlight(library::Preferences::default());
+            toggle(std::ptr::null_mut());
+            let (hwnd,_,_,_)=handles().unwrap();
+            assert_eq!(COMPACT_MOTION.get().unwrap().to,1.0);
+            SendMessageW(hwnd,WM_CHAR,'p' as WPARAM,0);
+            toggle(std::ptr::null_mut());
+            assert_eq!(COMPACT_MOTION.get().unwrap().to,0.0);
+            toggle(std::ptr::null_mut());
+            assert_eq!(COMPACT_MOTION.get().unwrap().to,1.0);
+            assert_ne!(IsWindowVisible(hwnd),0);
+            assert_eq!(STATE.with(|s|s.borrow().as_ref().unwrap().query.clone()),"p");
+            SendMessageW(hwnd,WM_KEYDOWN,VK_ESCAPE as WPARAM,0);
+            let mut closing=COMPACT_MOTION.get().unwrap();
+            closing.start-=std::time::Duration::from_millis(u64::from(closing.duration)+50);
+            COMPACT_MOTION.set(Some(closing));
+            SendMessageW(hwnd,WM_TIMER,COMPACT_TWEEN,0);
+            assert_eq!(IsWindowVisible(hwnd),0);
+            assert!(COMPACT_MOTION.get().is_none()&&COMPACT_FRAME.with(|f|f.borrow().is_none()));
+        }
+    }
+    #[test]
     fn native_search_enter_and_reopen_do_not_reenter_state() {
         unsafe {
             let _desktop = fullscreen::native_tests::Desktop::isolated();
+            // Keep this keyboard/history test independent of the transition clock.
+            configure_spotlight(library::Preferences{animations:false,..library::Preferences::default()});
             toggle(std::ptr::null_mut());
             let (hwnd, _, _, _) = handles().expect("native launcher window");
             for _ in 0..8 {
