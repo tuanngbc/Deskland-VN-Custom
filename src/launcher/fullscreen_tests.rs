@@ -249,8 +249,13 @@ fn native_isolated_library_search_navigation_and_100_toggles() {
         SendMessageW(hwnd,WM_MOUSEMOVE,0,mouse(x+1,y+1));
         assert_eq!(GetUpdateRect(hwnd,&mut dirty,0),0);
         std::thread::sleep(Duration::from_millis(130));
-        pump();
+        // On the private non-input desktop TrackMouseEvent may queue a real
+        // leave for the physical pointer, which is outside our synthetic tile.
+        // Deliver the timer to the same native window procedure before pumping
+        // unrelated pointer messages; then test the explicit leave separately.
+        SendMessageW(hwnd,WM_TIMER,HOVER_ANIMATION,0);
         assert!(PANEL.with(|p|p.borrow().as_ref().unwrap().hover_started.is_none()));
+        UpdateWindow(hwnd);
         screenshot(hwnd,"hover-fixture-light.png");
         SendMessageW(hwnd,WM_MOUSELEAVE,0,0);
         UpdateWindow(hwnd);
