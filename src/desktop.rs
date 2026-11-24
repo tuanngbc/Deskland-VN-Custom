@@ -11,6 +11,30 @@ use windows_sys::Win32::System::Memory::*;
 use windows_sys::Win32::System::Threading::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
+pub(crate) unsafe fn current_sid()->Option<String>{
+    use windows_sys::Win32::Security::{GetTokenInformation,TokenUser,TOKEN_QUERY,TOKEN_USER};
+    use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+    let mut token=std::ptr::null_mut();
+    if OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&mut token)==0{return None;}
+    let sid=(||{
+        let mut len=0;
+        GetTokenInformation(token,TokenUser,std::ptr::null_mut(),0,&mut len);
+        if len < std::mem::size_of::<TOKEN_USER>() as u32||len>4096{return None;}
+        // GetTokenInformation returns native pointers: keep the buffer aligned.
+        let mut buffer=vec![0usize;(len as usize).div_ceil(std::mem::size_of::<usize>())];
+        if GetTokenInformation(token,TokenUser,buffer.as_mut_ptr().cast(),len,&mut len)==0{return None;}
+        let user=&*buffer.as_ptr().cast::<TOKEN_USER>();
+        let mut text=std::ptr::null_mut();
+        if ConvertSidToStringSidW(user.User.Sid,&mut text)==0{return None;}
+        let end=(0..192).find(|&i|*text.add(i)==0);
+        let value=end.and_then(|n|String::from_utf16(std::slice::from_raw_parts(text,n)).ok());
+        LocalFree(text.cast());
+        value
+    })();
+    CloseHandle(token);
+    sid
+}
+
 pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -49,6 +73,17 @@ unsafe extern "system" fn enum_find_defview_host(h: HWND, l: LPARAM) -> BOOL {
         return 0;
     }
     1
+}
+
+pub(crate) fn wallpaper_host_ready() -> bool {
+    let progman = find_window("Progman");
+    if progman.is_null() { return false; }
+    if !find_child(progman, std::ptr::null_mut(), "SHELLDLL_DefView").is_null() {
+        return true;
+    }
+    let mut host: HWND = std::ptr::null_mut();
+    unsafe { EnumWindows(Some(enum_find_defview_host), &mut host as *mut HWND as LPARAM) };
+    !host.is_null()
 }
 
 fn find_classic_worker() -> HWND {

@@ -1014,31 +1014,4 @@ unsafe extern "system" fn proc_(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESUL
 }
 
 // ---------------------------------------------------------------- Khởi động cùng Windows
-const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-const RUN_NAME: &str = "tuanpc-desk";
-const LEGACY_RUN_NAME: &str = "DesklandRs";
-
-pub fn autostart_enabled() -> bool {
-    crate::lock::reg_get_string(windows_sys::Win32::System::Registry::HKEY_CURRENT_USER, RUN_KEY, RUN_NAME).is_some()
-        || crate::lock::reg_get_string(windows_sys::Win32::System::Registry::HKEY_CURRENT_USER, RUN_KEY, LEGACY_RUN_NAME).is_some()
-}
-
-pub fn set_autostart(on: bool) {
-    if let Err(error) = crate::trial::protect_windows() { crate::log!("{error}"); return; }
-    use windows_sys::Win32::System::Registry::HKEY_CURRENT_USER;
-    if on {
-        let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-        if crate::lock::reg_set_string(HKEY_CURRENT_USER, RUN_KEY, RUN_NAME, &format!("\"{exe}\"")) {
-            crate::lock::reg_delete_value(HKEY_CURRENT_USER, RUN_KEY, LEGACY_RUN_NAME);
-        }
-    } else {
-        crate::lock::reg_delete_value(HKEY_CURRENT_USER, RUN_KEY, RUN_NAME);
-        crate::lock::reg_delete_value(HKEY_CURRENT_USER, RUN_KEY, LEGACY_RUN_NAME);
-    }
-    crate::log!("Khởi động cùng Windows: {}", if on { "bật" } else { "tắt" });
-}
-
-/// Preserve the existing autostart choice when the installed executable is renamed.
-pub fn migrate_autostart() {
-    if autostart_enabled() { set_autostart(true); }
-}
+pub(crate) use crate::startup::{enabled as autostart_enabled, migrate as migrate_autostart, set as set_autostart};

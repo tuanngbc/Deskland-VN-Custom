@@ -2,34 +2,8 @@
 //! varies by Windows version; fall back to the installed default picture.
 use super::*;
 use std::{ffi::OsString, os::windows::ffi::OsStringExt, ptr, sync::mpsc};
-use windows_sys::Win32::{
-    Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER},
-    Security::Authorization::ConvertSidToStringSidW,
-    System::{Registry::{RegGetValueW,HKEY_LOCAL_MACHINE,RRF_RT_REG_SZ},
-             Threading::{GetCurrentProcess,OpenProcessToken}},
-};
-
-unsafe fn current_sid()->Option<String>{
-    let mut token=ptr::null_mut();
-    if OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&mut token)==0{return None;}
-    let sid=(||{
-        let mut len=0;
-        GetTokenInformation(token,TokenUser,ptr::null_mut(),0,&mut len);
-        if len < std::mem::size_of::<TOKEN_USER>() as u32||len>4096{return None;}
-        // GetTokenInformation returns native pointers: keep the buffer aligned.
-        let mut buffer=vec![0usize;(len as usize).div_ceil(std::mem::size_of::<usize>())];
-        if GetTokenInformation(token,TokenUser,buffer.as_mut_ptr().cast(),len,&mut len)==0{return None;}
-        let user=&*buffer.as_ptr().cast::<TOKEN_USER>();
-        let mut text=ptr::null_mut();
-        if ConvertSidToStringSidW(user.User.Sid,&mut text)==0{return None;}
-        let end=(0..192).find(|&i|*text.add(i)==0);
-        let value=end.and_then(|n|String::from_utf16(std::slice::from_raw_parts(text,n)).ok());
-        LocalFree(text.cast());
-        value
-    })();
-    CloseHandle(token);
-    sid
-}
+use crate::desktop::current_sid;
+use windows_sys::Win32::System::Registry::{RegGetValueW,HKEY_LOCAL_MACHINE,RRF_RT_REG_SZ};
 
 unsafe fn picture_path(size:i32)->Option<PathBuf>{
     let sid=current_sid()?;

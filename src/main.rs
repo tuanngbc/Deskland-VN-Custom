@@ -42,6 +42,7 @@ mod presentation;
 mod gpu_present;
 mod config_store;
 mod trial;
+mod startup;
 
 use desktop::wide;
 use engine::{IconBox, Prog, Shared, Theme};
@@ -1398,7 +1399,13 @@ impl App {
                 }
                 None
             } else {
-                Some(desktop::attach(hwnd, m.rect).ok_or("Không gắn được vào lớp hình nền")?)
+                match desktop::attach(hwnd, m.rect) {
+                    Some(attachment) => Some(attachment),
+                    None => {
+                        unsafe { DestroyWindow(hwnd); }
+                        return Err("Không gắn được vào lớp hình nền".into());
+                    }
+                }
             };
             let hdc = unsafe { GetDC(hwnd) };
             unsafe {SetStretchBltMode(hdc,HALFTONE);SetBrushOrgEx(hdc,0,0,std::ptr::null_mut());}
@@ -2408,7 +2415,6 @@ fn main() {
     }
     let headless = args.iter().any(|a| a == "--headless");
     if !saver && !headless {
-        settings::migrate_autostart();
         lock::log_saver_state("khởi động");
         if let Err(e) = lock::reconcile_disabled_saver() {
             log!("Chưa đồng bộ được trạng thái saver lúc khởi động: {e}; sẽ thử lại khi mở khóa");
@@ -2483,34 +2489,33 @@ fn main() {
         legacy_panorama_post:args.iter().any(|a|a=="--legacy-panorama-post"),
     };
     log!("Cách hiển thị: {}", if app.prefer_gpu {"GPU trực tiếp (GDI dự phòng)"} else if app.gdi { "GDI" } else { "OpenGL SwapBuffers" });
-    // Khi chạy từ HKCU\...\Run, Windows có thể khởi động tiến trình trước khi
-    // Explorer dựng xong Progman/WorkerW. Chờ và thử lại để TLauncher tự chạy
-    // ổn định sau đăng nhập thay vì thoát ngay ở lần gắn hình nền đầu tiên.
-    let mut walls_ready = false;
-    for attempt in 0..12 {
+    let autostart = !saver && !headless && args.iter().any(|arg| arg == "--autostart");
+    if !saver && !headless {
+        // Publish Dock and Stage before waiting on Explorer or initializing GL.
+        app.configure_dock();
+        log!("Dock & Stage: khởi tạo sau {:.0} ms", t_start.elapsed().as_secs_f64() * 1000.0);
+    }
+    // Scheduled logon starts before Explorer is necessarily ready. Start
+    // processing messages before attempting GL; retry from the event loop.
+    let mut wallpaper_retry = (autostart && app.cfg.wallpaper_enabled).then(|| app.now() + 60.0);
+    if wallpaper_retry.is_none() {
         match app.create_walls() {
-            Ok(()) => {
-                walls_ready = true;
-                break;
-            }
-            Err(e) => {
-                log!("Khởi động/gắn hình nền lần {} thất bại: {e}", attempt + 1);
+            Ok(()) => {}
+            Err(error) => {
                 app.stop_wallpaper();
-                if attempt < 11 {
-                    std::thread::sleep(Duration::from_millis(500));
-                }
+                log!("Chưa dựng được hình nền lúc khởi động: {error}");
+                if saver || headless { return; }
+                wallpaper_retry = Some(app.now() + 500.0);
             }
         }
     }
-    if !walls_ready {
-        log!("Không thể gắn hình nền sau nhiều lần thử; các tiện ích desktop vẫn độc lập");
-        if saver || headless {return;}
-    }
+    let mut wallpaper_retry_attempts = 0u32;
+    let mut wallpaper_init_errors = 0u32;
     app.init_widget();
     app.update_second_clock();
     app.configure_system_monitor(msg_hwnd);
-    app.configure_dock();
-    if !saver && !headless {save_config(&app.cfg);}
+    if !saver && !headless && wallpaper_retry.is_none() {save_config(&app.cfg);}
+
     if headless && !args.iter().any(|a| a == "--real-icons") {
         let now = app.now();
         if let Some(ctx) = app.ctx.as_ref() {
@@ -2605,7 +2610,9 @@ fn main() {
         PENDING_CMD.with(|c| c.set(CMD_SETTINGS));
     }
     if open_launcher && !saver { PENDING_CMD.with(|c| c.set(CMD_LAUNCHER)); }
-    log!("Khung hình đầu tiên sau {:.0} ms kể từ khi khởi động", t_start.elapsed().as_secs_f64() * 1000.0);
+    if wallpaper_retry.is_none() && !app.walls.is_empty() {
+        log!("Khung hình đầu tiên sau {:.0} ms kể từ khi khởi động", t_start.elapsed().as_secs_f64() * 1000.0);
+    }
     if saver {
         unsafe {
             ShowCursor(0);
@@ -2620,6 +2627,7 @@ fn main() {
     let mut lock_sync_at = (!saver && !headless).then(|| app.now() + 6_000.0);
     let mut saver_check_at: Option<f64> = None;
     let mut rebuild_at: Option<f64> = None;
+    let mut autostart_check_at = (!saver && !headless).then(|| app.now() + 2500.0);
     let mut web_changed = false;
     let mut shortcut_capture_started: Option<Instant> = None;
     let mut last_icons_json = String::new();
@@ -3399,6 +3407,48 @@ fn main() {
             if web::is_open() { app.post_dock_state(); }
             if settings::hwnd().is_some() { settings::sync(&app.settings_state()); }
         }
+        if wallpaper_retry.is_some_and(|t| app.now() >= t) {
+            wallpaper_retry = None;
+            if app.cfg.wallpaper_enabled && app.walls.is_empty() {
+                wallpaper_retry_attempts += 1;
+                let shell_ready = desktop::wallpaper_host_ready();
+                let result = if shell_ready {app.create_walls()} else {Err("Explorer chưa sẵn sàng".into())};
+                match result {
+                    Ok(()) => {
+                        app.poll_icons();
+                        app.render();
+                        log!("Hình nền sẵn sàng sau {:.0} ms kể từ khi bắt đầu khởi tạo giao diện", t_start.elapsed().as_secs_f64() * 1000.0);
+                        app.init_widget();
+                        app.update_second_clock();
+                        save_config(&app.cfg);
+                        if web::is_open() {app.post_dock_state();}
+                    }
+                    Err(error) => {
+                        app.stop_wallpaper();
+                        if wallpaper_retry_attempts == 1 || wallpaper_retry_attempts == 12 {
+                            log!("Chờ gắn hình nền (lần {wallpaper_retry_attempts}): {error}; Dock và Stage vẫn chạy");
+                        }
+                        // Fast during Explorer startup, slower if unavailable
+                        // (e.g. alternate Windows shell); avoid idle spin.
+                        if shell_ready { wallpaper_init_errors += 1; }
+                        if wallpaper_init_errors < 3 {
+                            let delay = if wallpaper_retry_attempts < 12 {500.0} else if wallpaper_retry_attempts < 30 {1500.0} else {5000.0};
+                            wallpaper_retry = Some(app.now() + delay);
+                        } else {
+                            log!("Dừng thử lại hình nền sau lỗi trình dựng: {error}; Dock và Stage vẫn chạy");
+                        }
+                    }
+                }
+            }
+        }
+        if autostart_check_at.is_some_and(|t| app.now() >= t) {
+            autostart_check_at = None;
+            settings::migrate_autostart();
+            if settings::hwnd().is_some() {settings::sync(&app.settings_state());}
+            if web::is_open() {
+                web::post(&serde_json::json!({"t":"autostart","v":settings::autostart_enabled()}).to_string());
+            }
+        }
         if REPAINT.with(|c| c.replace(false)) {
             app.repaint_all();
         }
@@ -3518,7 +3568,8 @@ fn main() {
             widget_save_at = None;
         }
         // Rounding down left a sub-millisecond busy loop before every frame.
-        let wait = (next_frame.min(next_icons).min(next_fg) - app.now()).ceil().clamp(1.0,500.0) as u32;
+        let next_startup = wallpaper_retry.unwrap_or(f64::INFINITY).min(autostart_check_at.unwrap_or(f64::INFINITY));
+        let wait = (next_frame.min(next_icons).min(next_fg).min(next_startup) - app.now()).ceil().clamp(1.0,500.0) as u32;
         unsafe { MsgWaitForMultipleObjects(0, std::ptr::null(), 0, wait, QS_ALLINPUT) };
     }
 
