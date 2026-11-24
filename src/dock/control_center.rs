@@ -333,7 +333,7 @@ pub(super) unsafe fn follow_hub(owner:HWND,dock:crate::launcher::DockAnchor){
         Some((p.hwnd,p.anchor,p.dpi,p.layer.size))
     });
     let Some((hwnd,anchor,dpi,(w,h)))=target else{return;};
-    let Some(rect)=chrome::follow_rect(anchor,dpi,w,h)else{PostMessageW(hwnd,WM_CLOSE,0,0);return;};
+    let Some(rect)=chrome::follow_rect(anchor,dpi,w,h)else{DestroyWindow(hwnd);return;};
     SetWindowPos(hwnd,ptr::null_mut(),rect.left,rect.top,0,0,SWP_NOACTIVATE|SWP_NOSIZE|SWP_NOZORDER);
     PANE.with(|slot|if let Some(p)=slot.borrow_mut().as_mut().filter(|p|p.hwnd==hwnd){
         chrome::PanelShadow::sync(&mut p.shadow,hwnd,owner,rect,dpi,anchor.side,anchor.dark);
@@ -412,6 +412,25 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     match msg{
         WM_ERASEBKGND=>1,
         WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{PostMessageW(hwnd,WM_CLOSE,0,0);0},
+        WM_DPICHANGED=>{DestroyWindow(hwnd);0},
+        WM_CLOSE=>{
+            let animated=PANE.with(|s|{
+                let mut slot=s.borrow_mut();
+                let Some(p)=slot.as_mut().filter(|p|p.hwnd==hwnd&&p.layered)else{return false;};
+                if cfg!(test)||!super::popup_motion_allowed(){return false;}
+                if p.entrance.is_some_and(|t|t.to==0.0){return true;}
+                if SetTimer(hwnd,ENTRANCE_TIMER,16,None)==0{return false;}
+                p.entrance=Some(super::motion::Tween::new(false,super::motion::PANEL,p.entrance));
+                p.pressed=None;
+                true
+            });
+            if !animated{DestroyWindow(hwnd);}
+            else{
+                KillTimer(hwnd,METRIC_TIMER);
+                if GetCapture()==hwnd{ReleaseCapture();}
+            }
+            0
+        },
         WM_NCDESTROY=>{
             KillTimer(hwnd,METRIC_TIMER);
             KillTimer(hwnd,ENTRANCE_TIMER);
@@ -452,12 +471,14 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER if w==ENTRANCE_TIMER=>{
             let panel=PANE.with(|s|{let mut s=s.borrow_mut();if s.as_ref().is_some_and(|p|p.hwnd==hwnd){s.take()}else{None}});
             if let Some(mut p)=panel{
-                let _=p.present();
-                if p.entrance.is_none_or(|t|t.progress()>=1.0){
-                    KillTimer(hwnd,ENTRANCE_TIMER);p.entrance=None;
-                }
-                if IsWindow(hwnd)!=0{PANE.with(|s|{let mut s=s.borrow_mut();if s.is_none(){*s=Some(p);}});}
-                else{super::panel_closed(p.owner);}
+                let settled=p.entrance.is_none_or(|t|t.progress()>=1.0||!super::popup_motion_allowed());
+                let closing=settled&&p.entrance.is_some_and(|t|t.to==0.0);
+                if settled{KillTimer(hwnd,ENTRANCE_TIMER);p.entrance=None;}
+                if !closing{let _=p.present();}
+                if IsWindow(hwnd)!=0{
+                    PANE.with(|s|{let mut s=s.borrow_mut();if s.is_none(){*s=Some(p);}});
+                    if closing{DestroyWindow(hwnd);}
+                }else{super::panel_closed(p.owner);}
             }else{KillTimer(hwnd,ENTRANCE_TIMER);}
             0
         },
@@ -475,10 +496,10 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if ready{InvalidateRect(hwnd,ptr::null(),0);}0
         },
         WM_MOUSEMOVE|super::WM_DOCK_MOUSELEAVE|WM_LBUTTONDOWN|WM_LBUTTONUP|WM_CAPTURECHANGED|WM_MOUSEWHEEL|WM_KEYDOWN=>{
-            if msg==WM_KEYDOWN&&w as u16==VK_ESCAPE{DestroyWindow(hwnd);return 0;}
+            if msg==WM_KEYDOWN&&w as u16==VK_ESCAPE{PostMessageW(hwnd,WM_CLOSE,0,0);return 0;}
             let (action,repaint,capture)=PANE.with(|s|{
                 let mut p=s.borrow_mut();
-                let Some(p)=p.as_mut().filter(|p|p.hwnd==hwnd)else{return (None,false,false);};
+                let Some(p)=p.as_mut().filter(|p|p.hwnd==hwnd&&!p.entrance.is_some_and(|t|t.to==0.0))else{return (None,false,false);};
                 let x=l as i16 as i32;let y=(l>>16) as i16 as i32;
                 let before=(p.index,p.page);
                 let mut action=None;

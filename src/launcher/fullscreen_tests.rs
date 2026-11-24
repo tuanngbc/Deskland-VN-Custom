@@ -115,6 +115,20 @@ fn native_live_backdrop_retains_color_and_filters_detail() {
                     let opaque=sample(&first,94,90)==[25,185,245]&&sample(&next,94,90)==[245,180,25];
                     let transparent=sample(&next,140,315)==sample(&reference,140,315);
                     println!("GLASS_FOREGROUND opaque_dirty_update={opaque} unchanged_transparent_region={transparent}");
+                    if opaque&&transparent{
+                        let opening=Transition::new(true,motion::FULL,None);
+                        fg.motion(opening,W,90)?;
+                        let closing=Transition::new(false,motion::FULL,Some(opening));
+                        fg.motion(closing,W,90)?;
+                        let deadline=Instant::now()+Duration::from_millis(u64::from(closing.duration)+50);
+                        while Instant::now()<deadline{pump();std::thread::sleep(Duration::from_millis(10));}
+                        let _=DwmFlush();
+                        let faded=screen().is_some_and(|img|sample(&img,94,90)==sample(&reference,94,90));
+                        fg.settle()?;
+                        settle();
+                        let settled=screen().is_some_and(|img|sample(&img,94,90)==[245,180,25]);
+                        println!("SPOTLIGHT_NATIVE compositor_reversal_transparent_end={faded} settled_foreground_restored={settled}");
+                    }
                     Ok(opaque&&transparent)
                 })();
                 println!("GLASS_FOREGROUND fixture={check:?}");
@@ -382,7 +396,7 @@ unsafe fn screenshot(hwnd: HWND, name: &str) {
     let font = crate::native_text::font_pixels(px(15, dpi), 450);
     let query = read_edit(edit, 256);
     let (label, ink) = if query.is_empty() {
-        ("Tìm ứng dụng, tệp, công cụ…", 0x00635b56)
+        (words("Tìm kiếm…", "Search…", "搜索…"), 0x00635b56)
     } else {
         (query.as_str(), 0x004044bc)
     };
@@ -427,6 +441,10 @@ fn native_isolated_library_search_navigation_and_100_toggles() {
             bounds.left, bounds.top, bounds.right, bounds.bottom
         );
         open(p, String::new(), ptr::null_mut(), false);
+        println!(
+            "SPOTLIGHT_NATIVE cold_hwnd_open_ms={:.3}",
+            cold.elapsed().as_secs_f64() * 1000.0
+        );
         let hwnd = window().expect("created native overlay");
         let click=|x:i32,y:i32|{
             let l=(((y as u32&0xffff)<<16)|(x as u32&0xffff)) as LPARAM;
@@ -448,10 +466,6 @@ fn native_isolated_library_search_navigation_and_100_toggles() {
         click(5,5);
         MODAL.set(false);
         assert_eq!(window(),Some(hwnd));
-        println!(
-            "SPOTLIGHT_NATIVE cold_hwnd_open_ms={:.3}",
-            cold.elapsed().as_secs_f64() * 1000.0
-        );
         pump();
         let edit = PANEL.with(|p| p.borrow().as_ref().unwrap().edit);
         assert_eq!(GetParent(edit), hwnd);
@@ -573,21 +587,13 @@ fn native_isolated_library_search_navigation_and_100_toggles() {
                 .as_ref()
                 .is_some_and(|p| p.folder == folder && p.tiles.len() == 2)
         }));
+        configure(Preferences { theme: "dark".into(), animations: false, ..Preferences::default() });
+        screenshot(hwnd, "folder-fixture-dark.png");
         click(5,5);
         assert!(PANEL.with(|p|p.borrow().as_ref().is_some_and(|p|p.folder==0)));
-        configure(Preferences{animations:false,..Preferences::default()});
         click(5,5);
         assert!(window().is_none(),"background click closes only the outermost view");
         println!("SPOTLIGHT_NATIVE minimal_chrome=PASS empty_click=PASS modal_edit_folder_protection=PASS");
-        open(p,String::new(),ptr::null_mut(),false);
-        let hwnd=window().unwrap();
-        use_fixture_entries(hwnd);
-        let mut cfg = Preferences::default();
-        cfg.theme = "dark".into();
-        configure(cfg);
-        SendMessageW(hwnd, WM_THEMECHANGED, 0, 0);
-        screenshot(hwnd, "folder-fixture-dark.png");
-        dismiss(false);
         pump();
         let before = resources();
         let mut elapsed = Vec::new();

@@ -163,14 +163,20 @@ impl NativeBackdrop {
     unsafe fn show_behind(&self,foreground:HWND,r:RECT){
         SetWindowPos(self.hwnd,foreground,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_SHOWWINDOW);
     }
-    fn transition(&self,t:Transition,strength:i32)->windows::core::Result<()>{
+    fn transition(&self,t:Transition)->windows::core::Result<()>{
         let Some(host)=&self.host else{return Ok(());};
-        let _=strength; // Tint is configured independently; fade the entire glass visual.
+        // Tint is configured independently; fade the entire glass visual.
         let animation=host.compositor.CreateScalarKeyFrameAnimation()?;
         animation.SetDuration(windows::Foundation::TimeSpan{Duration:i64::from(t.duration)*10_000})?;
         animation.InsertKeyFrame(0.0,t.from)?;
         animation.InsertKeyFrame(1.0,t.to)?;
         host.root.StartAnimation(&windows::core::HSTRING::from("Opacity"),&animation)
+    }
+    fn settle(&self){
+        if let Some(host)=&self.host{
+            let _=host.root.StopAnimation(&windows::core::HSTRING::from("Opacity"));
+            let _=host.root.SetOpacity(1.0);
+        }
     }
 }
 impl Drop for NativeBackdrop{
@@ -1661,12 +1667,12 @@ fn start_transition(hwnd:HWND,open:bool)->bool{
         let native=p.native.as_ref()?;
         let t=Transition::new(open,motion::FULL,p.transition);
         if unsafe{native.foreground.motion(t,p.width,px(66,p.dpi))}.is_err(){return None;}
-        let _=native.backdrop.transition(t,OPTIONS.with(|o|o.borrow().glass_strength));
+        let _=native.backdrop.transition(t);
         p.transition=Some(t);
         Some(t)
     });
     if let Some(t)=transition{
-        unsafe{SetTimer(hwnd,TRANSITION_TIMER,t.duration+20,None);}
+        if unsafe{SetTimer(hwnd,TRANSITION_TIMER,t.duration+20,None)}==0{settle_transition(hwnd);}
         true
     }else{false}
 }
@@ -1680,7 +1686,12 @@ fn settle_transition(hwnd:HWND){
         let mut p=s.borrow_mut();
         let Some(p)=p.as_mut()else{return false;};
         let Some(t)=p.transition.take()else{return false;};
-        if let Some(n)=&p.native{let _=unsafe{n.foreground.settle()};}
+        if t.to!=0.0{
+            if let Some(n)=&p.native{
+                let _=unsafe{n.foreground.settle()};
+                n.backdrop.settle();
+            }
+        }
         t.to==0.0
     });
     unsafe{KillTimer(hwnd,TRANSITION_TIMER);}
