@@ -57,6 +57,8 @@ TLauncher 是一款专为 Windows 11 打造的开源桌面工作空间工具。�
 
 **1.0.1 版：**启用自动启动后，Windows 任务计划程序会在用户登录时启动 TLauncher。Dock 和台前调度先于壁纸初始化；若 Explorer 尚未就绪，壁纸稍后会重新尝试挂载。参见[验证记录和测试条件](CHANGELOG.md#kiểm-chứng)。
 
+**1.0.2 候选版 — 统一 Spotlight：** 快速搜索与应用库共用 TLauncher 的应用目录。按 Alt+Space 打开紧凑搜索，按 F6 切换模式；单击 Dock 上的放大镜可打开全屏应用库。支持添加 EXE/LNK、固定、隐藏或恢复应用，以及自定义文件夹。Windows 控制桌面 Acrylic 效果，候选版提供纯色主题背景作为后备。详见[验收指南](docs/unified-spotlight.md)。公开版本仍为 1.0.1。
+
 <!-- product-guide:start -->
 ## 功能详情与截图
 

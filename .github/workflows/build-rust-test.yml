@@ -76,6 +76,11 @@ jobs:
           $env:TUANPC_DESK_START_EVIDENCE = Join-Path $env:RUNNER_TEMP "start-native.png"
           cargo test --release launcher::start::tests::native_panel_search_keyboard_and_anchor_are_independent_of_spotlight -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Private Win32 desktop with synthetic app names; never switches the input desktop.
+          $env:TUANPC_SPOTLIGHT_EVIDENCE = Join-Path $env:RUNNER_TEMP "spotlight-evidence"
+          New-Item -ItemType Directory -Force $env:TUANPC_SPOTLIGHT_EVIDENCE | Out-Null
+          cargo test --release launcher::fullscreen::native_tests::native_isolated_library_search_navigation_and_100_toggles -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:TUANPC_DESK_TYPE_EVIDENCE = Join-Path $env:RUNNER_TEMP "typography-evidence"
           cargo test --release native_text::tests::grayscale_typography_sheet_at_96_120_144 -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -177,6 +182,7 @@ jobs:
             ${{ runner.temp }}/stage-fixture-evidence/stage-external-fixture-result.txt
             ${{ runner.temp }}/start-native*.png
             ${{ runner.temp }}/typography-evidence/*.png
+            ${{ runner.temp }}/spotlight-evidence/*.png
             ${{ runner.temp }}/calendar-evidence/*.png
           if-no-files-found: error
           retention-days: 14

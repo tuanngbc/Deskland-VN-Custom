@@ -102,6 +102,23 @@ pub(super) fn encode(line:&str,label:&str)->Result<String,PinError>{
     }
     Ok(key(&launch))
 }
+pub(crate) fn encode_application(path: &Path, label: &str, args: &str, directory: &str) -> Result<String, &'static str> {
+    let exe = path.to_str().ok_or("Đường dẫn ứng dụng không hợp lệ.")?;
+    if !absolute_exe(exe) || !path.is_file() {
+        return Err("Chỉ EXE hỗ trợ đối số và thư mục làm việc.");
+    }
+    if args.len() > 4096 || [exe, label, args, directory].iter().any(|s| s.chars().any(char::is_control)) {
+        return Err("Đối số hoặc thư mục làm việc không hợp lệ.");
+    }
+    let directory = if directory.trim().is_empty() {
+        path.parent().and_then(Path::to_str).ok_or("Không xác định được thư mục làm việc.")?
+    } else { directory.trim() };
+    if !Path::new(directory).is_absolute() || !Path::new(directory).is_dir() {
+        return Err("Chọn thư mục làm việc đầy đủ đang tồn tại.");
+    }
+    Ok(key(&Launch {exe:exe.into(), parameters:args.trim().into(), directory:directory.into(), label:label.into()}))
+}
+
 fn key(launch:&Launch)->String{
     // The existing pin membership check ignores ASCII case. Hex encoding
     // keeps the case of parameters significant without changing path pins.

@@ -8,3 +8,7 @@
 - Giữ nguyên `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, `TRADEMARKS.md` và `third_party/deskland-vn/`.
 - Ứng dụng đọc/ghi `%USERPROFILE%\\.deskland-rs`; không xóa cấu hình người dùng khi dọn build cũ.
 - Mục tiêu nền là 20–30 FPS, tạm dừng khi bị che/khóa và tránh tạo tiến trình WebView2 thường trực.
+
+## Chính sách build và kiểm thử bắt buộc (OWNER)
+
+TLauncher development follows a GitHub Actions-only build and verification policy. The owner's machine is production-only. Local source editing and Git operations are permitted, but local compilation, dependency installation, executable testing, packaging, and development runtime execution are prohibited. All builds and automated verification must run on GitHub-hosted runners. Never use the owner's machine as a build fallback or self-hosted runner. Preserve the owner's production installation and configuration.

@@ -12,6 +12,9 @@ use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 pub(crate) mod start;
+mod catalog;
+mod fullscreen;
+pub(crate) mod library;
 
 /// Start and Spotlight share this UI thread. Carry the actual input method
 /// across the focus handoff, rather than reusing a layout left on our thread
@@ -58,6 +61,7 @@ impl Appearance {
 }
 
 pub fn configure(appearance: Appearance) {
+    if PREFS.with(|c| c.borrow().eq(&appearance)) {return;}
     PREFS.with(|c| *c.borrow_mut() = appearance.clone());
     let hwnd = STATE.with(|c| {
         let mut state=c.borrow_mut();
@@ -127,11 +131,12 @@ struct State {
     selected: usize, first: usize, scale: f32, width: i32, height: i32,
     glass: Vec<u8>, backdrop: Vec<u8>, error: String, select_all: bool,
     icons: std::collections::HashMap<(PathBuf, i32), Option<IconPixels>>,
-    icon_requests: std::sync::mpsc::Sender<(PathBuf, i32)>,
+    icon_requests: IconRequests,
     icon_results: std::sync::mpsc::Receiver<((PathBuf, i32), Option<IconPixels>)>,
     pending_icons: usize,
-    apps_indexed:bool, apps_rx:Option<std::sync::mpsc::Receiver<Vec<Entry>>>,
+    apps_rx:Option<std::sync::mpsc::Receiver<Vec<Entry>>>,
     history: History, launching: bool, dock_start:bool, dock_anchor:Option<DockAnchor>,
+    point: POINT, prior: HWND, icon_rev: u64,
 }
 #[derive(Clone)]
 pub(crate) struct IconPixels { pub(crate) width: i32, pub(crate) height: i32, pub(crate) pixels: Vec<u8> }
@@ -145,20 +150,29 @@ thread_local! {
 pub fn dock_pins(paths:&[String]){
     DOCK_PINS.with(|v|v.replace(paths.to_vec()));
     start::pins_changed();
+    fullscreen::update_pins();
     if let Some((hwnd,_,_,_))=handles(){
         STATE.with(|c|if let Some(s)=c.borrow_mut().as_mut(){sync_pin_entries(&mut s.all);});
         unsafe{if IsWindowVisible(hwnd)!=0{refresh_results(false);}}
     }
 }
 pub fn take_dock_edit()->Option<crate::dock::Edit>{PIN_EDIT.with(|edit|edit.borrow_mut().take())}
-fn pinned(path:&Path)->bool{DOCK_PINS.with(|pins|pins.borrow().iter().any(|p|same_path(Path::new(p),path)))}
+fn existing_pin(path:&Path)->Option<String>{
+    let id=catalog::identity(path);
+    DOCK_PINS.with(|pins|pins.borrow().iter().find(|p|same_path(Path::new(p),path)||(!id.is_empty()&&id==catalog::identity(Path::new(p)))).cloned())
+}
+fn pinned(path:&Path)->bool{existing_pin(path).is_some()}
+pub fn cached_application_name(path:&Path)->Option<String>{catalog::label(path)}
+pub fn shell_catalog_changed(){catalog::invalidate();}
 fn app_entry(e:&Entry)->bool{matches!(e.kind,"Application"|"Pinned")}
 fn sync_pin_entries(all:&mut Vec<Entry>){
     all.retain(|entry|entry.kind!="Pinned");
+    let mut identities=all.iter().map(|e|catalog::identity(&e.path)).collect::<std::collections::HashSet<_>>();
     DOCK_PINS.with(|prefs|for value in prefs.borrow().iter(){
         if value=="deskland:settings"{continue;}
         let path=PathBuf::from(value);
-        if all.iter().any(|e|same_path(&e.path,&path)){continue;}
+        let id=catalog::identity(&path);
+        if !identities.insert(id){continue;}
         let command=crate::dock::command_pin::decode(value);
         let name=command.as_ref().map(|c|c.label.clone()).unwrap_or_else(||{
             path.file_stem().and_then(|name|name.to_str()).unwrap_or(value).to_owned()
@@ -169,7 +183,7 @@ fn sync_pin_entries(all:&mut Vec<Entry>){
 fn pin_change(entry:&Entry)->Option<crate::dock::Edit>{
     app_entry(entry).then(||{
         let path=entry.path.to_string_lossy().into_owned();
-        if pinned(&entry.path){crate::dock::Edit::Unpin(path)}else{crate::dock::Edit::Pin(path)}
+        if let Some(pin)=existing_pin(&entry.path){crate::dock::Edit::Unpin(pin)}else{crate::dock::Edit::Pin(path)}
     })
 }
 unsafe extern "system" { fn SetFocus(hwnd: HWND) -> HWND; }
@@ -181,21 +195,25 @@ fn enum_dir(root: &Path, depth: u8, files: bool, out: &mut Vec<Entry>) {
         if out.len() >= 5000 { break; }
         let p = item.path();
         // Do not follow junctions/symlinks into unrelated folders.
-        let Ok(ft) = item.file_type() else { continue };
-        if ft.is_symlink() { continue; }
+        use std::os::windows::fs::MetadataExt;
+        let Ok(md) = item.metadata() else { continue };
+        if md.file_attributes() & 0x400 != 0 { continue; }
+        let ft = md.file_type();
         if ft.is_dir() { enum_dir(&p, depth - 1, files, out); continue; }
         let ext = p.extension().and_then(|x| x.to_str()).unwrap_or_default().to_ascii_lowercase();
         if !files && !matches!(ext.as_str(), "lnk" | "exe" | "url" | "appref-ms") { continue; }
         let name = p.file_stem().and_then(|x| x.to_str()).unwrap_or_default().replace('_', " ");
-        if name.is_empty() || name.starts_with('.') || ext == "tmp" { continue; }
+        let folded = name.to_ascii_lowercase();
+        if name.is_empty() || name.starts_with('.') || ext == "tmp" || (!files &&
+            (folded.starts_with("uninstall") || folded.starts_with("unins00") || folded.ends_with(" updater"))) { continue; }
         let kind = match ext.as_str() { "lnk" | "exe" | "appref-ms" => "Application", "url" => "Web shortcut", _ => "File" };
-        let size = item.metadata().ok().map(|m| m.len()).unwrap_or(0);
+        let size = md.len();
         let detail = if kind == "File" { format!("{} · {} KB · {}", ext.to_uppercase(), size.div_ceil(1024), p.display()) } else { p.display().to_string() };
         out.push(Entry { name, path: p, kind, detail });
     }
 }
 
-fn app_entries() -> Vec<Entry> {
+fn builtin_apps() -> Vec<Entry> {
     let mut out = Vec::new();
     // Prefer explicit system commands over duplicate shortcuts.
     for (name, command) in [("Paint", "mspaint.exe"), ("Notepad", "notepad.exe"), ("Calculator", "calc.exe"), ("File Explorer", "explorer.exe"), ("Settings", "ms-settings:"), ("Task Manager","Taskmgr.exe")] {
@@ -204,38 +222,18 @@ fn app_entries() -> Vec<Entry> {
         let path = if system.is_file() { system } else { command.into() };
         out.push(Entry { name: name.into(), path, kind: "Application", detail: format!("Windows · {command}") });
     }
+    out
+}
+
+fn app_entries() -> Vec<Entry> {
+    let mut out = builtin_apps();
+    if cfg!(test) { return out; }
     for key in ["APPDATA", "PROGRAMDATA"] {
         if let Ok(base) = std::env::var(key) { enum_dir(&PathBuf::from(base).join("Microsoft\\Windows\\Start Menu\\Programs"), 5, false, &mut out); }
     }
     out
 }
 
-fn entries() -> Vec<Entry> {
-    let mut out=app_entries();
-    if let Ok(base) = std::env::var("USERPROFILE") {
-        for folder in ["Desktop", "Documents", "Downloads", "OneDrive\\Desktop", "OneDrive\\Documents"] {
-            enum_dir(&PathBuf::from(&base).join(folder), 2, true, &mut out);
-        }
-    }
-    let mut seen = std::collections::HashSet::new();
-    out.retain(|e| seen.insert(if e.kind == "Application" { e.name.to_lowercase() } else { e.path.to_string_lossy().to_lowercase() }));
-    out.sort_by_key(|e| (e.kind != "Application", e.name.to_lowercase()));
-    out
-}
-
-fn installed_apps_worker()->Option<std::sync::mpsc::Receiver<Vec<Entry>>>{
-    let (tx,rx)=std::sync::mpsc::channel();
-    std::thread::Builder::new().name("deskland-installed-apps".into()).spawn(move||{
-        use windows::Win32::System::Com::{CoInitializeEx,CoUninitialize,COINIT_APARTMENTTHREADED};
-        unsafe{
-            if CoInitializeEx(None,COINIT_APARTMENTTHREADED).is_err(){return;}
-            let apps=installed_apps();
-            CoUninitialize();
-            let _=tx.send(apps);
-        }
-    }).ok()?;
-    Some(rx)
-}
 unsafe fn installed_apps()->Vec<Entry>{
     use windows::{core::PCWSTR,Win32::{System::Com::CoTaskMemFree,UI::Shell as shell}};
     fn canonical_id(raw:&str)->Option<&str>{
@@ -272,8 +270,7 @@ fn filter(all: &[Entry], query: &str, history: &History) -> Vec<usize> {
         return history.paths.iter().filter_map(|path| indexed.get(&path.to_string_lossy().to_lowercase()).copied()).collect();
     }
     let mut found: Vec<(u8, usize)> = all.iter().enumerate().filter_map(|(i, e)| {
-        let name = e.name.to_lowercase();
-        let rank = if name == q { 0 } else if name.starts_with(&q) { 1 } else if q.split_whitespace().all(|part| name.contains(part)) { 2 } else { return None; };
+        let rank = catalog::search_rank(&e.name,&q)?;
         Some((rank, i))
     }).collect();
     found.sort_by_key(|&(rank, i)| (rank, all[i].kind != "Application"));
@@ -319,9 +316,16 @@ fn dismiss(hwnd: HWND) {
         s.matches.get(s.selected).and_then(|&i| s.all.get(i)).map(|e| e.path.clone())
     });
     if let Some(path) = searched { remember_entry(&path); }
-    unsafe { ShowWindow(hwnd, SW_HIDE); }
+    unsafe { KillTimer(hwnd,7); ShowWindow(hwnd, SW_HIDE); }
 }
 
+fn dismiss_compact_with_focus(hwnd: HWND) {
+    let prior = STATE.with(|s| s.borrow().as_ref().map(|p| p.prior));
+    dismiss(hwnd);
+    if let Some(prior) = prior {
+        unsafe { if !prior.is_null() && IsWindow(prior) != 0 { SetForegroundWindow(prior); } }
+    }
+}
 fn move_selection(delta: i32) {
     let hwnd = STATE.with(|c| {
         let mut guard = c.borrow_mut(); let s = guard.as_mut()?;
@@ -364,22 +368,49 @@ unsafe fn execute(hwnd: HWND, path: &Path) -> isize {
     ShellExecuteW(hwnd, wide("open").as_ptr(), wide(&path.to_string_lossy()).as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) as isize
 }
 
-// Extract large shell icons on one worker; shell extensions never block typing.
-fn icon_worker() -> (std::sync::mpsc::Sender<(PathBuf, i32)>, std::sync::mpsc::Receiver<((PathBuf, i32), Option<IconPixels>)>) {
-    let (tx, work) = std::sync::mpsc::channel::<(PathBuf, i32)>();
-    let (done, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || unsafe {
-        use windows::Win32::System::Com::*;
-        let com = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        while let Ok(key) = work.recv() {
-            let icon = extract_icon(&key.0, key.1);
-            if done.send((key, icon)).is_err() { break; }
-        }
-        if com.is_ok() { CoUninitialize(); }
-    });
-    (tx, rx)
+// One bounded icon queue and cache. Popups own only their reply endpoints.
+type IconKey = (PathBuf, i32);
+type IconResult = (IconKey, Option<IconPixels>);
+type IconJob = (IconKey, std::sync::mpsc::Sender<IconResult>);
+struct IconRequests(std::sync::mpsc::Sender<IconResult>);
+impl IconRequests {
+    fn send(&self, key: IconKey) -> Result<(), ()> {
+        use std::sync::{OnceLock, mpsc};
+        static WORK: OnceLock<Option<mpsc::SyncSender<IconJob>>> = OnceLock::new();
+        let work = WORK.get_or_init(|| {
+            let (tx, rx) = mpsc::sync_channel::<IconJob>(64);
+            std::thread::Builder::new().name("tlauncher-shell-icons".into()).spawn(move || unsafe {
+                use windows::Win32::System::Com::*;
+                let com = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+                let mut cache = std::collections::VecDeque::<(IconKey, Option<IconPixels>)>::new();
+                let mut revision = crate::app_icons::revision();
+                while let Ok((key, reply)) = rx.recv() {
+                    let next = crate::app_icons::revision();
+                    if revision != next { cache.clear(); revision = next; }
+                    let icon = if let Some(i) = cache.iter().position(|(k, _)| *k == key) {
+                        let hit = cache.remove(i).unwrap();
+                        let icon = hit.1.clone();
+                        cache.push_back(hit);
+                        icon
+                    } else {
+                        let icon = extract_icon(&key.0, key.1.clamp(8, 192));
+                        if cache.len() >= 96 { cache.pop_front(); }
+                        cache.push_back((key.clone(), icon.clone()));
+                        icon
+                    };
+                    let _ = reply.send((key, icon));
+                }
+                if com.is_ok() { CoUninitialize(); }
+            }).ok()?;
+            Some(tx)
+        });
+        work.as_ref().ok_or(())?.try_send((key, self.0.clone())).map_err(|_| ())
+    }
 }
-
+fn icon_worker() -> (IconRequests, std::sync::mpsc::Receiver<IconResult>) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    (IconRequests(tx), rx)
+}
 unsafe fn extract_icon(path: &Path, size: i32) -> Option<IconPixels> {
     let command=path.to_str().and_then(crate::dock::command_pin::decode);
     let icon=crate::app_icons::load(path).or_else(||shell_icon(
@@ -467,12 +498,15 @@ fn shell_pixels_keep_premultiplied_bgra_without_colored_transparent_edges() {
 fn icon_for(hwnd: HWND, path: &Path, size: i32) -> Option<IconPixels> {
     let (icon, pending) = STATE.with(|c| {
         let mut g = c.borrow_mut(); let s = g.as_mut()?;
+        if s.icon_rev!=crate::app_icons::revision(){s.icons.clear();s.pending_icons=0;(s.icon_requests,s.icon_results)=icon_worker();s.icon_rev=crate::app_icons::revision();}
         let key = (path.to_path_buf(), size);
-        if !s.icons.contains_key(&key) {
-            s.icons.insert(key.clone(), None);
-            let _ = s.icon_requests.send(key);
-            s.pending_icons += 1;
-            return Some((None, true));
+        if !s.icons.contains_key(&key) && s.pending_icons < 24 {
+            if s.icons.len() >= 192 { s.icons.retain(|_,icon|icon.is_none()); if s.icons.len()>=192{s.icons.clear();} }
+            if s.icon_requests.send(key.clone()).is_ok(){
+                s.icons.insert(key, None);
+                s.pending_icons += 1;
+                return Some((None, true));
+            }
         }
         Some((s.icons.get(&key).cloned().flatten(), false))
     }).unwrap_or((None, false));
@@ -487,6 +521,7 @@ unsafe fn execute(_hwnd: HWND, _path: &Path) -> isize { 33 }
 // and costs no continuous blur/redraw work while the panel is idle.
 pub(crate) unsafe fn capture_glass(x: i32, y: i32, width: i32, height: i32) -> Vec<u8> {
     let (bw, bh) = ((width / 4).max(1), (height / 4).max(1));
+    if cfg!(test) { return vec![96; (bw * bh * 4) as usize]; }
     let screen = GetDC(std::ptr::null_mut()); let dc = CreateCompatibleDC(screen);
     let mut info: BITMAPINFO = std::mem::zeroed();
     info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
@@ -608,7 +643,8 @@ unsafe fn paint(hwnd: HWND) {
         let text = wide(&query); let mut extent: SIZE = std::mem::zeroed(); let oldfont = SelectObject(dc,search);
         GetTextExtentPoint32W(dc,text.as_ptr(),text.len().saturating_sub(1) as i32,&mut extent); SelectObject(dc,oldfont);
         if select_all && !query.is_empty() { let brush=CreateSolidBrush(if dark {0x008B593A} else {0x00ECD5BC}); FillRect(dc,&RECT {left:px(59),top:px(23),right:(px(62)+extent.cx).min(w-px(65)),bottom:px(53)},brush); DeleteObject(brush); }
-        label(dc,if query.is_empty(){if dock_start{"Tìm ứng dụng, tệp…"}else{"Spotlight Search"}}else{&query},RECT {left:px(60),top:px(14),right:w-px(64),bottom:px(61)},search,if query.is_empty(){secondary}else{primary});
+        label(dc,if query.is_empty(){if dock_start{"Tìm ứng dụng, tệp…"}else{"Spotlight Search"}}else{&query},RECT {left:px(60),top:px(14),right:w-px(78),bottom:px(61)},search,if query.is_empty(){secondary}else{primary});
+        if !dock_start { label(dc,"▦",RECT{left:w-px(58),top:px(14),right:w-px(20),bottom:px(61)},search,primary); }
         if GetForegroundWindow() == hwnd { let caret=CreateSolidBrush(primary); let x=(px(60)+extent.cx).min(w-px(65)); FillRect(dc,&RECT{left:x,top:px(25),right:x+px(1).max(1),bottom:px(51)},caret); DeleteObject(caret); }
         label(dc,"esc",RECT {left:w-px(43),top:px(24),right:w-px(14),bottom:px(48)},small,secondary);
         let mut icons = Vec::new();
@@ -687,9 +723,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     match rx.try_recv(){
                         Ok(apps)=>{
                             s.apps_rx=None;
-                            s.all.retain(|entry|entry.kind!="Pinned");
-                            let mut seen=s.all.iter().map(|e|e.path.to_string_lossy().to_ascii_lowercase()).collect::<std::collections::HashSet<_>>();
-                            s.all.extend(apps.into_iter().filter(|e|seen.insert(e.path.to_string_lossy().to_ascii_lowercase())));
+                            s.all=apps;
+                            fullscreen::merge_manual(&mut s.all);
                             sync_pin_entries(&mut s.all);
                             apps_changed=true;
                         },
@@ -732,9 +767,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 return 0;
             }
             match w as u16 {
+                VK_F6 => expand_compact(),
                 VK_APPS => result_menu(hwnd,None),
                 VK_F10 if GetKeyState(VK_SHIFT as i32)<0=>result_menu(hwnd,None),
-                VK_ESCAPE => { dismiss(hwnd); }
+                VK_ESCAPE => { dismiss_compact_with_focus(hwnd); }
                 VK_RETURN => { PostMessageW(hwnd, OPEN_SELECTED, 0, 0); }
                 VK_DOWN => move_selection(1), VK_UP => move_selection(-1),
                 VK_NEXT => move_selection(PAGE as i32), VK_PRIOR => move_selection(-(PAGE as i32)),
@@ -755,6 +791,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         WM_RBUTTONUP=>{result_menu(hwnd,Some((l as i16 as i32,(l>>16) as i16 as i32)));0},
         WM_LBUTTONDOWN | WM_LBUTTONUP | WM_LBUTTONDBLCLK => {
             let y = (l >> 16) as i16 as i32;
+            if msg==WM_LBUTTONUP && STATE.with(|s|s.borrow().as_ref().is_some_and(|p|{
+                let x=(l as i16 as f32/p.scale) as i32-12;
+                let y=(y as f32/p.scale) as i32-12;
+                !p.dock_start && x>=612 && x<=648 && (9..=68).contains(&y)
+            })){expand_compact();return 0;}
             let clicked = STATE.with(|c| {
                 let mut guard = c.borrow_mut(); let Some(s) = guard.as_mut() else { return (false,false); };
                 let logical_y = (y as f32 / s.scale) as i32 - 12;
@@ -772,7 +813,58 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
     }
 }
 
-pub fn toggle(_owner: HWND) {toggle_at(None);}
+pub fn configure_spotlight(options: library::Preferences) {
+    fullscreen::configure(options);
+    if !fullscreen::enabled() { close_spotlight(); }
+}
+pub fn initialize_spotlight(value: library::Library) { fullscreen::initialize(value); }
+pub fn close_spotlight(){
+    fullscreen::dismiss(false);
+    if let Some((hwnd,_,_,_))=handles(){
+        unsafe{if IsWindowVisible(hwnd)!=0{dismiss(hwnd);}}
+    }
+}
+fn compact_handoff()->Option<(POINT,String,HWND)> {
+    let (hwnd,_,_,_)=handles()?;
+    if unsafe{IsWindowVisible(hwnd)}==0{return None;}
+    let handoff=STATE.with(|p|p.borrow().as_ref().map(|p|(p.point,p.query.clone(),p.prior)));
+    IN_ACTION_MENU.with(|cell|cell.set(true));
+    unsafe { KillTimer(hwnd,7); ShowWindow(hwnd,SW_HIDE); }
+    IN_ACTION_MENU.with(|cell|cell.set(false));
+    handoff
+}
+fn expand_compact(){
+    if let Some((point,query,prior))=compact_handoff(){
+        fullscreen::open(point,query,prior,false);
+    }
+}
+pub fn open_spotlight_dock(point: POINT) {
+    if !fullscreen::enabled(){return;}
+    if fullscreen::dock_fullscreen(){
+        let prior=unsafe{GetForegroundWindow()};
+        let old=compact_handoff();
+        fullscreen::open(point,old.as_ref().map(|(_,s,_)|s.clone()).unwrap_or_default(),
+            old.map_or(prior,|(_,_,p)|p),false);
+    }else if fullscreen::window().is_some(){fullscreen::dismiss(true);}else{open_compact(Some(point),None);}
+}
+pub fn open_spotlight_hidden(){
+    if !fullscreen::enabled(){return;}
+    let mut at=POINT{x:0,y:0};
+    let prior=unsafe{GetCursorPos(&mut at);GetForegroundWindow()};
+    let old=compact_handoff();
+    fullscreen::open(at,String::new(),old.map_or(prior,|(_,_,p)|p),true);
+}
+pub fn reset_spotlight_layout(owner:HWND) { fullscreen::reset(owner); }
+pub fn refresh_spotlight_library(){
+    if let Some(hwnd)=fullscreen::window(){fullscreen::refresh_catalog(hwnd);}
+    else{let _=catalog::request(true,true);}
+}
+pub fn toggle(_owner: HWND) {
+    if !fullscreen::enabled(){return;}
+    if fullscreen::window().is_some(){fullscreen::dismiss(true);return;}
+    open_compact(None,None);
+}
+pub(super) fn open_compact(point:Option<POINT>,query:Option<String>){toggle_at(point,query,None);}
 #[derive(Clone,Copy)]
 pub(crate) struct DockAnchor {pub point:POINT,pub side:crate::dock::DockSide}
 impl DockAnchor {
@@ -800,16 +892,13 @@ impl DockAnchor {
 fn spotlight_origin(screen:RECT,w:i32,h:i32)->(i32,i32){
     (screen.left+(screen.right-screen.left-w)/2,screen.top+(screen.bottom-screen.top-h)/2)
 }
-pub(crate) fn toggle_at(dock:Option<DockAnchor>) {
+fn toggle_at(at:Option<POINT>, query:Option<String>, prior:Option<HWND>) {
     unsafe {
         if let Some((hwnd, _, _, _)) = handles() {
             if IsWindowVisible(hwnd) != 0 {
-                let same=STATE.with(|s|s.borrow().as_ref().is_some_and(|s|match (s.dock_anchor,dock){
-                    (Some(a),Some(b))=>a.point.x==b.point.x&&a.point.y==b.point.y&&a.side==b.side,
-                    (None,None)=>true,_=>false,
-                }));
+                let same=STATE.with(|s|s.borrow().as_ref().is_some_and(|s| at.is_none_or(|p|MonitorFromPoint(p,MONITOR_DEFAULTTONEAREST)==MonitorFromPoint(s.point,MONITOR_DEFAULTTONEAREST))));
+                if same{dismiss_compact_with_focus(hwnd);return;}
                 dismiss(hwnd);
-                if same{return;}
             }
         } else {
             let instance = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(std::ptr::null());
@@ -821,30 +910,32 @@ pub(crate) fn toggle_at(dock:Option<DockAnchor>) {
             // without inheriting the hidden message window's visibility/owner chain.
             let hwnd = CreateWindowExW(WS_EX_LAYERED|WS_EX_TOOLWINDOW, cls.as_ptr(), wide("TLauncher Spotlight").as_ptr(), WS_POPUP, 0, 0, 684, 468, std::ptr::null_mut(), std::ptr::null_mut(), instance, std::ptr::null_mut());
             if hwnd.is_null() { crate::log!("Launcher: CreateWindowEx failed {}", GetLastError()); return; }
-            let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED);
-            let mut all = entries();
+            let mut all = catalog::snapshot(true);
+            fullscreen::merge_manual(&mut all);
             sync_pin_entries(&mut all);
             let (icon_requests,icon_results)=icon_worker();
-            STATE.with(|c| *c.borrow_mut() = Some(State { hwnd, all, matches: Vec::new(), query: String::new(), selected: 0, first: 0, scale: 1.0, width: 660, height: 444, glass: Vec::new(), backdrop: Vec::new(), error: String::new(), select_all: false, icons:std::collections::HashMap::new(),icon_requests,icon_results,pending_icons:0,apps_indexed:false,apps_rx:None,history:load_history(),launching:false,dock_start:false,dock_anchor:None }));
+            STATE.with(|c| *c.borrow_mut() = Some(State { hwnd, all, matches: Vec::new(), query: String::new(), selected: 0, first: 0, scale: 1.0, width: 660, height: 444, glass: Vec::new(), backdrop: Vec::new(), error: String::new(), select_all: false, icons:std::collections::HashMap::new(),icon_requests,icon_results,pending_icons:0,apps_rx:None,history:load_history(),launching:false,dock_start:false,dock_anchor:None,point:POINT{x:0,y:0},prior:std::ptr::null_mut(),icon_rev:crate::app_icons::revision() }));
         }
         let Some((hwnd, _, _, _)) = handles() else { return; };
-        let mouse=dock.map_or_else(||{let mut p=POINT{x:0,y:0};GetCursorPos(&mut p);p},|a|a.point);
+        let mouse=at.unwrap_or_else(||{let mut p=POINT{x:0,y:0};GetCursorPos(&mut p);p});
         let monitor = MonitorFromPoint(mouse, MONITOR_DEFAULTTONEAREST); let mut mi: MONITORINFO = std::mem::zeroed(); mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32; GetMonitorInfoW(monitor, &mut mi);
         if mi.rcWork.right<=mi.rcWork.left||mi.rcWork.bottom<=mi.rcWork.top{return;}
         // Query DPI after moving the still-hidden HWND to the target output.
         SetWindowPos(hwnd,std::ptr::null_mut(),mi.rcWork.left,mi.rcWork.top,1,1,SWP_NOACTIVATE|SWP_NOREDRAW|SWP_NOZORDER);
-        let fit=if dock.is_some(){mi.rcWork}else{mi.rcMonitor};
+        let fit=mi.rcMonitor;
         let scale = (windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd).clamp(72,288) as f32 / 96.0)
             .min((fit.right-fit.left) as f32/684.0).min((fit.bottom-fit.top) as f32/468.0);
         let width = (660.0 * scale) as i32; let height = (444.0 * scale) as i32;
         let pad=(12.0*scale).round() as i32;
-        let (x,y)=if let Some(anchor)=dock{anchor.position(mi.rcWork,width+2*pad,height+2*pad,(32.0*scale).round() as i32)}
-        else{spotlight_origin(mi.rcMonitor,width+2*pad,height+2*pad)};
+        let (x,y)=spotlight_origin(mi.rcMonitor,width+2*pad,height+2*pad);
         let backdrop = capture_glass(x+pad, y+pad, width, height);
         let appearance=PREFS.with(|c| c.borrow().clone());
         let glass=frost(&backdrop,width,height,scale,&appearance);
-        STATE.with(|c| if let Some(s) = c.borrow_mut().as_mut() { s.scale = scale; s.width = width; s.height = height; s.glass = glass; s.backdrop=backdrop; s.query.clear(); s.select_all = false; s.dock_start=dock.is_some();s.dock_anchor=dock;
-            if s.dock_start&&!s.apps_indexed{s.apps_indexed=true;s.apps_rx=installed_apps_worker();}
+        let mut base=catalog::snapshot(true);
+        fullscreen::merge_manual(&mut base);
+        sync_pin_entries(&mut base);
+        STATE.with(|c| if let Some(s) = c.borrow_mut().as_mut() { s.all=base; s.scale = scale; s.width = width; s.height = height; s.glass = glass; s.backdrop=backdrop; s.query=query.unwrap_or_default(); s.select_all = false; s.dock_start=false;s.dock_anchor=None;s.point=mouse;s.prior=prior.unwrap_or_else(||GetForegroundWindow());
+            if s.apps_rx.is_none(){s.apps_rx=catalog::request(true,false);}
         });
         refresh();
         SetWindowPos(hwnd, HWND_TOP, x, y, width+2*pad, height+2*pad, SWP_NOACTIVATE);
@@ -968,6 +1059,7 @@ mod tests {
     #[test]
     fn native_search_enter_and_reopen_do_not_reenter_state() {
         unsafe {
+            let _desktop = fullscreen::native_tests::Desktop::isolated();
             toggle(std::ptr::null_mut());
             let (hwnd, _, _, _) = handles().expect("native launcher window");
             for _ in 0..8 {

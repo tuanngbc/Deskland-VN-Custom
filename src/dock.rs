@@ -514,6 +514,7 @@ unsafe fn stage_window_is_local(hwnd:HWND,bounds:RECT)->bool {
 fn basename(path:&str)->String {
     if path==internal_app::KEY{return internal_app::LABEL.into();}
     if let Some(command)=command_pin::decode(path){return command.label;}
+    if let Some(name)=crate::launcher::cached_application_name(std::path::Path::new(path)){return name;}
     path.rsplit(['\\','/']).next().unwrap_or(path).trim_end_matches(".exe").to_string()
 }
 fn is_shell_class(class:&str)->bool {
@@ -1666,9 +1667,15 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         }
     }
 }
-unsafe fn open_launcher(){
+unsafe fn open_launcher(bar:HWND){
     let owner=OWNER.with(Cell::get);
-    if !owner.is_null(){PostMessageW(owner,crate::WM_OPEN_LAUNCHER,0,0);}
+    let monitor=MonitorFromWindow(bar,MONITOR_DEFAULTTONEAREST);
+    let mut info:MONITORINFO=std::mem::zeroed();
+    info.cbSize=std::mem::size_of::<MONITORINFO>() as u32;
+    if !owner.is_null() && GetMonitorInfoW(monitor,&mut info)!=0{
+        let r=info.rcMonitor;
+        PostMessageW(owner,crate::WM_OPEN_DOCK_SPOTLIGHT,((r.left+r.right)/2) as WPARAM,((r.top+r.bottom)/2) as LPARAM);
+    }
 }
 unsafe fn open(uri:&str) {
     ShellExecuteW(ptr::null_mut(),wide("open").as_ptr(),wide(uri).as_ptr(),ptr::null(),ptr::null(),SW_SHOWNORMAL);
@@ -3359,7 +3366,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if let Some((item,search,utilities,widget,shell,previous))=action{
                 if let Some(target)=shell{activate_shell(hwnd,target,false);}
                 if let Some(item)=item{open_dock_item(hwnd,&item);}
-                if search {open_launcher();}
+                if search {open_launcher(hwnd);}
                 if utilities||widget.is_some(){request_utilities(hwnd,widget);}
                 if previous!=0 && IsWindow(previous as _)!=0{SetForegroundWindow(previous as _);}
                 InvalidateRect(hwnd,ptr::null(),0);
@@ -3445,7 +3452,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                             None=>activate(hwnd,&item),
                         }
                     }},
-                    Some(DockTarget::Launcher)=>open_launcher(),
+                    Some(DockTarget::Launcher)=>open_launcher(hwnd),
                     Some(DockTarget::Overflow)=>request_utilities(hwnd,None),
                     Some(DockTarget::Utility(widget))=>request_utilities(hwnd,Some(widget)),
                     Some(DockTarget::Shell(target))=>activate_shell(hwnd,target,false),

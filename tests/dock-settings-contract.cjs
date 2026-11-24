@@ -314,4 +314,26 @@ test('native Settings starts without a live iframe and recovery cannot reopen it
     assert.equal(element('previewStill').hidden,false);
   }
 });
+test('unified Spotlight preferences and library actions are independent of Dock configuration',()=>{
+  const begin=html.indexOf('const spotlightInputs=');
+  const finish=html.indexOf(';',html.indexOf("send({t:'spotlightLibraryAction',action})",begin))+1;
+  assert(begin>0&&finish>begin);
+  vm.runInContext(html.slice(begin,finish),context);
+  $('spotlightEnabled').checked=true;
+  $('spotlightDockClick').value='compact';
+  $('spotlightFullTheme').value='dark';
+  $('spotlightIconSize').value='72';
+  $('spotlightSpacing').value='26';
+  $('spotlightNames').checked=false;
+  $('spotlightFavorites').checked=true;
+  $('spotlightSpacing').listeners.change();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{
+    t:'spotlightPreferences',value:{enabled:true,dockFullscreen:false,theme:'dark',
+      iconSize:72,spacing:26,showNames:false,favoritesFirst:true}
+  });
+  for(const [id,action] of [['spotlightHidden','hidden'],['spotlightRefresh','refresh'],['spotlightReset','reset']]){
+    $(id).listeners.click();
+    assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'spotlightLibraryAction',action});
+  }
+});
 console.log('TOTAL: '+count+' PASS / 0 FAIL');

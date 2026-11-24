@@ -111,6 +111,9 @@ const WM_OPEN_SETTINGS: u32 = WM_APP + 2;
 const WM_OPEN_LAUNCHER: u32 = WM_APP + 3;
 const WM_OPEN_DOCK_LAUNCHER: u32 = WM_APP + 79;
 const CMD_DOCK_LAUNCHER: usize = 140;
+const WM_OPEN_DOCK_SPOTLIGHT:u32=WM_APP+80;
+const CMD_DOCK_SPOTLIGHT:usize=141;
+thread_local!{static SPOTLIGHT_DISPLAY:Cell<Option<POINT>>=const{Cell::new(None)};}
 thread_local!{static DOCK_LAUNCH_POINT: Cell<Option<launcher::DockAnchor>>=const{Cell::new(None)};}
 const CMD_EXIT: usize = 199;
 const HOTKEY_SAVER: i32 = 1;
@@ -303,6 +306,11 @@ unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRE
         WM_OPEN_DOCK_LAUNCHER => {
             DOCK_LAUNCH_POINT.with(|c|c.set(Some(launcher::DockAnchor::decode(w,l))));
             PENDING_CMD.with(|c|c.set(CMD_DOCK_LAUNCHER));
+            0
+        }
+        WM_OPEN_DOCK_SPOTLIGHT => {
+            SPOTLIGHT_DISPLAY.with(|p|p.set(Some(POINT{x:w as i32,y:l as i32})));
+            PENDING_CMD.with(|c|c.set(CMD_DOCK_SPOTLIGHT));
             0
         }
         WM_OPEN_LAUNCHER => {
@@ -609,6 +617,7 @@ struct Config {
     launcher_mods: u32,
     launcher_vk: u32,
     launcher_appearance: launcher::Appearance,
+    spotlight:launcher::library::Preferences,
     tools: mini_tools::Options,
     system_monitor: system_monitor::Options,
 }
@@ -624,6 +633,7 @@ fn load_config(cli_theme: Option<String>) -> Config {
     let cs = std::env::var("LOCALAPPDATA").map(|d| std::path::PathBuf::from(d).join("DesklandPreview").join("settings.json")).unwrap_or_default();
     let csv = if trial::active() { None } else { read(&cs) };
     let root = read(&rust_settings_path()).or_else(|| csv.clone()).unwrap_or(serde_json::Value::Null);
+    launcher::initialize_spotlight(launcher::library::Library::from_json(&root["spotlightLibrary"]));
     // Ngôn ngữ: bản Rust chưa lưu thì theo lựa chọn ở bản C#
     let lang = root.get("lang").or_else(|| csv.as_ref().and_then(|c| c.get("lang"))).and_then(|v| v.as_str()).unwrap_or("auto").to_string();
     let saved = root.get("theme").and_then(|v| v.as_str()).unwrap_or("beach").to_string();
@@ -688,6 +698,7 @@ fn load_config(cli_theme: Option<String>) -> Config {
             if normalize_hotkey(root.get("launcherHotkey").and_then(|v| v.get("mods")).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(MOD_ALT | MOD_NOREPEAT), vk).is_some() { vk } else { VK_SPACE as u32 }
         },
         launcher_appearance: launcher::Appearance::from_json(&root["launcherAppearance"]),
+        spotlight:launcher::library::Preferences::from_json(&root["spotlight"]),
         tools: mini_tools::Options::from_json(&root["miniTools"]),
         system_monitor: system_monitor::Options::from_json(&root["systemMonitor"]),
         lock_idle_mins: root.get("lockIdleMins").and_then(|v| v.as_u64()).map(|v| v as u32).filter(|&v| v > 0).unwrap_or(5),
@@ -707,7 +718,7 @@ fn register_configured_shortcuts(hwnd: HWND,cfg: &Config) {
     unregister_shortcuts(hwnd);
     unsafe {
         HOTKEY_OK.with(|c|c.set(register_hotkey_logged(hwnd,HOTKEY_SAVER,cfg.saver_mods,cfg.saver_vk,"Khóa với cảnh động")));
-        LAUNCHER_HOTKEY_OK.with(|c|c.set(register_hotkey_logged(hwnd,HOTKEY_LAUNCHER,cfg.launcher_mods,cfg.launcher_vk,"Spotlight")));
+        LAUNCHER_HOTKEY_OK.with(|c|c.set(cfg.spotlight.enabled && register_hotkey_logged(hwnd,HOTKEY_LAUNCHER,cfg.launcher_mods,cfg.launcher_vk,"Spotlight")));
     }
     TOOL_HOTKEYS.with(|c|c.set(mini_tools::register(hwnd,&cfg.tools)));
 }
@@ -747,6 +758,7 @@ fn save_config(cfg: &Config) {
         "saverHotkey": { "mods": cfg.saver_mods, "vk": cfg.saver_vk },
         "launcherHotkey": { "mods": cfg.launcher_mods, "vk": cfg.launcher_vk },
         "launcherAppearance": cfg.launcher_appearance.json(),
+        "spotlight": &cfg.spotlight,
         "miniTools": cfg.tools.json(),
         "systemMonitor": cfg.system_monitor.json(),
     });
@@ -873,6 +885,7 @@ fn web_init(app: &App) -> serde_json::Value {
             "force": { "showBoy": 0, "showCat": 0 },
         },
     });
+    init["spotlight"]=serde_json::json!(&app.cfg.spotlight);
     app.dock_taskbar.add_fields(&mut init);
     init["dockWinKeyStatus"]=serde_json::json!(app.dock_win_key_status);
     init
@@ -2685,6 +2698,7 @@ fn main() {
         let cmd = PENDING_CMD.with(|c| c.replace(0));
         if TRAY_RESTORE_PENDING.with(|p|p.replace(false)) && !saver && !headless {
             unsafe{Shell_NotifyIconW(NIM_ADD,&nid);}
+            launcher::shell_catalog_changed();
             log!("Explorer khởi động lại: khôi phục menu tray, giữ cấu hình module");
         }
         let dock_events=app.dock_runtime.as_ref().map(|r|r.take_events()).unwrap_or_default();
@@ -3091,6 +3105,27 @@ fn main() {
                     launcher::configure(app.cfg.launcher_appearance.clone());
                     web_changed = true;
                 }
+                "spotlightPreferences" => {
+                    let enabled=app.cfg.spotlight.enabled;
+                    app.cfg.spotlight=launcher::library::Preferences::from_json(&m["value"]);
+                    launcher::configure_spotlight(app.cfg.spotlight.clone());
+                    if enabled!=app.cfg.spotlight.enabled {
+                        unsafe{UnregisterHotKey(msg_hwnd,HOTKEY_LAUNCHER);}
+                        LAUNCHER_HOTKEY_OK.with(|c|c.set(app.cfg.spotlight.enabled&&unsafe{
+                            register_hotkey_logged(msg_hwnd,HOTKEY_LAUNCHER,app.cfg.launcher_mods,app.cfg.launcher_vk,"Spotlight")
+                        }));
+                    }
+                    web_changed=true;
+                }
+                "spotlightLibraryAction" => {
+                    launcher::configure_spotlight(app.cfg.spotlight.clone());
+                    match m["action"].as_str(){
+                        Some("hidden")=>launcher::open_spotlight_hidden(),
+                        Some("refresh")=>launcher::refresh_spotlight_library(),
+                        Some("reset")=>launcher::reset_spotlight_layout(msg_hwnd),
+                        _=>{}
+                    }
+                }
                 "systemMonitor" => {
                     app.cfg.system_monitor = system_monitor::Options::from_json(&m);
                     app.configure_system_monitor(msg_hwnd);
@@ -3280,7 +3315,15 @@ fn main() {
                         launcher::start::toggle(msg_hwnd,point);
                     }
                 }
+                CMD_DOCK_SPOTLIGHT => {
+                    if let Some(point)=SPOTLIGHT_DISPLAY.with(|p|p.take()){
+                        launcher::configure_spotlight(app.cfg.spotlight.clone());
+                        launcher::configure(app.cfg.launcher_appearance.clone());
+                        launcher::open_spotlight_dock(point);
+                    }
+                }
                 CMD_LAUNCHER => {
+                    launcher::configure_spotlight(app.cfg.spotlight.clone());
                     launcher::configure(app.cfg.launcher_appearance.clone());
                     launcher::toggle(msg_hwnd);
                 }
@@ -3575,6 +3618,7 @@ fn main() {
 
     if precise_timer {unsafe {timeEndPeriod(1);}}
     log!("Đang thoát");
+    launcher::close_spotlight();
     web::close();
     if !headless && !saver {save_config(&app.cfg);}
     // Join managed desktop UI before removing the TLauncher tray/config owner.

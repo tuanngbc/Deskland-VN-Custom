@@ -97,7 +97,7 @@ pub fn post(json: &str) {
     }
 }
 
-fn light_theme() -> bool {
+pub(crate) fn light_theme() -> bool {
     use windows_sys::Win32::System::Registry::HKEY_CURRENT_USER;
     let k = wide(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
     let n = wide("AppsUseLightTheme");

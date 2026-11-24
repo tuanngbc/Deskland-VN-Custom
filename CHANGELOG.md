@@ -1,5 +1,12 @@
 # Nhật ký thay đổi TLauncher
 
+## 1.0.2 — Unified Spotlight (ứng viên, chưa phát hành)
+
+- Giữ Spotlight thu gọn và phím Alt+Space. F6 chuyển giữa chế độ thu gọn và toàn màn hình, giữ nội dung đang tìm. Nút kính lúp trên Dock mặc định mở thư viện trên màn hình của Dock.
+- Lưới phân trang và bốn bộ lọc cho ứng dụng, tệp và công cụ hệ thống. Start, Dock và Spotlight dùng chung dữ liệu ứng dụng đã phát hiện, gồm Start Menu và Windows AppsFolder.
+- Thêm ứng dụng EXE/LNK, đổi tên và icon, ghim vào Dock, đánh dấu yêu thích, ẩn/khôi phục, sắp xếp và nhóm vào thư mục. Các thay đổi được lưu cùng hồ sơ TLauncher; ẩn hoặc bỏ mục tự thêm giữ nguyên tệp gốc.
+- Thư viện chạy trong TLauncher.exe với cửa sổ Win32 native, yêu cầu hiệu ứng Acrylic từ Windows và dùng nền sáng/tối dự phòng. Xem [hướng dẫn kiểm thử cách ly](docs/unified-spotlight.md).
+
 ## 1.0.1 — Khởi động cùng Windows, Dock sẵn sàng sớm hơn
 
 - Tùy chọn **Khởi động cùng Windows** dùng Task Scheduler cho tài khoản hiện tại, chạy ngay khi người dùng đăng nhập, không thêm thời gian chờ và không yêu cầu quyền quản trị. TLauncher chuyển mục tự khởi động cũ đã bật sang cơ chế mới khi đăng ký thành công. Mục đã bị tắt trong Windows không được tự bật lại.

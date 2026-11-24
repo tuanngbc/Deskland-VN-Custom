@@ -2,7 +2,7 @@
 //! app catalog, Shell launching and icon extraction are shared with Spotlight.
 use super::*;
 use crate::dock::{panel_chrome as chrome,PopupPalette,PopupPixels};
-use std::{collections::{HashMap,HashSet},ptr,rc::Rc,sync::mpsc::{self,Receiver,Sender},time::{Duration,Instant}};
+use std::{collections::{HashMap,HashSet},ptr,rc::Rc,sync::mpsc::{self,Receiver},time::{Duration,Instant}};
 
 const CLASS:&str="TuanpcDeskStartPanel";
 #[path = "start_layout.rs"]
@@ -32,7 +32,7 @@ struct Model {
     all:Vec<Entry>, pins:Vec<String>, usage:Usage, query:String, page:usize, selected:usize,
     pressed:Option<(Hit,i32,i32)>, hover:Option<Hit>, keyboard:bool, view:StartView, error:String, glass:Rc<[u8]>, glass_height:i32, fonts:Fonts, avatar:Option<IconPixels>, avatar_rx:Option<Receiver<Option<IconPixels>>>, avatar_at:Option<Instant>,
     icons:HashMap<(PathBuf,i32),Option<IconPixels>>, loading:HashSet<(PathBuf,i32)>,
-    icon_tx:Sender<(PathBuf,i32)>,icon_rx:Receiver<((PathBuf,i32),Option<IconPixels>)>,
+    icon_tx:IconRequests,icon_rx:Receiver<((PathBuf,i32),Option<IconPixels>)>,
     catalog:Option<Receiver<Vec<Entry>>>, indexed_at:Option<Instant>,
 }
 thread_local!{
@@ -104,21 +104,7 @@ fn make_pin(value:&str)->Entry{
     Entry{name,path,kind:"Pinned",detail:String::new()}
 }
 fn catalog_worker()->Option<Receiver<Vec<Entry>>>{
-    let (tx,rx)=mpsc::channel();
-    std::thread::Builder::new().name("deskland-start-catalog".into()).spawn(move||{
-        let mut apps=app_entries();
-        use windows::Win32::System::Com::{CoInitializeEx,CoUninitialize,COINIT_APARTMENTTHREADED};
-        unsafe{
-            if CoInitializeEx(None,COINIT_APARTMENTTHREADED).is_ok(){
-                apps.extend(installed_apps());CoUninitialize();
-            }
-        }
-        let mut seen=HashSet::new();
-        apps.retain(|app|app.kind=="Application"&&seen.insert(app.path.to_string_lossy().to_lowercase()));
-        apps.sort_by_cached_key(|app|app.name.to_lowercase());
-        let _=tx.send(apps);
-    }).ok()?;
-    Some(rx)
+    catalog::request(false,false)
 }
 fn px(v:i32,scale:f32)->i32{(v as f32*scale).round() as i32}
 fn rr(x:i32,y:i32,w:i32,h:i32,s:f32)->RECT{RECT{left:px(x,s),top:px(y,s),right:px(x+w,s),bottom:px(y+h,s)}}
@@ -146,8 +132,7 @@ fn content(model:&Model)->(Vec<std::borrow::Cow<'_,Entry>>,bool,[Vec<Entry>;2],u
             let mut matches=model.all.iter().map(Cow::Borrowed)
                 .chain(model.pins.iter().filter(|p|!model.all.iter().any(|a|same_path(&a.path,Path::new(p)))).map(|p|Cow::Owned(make_pin(p))))
                 .filter_map(|e|{
-                    let name=e.name.to_lowercase();
-                    let rank=if name==q{0}else if name.starts_with(&q){1}else if q.split_whitespace().all(|part|name.contains(part)){2}else{return None;};
+                    let rank=catalog::search_rank(&e.name,&q)?;
                     Some((rank,e))
                 }).collect::<Vec<_>>();
             matches.sort_by_key(|(rank,e)|(*rank,e.kind!="Application"));
@@ -930,7 +915,7 @@ unsafe extern "system" fn proc_start(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
                 let mut changed=false;
                 if let Some(catalog)=&m.catalog{
                     match catalog.try_recv(){
-                        Ok(apps)=>{m.all=apps;m.catalog=None;m.indexed_at=Some(Instant::now());changed=true;},
+                        Ok(mut apps)=>{fullscreen::merge_manual(&mut apps);m.all=apps;m.catalog=None;m.indexed_at=Some(Instant::now());changed=true;},
                         Err(mpsc::TryRecvError::Disconnected)=>m.catalog=None,
                         Err(mpsc::TryRecvError::Empty)=>{}
                     }

@@ -57,6 +57,8 @@ Ghim và mở app bằng Dock, quản lý cửa sổ bằng Stage Manager, tìm 
 
 **Bản 1.0.1:** Khi bật tự khởi động, Windows mở TLauncher lúc đăng nhập qua Task Scheduler. Dock và Stage khởi tạo trước hình nền; nếu Explorer chưa sẵn sàng, hình nền thử gắn lại sau. Xem [ghi chú và điều kiện kiểm chứng](CHANGELOG.md#kiểm-chứng).
 
+**Ứng viên 1.0.2 — Unified Spotlight:** Gộp tìm kiếm và thư viện ứng dụng trong TLauncher. Dùng Alt+Space để tìm nhanh, F6 để chuyển chế độ hoặc bấm kính lúp trên Dock để mở thư viện toàn màn hình. Thư viện hỗ trợ thêm EXE/LNK, ghim, ẩn/khôi phục và thư mục tùy chỉnh. Windows điều khiển kính Acrylic; bản thử có nền dự phòng theo chủ đề. Xem [hướng dẫn kiểm thử](docs/unified-spotlight.md). Bản công khai vẫn là 1.0.1.
+
 <!-- product-guide:start -->
 ## Chi tiết và ảnh minh họa
 
