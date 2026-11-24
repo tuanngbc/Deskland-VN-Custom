@@ -116,6 +116,12 @@ fn native_live_backdrop_retains_color_and_filters_detail() {
                     let transparent=sample(&next,140,315)==sample(&reference,140,315);
                     println!("GLASS_FOREGROUND opaque_dirty_update={opaque} unchanged_transparent_region={transparent}");
                     if opaque&&transparent{
+                        fg.prepare_open()?;
+                        fg.comp.WaitForCommitCompletion()?;
+                        settle();
+                        let prepared=screen().is_some_and(|img|sample(&img,94,90)==sample(&reference,94,90));
+                        assert!(prepared,"prepared foreground must be transparent before the opening clock");
+                        println!("MOTION_SPEED fullscreen_first_frame=PASS");
                         let opening=Transition::new(true,motion::FULL,None);
                         fg.motion(opening,W,90)?;
                         fg.comp.WaitForCommitCompletion()?;
@@ -259,6 +265,26 @@ fn native_activation_modes_apply_live_on_one_overlay(){
     configure(prefs);
     super::super::open_spotlight_dock(at);
     assert!(window().is_some());
+    dismiss(false);
+    configure(Preferences::default());
+    for speed in [25,50,75,100,150,200]{
+        motion::native_fixture(speed,||unsafe{
+            super::super::toggle(ptr::null_mut());
+            let (h,_,_,_)=handles().unwrap();
+            let opening=COMPACT_MOTION.get().expect("compact runtime transition");
+            assert_eq!(opening.duration,(22000.0/speed as f64).round() as u32);
+            SendMessageW(h,WM_CHAR,'q' as WPARAM,0);
+            assert_eq!(STATE.with(|s|s.borrow().as_ref().unwrap().query.clone()),"q");
+            super::super::toggle(ptr::null_mut());
+            let closing=COMPACT_MOTION.get().unwrap();
+            assert_eq!(closing.duration,(16000.0/speed as f64).round() as u32);
+            assert_eq!(closing.to,0.0);
+            COMPACT_MOTION.set(Some(closing.finish()));
+            SendMessageW(h,WM_TIMER,COMPACT_TWEEN,0);
+            assert!(!compact_visible());
+        });
+    }
+    println!("MOTION_SPEED compact_native=PASS six_speeds=PASS closing_endpoint=PASS");
     println!("SPOTLIGHT_NATIVE activation_mode_live_apply=PASS toggle=PASS F6_query=PASS");
 }
 
@@ -603,6 +629,22 @@ fn native_isolated_library_search_navigation_and_100_toggles() {
         click(5,5);
         assert!(window().is_none(),"background click closes only the outermost view");
         println!("SPOTLIGHT_NATIVE minimal_chrome=PASS empty_click=PASS modal_edit_folder_protection=PASS");
+        configure(Preferences::default());
+        open(p,String::new(),ptr::null_mut(),false);
+        let motion_hwnd=window().unwrap();
+        for speed in [25,50,75,100,150,200]{
+            motion::native_fixture(speed,||{
+                PANEL.with(|p|p.borrow_mut().as_mut().unwrap().folder=1);
+                start_grid_motion(motion_hwnd);
+                assert_eq!(PANEL.with(|p|p.borrow().as_ref().unwrap().grid_started.unwrap().ms()),(24000.0/speed as f64).round() as u32);
+                PANEL.with(|p|p.borrow_mut().as_mut().unwrap().folder=0);
+                start_grid_motion(motion_hwnd);
+                assert_eq!(PANEL.with(|p|p.borrow().as_ref().unwrap().grid_started.unwrap().ms()),(22000.0/speed as f64).round() as u32);
+            });
+        }
+        dismiss(false);
+        configure(Preferences{animations:false,..Preferences::default()});
+        println!("MOTION_SPEED folder_page_native=PASS six_speeds=PASS");
         pump();
         let before = resources();
         let mut elapsed = Vec::new();

@@ -44,6 +44,22 @@ pub(crate) fn configure(value:Settings){
 }
 pub(crate) fn refresh_system(){SYSTEM.store(system_allowed(),Ordering::Relaxed);}
 pub(crate) fn allowed()->bool{settings().allowed(SYSTEM.load(Ordering::Relaxed))}
+pub(crate) fn native_allowed()->bool{
+    #[cfg(test)]
+    if !NATIVE_FIXTURE.get(){return false;}
+    allowed()
+}
+#[cfg(test)]
+thread_local!{static NATIVE_FIXTURE:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
+/// Called only from individually dispatched, ignored native CI fixtures.
+#[cfg(test)]
+pub(crate) fn native_fixture<T>(speed:u32,run:impl FnOnce()->T)->T{
+    struct Reset(Settings,bool);
+    impl Drop for Reset{fn drop(&mut self){configure(self.0);NATIVE_FIXTURE.set(self.1);}}
+    let _guard=Reset(settings(),NATIVE_FIXTURE.replace(true));
+    configure(Settings{speed,..Default::default()});
+    run()
+}
 pub(crate) fn duration(base:u32)->u32{settings().duration(base)}
 // Pointer feedback should remain responsive even at very slow visual speeds.
 pub(crate) fn hover_ms()->u32{duration(HOVER_MS as u32).clamp(50,140)}
@@ -54,6 +70,8 @@ impl Span{
     pub fn hover()->Self{Self::fixed(hover_ms())}
     pub fn fixed(duration:u32)->Self{Self{start:Instant::now(),duration:duration.max(1)}}
     pub fn progress(self)->f32{(self.start.elapsed().as_secs_f32()*1000.0/self.duration as f32).clamp(0.0,1.0)}
+    #[cfg(test)]
+    pub(crate) fn ms(self)->u32{self.duration}
 }
 
 #[derive(Clone,Copy)]
@@ -90,6 +108,8 @@ impl Tween {
         (1000.0*self.start.elapsed().as_secs_f32()/self.duration.max(1) as f32).clamp(0.0,1.0)
     }
     pub fn openness(self)->f32{self.from+(self.to-self.from)*ease(self.progress())}
+    #[cfg(test)]
+    pub(crate) fn finish(mut self)->Self{self.frozen=false;self.start-=std::time::Duration::from_millis(u64::from(self.duration)+1);self}
 }
 pub(crate) fn ease(value:f32)->f32{1.0-(1.0-value.clamp(0.0,1.0)).powi(3)}
 pub(crate) fn zoom(base:f32,open:f32)->f32{base+(1.0-base)*open}

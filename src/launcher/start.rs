@@ -231,7 +231,7 @@ unsafe fn start_opacity(hwnd:HWND,open:f32){
     SHADOW.with(|s|if let Some(c)=s.borrow().as_ref(){c.opacity(alpha);});
 }
 unsafe fn transition(hwnd:HWND,open:bool)->bool{
-    if cfg!(test)||!crate::dock::popup_motion_allowed(){return false;}
+    if !super::motion::native_allowed(){return false;}
     let t=super::motion::Tween::new(open,super::motion::START,START_MOTION.get());
     let t=if open&&IsWindowVisible(hwnd)==0{t.prepared()}else{t};
     if SetTimer(hwnd,START_TWEEN,16,None)==0{return false;}
@@ -1228,6 +1228,25 @@ mod tests {
             toggle(ptr::null_mut(),anchor);
             SendMessageW(host,APPLY,VK_ESCAPE as usize,0);
             assert_eq!(IsWindowVisible(host),0);
+            for speed in [25,50,75,100,150,200]{
+                super::motion::native_fixture(speed,||{
+                    toggle(ptr::null_mut(),anchor);
+                    let t=START_MOTION.get().expect("native Start opening transition");
+                    assert_eq!(t.from,0.0);
+                    assert_eq!(t.duration,(24000.0/speed as f64).round() as u32);
+                    SetWindowTextW(edit,wide("paint").as_ptr());
+                    assert_eq!(START.with(|s|s.borrow().as_ref().unwrap().query.clone()),"paint");
+                    SendMessageW(host,APPLY,VK_ESCAPE as usize,0);
+                    assert_ne!(IsWindowVisible(host),0);
+                    let closing=START_MOTION.get().unwrap();
+                    assert_eq!(closing.duration,(18000.0/speed as f64).round() as u32);
+                    START_MOTION.set(Some(closing.finish()));
+                    SendMessageW(host,WM_TIMER,START_TWEEN,0);
+                    assert_eq!(IsWindowVisible(host),0);
+                    assert!(START_MOTION.get().is_none());
+                });
+            }
+            println!("MOTION_SPEED start_native=PASS six_speeds=PASS input_while_opening=PASS");
             DestroyWindow(host);
             START.with(|s|if let Some(m)=s.borrow_mut().take(){m.fonts.delete();});
         }

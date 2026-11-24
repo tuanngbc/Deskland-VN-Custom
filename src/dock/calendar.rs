@@ -207,7 +207,7 @@ pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor){
     let mut panel=Panel{hwnd,owner,anchor,layer,dpi:dock_dpi,glass,shadow:None,fonts,local,view:local.month,following:true,
         dirty:true,hover:None,focus:None,pressed:None,motion:None};
     panel.paint();
-    if !cfg!(test)&&super::popup_motion_allowed()&&SetTimer(hwnd,MOTION_TIMER,16,None)!=0{
+    if super::motion::native_allowed()&&SetTimer(hwnd,MOTION_TIMER,16,None)!=0{
         panel.motion=Some(super::motion::Tween::new(true,super::motion::CALENDAR,None).prepared());
     }
     if !panel.present(){DestroyWindow(hwnd);return;}
@@ -232,7 +232,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_CLOSE=>{
             let animated=PANEL.with(|s|{
                 let mut p=s.borrow_mut();let Some(p)=p.as_mut().filter(|p|p.hwnd==hwnd)else{return false;};
-                if cfg!(test)||!super::popup_motion_allowed(){return false;}
+                if !super::motion::native_allowed(){return false;}
                 if p.motion.is_some_and(|t|t.to==0.0){return true;}
                 if SetTimer(hwnd,MOTION_TIMER,16,None)==0{return false;}
                 p.motion=Some(super::motion::Tween::new(false,super::motion::CALENDAR,p.motion));true
@@ -393,6 +393,23 @@ mod tests{
                 assert!(!open_for(owner));
                 assert_eq!(IsWindow(hwnd),0);
             }
+            for speed in [25,50,75,100,150,200]{
+                super::super::motion::native_fixture(speed,||{
+                    let anchor=chrome::Anchor{point:POINT{x:260,y:480},side:super::super::DockSide::Bottom,dark:false,transparency:32};
+                    show(owner,anchor);
+                    let (hwnd,tween)=PANEL.with(|s|{let s=s.borrow();let p=s.as_ref().unwrap();(p.hwnd,p.motion.unwrap())});
+                    assert_ne!(IsWindowVisible(hwnd),0);
+                    assert_eq!(tween.from,0.0);
+                    assert_eq!(tween.duration,(20000.0/speed as f64).round() as u32);
+                    SendMessageW(hwnd,WM_KEYDOWN,VK_ESCAPE as usize,0);
+                    assert_ne!(IsWindow(hwnd),0,"animated close keeps HWND until endpoint");
+                    PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().unwrap();let t=p.motion.unwrap();
+                        assert_eq!(t.duration,(15000.0/speed as f64).round() as u32);p.motion=Some(t.finish());});
+                    SendMessageW(hwnd,WM_TIMER,MOTION_TIMER,0);
+                    assert_eq!(IsWindow(hwnd),0);assert!(!open_for(owner));
+                });
+            }
+            println!("MOTION_SPEED calendar_native=PASS six_speeds=PASS closing_endpoint=PASS");
             DestroyWindow(owner);
         }
     }

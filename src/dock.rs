@@ -830,7 +830,8 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         state.screens = displays();
         state.workspaces.dissolve_missing_displays(state.screens.iter().map(|s|s.id.as_str()));
     }
-    let material_changed=if topology||state.material.is_none(){
+    let policy_changed=state.material.is_some_and(|m|m.reduced_motion!=state.prefs.appearance.motion_reduced());
+    let material_changed=if topology||state.material.is_none()||policy_changed{
         let style=&state.prefs.appearance;
         state.system_dark=surface::Material::system_dark();
         let material=surface::Material::themed(style.theme,state.system_dark,style.transparency,style.motion_reduced());

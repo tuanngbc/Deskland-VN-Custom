@@ -377,7 +377,7 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bo
     let fonts=[chrome::choose_font(dpi,if list{18}else{21},550),chrome::choose_font(dpi,14,if list{455}else{530}),chrome::choose_font(dpi,12,420),chrome::choose_font(dpi,19,540)];
     let metrics=view.metrics.map(Metrics::new);
     let start=std::time::Instant::now();
-    let animated=!cfg!(test)&&super::popup_motion_allowed();
+    let animated=super::motion::native_allowed();
     let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,glass,fonts,view,metrics,index:None,pressed:None,page:0,cols,per_page,row_height,list,entrance:None,shadow:None,hub};
     // A hidden HWND can't be relied on to dispatch WM_PAINT. Submit the
     // completed bitmap directly, then show the window with content.
@@ -420,7 +420,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             let animated=PANE.with(|s|{
                 let mut slot=s.borrow_mut();
                 let Some(p)=slot.as_mut().filter(|p|p.hwnd==hwnd&&p.layered)else{return false;};
-                if cfg!(test)||!super::popup_motion_allowed(){return false;}
+                if !super::motion::native_allowed(){return false;}
                 if p.entrance.is_some_and(|t|t.to==0.0){return true;}
                 if SetTimer(hwnd,ENTRANCE_TIMER,16,None)==0{return false;}
                 p.entrance=Some(super::motion::Tween::new(false,super::motion::CONTROL,p.entrance));
@@ -585,8 +585,26 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             let shadow=PANE.with(|p|p.borrow().as_ref().unwrap().shadow.as_ref().expect("hub shadow").hwnd);
             assert_ne!(IsWindowVisible(shadow),0);
             assert_ne!(GetWindowLongPtrW(shadow,GWL_EXSTYLE)&WS_EX_TRANSPARENT as isize,0);
-            close_for(owner);DestroyWindow(owner);
+            close_for(owner);
             assert_eq!(IsWindow(shadow),0);
+            for speed in [25,50,75,100,150,200]{
+                super::super::motion::native_fixture(speed,||{
+                    show_hub(owner,chrome::Anchor{point:POINT{x:220,y:550},side:super::super::DockSide::Bottom,dark:false,transparency:30},
+                        View{title:"Control Center".into(),hint:String::new(),cards:vec![],metrics:None});
+                    let (h,t)=PANE.with(|p|{let p=p.borrow();let p=p.as_ref().unwrap();(p.hwnd,p.entrance.unwrap())});
+                    assert_ne!(IsWindowVisible(h),0);
+                    assert_eq!(t.from,0.0);
+                    assert_eq!(t.duration,(22000.0/speed as f64).round() as u32);
+                    SendMessageW(h,WM_KEYDOWN,VK_ESCAPE as usize,0);
+                    assert_ne!(IsWindow(h),0);
+                    PANE.with(|p|{let mut p=p.borrow_mut();let p=p.as_mut().unwrap();let t=p.entrance.unwrap();
+                        assert_eq!(t.duration,(16000.0/speed as f64).round() as u32);p.entrance=Some(t.finish());});
+                    SendMessageW(h,WM_TIMER,ENTRANCE_TIMER,0);
+                    assert_eq!(IsWindow(h),0);assert!(!open_for(owner));
+                });
+            }
+            println!("MOTION_SPEED control_center_native=PASS six_speeds=PASS closing_endpoint=PASS");
+            DestroyWindow(owner);
         }
     }
     #[test] fn inline_readings_keep_slots_stable_when_an_engine_has_no_sample(){

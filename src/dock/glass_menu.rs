@@ -34,6 +34,11 @@ struct Menu{
 }
 impl Drop for Menu{fn drop(&mut self){unsafe{if !self.font.is_null(){DeleteObject(self.font);}}}}
 impl Menu{
+    unsafe fn prepare_open(&mut self,hwnd:HWND)->bool{
+        self.tween=Some(Tween::new(true,motion::MENU,None).prepared());
+        self.present(hwnd)
+    }
+    fn begin_close(&mut self){self.tween=Some(Tween::new(false,motion::MENU,self.tween));}
     fn entries(&self)->&[Entry]{&self.pages.last().unwrap().0}
     fn back(&mut self){
         if self.pages.len()>1{
@@ -230,8 +235,7 @@ unsafe fn show(menu:HMENU,owner:HWND,point:POINT,flags:u32,dark:bool,transparenc
     let ready=model.borrow_mut().render(hwnd);
     if !ready{DestroyWindow(hwnd);return None;}
     if animate{
-        let mut m=model.borrow_mut();m.tween=Some(Tween::new(true,motion::MENU,None).prepared());
-        if !m.present(hwnd){DestroyWindow(hwnd);return None;}
+        if !model.borrow_mut().prepare_open(hwnd){DestroyWindow(hwnd);return None;}
     }
     SetWindowLongPtrW(hwnd,GWLP_USERDATA,&model as *const _ as isize);
     ShowWindow(hwnd,SW_SHOW);
@@ -256,8 +260,7 @@ unsafe fn show(menu:HMENU,owner:HWND,point:POINT,flags:u32,dark:bool,transparenc
     if GetCapture()==hwnd{ReleaseCapture();}
     let mut restore=foreground==hwnd;
     if restore&&IsWindow(hwnd)!=0&&motion::allowed()&&model.borrow().result==0&&IsWindow(owner)!=0{
-        let old=model.borrow().tween;
-        model.borrow_mut().tween=Some(Tween::new(false,motion::MENU,old));
+        model.borrow_mut().begin_close();
         if SetTimer(hwnd,FRAME_TIMER,16,None)!=0{
             while motion::allowed()&&IsWindow(hwnd)!=0&&GetForegroundWindow()==hwnd&&model.borrow().tween.is_some_and(|t|t.progress()<1.0){
                 let running=GetMessageW(&mut msg,ptr::null_mut(),0,0);
@@ -278,6 +281,39 @@ unsafe fn show(menu:HMENU,owner:HWND,point:POINT,flags:u32,dark:bool,transparenc
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    #[ignore="native layered menu fixture on GitHub Actions"]
+    fn native_menu_prepares_frame_and_uses_all_six_speeds(){
+        unsafe{
+            let name=wide("STATIC");
+            let hwnd=CreateWindowExW(WS_EX_LAYERED|WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW,name.as_ptr(),ptr::null(),
+                WS_POPUP,30,30,220,80,ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
+            assert!(!hwnd.is_null());
+            for speed in [25,50,75,100,150,200]{
+                motion::native_fixture(speed,||{
+                    let mut m=Menu{layer:Layer::new(220,80).unwrap(),scaled:Layer::new(220,80),
+                        glass:Glass::capture(RECT{left:30,top:30,right:250,bottom:110},96,false,30),
+                        font:chrome::choose_font(96,14,500),dark:false,dpi:96,pages:vec![(vec![Entry{id:1,text:"Open".into(),
+                            disabled:false,check:false,separator:false,children:vec![]}],0,None)],
+                        tween:None,pivot:(0.0,0.0),hover_from:None,hover_at:None,shadow:None,
+                        hot:None,offset:0,pressed:None,rows:1,row:32,pad:8,done:false,result:0};
+                    assert!(m.render(hwnd));assert!(m.prepare_open(hwnd));
+                    let first=m.tween.unwrap();
+                    assert_eq!(first.openness(),0.0);
+                    assert_eq!(first.duration,(18000.0/speed as f64).round() as u32);
+                    m.tween=Some(first.restart_clock());
+                    assert!(m.hit(20,16).is_some());
+                    m.begin_close();
+                    let close=m.tween.unwrap();
+                    assert_eq!(close.duration,(12000.0/speed as f64).round() as u32);
+                    m.tween=Some(close.finish());
+                    assert!(m.present(hwnd));assert_eq!(m.tween.unwrap().openness(),0.0);
+                });
+            }
+            DestroyWindow(hwnd);
+            println!("MOTION_SPEED dock_menu_native=PASS six_speeds=PASS prepared_frame=PASS closing_endpoint=PASS");
+        }
+    }
     #[test]
     fn glass_menu_preserves_command_ids_checks_and_submenu_state(){
         unsafe{
