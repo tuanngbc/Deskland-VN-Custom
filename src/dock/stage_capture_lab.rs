@@ -339,28 +339,58 @@ fn native_stage_worker_keeps_independent_frames_through_minimize(){
 fn native_scale_production_owned_external_windows(){
     if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
     use super::WindowIdentity;
-    use std::process::{Child,Command,Stdio};
-    struct FixtureProcess(Child);
-    impl Drop for FixtureProcess{
-        fn drop(&mut self){let _=self.0.kill();let _=self.0.wait();}
-    }
+    use windows_sys::Win32::{Security::*,System::Threading::*};
+    struct Handle(HANDLE);
+    impl Drop for Handle{fn drop(&mut self){unsafe{if !self.0.is_null(){CloseHandle(self.0);}}}}
+    struct FixtureProcess{process:Handle,pid:u32}
+    impl Drop for FixtureProcess{fn drop(&mut self){unsafe{
+        // The handle comes only from creating our known synthetic child.
+        TerminateProcess(self.process.0,0);WaitForSingleObject(self.process.0,3000);
+    }}}
     let dir=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE").map(std::path::PathBuf::from).unwrap();
     std::fs::create_dir_all(&dir).unwrap();
     let path=dir.join(format!("scale-worker-ready-{}.txt",std::process::id()));
-    let child=FixtureProcess(Command::new(std::env::current_exe().unwrap())
-        .args(["--ignored","--exact","dock::stage_capture_lab::native_worker_fixture_host"])
-        .env("TUANPC_DESK_STAGE_FIXTURE_READY",&path).stdout(Stdio::null()).spawn().unwrap());
+    let child=unsafe{
+        let mut raw=null_mut();
+        assert_ne!(OpenProcessToken(GetCurrentProcess(),TOKEN_DUPLICATE|TOKEN_QUERY|TOKEN_ASSIGN_PRIMARY,&mut raw),0);
+        let original=Handle(raw);
+        let mut restricted=null_mut();
+        // This is a real Windows least-privilege token for the owned CI
+        // fixture, not an override of the production elevation check.
+        assert_ne!(CreateRestrictedToken(original.0,LUA_TOKEN|DISABLE_MAX_PRIVILEGE,0,null_mut(),0,null_mut(),0,null_mut(),&mut restricted),0,
+            "restricted CI fixture token: {}",GetLastError());
+        let restricted=Handle(restricted);
+        let mut e:TOKEN_ELEVATION=std::mem::zeroed();let mut returned=0;
+        assert_ne!(GetTokenInformation(restricted.0,TokenElevation,(&mut e as *mut TOKEN_ELEVATION).cast(),std::mem::size_of::<TOKEN_ELEVATION>() as u32,&mut returned),0);
+        assert_eq!(e.TokenIsElevated,0,"runner did not grant a non-elevated fixture token");
+        let exe=std::env::current_exe().unwrap();
+        let mut command=wide(&format!("\"{}\" --ignored --exact dock::stage_capture_lab::native_worker_fixture_host",exe.display()));
+        let app=wide(&exe.to_string_lossy());
+        let mut start:STARTUPINFOW=std::mem::zeroed();start.cb=std::mem::size_of::<STARTUPINFOW>() as u32;
+        let mut info:PROCESS_INFORMATION=std::mem::zeroed();
+        // Single ignored test process; inherit its environment with one
+        // fixture-specific ready path, restoring it immediately after spawn.
+        let key="TUANPC_DESK_STAGE_FIXTURE_READY";
+        let old=std::env::var_os(key);std::env::set_var(key,&path);
+        let ok=CreateProcessAsUserW(restricted.0,app.as_ptr(),command.as_mut_ptr(),null_mut(),null_mut(),0,
+            0,null_mut(),null_mut(),&start,&mut info);
+        let error=GetLastError();
+        if let Some(old)=old{std::env::set_var(key,old);}else{std::env::remove_var(key);}
+        assert_ne!(ok,0,"create non-elevated CI fixture: {error}");
+        CloseHandle(info.hThread);
+        FixtureProcess{process:Handle(info.hProcess),pid:info.dwProcessId}
+    };
     let started=Instant::now();
     let handles=loop{
         if let Ok(text)=std::fs::read_to_string(&path){
             let _=std::fs::remove_file(&path);
             break text.split_whitespace().map(|h|h.parse::<usize>().unwrap()).collect::<Vec<_>>();
         }
-        assert!(started.elapsed()<Duration::from_secs(8),"child fixture did not start");
+        assert!(started.elapsed()<Duration::from_secs(8),"non-elevated child fixture did not start");
         std::thread::sleep(Duration::from_millis(20));
     };
     assert_eq!(handles.len(),2);
     let ids=handles.iter().map(|&h|unsafe{WindowIdentity::read(h as HWND).unwrap()}).collect::<Vec<_>>();
-    assert!(ids.iter().all(|id|id.pid==child.0.id()));
+    assert!(ids.iter().all(|id|id.pid==child.pid));
     unsafe{super::window_effect::probe_production_path(&ids);}
 }

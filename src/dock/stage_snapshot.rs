@@ -20,7 +20,9 @@ use windows::{
 };
 
 fn budget(w:i32,h:i32)->bool{
-    w>0&&h>0&&w<=4096&&h<=4096&&i64::from(w)*i64::from(h)<=8_388_608
+        // 3840x2160 plus the invisible Win32 resize border. This is the
+    // bounded WGC staging/pool budget, not an animation texture allocation.
+    w>0&&h>0&&w<=4096&&h<=4096&&i64::from(w)*i64::from(h)<=8_650_000
 }
 fn thumb_size(w:usize,h:usize,limit:usize)->(usize,usize){
     let side=w.max(h).max(limit);
@@ -376,6 +378,8 @@ pub(super) struct CaptureTiming{
     pub readback_ms:u64,pub downsample_ms:u64,
 }
 pub(super) type CaptureTimingHandle=Arc<Mutex<CaptureTiming>>;
+#[cfg(test)]
+pub(super) static FIXTURE_TRANSITION_DELAY_MS:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
 fn elapsed(start:Instant)->u64{start.elapsed().as_millis() as u64}
 fn record(timing:Option<&CaptureTimingHandle>,f:impl FnOnce(&mut CaptureTiming)){
     if let Some(t)=timing{if let Ok(mut t)=t.lock(){f(&mut t);}}
@@ -400,7 +404,13 @@ impl Worker{
                         Err(mpsc::RecvTimeoutError::Disconnected)=>break,
                     }
                 }else if let Ok(req)=rx.recv(){req}else{break;};
-                record(req.timing.as_ref(),|t|t.queue_ms=elapsed(req.queued)); let valid=||req.live.load(Ordering::Relaxed)&&stamp(req.source).as_ref()==Some(&req.stamp);
+                record(req.timing.as_ref(),|t|t.queue_ms=elapsed(req.queued));
+                #[cfg(test)]
+                if req.timing.is_some(){
+                    let delay=FIXTURE_TRANSITION_DELAY_MS.load(Ordering::Relaxed);
+                    if delay!=0{std::thread::sleep(Duration::from_millis(delay));}
+                }
+                let valid=||req.live.load(Ordering::Relaxed)&&stamp(req.source).as_ref()==Some(&req.stamp);
                 let result=(||{
                     if let Err(reason)=&apartment{return Err(reason.clone());}
                     if !valid(){return Err("capture cancelled".into());}
@@ -441,7 +451,7 @@ unsafe fn stamp(source:WindowIdentity)->Option<Stamp>{
     let hwnd=source.hwnd as HWND;
     if !retainable(source)||IsIconic(hwnd)!=0||IsWindowVisible(hwnd)==0{return None;}
     let mut r:RECT=std::mem::zeroed();
-    if GetWindowRect(hwnd,&mut r)==0||!budget(r.right-r.left,r.bottom-r.top){return None;}
+    if GetWindowRect(hwnd,&mut r)==0||r.right<=r.left||r.bottom<=r.top{return None;}
     // Never synchronously ask the Settings UI thread for its title.
     let title=if source.pid==std::process::id(){super::internal_app::LABEL.into()}else{
         let mut text=[0u16;256];
@@ -649,7 +659,7 @@ pub(super) fn recent_transition(source:WindowIdentity,revision:u64)->Result<Fram
     CURRENT.with(|cell|{
         let mut state=cell.borrow_mut();
         if !unsafe{retainable(source)}{return Err("protected-window");}
-        let entry=state.sources.get_mut(&source).ok_or("restore-preview-missing")?;
+        let entry=state.sources.get_mut(&source).ok_or("restore-preview-evicted")?;
         if entry.transition_revision!=Some(revision){return Err("restore-preview-replaced");}
         if entry.captured_at.is_none_or(|t|t.elapsed()>MAX_AGE){return Err("restore-preview-expired");}
         let frame=entry.frame.clone().ok_or("restore-preview-missing")?;
@@ -716,6 +726,9 @@ mod tests{
     use super::*;
     #[test]
     fn minimize_has_no_capture_request_and_restore_keeps_last_frame(){
+        assert!(budget(3856,2176),"UHD includes invisible maximized window borders");
+        assert!(budget(2176,3856));
+        assert!(!budget(4096,4096),"physical capture pool must remain bounded");
         let now=Instant::now();
         let stamp=Stamp{i:800,j:500,title:"Owned fixture".into()};
         let mut s=Source{frame:Some((vec![1,2,3,255],1,1)),stamp:Some(stamp.clone()),..Default::default()};

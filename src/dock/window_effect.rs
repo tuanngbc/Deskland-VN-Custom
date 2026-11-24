@@ -110,7 +110,10 @@ impl Attempt{
         self.values["totalDurationMs"]=json!(self.started.elapsed().as_millis() as u64);
         if let Some(t)=&self.timing{if let Ok(t)=t.lock(){self.values["captureTiming"]=json!(*t);}}
         let hwnd=self.source.hwnd as HWND;
-        self.values["finalWindowState"]=json!(unsafe{if !self.source.matches(hwnd){"invalid"}else if IsIconic(hwnd)!=0{"minimized"}else{"open"}});
+        let observed=unsafe{if !self.source.matches(hwnd){"invalid"}else if IsIconic(hwnd)!=0{"minimized"}else{"open"}};
+        self.values["observedWindowState"]=json!(observed);
+        let expected=if self.values["action"]=="minimize"{"minimized"}else{"open"};
+        self.values["finalWindowState"]=json!(if reason.is_some()&&observed!=expected&&observed!="invalid"{"pending-native"}else{observed});
         if crate::trial::active(){crate::log!("DOCK_WINDOW_SCALE {}",self.values);}
         if let Ok(mut last)=LAST.lock(){*last=Some(self.values.clone());}
         #[cfg(test)]
@@ -285,6 +288,9 @@ impl Proxy{
             class.as_ptr(),wide("TLauncher window transition").as_ptr(),WS_POPUP,area.left,area.top,1,1,
             ptr::null_mut(),ptr::null_mut(),instance,ptr::null_mut());
         if hwnd.is_null(){return None;}
+        // Only the owned proxy is exempt from Windows's show/hide animation.
+        let disable=1i32;
+        let _=DwmSetWindowAttribute(hwnd,DWMWA_TRANSITIONS_FORCEDISABLED as u32,(&disable as *const i32).cast(),4);
         let result=(||->windows::core::Result<Self>{
             let target=comp.CreateTargetForHwnd(WinHwnd(hwnd),true)?;
             let visual=comp.CreateVisual()?;let scale=comp.CreateScaleTransform()?;let effect=comp.CreateEffectGroup()?;
@@ -319,7 +325,9 @@ impl Proxy{
             Ok(())
         })();
         if updated.is_err(){return false;}
-        SetWindowPos(self.hwnd,HWND_TOPMOST,r.left,r.top,w,h,SWP_NOACTIVATE|SWP_SHOWWINDOW)!=0
+        let shown=SetWindowPos(self.hwnd,HWND_TOPMOST,r.left,r.top,w,h,SWP_NOACTIVATE|SWP_SHOWWINDOW)!=0;
+        if shown&&first{let _=DwmFlush();}
+        shown
     }
 }
 enum Phase{
@@ -442,7 +450,10 @@ unsafe fn begin(owner:HWND,path:&str,id:WindowIdentity,action:Action)->bool{
             }
             Action::Restore=>{
                 let revision=RECENT.with(|r|r.borrow().get(&id).map(|r|r.revision)).ok_or("restore-preview-missing")?;
+                let started=Instant::now();
                 let frame=stage_snapshot::recent_transition(id,revision)?;
+                attempt.values["cachedCapture"]=json!(true);
+                attempt.values["captureDurationMs"]=json!(started.elapsed().as_millis() as u64);
                 let proxy=attempt.proxy(&frame,req.area)?;
                 attempt.present(&proxy,icon_fit(req.area,req.icon),64)?;
                 attempt.animation=Some(Instant::now());
@@ -610,10 +621,15 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
     assert_eq!(last()["fallbackReason"],"motion-disabled");
     motion::configure(policy);
     let actual_policy=Policy::read();
+    if actual_policy.client_animation==Some(false){
+        motion::configure(motion::Settings{respect_system:true,..policy});
+        assert!(!minimize(bar,path,ids[0]));assert_eq!(last()["fallbackReason"],"system-reduced-motion");
+        motion::configure(policy);
+    }
     let eligibility=actual_policy.gate().and_then(|_|permitted(ids[0])).and_then(|_|if elevation(ids[0].pid)==Some(false){Ok(())}else{Err("elevated-window")});
     if let Err(reason)=eligibility{
         assert!(!minimize(bar,path,ids[0]));assert_eq!(last()["fallbackReason"],reason);
-        println!("WINDOW_SCALE_PRODUCTION=NOT_VERIFIED runner eligibility={reason} policy={}",actual_policy.json());
+        panic!("WINDOW_SCALE_PRODUCTION=NOT_VERIFIED runner eligibility={reason} policy={}",actual_policy.json());
         return;
     }
     let mut pixel_matches=0usize;
@@ -671,6 +687,29 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
         assert!(super::same_rect(placement(id.hwnd as HWND).unwrap().rcNormalPosition,original));
     }
     drop(drain);
+    // Fault-inject a bounded delay in the existing worker, never the
+    // eligibility gates. The real Dock action must finish natively once.
+    stage_snapshot::FIXTURE_TRANSITION_DELAY_MS.store(850,std::sync::atomic::Ordering::Relaxed);
+    assert!(super::finish_double_click(AppClick{owner:bar as usize,key:ClickKey::Dock(path.into()),
+        window:Some(ids[0]),was_open:true,at:Instant::now()}).is_some());
+    let start=Instant::now();
+    while ACTIVE.with(|a|a.borrow().is_some()){
+        assert!(start.elapsed()<Duration::from_secs(3));
+        timer();std::thread::sleep(Duration::from_millis(16));
+    }
+    stage_snapshot::FIXTURE_TRANSITION_DELAY_MS.store(0,std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(last()["fallbackReason"],"capture-timeout");
+    while IsIconic(source)==0{
+        assert!(start.elapsed()<Duration::from_secs(3),"native fallback did not minimize");
+        std::thread::sleep(Duration::from_millis(16));
+    }
+    ShowWindowAsync(source,SW_RESTORE);
+    let start=Instant::now();while IsIconic(source)!=0{
+        assert!(start.elapsed()<Duration::from_secs(3));std::thread::sleep(Duration::from_millis(16));
+    }
+    println!("WINDOW_SCALE_PRODUCTION_FALLBACK capture_timeout=PASS single_request_native_minimize=PASS");
+    let (mw,mh)=dims(display.bounds);
+    println!("WINDOW_SCALE_PRODUCTION_GEOMETRY runner={}x{} dpi={} owner_2560x1080_1080x1920_4k=NOT_VERIFIED geometry_and_budget_unit=PASS",mw,mh,display.dpi);
     release_factory();
     println!("WINDOW_SCALE_PRODUCTION=PASS gestures=double-click/activate source_identities={} restore_after_16s=PASS magnification=PASS duration=PASS placement=PASS compositor_pixels={} samples={pixel_matches} memory={before:?}->{:?} peak={peak:?}",
         ids.len(),if pixel_matches>0{"MATCH"}else{"NOT_VERIFIED"},crate::private_mb());
