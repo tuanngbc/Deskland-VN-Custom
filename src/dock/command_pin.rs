@@ -207,9 +207,13 @@ $result = [ordered]@{ args = @($args); location = (Get-Location).Path; expected 
         let data = std::fs::read(&proof).expect("PowerShell launch fixture did not report within 30 seconds");
         let actual: serde_json::Value = serde_json::from_slice(&data).expect("fixture must report actual arguments and directory");
         assert_eq!(actual["args"], serde_json::json!(["A & B", "CaseSensitive"]));
-        assert!(actual["location"].as_str().unwrap().eq_ignore_ascii_case(&launch.directory),
-            "unexpected location: {}", actual["location"]);
-        assert!(actual["expected"].as_str().unwrap().eq_ignore_ascii_case(&launch.directory));
+        // The runner's TEMP can use DOS 8.3 aliases or a different path
+        // spelling. Compare resolved filesystem directories, not their strings.
+        let canonical = |value: &str| std::fs::canonicalize(value).unwrap();
+        let requested = canonical(&launch.directory);
+        assert_eq!(canonical(actual["location"].as_str().unwrap()), requested,
+            "unexpected location: {}, requested: {}", actual["location"], launch.directory);
+        assert_eq!(canonical(actual["expected"].as_str().unwrap()), requested);
         std::fs::remove_file(proof).unwrap();
         std::fs::remove_file(fixture).unwrap();
         // Explorer returns before the process exits. Windows keeps the
