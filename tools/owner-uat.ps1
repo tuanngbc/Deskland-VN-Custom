@@ -8,6 +8,8 @@ param(
     [string]$ExpectedCommit,
     [string]$ExpectedExeSha256,
     [switch]$RestoreOnly,
+    [switch]$UseVerifiedManifest,
+    [switch]$PreflightOnly,
     [switch]$LibraryOnly
 )
 $ErrorActionPreference = 'Stop'
@@ -35,11 +37,30 @@ function Get-LaunchPlan($Processes,[string]$Production,[string]$Candidate) {
 function Get-SessionProcesses {
     $session = (Get-Process -Id $PID).SessionId
     $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='TLauncher.exe'" | Where-Object SessionId -eq $session)) {
-        $owner = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid
-        if ($owner.ReturnValue -ne 0 -or $owner.Sid -ne $sid) { throw 'Cannot verify ownership of a TLauncher process in this session.' }
-        $p
+    # A process can disappear between enumeration and GetOwnerSid.
+    # Discard the whole snapshot if any owner could not be resolved.
+    for ($attempt=1; $attempt -le 5; $attempt++) {
+        $verified=@()
+        $retry=$null
+        foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='TLauncher.exe'" | Where-Object SessionId -eq $session)) {
+            try {
+                $owner=Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid
+                if ($null -eq $owner) { $retry="PID $($p.ProcessId): owner unavailable"; break }
+                if ($owner.ReturnValue -ne 0) { $retry="PID $($p.ProcessId): GetOwnerSid returned $($owner.ReturnValue)"; break }
+                if (-not $owner.Sid) { $retry="PID $($p.ProcessId): empty owner SID"; break }
+            } catch {
+                $retry="PID $($p.ProcessId): GetOwnerSid failed: $($_.Exception.Message)"
+                break
+            }
+            if ($owner.Sid -ne $sid) {
+                throw "TLauncher PID $($p.ProcessId) is owned by a different account. No process has been stopped."
+            }
+            $verified += $p
+        }
+        if (-not $retry) { return $verified }
+        if ($attempt -lt 5) { Start-Sleep -Milliseconds 250 }
     }
+    throw "Cannot verify TLauncher ownership after retrying. $retry"
 }
 
 function Test-Singleton {
@@ -83,11 +104,15 @@ function Assert-Candidate([string]$Dir,[string]$Commit,[string]$ExeHash) {
     return $exe
 }
 
-function Initialize-Profile([string]$Dir,[string]$Root) {
+function Test-ProfileLocation([string]$Dir,[string]$Root) {
     $parent=Join-Path $Root 'profiles'
     if (-not (Same-Path ([IO.Path]::GetDirectoryName($Dir)) $parent) -or
         [IO.Path]::GetFileName($Dir) -notmatch '^tuanpc-desk-trial-[a-zA-Z0-9-]+$') { throw 'Unsafe isolated profile directory.' }
     Assert-NoReparse $Dir
+}
+
+function Initialize-Profile([string]$Dir,[string]$Root) {
+    Test-ProfileLocation $Dir $Root
     $marker=Join-Path $Dir '.tuanpc-desk-trial'
     Assert-NoReparse $marker
     $expected="tuanpc-desk isolated native smoke profile v1`n"
@@ -113,19 +138,53 @@ if ($LibraryOnly) { return }
 Add-Type -AssemblyName System.Windows.Forms
 function Notify([string]$Message) { [void][Windows.Forms.MessageBox]::Show($Message,'TLauncher 1.0.2 TEST') }
 
-$ownerMutex=$null; $locked=$false; $restore=$false; $phase='validation'; $stateFile=$null
+$ownerMutex=$null; $locked=$false; $restore=$false; $phase='validation'; $stateFile=$null; $logFile=$null; $failure=$null
+function Write-UatLog([string]$Message) {
+    if ($logFile) {
+        try { Add-Content -LiteralPath $logFile -Value ("{0:o} {1}" -f [DateTime]::UtcNow,$Message) -ErrorAction Stop }
+        catch { Write-Warning "Could not write UAT diagnostics: $($_.Exception.Message)" }
+    }
+}
 try {
     $ownerMutex=[Threading.Mutex]::new($false,'Local\TLauncherOwnerUatSwitch')
     try { $locked=$ownerMutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked=$true }
     if (-not $locked) { throw 'A UAT switch is already in progress.' }
+    if ($UseVerifiedManifest) {
+        $CandidateDir=$PSScriptRoot
+        $manifest=Join-Path $CandidateDir 'verified-artifact.json'
+        Assert-NoReparse $manifest
+        $verified=Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
+        $ExpectedCommit=$verified.sourceCommit
+        $ExpectedExeSha256=$verified.exeSha256
+        $ProfileDir=$verified.profile
+        $ProductionExe=$verified.productionExe
+    }
     $exe=Join-Path $CandidateDir 'TLauncher.exe'
-    if (-not $RestoreOnly) { $exe=Assert-Candidate $CandidateDir $ExpectedCommit $ExpectedExeSha256 }
     $root=[IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($CandidateDir))
-    if (-not (Same-Path $root (Join-Path $env:LOCALAPPDATA 'TLauncher-UAT'))) { throw 'Candidate must be in the dedicated UAT directory.' }
+    if (-not (Same-Path $root (Join-Path $env:LOCALAPPDATA 'TLauncher-UAT')) -and
+        -not ($UseVerifiedManifest -and [IO.Path]::GetFileName($root) -eq 'TLauncher-UAT')) { throw 'Candidate must be in the dedicated UAT directory.' }
+    Assert-NoReparse $CandidateDir
+    if (-not $PreflightOnly) {
+        $safeLog=Join-Path $CandidateDir 'uat-launch.log'
+        Assert-NoReparse $safeLog
+        $logFile=$safeLog
+        Write-UatLog 'UAT launcher entered.'
+    }
+    if (-not $RestoreOnly) { $exe=Assert-Candidate $CandidateDir $ExpectedCommit $ExpectedExeSha256 }
     Assert-NoReparse $ProductionExe
-    if (-not (Test-Path -LiteralPath $ProductionExe -PathType Leaf) -or (Same-Path $ProductionExe $exe)) { throw 'Production path is missing or points to candidate.' }
+    $prodFull=[IO.Path]::GetFullPath($ProductionExe)
+    if (-not (Test-Path -LiteralPath $ProductionExe -PathType Leaf) -or
+        $prodFull.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Production path is missing or is inside the UAT directory.' }
+    if (-not $RestoreOnly) { Test-ProfileLocation $ProfileDir $root }
+    if ($PreflightOnly) {
+        if ($RestoreOnly) { throw 'Preflight cannot restore production.' }
+        Write-Output 'OWNER_UAT_PREFLIGHT=PASS'
+        return
+    }
     $stateFile=Join-Path $CandidateDir 'uat-state.json'
     Assert-NoReparse $stateFile
+    $sessionLog=Join-Path $CandidateDir 'uat-session.log'
+    Assert-NoReparse $sessionLog
     $plan=Get-LaunchPlan @(Get-SessionProcesses) $ProductionExe $exe
     if ($RestoreOnly) {
         if ($plan.WasRunning) { Notify 'Production is already running.'; return }
@@ -134,14 +193,15 @@ try {
         if (-not $saved.wasRunning -or -not (Same-Path $saved.production $ProductionExe)) { throw 'No verified production session to restore.' }
         $restore=$true
     } else {
-        $restore=$plan.WasRunning
-        @{wasRunning=$restore;production=$ProductionExe;workingDirectory=[IO.Path]::GetDirectoryName($ProductionExe);commit=$ExpectedCommit;phase='switching'} | ConvertTo-Json | Set-Content -LiteralPath $stateFile -Encoding UTF8
+        @{wasRunning=$plan.WasRunning;production=$ProductionExe;workingDirectory=[IO.Path]::GetDirectoryName($ProductionExe);commit=$ExpectedCommit;phase='switching'} | ConvertTo-Json | Set-Content -LiteralPath $stateFile -Encoding UTF8
         $phase='stopping production'
-        if ($restore) {
+        if ($plan.WasRunning) {
             # Verify the same PID, creation timestamp and executable path before
             # invoking the existing singleton quit command. Never kill by name.
             $now=Get-LaunchPlan @(Get-SessionProcesses) $ProductionExe $exe
             if (-not $now.WasRunning -or $now.Main.ProcessId -ne $plan.Main.ProcessId -or $now.Main.CreationDate -ne $plan.Main.CreationDate) { throw 'Production identity changed; aborting switch.' }
+            $restore=$true
+            Write-UatLog "Requesting normal production exit (PID $($now.Main.ProcessId))."
             Start-Process -FilePath $ProductionExe -ArgumentList '--quit' -WorkingDirectory ([IO.Path]::GetDirectoryName($ProductionExe)) -WindowStyle Hidden -Wait
         }
         if (-not (Wait-Vacant)) { throw 'Production did not exit safely or the singleton is busy. No process was forcibly terminated.' }
@@ -150,12 +210,17 @@ try {
         $phase='candidate launch'
         $process=Start-Process -FilePath $exe -ArgumentList ('--trial-dir "'+$ProfileDir+'"') -WorkingDirectory $CandidateDir -PassThru
         $started=[DateTime]::UtcNow
-        Add-Content -LiteralPath (Join-Path $CandidateDir 'uat-session.log') -Value ("{0:o} candidate PID={1} commit={2}" -f $started,$process.Id,$ExpectedCommit)
+        Add-Content -LiteralPath $sessionLog -Value ("{0:o} candidate PID={1} commit={2}" -f $started,$process.Id,$ExpectedCommit)
         $process.WaitForExit()
-        Add-Content -LiteralPath (Join-Path $CandidateDir 'uat-session.log') -Value ("{0:o} candidate exit={1}" -f [DateTime]::UtcNow,$process.ExitCode)
-        if ($process.ExitCode -ne 0 -or ([DateTime]::UtcNow-$started).TotalSeconds -lt 2) { Notify 'The candidate stopped unexpectedly. Attempting to restore production.' }
+        Add-Content -LiteralPath $sessionLog -Value ("{0:o} candidate exit={1}" -f [DateTime]::UtcNow,$process.ExitCode)
+        if ($process.ExitCode -ne 0 -or ([DateTime]::UtcNow-$started).TotalSeconds -lt 2) { throw 'The candidate stopped unexpectedly.' }
     }
-} catch { Notify ("UAT stopped at $phase.`n"+$_.Exception.Message) }
+} catch {
+    $failure="UAT stopped at $phase. "+$_.Exception.Message
+    Write-UatLog $failure
+    Write-Warning $failure
+    if ($PreflightOnly) { throw }
+}
 finally {
     if ($locked -and $restore) {
         try {
@@ -167,8 +232,14 @@ finally {
                 $plan=Get-LaunchPlan $running $ProductionExe (Join-Path $CandidateDir 'TLauncher.exe')
                 if (-not $plan.WasRunning) { throw 'Production recovery is waiting for its previous guard to exit.' }
             }
-        } catch { Notify ("Production recovery requires attention. Use RESTORE-PRODUCTION.cmd in the candidate folder after the test exits.`n"+$_.Exception.Message) }
+        } catch {
+            $recovery="Production recovery requires attention. "+$_.Exception.Message
+            Write-UatLog $recovery
+            Write-Warning $recovery
+            $failure=(@($failure,$recovery) | Where-Object {$_}) -join [Environment]::NewLine
+        }
     }
     if ($locked -and $ownerMutex) { $ownerMutex.ReleaseMutex() }
     if ($ownerMutex) { $ownerMutex.Dispose() }
 }
+if ($failure) { Notify $failure; exit 1 }

@@ -111,7 +111,8 @@ jobs:
           cargo build --release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./tests/trial-isolation.ps1 -Exe (Resolve-Path target/release/TLauncher.exe).Path
-          ./tests/owner-uat-contract.ps1
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/owner-uat-contract.ps1 -Exe (Resolve-Path target/release/TLauncher.exe).Path
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/renderer-contract.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/shortcuts-contract.cjs
