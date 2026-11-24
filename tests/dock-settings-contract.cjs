@@ -361,13 +361,17 @@ test('global motion controls round-trip independently of Dock and Spotlight',()=
     assert($('motionSpeedLabel').textContent.startsWith(speed.toFixed(2)+'x'));
     $('motionSpeed').listeners.change();
     assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{
-      t:'motionPreferences',value:{animationSpeed:speed,animationsEnabled:true,respectSystemReducedMotion:true}});
+      t:'motionPreferences',value:{animationSpeed:speed,animationsEnabled:true,respectSystemReducedMotion:true,windowEffect:'windows'}});
   }
   $('motionEnabled').checked=false;$('motionEnabled').listeners.change();
   assert.equal(messages.pop().value.animationsEnabled,false);
   $('motionRespect').checked=false;$('motionRespect').listeners.change();
   assert.equal(messages.pop().value.respectSystemReducedMotion,false);
+  $('motionWindowEffect').value='scale';$('motionWindowEffect').listeners.change();
+  assert.equal(messages.pop().value.windowEffect,'scale');
+  context.syncMotion({windowEffect:'scale',animationSpeed:0.70});
+  assert.equal($('motionWindowEffect').value,'scale');
   $('motionReset').listeners.click();
-  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'motionPreferences',value:{animationsEnabled:true,animationSpeed:0.70,respectSystemReducedMotion:true}});
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'motionPreferences',value:{animationsEnabled:true,animationSpeed:0.70,respectSystemReducedMotion:true,windowEffect:'windows'}});
 });
 console.log('TOTAL: '+count+' PASS / 0 FAIL');

@@ -5,9 +5,9 @@ use serde_json::{Value,json};
 /// The main settings owner persists this once; both native UI threads read
 /// the same snapshot. Durations are captured by each new transition.
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub(crate) struct Settings { pub enabled:bool,pub speed:u32,pub respect_system:bool }
+pub(crate) struct Settings { pub enabled:bool,pub speed:u32,pub respect_system:bool,pub scale_windows:bool }
 impl Default for Settings{
-    fn default()->Self{Self{enabled:true,speed:70,respect_system:true}}
+    fn default()->Self{Self{enabled:true,speed:70,respect_system:true,scale_windows:false}}
 }
 fn normalize_speed(value:&Value)->u32{
     let Some(value)=value.as_f64().filter(|v|v.is_finite()&&*v>0.0)else{return 70;};
@@ -17,7 +17,8 @@ impl Settings {
     pub fn from_json(value:&Value)->Self{
         Self{enabled:value["animationsEnabled"].as_bool().unwrap_or(true),
             speed:normalize_speed(&value["animationSpeed"]),
-            respect_system:value["respectSystemReducedMotion"].as_bool().unwrap_or(true)}
+            respect_system:value["respectSystemReducedMotion"].as_bool().unwrap_or(true),
+            scale_windows:value["windowEffect"].as_str()==Some("scale")}
     }
     pub fn from_profile(root:&Value,legacy:&Value)->Self{
         if root["motion"].is_object(){return Self::from_json(&root["motion"]);}
@@ -28,10 +29,10 @@ impl Settings {
     }
     pub fn json(self)->Value{
         json!({"animationsEnabled":self.enabled,"animationSpeed":self.speed as f64/100.0,
-            "respectSystemReducedMotion":self.respect_system})
+            "respectSystemReducedMotion":self.respect_system,"windowEffect":if self.scale_windows{"scale"}else{"windows"}})
     }
-    fn packed(self)->u32{self.speed|((self.enabled as u32)<<8)|((self.respect_system as u32)<<9)}
-    fn unpack(v:u32)->Self{Self{speed:v&255,enabled:v&256!=0,respect_system:v&512!=0}}
+    fn packed(self)->u32{self.speed|((self.enabled as u32)<<8)|((self.respect_system as u32)<<9)|((self.scale_windows as u32)<<10)}
+    fn unpack(v:u32)->Self{Self{speed:v&255,enabled:v&256!=0,respect_system:v&512!=0,scale_windows:v&1024!=0}}
     fn allowed(self,system:bool)->bool{self.enabled&&(!self.respect_system||system)}
     fn duration(self,base:u32)->u32{((base as f64*100.0/self.speed as f64).round() as u32).max(1)}
 }
@@ -181,6 +182,10 @@ mod tests {
         assert_eq!(Settings::from_profile(&json!({}),&json!({"animationSpeed":100})),Settings::default());
         assert_eq!(Settings::from_profile(&json!({}),&json!({"animationSpeed":125})).speed,125);
         assert_eq!(Settings::default().speed,70);
+        assert!(!Settings::default().scale_windows);
+        let scale=Settings{scale_windows:true,..Settings::default()};
+        assert_eq!(Settings::from_json(&scale.json()),scale);
+        assert_eq!(Settings::unpack(scale.packed()),scale);
         assert_eq!(Settings::from_profile(&json!({"motion":{"animationSpeed":0.75}}),&json!({})).speed,75);
         assert!(!Settings::from_profile(&json!({"spotlight":{"animations":false}}),&json!({})).enabled);
         assert!(!Settings::from_profile(&json!({}),&json!({"reducedMotion":true})).enabled);

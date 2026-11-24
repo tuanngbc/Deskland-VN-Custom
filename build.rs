@@ -36,8 +36,10 @@ fn main() {
     if target.contains("windows") && target.contains("msvc") {
         let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
         let manifest_path = manifest_dir.join("app.manifest");
-        println!("cargo:rustc-link-arg-bins=/MANIFEST:EMBED");
-        println!("cargo:rustc-link-arg-bins=/MANIFESTINPUT:{}", manifest_path.display());
+        // Both the shipping executable and native test harness need the
+        // same Windows 8+ layered-child and PerMonitorV2 declarations.
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest_path.display());
 
         let rc_exe = find_rc_exe().expect("Không tìm thấy rc.exe của Windows SDK để nhúng assets/app.ico");
         let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());

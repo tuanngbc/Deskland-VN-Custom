@@ -346,6 +346,7 @@
       <label class="setting-row switch-row"><span><b data-i18n="motionEnabled">Bật hiệu ứng chuyển động</b><small data-i18n="motionHint">Áp dụng cho Spotlight, Start, Dock, Stage và các bảng tiện ích.</small></span><input type="checkbox" id="motionEnabled" role="switch" checked><i class="switch" aria-hidden="true"></i></label>
       <label class="setting-row"><b data-i18n="motionSpeed">Tốc độ chuyển động</b><span><input type="range" id="motionSpeed" min="0.25" max="2" step="0.05" value="0.70"><output id="motionSpeedLabel">0.70x</output></span></label>
       <label class="setting-row switch-row"><span><b data-i18n="motionRespect">Tôn trọng giảm chuyển động của Windows</b><small data-i18n="motionRespectHint">Tắt hiệu ứng nếu Windows tắt animation trong Accessibility.</small></span><input type="checkbox" id="motionRespect" role="switch" checked><i class="switch" aria-hidden="true"></i></label>
+      <label class="setting-row"><span><b data-i18n="motionWindowEffect">Hiệu ứng thu nhỏ và phục hồi cửa sổ</b><small data-i18n="motionWindowEffectHint">Áp dụng khi thao tác trên Dock; dùng Windows mặc định khi không có ảnh hợp lệ hoặc hiệu ứng Windows có thể chồng lên.</small></span><select id="motionWindowEffect"><option value="windows" data-i18n="motionWindowWindows">Windows mặc định</option><option value="scale" data-i18n="motionWindowScale">Scale Effect (cửa sổ tương thích)</option></select></label>
       <div class="actions"><button class="ghost-btn" type="button" id="motionPreview" data-i18n="motionPreview">Xem thử hiệu ứng</button><button class="ghost-btn" type="button" id="motionReset" data-i18n="motionReset">Khôi phục mặc định</button></div>
       <div id="motionPreviewArea" aria-hidden="true"><div id="motionPreviewCard" hidden><span></span><span></span><span></span></div></div>
     </section>
@@ -1369,7 +1370,7 @@ $('spotlightGuideDialog').addEventListener('close',()=>{
   send({t:'spotlightGuideSeen'});
   spotlightGuideTrigger?.focus();
 });
-const motionDefaults={animationsEnabled:true,animationSpeed:0.70,respectSystemReducedMotion:true};
+const motionDefaults={animationsEnabled:true,animationSpeed:0.70,respectSystemReducedMotion:true,windowEffect:'windows'};
 let motionPreferences={...motionDefaults};
 let motionPreviewAnimation=null;
 function motionSpeedLabel(){
@@ -1382,15 +1383,16 @@ function syncMotion(value){
   $('motionEnabled').checked=motionPreferences.animationsEnabled;
   $('motionRespect').checked=motionPreferences.respectSystemReducedMotion;
   $('motionSpeed').value=String(motionPreferences.animationSpeed);
+  $('motionWindowEffect').value=motionPreferences.windowEffect==='scale'?'scale':'windows';
   motionSpeedLabel();
 }
 function saveMotion(){
   motionPreferences={animationsEnabled:$('motionEnabled').checked,animationSpeed:Number($('motionSpeed').value),
-    respectSystemReducedMotion:$('motionRespect').checked};
+    respectSystemReducedMotion:$('motionRespect').checked,windowEffect:$('motionWindowEffect').value};
   send({t:'motionPreferences',value:motionPreferences});
 }
 $('motionSpeed').addEventListener('input',motionSpeedLabel);
-for(const id of ['motionEnabled','motionSpeed','motionRespect'])$(id).addEventListener('change',saveMotion);
+for(const id of ['motionEnabled','motionSpeed','motionRespect','motionWindowEffect'])$(id).addEventListener('change',saveMotion);
 $('motionReset').addEventListener('click',()=>{syncMotion(motionDefaults);saveMotion();});
 $('motionPreview').addEventListener('click',()=>{
   const card=$('motionPreviewCard');

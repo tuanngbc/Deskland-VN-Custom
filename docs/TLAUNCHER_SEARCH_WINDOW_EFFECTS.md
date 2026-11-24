@@ -1,0 +1,25 @@
+# TLauncher 1.0.2 – search and Dock Scale candidate
+
+Reference: b33c2d3dc4bef82fee5e74e552d0848ec26204dd. No release or production upgrade.
+
+## Search field
+
+The earlier fullscreen implementation painted an opaque native EDIT directly on the compatibility path; on live glass the single-matte decoder marked every nonmatching pixel opaque, including native theme/cue/antialias pixels. The previous screenshot fixture then drew its own non-production placeholder/query and could not detect that error. The native child now retains Windows text handling, but is visually composited over the parent field with near-zero window opacity. The actual native EDIT print is recovered with black/white mattes; placeholder and caret are painted through the shared alpha surface. The compatibility path also uses the shared field when layered child support is available. Existing native IME, selection and focus remain; actual IME operation requires owner confirmation. Compact uses the same 49 DIP search surface, radius and ivory typography, preserving its existing input path. No new full-window graphics factory, texture or timer.
+
+## Window effect scope
+
+Scale is selectable independently of the global motion speed. The Dock requests one bounded fresh WGC frame from the existing Stage worker, uses one transient click-through layered proxy, scales/fades the captured window rather than its icon, and sends the regular native minimize/restore to its HWND. No application window is resized or hidden outside its normal minimize action. Restore uses the verified last-visible frame only for the same HWND/process/thread, title, placement, monitor and DPI within 15 seconds; it is stored in the existing 12 MiB Stage source budget, and larger frames shrink back to normal Stage dimensions after use/expiry. No window data is written to disk. A busy worker, invalid frame, identity/affinity/elevation failure, missing icon, multi-monitor span, excessive area, stale restore preview or an unsupported native transition falls back immediately to Windows. External minimize events keep native behavior. Genie is not implemented.
+
+Windows native minimize animation and a custom proxy can overlap. The only safe gate implemented here is a readable already-disabled native window transition or the current Windows minimize animation policy already off. We do not modify either policy on another application's HWND or system-wide. Consequently, on some Windows installations selecting Scale will continue to use normal Windows transitions. The owner must verify the actual compatibility and motion; the UI explicitly describes fallback. This is a limitation, not proof of full compatibility.
+
+## Reference audit (no copied code)
+
+- [WinDockIt DockWindow.cs](https://github.com/stephengade/windockit/blob/29f24ad52fad0cfa449a4066852bde1fd0458e2f/src/WinDockIt/DockWindow.cs), MIT, commit 29f24ad: click handling uses native ShowWindow/SW_MINIMIZE and Dock icon motion; no directly reusable custom window animation.
+- [PowerToys FancyZones WindowUtils.cpp](https://github.com/microsoft/PowerToys/blob/34ad01a6011f02b6ac984189af5e476ece07e680/src/modules/fancyzones/FancyZonesLib/WindowUtils.cpp), MIT, commit 34ad01a: placement/state and focus handling of normal/minimized/maximized HWNDs. Not a window transition renderer.
+- [KWin Magic Lamp](https://github.com/KDE/kwin/blob/32a6d2ef5254c12bdb116852509c97e178f62ea0/src/plugins/magiclamp/magiclamp.cpp), GPL-2.0-or-later for this file, commit 32a6d2e: compositor-owned transforms, timeline, icon geometry and mesh deformation. Linux compositor, conceptual reference only.
+- [Compiz Scale](https://github.com/compiz-reloaded/compiz/blob/aeab754a34fa45820385a059e78978feaf81b6de/plugins/scale.c), Novell permissive notice in file, commit aeab754: compositor transform and velocity-settling, not a Windows HWND implementation.
+- [DWM thumbnails](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/nf-dwmapi-dwmregisterthumbnail) establish a compositor relationship but API success and source size do not establish current valid pixels. The Windows-owned source/placement and documented [DWM transition attribute](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute) are independent of the owned proxy. [ShowWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showwindow) retains the native state transition. The existing WGC worker captures actual source pixels and confines readback to supported windows; no extra D3D factory or continuous capture is introduced.
+
+## Verification
+
+CI must run on GitHub-hosted Windows. The isolated native Spotlight screenshot uses real control/production renderer output rather than illustrative text. The owned-window Scale fixture checks actual WGC pixels and the rendered proxy buffer, state and placement, and 100 cleanup cycles if runner capture is supported. A surface buffer or API submission is not equivalent to compositor screen output: live composition, native overlap, actual mixed-DPI monitors, IME, owner frame pacing and whole-application CPU/GPU/RAM targets remain separate acceptance gates.

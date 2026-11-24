@@ -514,6 +514,11 @@ thread_local! {
     static OPTIONS: RefCell<Preferences> = RefCell::new(Preferences::default());
     static LIBRARY: RefCell<Library> = RefCell::new(Library::default());
     static EDIT_PROC: Cell<WNDPROC> = const { Cell::new(None) };
+    // The control retains its HWND, focus, IME, scrolling and accessibility.
+    // Its visible appearance is owned by the search surface, not USER32.
+    static EDIT_COMPOSITE: Cell<bool> = const { Cell::new(false) };
+    static EDIT_COMPOSING: Cell<bool> = const { Cell::new(false) };
+    static EDIT_PRINT: Cell<Option<(u32,u32)>> = const { Cell::new(None) };
     static MODAL: Cell<bool> = const { Cell::new(false) };
     static FRAME: RefCell<Option<Frame>> = const { RefCell::new(None) };
 }
@@ -1099,12 +1104,52 @@ unsafe fn search_glyph(dc:HDC,r:RECT,ink:u32,dpi:u32){
     draw_icon(dc,&IconPixels{width:size,height:size,pixels},r.left+px(15,dpi),(r.top+r.bottom-size)/2);
 }
 
-unsafe fn draw_live_edit(dc:HDC,edit:HWND,area:RECT,face:u32,ink:u32,font:HFONT){
+unsafe fn draw_live_edit(dc:HDC,edit:HWND,area:RECT,ink:u32,font:HFONT,high_contrast:bool){
     let (w,h)=(area.right-area.left,area.bottom-area.top);
+    let query=read_edit(edit,256);
+    let placeholder=query.is_empty()&&!EDIT_COMPOSING.get();
     let Some(mut raster)=crate::dock::PopupPixels::new(w,h)else{return;};
     let edc=raster.dc();
-    fill(edc,rect(0,0,w,h),face);
-    CallWindowProcW(EDIT_PROC.get(),edit,WM_PRINTCLIENT,edc as WPARAM,PRF_CLIENT as LPARAM);
+    // A black/white matte pair recovers native text coverage without treating
+    // antialias fringes or background pixels as opaque input rectangles.
+    // Selection and IME decoration that are independent of the matte survive.
+    let print=|target:HDC,bg:u32|{
+        fill(target,rect(0,0,w,h),bg);
+        EDIT_PRINT.set(Some((bg,ink)));
+        CallWindowProcW(EDIT_PROC.get(),edit,WM_PRINTCLIENT,target as WPARAM,PRF_CLIENT as LPARAM);
+        EDIT_PRINT.set(None);
+        GdiFlush();
+    };
+    if placeholder{
+        text_alpha(dc,words("Tìm kiếm…","Search…","搜索…"),area,font,
+            if high_contrast{ink}else{0x00d8d4cf},false);
+    }else if let Some(mut white)=crate::dock::PopupPixels::new(w,h){
+        print(edc,0);
+        print(white.dc(),0x00ffffff);
+        // If a native theme ignored WM_CTLCOLOR, never copy its opaque
+        // rectangle. The corner is outside the single-line text/selection.
+        let black_bg=raster.pixels()[0..3].to_vec();
+        let white_bg=white.pixels()[0..3].to_vec();
+        let valid_matte=black_bg.iter().all(|&c|c<12)&&white_bg.iter().all(|&c|c>243);
+        for (black,light) in raster.pixels().chunks_exact_mut(4).zip(white.pixels().chunks_exact(4)){
+            if valid_matte{
+                let difference=(0..3).map(|i|light[i].saturating_sub(black[i]) as u16).sum::<u16>();
+                let alpha=255-((difference+1)/3) as u8;
+                for c in &mut black[..3]{*c=(*c).min(alpha);}
+                black[3]=alpha;
+            }else{
+                // Unthemed EDIT normally honors the matte. On an unusual
+                // theme recover only glyph contrast, never a painted panel.
+                let alpha=(0..3).map(|i|black[i].abs_diff(black_bg[i])).max().unwrap_or(0);
+                for (i,shift) in [16,8,0].into_iter().enumerate(){
+                    black[i]=((((ink>>shift)&255)*u32::from(alpha)+127)/255) as u8;
+                }
+                black[3]=alpha;
+            }
+        }
+        AlphaBlend(dc,area.left,area.top,w,h,edc,0,0,w,h,BLENDFUNCTION{
+            BlendOp:AC_SRC_OVER as u8,BlendFlags:0,SourceConstantAlpha:255,AlphaFormat:AC_SRC_ALPHA as u8});
+    }
     if GetFocus()==edit{
         let sel=SendMessageW(edit,0x00b0,0,0) as u32; // EM_GETSEL
         let start=sel&0xffff;
@@ -1119,28 +1164,11 @@ unsafe fn draw_live_edit(dc:HDC,edit:HWND,area:RECT,face:u32,ink:u32,font:HFONT)
                 size.cx+1
             };
             let x=x.clamp(0,w-1);
-            fill(edc,rect(x,2,x+1,(h-2).max(2)),ink);
+            // A separate premultiplied caret, kept at the native character
+            // position. GDI FillRect would zero the composition alpha.
+            round(dc,rect(area.left+x,area.top+2,area.left+x+1,area.bottom-2),0,ink,255);
         }
     }
-    GdiFlush();
-    // Keep native EDIT input, IME, selection and caret. Extract grayscale
-    // foreground coverage from its opaque print surface; the matching
-    // background is transparent. Selection colors are preserved as solid.
-    let bg=[(face>>16) as u8,(face>>8) as u8,face as u8];
-    let fg=[(ink>>16) as u8,(ink>>8) as u8,ink as u8];
-    let channel=(0..3).max_by_key(|&i|fg[i].abs_diff(bg[i])).unwrap();
-    let denom=f32::from(fg[channel])-f32::from(bg[channel]);
-    for pixel in raster.pixels().chunks_exact_mut(4){
-        if denom.abs()<1.0{pixel[3]=255;continue;}
-        let a=((f32::from(pixel[channel])-f32::from(bg[channel]))/denom).clamp(0.0,1.0);
-        if (0..3).all(|i|(f32::from(pixel[i])-(f32::from(bg[i])+(f32::from(fg[i])-f32::from(bg[i]))*a)).abs()<=5.0){
-            let alpha=(a*255.0).round() as u8;
-            for i in 0..3{pixel[i]=((u16::from(fg[i])*u16::from(alpha)+127)/255) as u8;}
-            pixel[3]=alpha;
-        }else{pixel[3]=255;}
-    }
-    AlphaBlend(dc,area.left,area.top,w,h,edc,0,0,w,h,BLENDFUNCTION{
-        BlendOp:AC_SRC_OVER as u8,BlendFlags:0,SourceConstantAlpha:255,AlphaFormat:AC_SRC_ALPHA as u8});
 }
 
 type PaintTile = (
@@ -1351,12 +1379,12 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
             if high_contrast{round(dc,search,u(32),face,255);}
             else{
                 round(dc,rect(search.left-u(2),search.top,search.right+u(2),search.bottom+u(4)),u(36),0x00151008,48);
-                round(dc,search,u(32),0x00fcf8f5,if GetFocus()==edit{120}else{82});
+                round(dc,search,u(32),0x00fcf8f5,if GetFocus()==edit{100}else{62});
                 let inner=rect(search.left+1,search.top+1,search.right-1,search.bottom-1);
-                round(dc,inner,u(30),field_face,if live{155}else{255});
+                round(dc,inner,u(30),field_face,if live{140}else if EDIT_COMPOSITE.get(){207}else{255});
             }
             search_glyph(dc,search,secondary,dpi);
-            if live{draw_live_edit(dc,edit,field,field_face,ink,search_font);}
+            if live||EDIT_COMPOSITE.get(){draw_live_edit(dc,edit,field,ink,search_font,high_contrast);}
         }
         for (action, r, s) in buttons {
             if !intersects(r,dirty) { continue; }
@@ -1546,7 +1574,7 @@ unsafe fn surface_style(hwnd: HWND, dark: bool) {
     let _ = attr(DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_NONE);
 }
 
-fn high_contrast()->bool {
+pub(super) fn high_contrast()->bool {
     if cfg!(test){return false;}
     use windows_sys::Win32::UI::Accessibility::{HIGHCONTRASTW,HCF_HIGHCONTRASTON};
     unsafe {
@@ -1765,6 +1793,8 @@ pub(super) fn dismiss(restore: bool) {
         drop(p.watch.take());
         drop(p.native.take());
         DestroyWindow(p.hwnd);
+        EDIT_COMPOSITE.set(false);
+        EDIT_COMPOSING.set(false);
         FRAME.with(|frame| { frame.borrow_mut().take(); });
         crate::native_text::release();
         if !p.font.is_null() {
@@ -2471,7 +2501,9 @@ unsafe fn drop_tile(hwnd: HWND, from: usize, to: usize) {
 }
 
 unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
-    let live=PANEL.with(|p|p.try_borrow().ok().is_some_and(|p|p.as_ref().is_some_and(|p|p.edit==hwnd&&p.native.is_some())));
+    let live=EDIT_COMPOSITE.get()||PANEL.with(|p|p.try_borrow().ok().is_some_and(|p|p.as_ref().is_some_and(|p|p.edit==hwnd&&p.native.is_some())));
+    if msg==WM_IME_STARTCOMPOSITION{EDIT_COMPOSING.set(true);}
+    if msg==WM_IME_ENDCOMPOSITION{EDIT_COMPOSING.set(false);}
     if live&&msg==WM_ERASEBKGND{return 1;}
     if live&&msg==WM_PAINT{
         let mut ps:PAINTSTRUCT=std::mem::zeroed();
@@ -2494,12 +2526,13 @@ unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         return 0;
     }
     let result=CallWindowProcW(EDIT_PROC.get(), hwnd, msg, w, l);
-    if live&&matches!(msg,WM_SETFOCUS|WM_KILLFOCUS|WM_KEYDOWN|WM_CHAR|WM_LBUTTONDOWN|WM_LBUTTONUP|WM_MOUSEMOVE){
+    if live&&matches!(msg,WM_SETFOCUS|WM_KILLFOCUS|WM_KEYDOWN|WM_CHAR|WM_LBUTTONDOWN|WM_LBUTTONUP|WM_MOUSEMOVE|
+        WM_SETTEXT|WM_PASTE|WM_CUT|WM_CLEAR|WM_UNDO|WM_IME_STARTCOMPOSITION|WM_IME_COMPOSITION|WM_IME_ENDCOMPOSITION|0x00b1){
         if msg==WM_SETFOCUS{HideCaret(hwnd);}
         if msg!=WM_MOUSEMOVE||w&1!=0{
-            let area=PANEL.with(|p|p.borrow().as_ref().map(|p|{
+            let area=PANEL.with(|p|p.try_borrow().ok().and_then(|p|p.as_ref().map(|p|{
                 search_rect(p.width,p.dpi)
-            }));
+            })));
             if let Some(area)=area{InvalidateRect(GetParent(hwnd),&area,0);}
         }
     }
@@ -2519,11 +2552,12 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             if let Some(area)=area { render_full(hwnd,w as HDC,area); }
             0
         }
-        WM_CTLCOLOREDIT => {
+        WM_CTLCOLOREDIT|WM_CTLCOLORSTATIC => {
             let (dark,high)=PANEL.with(|p|p.borrow().as_ref().map_or((false,false),|s|(s.dark,s.high_contrast)));
             let palette=palette(dark,high);
-            let bg=palette.face;
-            SetTextColor(w as HDC, palette.ink);
+            let (bg,ink)=EDIT_PRINT.get().unwrap_or((palette.face,palette.ink));
+            SetBkMode(w as HDC,OPAQUE as i32);
+            SetTextColor(w as HDC, ink);
             SetBkColor(w as HDC, bg);
             SetDCBrushColor(w as HDC, bg);
             GetStockObject(DC_BRUSH) as LRESULT
@@ -2910,7 +2944,7 @@ fn open_native(point: POINT, query: String, prior: HWND, manage: bool, activate:
             WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
             c.as_ptr(),
             wide("TLauncher Spotlight · Thư viện ứng dụng").as_ptr(),
-            WS_POPUP | WS_CLIPCHILDREN,
+            WS_POPUP,
             area.left,
             area.top,
             1,
@@ -2923,6 +2957,8 @@ fn open_native(point: POINT, query: String, prior: HWND, manage: bool, activate:
         if hwnd.is_null() {
             return;
         }
+        EDIT_COMPOSITE.set(false);
+        EDIT_COMPOSING.set(false);
         let edit = CreateWindowExW(
             0,
             wide("EDIT").as_ptr(),
@@ -2950,11 +2986,25 @@ fn open_native(point: POINT, query: String, prior: HWND, manage: bool, activate:
             isize,
             unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
         >(old)));
+        // Do not let native theme/cue painting leak opaque gray into the
+        // composition. Near-zero alpha keeps normal HWND hit testing and IME
+        // geometry intact; alpha zero would make mouse input pass through.
+        let empty=wide("");
+        windows_sys::Win32::UI::Controls::SetWindowTheme(edit,empty.as_ptr(),empty.as_ptr());
+        let ex=GetWindowLongPtrW(edit,GWL_EXSTYLE);
+        SetWindowLongPtrW(edit,GWL_EXSTYLE,ex|WS_EX_LAYERED as isize);
+        let composited=SetLayeredWindowAttributes(edit,0,1,LWA_ALPHA)!=0;
+        EDIT_COMPOSITE.set(composited);
+        if !composited{
+            SetWindowLongPtrW(edit,GWL_EXSTYLE,ex);
+            // Downlevel/session fallback stays a fully usable native EDIT.
+            SetWindowLongPtrW(hwnd,GWL_STYLE,GetWindowLongPtrW(hwnd,GWL_STYLE)|WS_CLIPCHILDREN as isize);
+        }
         SendMessageW(edit, 0x00c5, 256, 0);
         SendMessageW(
             edit,
             0x1501,
-            1,
+            0,
             wide(words("Tìm kiếm…","Search…","搜索…")).as_ptr() as LPARAM,
         );
         let d = dark();

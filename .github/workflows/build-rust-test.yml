@@ -65,7 +65,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_capture_lab::native_wgc_projects_one_owned_hwnd_or_reports_blocked -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --release dock::stage_capture_lab::native_dwm_scale_proxy_feasibility -- --ignored --exact --nocapture --test-threads=1
+          cargo test --release dock::stage_capture_lab::native_scale_proxy_owned_source_100_cycles -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_surface::tests::native_slide_keeps_live_preview_host_aligned_without_activating_either_window -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

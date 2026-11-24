@@ -152,6 +152,21 @@ pub(super) fn native_wgc_projects_one_owned_hwnd_or_reports_blocked() {
 }
 
 
+#[cfg(test)]
+#[test]
+#[ignore="actual WGC source pixels and Scale proxy lifecycle on Actions"]
+fn native_scale_proxy_owned_source_100_cycles(){
+    if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+    unsafe{
+        let source=window(true).unwrap();
+        let frame=match pump_capture(&source){
+            Ok(frame)=>frame,
+            Err(reason)=>{println!("WINDOW_SCALE_NATIVE=BLOCKED {reason}");return;}
+        };
+        super::window_effect::probe_owned_window(source.0,&frame);
+    }
+}
+
 // Explicit proof of the DWM thumbnail API on owned synthetic windows only.
 // This is not the product transition backend: source freshness and interaction
 // with native Windows animations still require owner-hardware acceptance.

@@ -451,10 +451,10 @@ unsafe fn screenshot(hwnd: HWND, name: &str) {
     };
     let dir = PathBuf::from(dir);
     assert!(dir.is_dir());
-    let Some((w, h, edit, dpi)) = PANEL.with(|p| {
+    let Some((w, h, edit)) = PANEL.with(|p| {
         p.borrow()
             .as_ref()
-            .map(|p| (p.width, p.height, p.edit, p.dpi))
+            .map(|p| (p.width, p.height, p.edit))
     }) else {
         return;
     };
@@ -472,29 +472,20 @@ unsafe fn screenshot(hwnd: HWND, name: &str) {
     assert!(!bitmap.is_null() && !bits.is_null());
     let previous = SelectObject(dc, bitmap);
     SendMessageW(hwnd, WM_PRINTCLIENT, dc as WPARAM, 0);
-    let mut r: RECT = std::mem::zeroed();
-    GetWindowRect(edit, &mut r);
-    let mut at = POINT {
-        x: r.left,
-        y: r.top,
-    };
-    ScreenToClient(hwnd, &mut at);
-    let font = crate::native_text::font_pixels(px(15, dpi), 450);
-    let query = read_edit(edit, 256);
-    let (label, ink) = if query.is_empty() {
-        (words("Tìm kiếm…", "Search…", "搜索…"), 0x00635b56)
-    } else {
-        (query.as_str(), 0x004044bc)
-    };
-    text(
-        dc,
-        label,
-        rect(at.x, at.y, at.x + r.right - r.left, at.y + r.bottom - r.top),
-        font,
-        ink,
-        false,
-    );
-    DeleteObject(font);
+    // No illustrative query overlay. If the session cannot composite a child
+    // HWND, print the actual native fallback EDIT rather than inventing text.
+    let live=PANEL.with(|p|p.borrow().as_ref().is_some_and(|p|p.native.is_some()));
+    if !EDIT_COMPOSITE.get()&&!live{
+        let mut r:RECT=std::mem::zeroed();
+        GetWindowRect(edit,&mut r);
+        let mut at=POINT{x:r.left,y:r.top};
+        ScreenToClient(hwnd,&mut at);
+        let saved=SaveDC(dc);
+        SetViewportOrgEx(dc,at.x,at.y,ptr::null_mut());
+        IntersectClipRect(dc,0,0,r.right-r.left,r.bottom-r.top);
+        SendMessageW(edit,WM_PRINTCLIENT,dc as WPARAM,PRF_CLIENT as LPARAM);
+        RestoreDC(dc,saved);
+    }
     GdiFlush();
     let mut rgba =
         std::slice::from_raw_parts(bits.cast::<u8>(), (w as usize) * (h as usize) * 4).to_vec();
@@ -588,6 +579,35 @@ fn native_isolated_library_search_navigation_and_100_toggles() {
             std::thread::sleep(Duration::from_millis(10));
         }
         screenshot(hwnd, "library-fixture-light.png");
+        // Exercise the real native editor and the production compositor on
+        // small, contrasting render targets. The outside corners must not
+        // become an opaque native EDIT rectangle, even with a query.
+        let palette=palette(false,false);
+        let real_font=PANEL.with(|p|p.borrow().as_ref().unwrap().search_font);
+        SetFocus(edit);
+        for (label,value) in [("empty",""),("query","Tiếng Việt 中文")]{
+            SetWindowTextW(edit,wide(value).as_ptr());
+            SendMessageW(edit,0x00b1,usize::MAX,-1);
+            let r=edit_rect(bounds.right-bounds.left,dpi);
+            let (width,height)=(r.right-r.left,r.bottom-r.top);
+            let mut pixels=crate::dock::PopupPixels::new(width,height).unwrap();
+            let background=0x00362919;
+            fill(pixels.dc(),rect(0,0,width,height),background);
+            draw_live_edit(pixels.dc(),edit,rect(0,0,width,height),palette.ink,real_font,false);
+            GdiFlush();
+            let bytes=pixels.pixels();
+            let first=[0x36,0x29,0x19];
+            assert_eq!(&bytes[0..3],&first,"native {label} paint must preserve the glass corner");
+            assert_eq!(&bytes[bytes.len()-4..bytes.len()-1],&first);
+            assert!(bytes.chunks_exact(4).any(|p|p[0]>160&&p[1]>160&&p[2]>160),"real {label} text must render");
+            screenshot(hwnd,if value.is_empty(){"native-search-empty.png"}else{"native-search-query.png"});
+        }
+        SendMessageW(edit,0x00b1,0,-1);
+        screenshot(hwnd,"native-search-selection.png");
+        SetWindowTextW(edit,wide("").as_ptr());
+        SendMessageW(hwnd,WM_TIMER,SEARCH,0);
+        wait_for(||PANEL.with(|p|p.borrow().as_ref().is_some_and(|p|p.search_rx.is_none())));
+        println!("SPOTLIGHT_SEARCH production_edit_pixels=PASS child_composited={} actual_focus={} ime=NOT_VERIFIED dpi={dpi}",EDIT_COMPOSITE.get(),GetFocus()==edit);
         // Stable hit testing, bounded repaint and no repaint for movement
         // within the same tile, using the actual native window procedure.
         let tile=PANEL.with(|p|grid(p.borrow().as_ref().unwrap()).tiles(0));

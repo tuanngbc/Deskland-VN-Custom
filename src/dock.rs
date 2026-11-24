@@ -36,6 +36,7 @@ mod stage_surface;
 mod stage_rail;
 mod stage_projection;
 mod stage_snapshot;
+mod window_effect;
 mod stage_capture_lab;
 pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>{stage_capture_lab::inspect(path,true)}
 mod utilities;
@@ -1762,12 +1763,16 @@ unsafe fn show_feedback(hwnd:HWND,item:&Item,kind:FeedbackKind){
     InvalidateRect(hwnd,ptr::null(),0);
 }
 unsafe fn activate(hwnd:HWND,item:&Item) {
+    window_effect::cancel();
     if item.path==internal_app::KEY{
         PostMessageW(OWNER.with(Cell::get),crate::WM_OPEN_SETTINGS,0,0);
         return;
     }
     if !item.hwnd.is_null() && IsWindow(item.hwnd)!=0 {
         if IsIconic(item.hwnd)!=0{
+            if let Some(id)=WindowIdentity::read(item.hwnd){
+                if window_effect::restore(hwnd,&item.path,id){show_feedback(hwnd,item,FeedbackKind::Restore);return;}
+            }
             let restored=ShowWindowAsync(item.hwnd,SW_RESTORE)!=0;
             show_feedback(hwnd,item,if restored{FeedbackKind::Restore}else{FeedbackKind::Failed});
         }
@@ -1835,11 +1840,21 @@ unsafe fn finish_double_click(click:AppClick)->Option<FeedbackKind>{
     let hwnd=window.hwnd as HWND;
     if !window.matches_stage(){return None;}
     if crate::trial::active()&&taskbar_hidden(){
-        let surface=match click.key{ClickKey::Dock(_)=>"Dock",ClickKey::Stage(_)=>"Stage"};
+        let surface=match &click.key{ClickKey::Dock(_)=>"Dock",ClickKey::Stage(_)=>"Stage"};
         crate::log!("DOCK_TASKBAR_APP gesture=double-click surface={} hwnd={} was_open={}",surface,window.hwnd,click.was_open);
     }
-    if click.was_open{minimize_click(window).then_some(FeedbackKind::Minimize)}
-    else if IsIconic(hwnd)!=0{focus_stage_window(hwnd);Some(FeedbackKind::Restore)}
+    if click.was_open{
+        if let ClickKey::Dock(path)=&click.key{
+            if window_effect::minimize(click.owner as HWND,path,window){return Some(FeedbackKind::Minimize);}
+        }
+        window_effect::cancel();
+        minimize_click(window).then_some(FeedbackKind::Minimize)
+    }
+    else if IsIconic(hwnd)!=0{
+        if matches!(&click.key,ClickKey::Dock(_))&&window_effect::restoring(window){return None;}
+        window_effect::cancel();
+        focus_stage_window(hwnd);Some(FeedbackKind::Restore)
+    }
     else{None}
 }
 
@@ -2884,6 +2899,7 @@ unsafe fn stage_picker(hwnd:HWND,i:usize){
         hint:format!("{} cửa sổ · Chọn một cửa sổ để đưa lên trước",cards.len()),cards,metrics:None});
 }
 unsafe fn focus_stage_window(hwnd:HWND){
+    window_effect::cancel();
     if internal_app::owns(hwnd){
         let owner=OWNER.with(Cell::get);
         if !owner.is_null(){PostMessageW(owner,crate::WM_OPEN_SETTINGS,0,0);}
@@ -3063,6 +3079,9 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if tracked.0{retarget_start(hwnd);InvalidateRect(hwnd,ptr::null(),0);}
             0
         },
+        WM_TIMER if w==window_effect::TIMER&&hwnd==CONTROL.with(Cell::get)=>{
+            window_effect::timer();0
+        }
         WM_TIMER if w==STAGE_MOTION_TIMER=>{
             let step=STATE.with(|s|{
                 let mut state=s.borrow_mut();
@@ -3250,6 +3269,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}else{refresh_dock_clock();sync_win_key();request_dock_status();}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
         WM_TIMECHANGE=>{refresh_dock_clock();0},
         WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_THEMECHANGED|WM_DPICHANGED=>{
+            window_effect::reset();
             if msg==WM_SETTINGCHANGE{motion::refresh_system();}
             if msg==WM_DISPLAYCHANGE&&taskbar_active(){show_taskbar(taskbar_guard::Exit::ExplorerChanged,"Đã hiện lại thanh tác vụ khi thay đổi màn hình.");}
             DISPLAY_DIRTY.with(|d|d.set(true));queue_refresh();0
@@ -3611,6 +3631,7 @@ fn queue_refresh() {
 unsafe extern "system" fn window_event(_:HWINEVENTHOOK,event:u32,hwnd:HWND,object:i32,child:i32,_thread:u32,_time:u32) {
     if object==0 && child==0 {
         if event==EVENT_OBJECT_DESTROY{stage_snapshot::forget(hwnd);}
+        if matches!(event,EVENT_OBJECT_DESTROY|EVENT_SYSTEM_MINIMIZEEND|EVENT_OBJECT_NAMECHANGE){window_effect::invalidate_recent(hwnd);}
         queue_refresh();
     }
 }
@@ -3619,6 +3640,7 @@ unsafe fn drain_commands() {
     for command in commands {
         match command {
             Command::Configure(options)=>{
+                window_effect::reset();
                 let enable_default=STATE.with(|s|!s.borrow().prefs.enabled&&options.enabled&&options.taskbar_default);
                 let shortcut_changed=STATE.with(|s|s.borrow().prefs.start_shortcut!=options.start_shortcut);
                 if shortcut_changed&&taskbar_hidden(){sync_start_hotkey(CONTROL.with(Cell::get),options.start_shortcut);}
@@ -3641,6 +3663,7 @@ unsafe fn drain_commands() {
                 if enable_default&&!cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active(){start_saved_taskbar_mode();}
             },
             Command::Suspend(on)=>{
+                if on{window_effect::reset();}
                 if on&&(taskbar_active()||taskbar_retry_pending()){
                     cancel_taskbar_retry();
                     TASKBAR_RESUME.set(true);
@@ -3764,6 +3787,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0{
             if !utilities::route_panel_keyboard(&msg){TranslateMessage(&msg);DispatchMessageW(&msg);}
         }
+        window_effect::reset();
         if taskbar_active(){show_taskbar(taskbar_guard::Exit::Requested,"Đã hiện lại thanh tác vụ khi thoát Deskland.");}
         WIN_KEY.with(|s|drop(s.borrow_mut().take()));
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
