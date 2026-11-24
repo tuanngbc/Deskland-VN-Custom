@@ -618,6 +618,7 @@ struct Config {
     launcher_vk: u32,
     launcher_appearance: launcher::Appearance,
     spotlight:launcher::library::Preferences,
+    spotlight_guide_seen:bool,
     tools: mini_tools::Options,
     system_monitor: system_monitor::Options,
 }
@@ -699,6 +700,7 @@ fn load_config(cli_theme: Option<String>) -> Config {
         },
         launcher_appearance: launcher::Appearance::from_json(&root["launcherAppearance"]),
         spotlight:launcher::library::Preferences::from_json(&root["spotlight"]),
+        spotlight_guide_seen:root["spotlightGuideSeen"].as_bool().unwrap_or(root.is_object()),
         tools: mini_tools::Options::from_json(&root["miniTools"]),
         system_monitor: system_monitor::Options::from_json(&root["systemMonitor"]),
         lock_idle_mins: root.get("lockIdleMins").and_then(|v| v.as_u64()).map(|v| v as u32).filter(|&v| v > 0).unwrap_or(5),
@@ -759,6 +761,7 @@ fn save_config(cfg: &Config) {
         "launcherHotkey": { "mods": cfg.launcher_mods, "vk": cfg.launcher_vk },
         "launcherAppearance": cfg.launcher_appearance.json(),
         "spotlight": &cfg.spotlight,
+        "spotlightGuideSeen":cfg.spotlight_guide_seen,
         "miniTools": cfg.tools.json(),
         "systemMonitor": cfg.system_monitor.json(),
     });
@@ -772,8 +775,8 @@ fn save_config(cfg: &Config) {
 /// Ngôn ngữ thực dùng + ngôn ngữ hệ thống cho trang cài đặt.
 fn lang_eff(setting: &str) -> (String, String) {
     let id = unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() };
-    let sys = if id & 0x3FF == 0x2A { "vi" } else { "en" }.to_string();
-    let eff = if setting == "vi" || setting == "en" { setting.to_string() } else { sys.clone() };
+    let sys=match id&0x3ff{0x2a=>"vi",0x04=>"zh-CN",_=>"en"}.to_string();
+    let eff=if matches!(setting,"vi"|"en"|"zh-CN"){setting.to_owned()}else{sys.clone()};
     (eff, sys)
 }
 
@@ -886,6 +889,7 @@ fn web_init(app: &App) -> serde_json::Value {
         },
     });
     init["spotlight"]=serde_json::json!(&app.cfg.spotlight);
+    init["spotlightGuideSeen"]=serde_json::json!(app.cfg.spotlight_guide_seen);
     app.dock_taskbar.add_fields(&mut init);
     init["dockWinKeyStatus"]=serde_json::json!(app.dock_win_key_status);
     init
@@ -2381,6 +2385,7 @@ fn main() {
     let fps: f64 = arg_value(&args, "--fps").and_then(|s| s.parse().ok()).unwrap_or(30.0);
     let interval = 1000.0 / fps.max(1.0);
     let mut cfg = load_config(arg_value(&args, "--theme"));
+    launcher::spotlight_locale(&lang_eff(&cfg.lang).0);
     if let Some(mode) = arg_value(&args, "--mode") {
         if matches!(mode.as_str(), "mirror" | "independent" | "panorama") {
             cfg.mode = mode;
@@ -3118,6 +3123,12 @@ fn main() {
                     }
                     web_changed=true;
                 }
+                "spotlightGuideSeen" => {
+                    if !app.cfg.spotlight_guide_seen {
+                        app.cfg.spotlight_guide_seen=true;
+                        save_config(&app.cfg);
+                    }
+                }
                 "spotlightLibraryAction" => {
                     launcher::configure_spotlight(app.cfg.spotlight.clone());
                     match m["action"].as_str(){
@@ -3281,6 +3292,7 @@ fn main() {
                 "lang" => {
                     app.cfg.lang = s_("v");
                     let (eff, sys) = lang_eff(&app.cfg.lang);
+                    launcher::spotlight_locale(&eff);
                     web::post(&serde_json::json!({ "t": "lang", "v": app.cfg.lang, "eff": eff, "sys": sys }).to_string());
                     web_changed = true;
                 }

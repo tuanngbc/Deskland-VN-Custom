@@ -221,12 +221,37 @@ pub(crate) fn follow_dock(anchor:DockAnchor){
         unsafe{PostMessageW(target,FOLLOW_DOCK,w,l);}
     }
 }
+const START_TWEEN:usize=11;
+thread_local!{static START_MOTION:Cell<Option<super::motion::Tween>>=const{Cell::new(None)};}
+
+unsafe fn start_opacity(hwnd:HWND,open:f32){
+    let alpha=(open*255.0).round().clamp(1.0,255.0) as u8;
+    SetLayeredWindowAttributes(hwnd,0,alpha,LWA_ALPHA);
+    CORNERS.with(|s|if let Some(c)=s.borrow().as_ref(){c.opacity(alpha);});
+    SHADOW.with(|s|if let Some(c)=s.borrow().as_ref(){c.opacity(alpha);});
+}
+unsafe fn transition(hwnd:HWND,open:bool)->bool{
+    if cfg!(test)||!crate::dock::popup_motion_allowed(){return false;}
+    let t=super::motion::Tween::new(open,super::motion::START,START_MOTION.get());
+    if SetTimer(hwnd,START_TWEEN,16,None)==0{return false;}
+    START_MOTION.set(Some(t));
+    start_opacity(hwnd,t.openness());
+    true
+}
+unsafe fn close_animated(hwnd:HWND){
+    if START_MOTION.get().is_some_and(|t|t.to==0.0){return;}
+    if !transition(hwnd,false){hide(hwnd);}
+}
 unsafe fn place(hwnd:HWND){
     let geometry=START.with(|s|{
         let b=s.borrow();let m=b.as_ref()?;
         let (w,h)=(px(m.frame.width,m.scale),px(m.view.flow.height,m.scale));
         if w>m.work.right-m.work.left||h>m.work.bottom-m.work.top{return None;}
-        let (x,y)=m.anchor.position(m.work,w,h,chrome::scale(m.dock_dpi,chrome::PANEL_GAP));
+        let (mut x,mut y)=m.anchor.position(m.work,w,h,chrome::scale(m.dock_dpi,chrome::PANEL_GAP));
+        if let Some(t)=START_MOTION.get(){
+            let shift=(chrome::scale(m.dock_dpi,6) as f32*(1.0-t.openness())).round() as i32;
+            match m.anchor.side{crate::dock::DockSide::Bottom=>y+=shift,crate::dock::DockSide::Left=>x-=shift,crate::dock::DockSide::Right=>x+=shift}
+        }
         Some((RECT{left:x,top:y,right:x+w,bottom:y+h},m.dock_dpi,m.anchor.side,m.dark))
     });
     let Some((r,dpi,side,dark))=geometry else{if IsWindowVisible(hwnd)!=0{hide(hwnd);}return;};
@@ -234,7 +259,7 @@ unsafe fn place(hwnd:HWND){
     GetWindowRect(hwnd,&mut previous);
     let size_changed=r.right-r.left!=previous.right-previous.left||r.bottom-r.top!=previous.bottom-previous.top;
     if size_changed||r.left!=previous.left||r.top!=previous.top{
-        SetWindowPos(hwnd,ptr::null_mut(),r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_NOZORDER);
+        SetWindowPos(hwnd,ptr::null_mut(),r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_NOZORDER|if size_changed{0}else{SWP_NOSIZE});
         if size_changed{
             CORNERS.with(|c|c.replace(None));
             chrome::start_frame(hwnd,r.right-r.left,r.bottom-r.top,dpi);
@@ -499,6 +524,7 @@ unsafe fn paint_start(hwnd:HWND){
             });
             if IsWindowVisible(hwnd)!=0{
                 CORNERS.with(|c|chrome::StartCorners::paint(&mut c.borrow_mut(),hwnd,dc,width,height,dock_dpi));
+                if let Some(t)=START_MOTION.get(){start_opacity(hwnd,t.openness());}
             }
             surface.blit(target);
 
@@ -547,11 +573,13 @@ unsafe fn stop_dismissal(hwnd:HWND){
     ACTIVITY.set(None);
 }
 unsafe fn hide(hwnd:HWND){
+    START_MOTION.set(None);KillTimer(hwnd,START_TWEEN);
     FOCUS.set(None);KillTimer(hwnd,FOCUS_TIMER);
     stop_dismissal(hwnd);
     SHADOW.with(|s|s.replace(None));
     CORNERS.with(|c|c.replace(None));
     ShowWindow(hwnd,SW_HIDE);
+    SetLayeredWindowAttributes(hwnd,0,255,LWA_ALPHA);
     SetWindowPos(hwnd,HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
 }
 unsafe fn search_focus(hwnd:HWND,edit:HWND){
@@ -562,6 +590,7 @@ unsafe fn search_focus(hwnd:HWND,edit:HWND){
 }
 unsafe fn show(hwnd:HWND,edit:HWND){
     let input=super::InputHandoff::capture();
+    if !transition(hwnd,true){SetLayeredWindowAttributes(hwnd,0,255,LWA_ALPHA);}
     if SetWindowPos(hwnd,HWND_TOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW|SWP_NOACTIVATE)==0{return;}
     // Foreground permission is best effort; TOPMOST still makes Start visible
     // even when Windows declines focus for an asynchronous Win-key request.
@@ -776,8 +805,8 @@ unsafe extern "system" fn proc_start(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
             SetBkColor(w as HDC,color);SetDCBrushColor(w as HDC,color);
             GetStockObject(DC_BRUSH) as LRESULT
         }
-        WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{if !MENU.get()&&IsWindowVisible(hwnd)!=0{hide(hwnd);}0}
-        WM_CLOSE|DISMISS_OUTSIDE=>{if !MENU.get()&&IsWindowVisible(hwnd)!=0{hide(hwnd);}0}
+        WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{if !MENU.get()&&IsWindowVisible(hwnd)!=0{close_animated(hwnd);}0}
+        WM_CLOSE|DISMISS_OUTSIDE=>{if !MENU.get()&&IsWindowVisible(hwnd)!=0{close_animated(hwnd);}0}
         WM_ACTIVATE=>{
             if let Some(edit)=START.with(|s|s.borrow().as_ref().map(|m|m.edit)){
                 if FOCUS.get().is_some(){PostMessageW(hwnd,WM_TIMER,FOCUS_TIMER,0);}
@@ -810,13 +839,24 @@ unsafe extern "system" fn proc_start(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESU
             }else{FOCUS.set(None);KillTimer(hwnd,FOCUS_TIMER);}
             0
         }
+        WM_TIMER if w==START_TWEEN=>{
+            if let Some(t)=START_MOTION.get(){
+                let settled=t.progress()>=1.0||!crate::dock::popup_motion_allowed();
+                if settled{START_MOTION.set(None);KillTimer(hwnd,START_TWEEN);}
+                if settled&&t.to==0.0{hide(hwnd);}else{
+                    place(hwnd);
+                    start_opacity(hwnd,if settled{1.0}else{t.openness()});
+                }
+            }else{KillTimer(hwnd,START_TWEEN);}
+            0
+        }
         WM_TIMER if w==IDLE_TIMER=>{
-            if idle_expired(ACTIVITY.get(),Instant::now(),MENU.get()){hide(hwnd);}
+            if idle_expired(ACTIVITY.get(),Instant::now(),MENU.get()){close_animated(hwnd);}
             0
         }
         WM_KEYDOWN|APPLY=>{
             match w as u16{
-                VK_ESCAPE=>hide(hwnd),
+                VK_ESCAPE=>close_animated(hwnd),
                 VK_RETURN=>{
                     let tile=START.with(|s|s.borrow().as_ref().and_then(selected));
                     if let Some(tile)=tile{activate(hwnd,tile);}
@@ -945,15 +985,19 @@ pub(crate) fn toggle(owner:HWND,anchor:DockAnchor){
         let previous=START.with(|s|s.borrow().as_ref().map(|m|(m.hwnd,m.anchor)));
         if let Some((hwnd,last))=previous{
             if IsWindowVisible(hwnd)!=0{
+                if MonitorFromPoint(last.point,MONITOR_DEFAULTTONEAREST)==MonitorFromPoint(anchor.point,MONITOR_DEFAULTTONEAREST){
+                    if START_MOTION.get().is_some_and(|t|t.to==0.0){let _=transition(hwnd,true);}
+                    else{close_animated(hwnd);}
+                    return;
+                }
                 hide(hwnd);
-                if MonitorFromPoint(last.point,MONITOR_DEFAULTTONEAREST)==MonitorFromPoint(anchor.point,MONITOR_DEFAULTTONEAREST){return;}
             }
         }else{
             let cls=wide(CLASS);
             let module=windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(ptr::null());
             let wc=WNDCLASSW{lpfnWndProc:Some(proc_start),hInstance:module,hCursor:LoadCursorW(ptr::null_mut(),IDC_ARROW),lpszClassName:cls.as_ptr(),..std::mem::zeroed()};
             RegisterClassW(&wc);
-            let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW,cls.as_ptr(),wide("TLauncher Start").as_ptr(),WS_POPUP|WS_CLIPCHILDREN,
+            let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_LAYERED,cls.as_ptr(),wide("TLauncher Start").as_ptr(),WS_POPUP|WS_CLIPCHILDREN,
                 0,0,1,1,ptr::null_mut(),ptr::null_mut(),module,ptr::null());
             if hwnd.is_null(){return;}
             let edit=CreateWindowExW(0,wide("EDIT").as_ptr(),wide("").as_ptr(),WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL as u32,

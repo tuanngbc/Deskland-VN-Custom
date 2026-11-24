@@ -96,7 +96,7 @@ struct Panel {
     layered:bool,dirty:bool,
     hwnd:HWND,owner:HWND,tag:usize,anchor:chrome::Anchor,dpi:u32,layer:Layer,ink:Option<Layer>,
     glass:super::glass::Glass,fonts:[HFONT;4], view:View, metrics:Option<Metrics>, index:Option<usize>, pressed:Option<usize>, page:usize,
-    cols:usize,per_page:usize, row_height:i32,list:bool,entrance:Option<(std::time::Instant,POINT)>,shadow:Option<chrome::PanelShadow>,hub:bool,
+    cols:usize,per_page:usize, row_height:i32,list:bool,entrance:Option<super::motion::Tween>,shadow:Option<chrome::PanelShadow>,hub:bool,
 }
 impl Drop for Panel {
     fn drop(&mut self){unsafe{for &f in &self.fonts{if !f.is_null(){DeleteObject(f);}}}}
@@ -171,17 +171,9 @@ pub(super) fn inline_readings(cfg:MetricOptions)->Vec<InlineReading>{
 }
 impl Panel{
     unsafe fn present(&self)->bool{
-        if let Some((start,at))=self.entrance{
-            let remaining=(1.0-(start.elapsed().as_secs_f32()/0.15).clamp(0.0,1.0)).powi(3);
-            let shift=(chrome::scale(self.dpi,8) as f32*remaining).round() as i32;
-            let mut point=at;
-            match self.anchor.side{
-                super::DockSide::Bottom=>point.y+=shift,
-                super::DockSide::Left=>point.x-=shift,
-                super::DockSide::Right=>point.x+=shift,
-            }
-            self.layer.present_at(self.hwnd,Some(point),(255.0-79.0*remaining).round() as u8)
-        }else{self.layer.present(self.hwnd)}
+        let alpha=self.entrance.map_or(255,|t|(255.0*t.openness()).round().clamp(1.0,255.0) as u8);
+        if let Some(shadow)=&self.shadow{shadow.opacity(alpha);}
+        self.layer.present_at(self.hwnd,None,alpha)
     }
     fn rect(&self,i:usize)->RECT{
         let pad=chrome::scale(self.dpi,14);
@@ -385,12 +377,12 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bo
     let fonts=[chrome::choose_font(dpi,if list{18}else{21},550),chrome::choose_font(dpi,14,if list{455}else{530}),chrome::choose_font(dpi,12,420),chrome::choose_font(dpi,19,540)];
     let metrics=view.metrics.map(Metrics::new);
     let start=std::time::Instant::now();
-    let animated=list&&!super::STATE.with(|s|s.borrow().prefs.appearance.reduced_motion);
+    let animated=!cfg!(test)&&super::popup_motion_allowed();
     let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,glass,fonts,view,metrics,index:None,pressed:None,page:0,cols,per_page,row_height,list,entrance:None,shadow:None,hub};
     // A hidden HWND can't be relied on to dispatch WM_PAINT. Submit the
     // completed bitmap directly, then show the window with content.
     p.paint();
-    if animated&&SetTimer(hwnd,ENTRANCE_TIMER,16,None)!=0{p.entrance=Some((std::time::Instant::now(),POINT{x,y}));}
+    if animated&&SetTimer(hwnd,ENTRANCE_TIMER,16,None)!=0{p.entrance=Some(super::motion::Tween::new(true,super::motion::PANEL,None));}
     if !p.present(){
         crate::log!("DOCK_PANEL layered submission failed: {}",GetLastError());
         p.layered=false;
@@ -461,7 +453,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             let panel=PANE.with(|s|{let mut s=s.borrow_mut();if s.as_ref().is_some_and(|p|p.hwnd==hwnd){s.take()}else{None}});
             if let Some(mut p)=panel{
                 let _=p.present();
-                if p.entrance.is_none_or(|(start,_)|start.elapsed().as_millis()>=150){
+                if p.entrance.is_none_or(|t|t.progress()>=1.0){
                     KillTimer(hwnd,ENTRANCE_TIMER);p.entrance=None;
                 }
                 if IsWindow(hwnd)!=0{PANE.with(|s|{let mut s=s.borrow_mut();if s.is_none(){*s=Some(p);}});}

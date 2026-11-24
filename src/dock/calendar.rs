@@ -66,12 +66,19 @@ struct Panel{
     hwnd:HWND,owner:HWND,anchor:chrome::Anchor,layer:Layer,dpi:u32,glass:super::glass::Glass,shadow:Option<chrome::PanelShadow>,
     fonts:[HFONT;4],local:Local,view:Month,following:bool,dirty:bool,
     hover:Option<Button>,focus:Option<Button>,pressed:Option<Button>,
+    motion:Option<super::motion::Tween>,
 }
 thread_local!{static PANEL:RefCell<Option<Panel>>=const{RefCell::new(None)};}
 impl Drop for Panel{
     fn drop(&mut self){unsafe{for font in self.fonts{if !font.is_null(){DeleteObject(font);}}}}
 }
+const MOTION_TIMER:usize=7;
 impl Panel{
+    unsafe fn present(&self)->bool{
+        let alpha=self.motion.map_or(255,|t|(255.0*t.openness()).round().clamp(1.0,255.0) as u8);
+        if let Some(shadow)=&self.shadow{shadow.opacity(alpha);}
+        self.layer.present_at(self.hwnd,None,alpha)
+    }
     fn in_rect(&self,x:i32,y:i32,w:i32,h:i32)->RECT{
         let (a,b)=self.layer.size;
         RECT{left:x*a/WIDTH,top:y*b/HEIGHT,right:(x+w)*a/WIDTH,bottom:(y+h)*b/HEIGHT}
@@ -198,9 +205,12 @@ pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor){
     let local=Local::now();
     let glass=super::glass::Glass::capture(RECT{left:x,top:y,right:x+w,bottom:y+h},dock_dpi,anchor.dark,anchor.transparency);
     let mut panel=Panel{hwnd,owner,anchor,layer,dpi:dock_dpi,glass,shadow:None,fonts,local,view:local.month,following:true,
-        dirty:true,hover:None,focus:None,pressed:None};
+        dirty:true,hover:None,focus:None,pressed:None,motion:None};
     panel.paint();
-    if !panel.layer.present(hwnd){DestroyWindow(hwnd);return;}
+    if !cfg!(test)&&super::popup_motion_allowed()&&SetTimer(hwnd,MOTION_TIMER,16,None)!=0{
+        panel.motion=Some(super::motion::Tween::new(true,super::motion::PANEL,None));
+    }
+    if !panel.present(){DestroyWindow(hwnd);return;}
     PANEL.with(|slot|slot.replace(Some(panel)));
     SetTimer(hwnd,TIMER,1000,None);
     ShowWindow(hwnd,SW_SHOW);
@@ -215,9 +225,32 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     match msg{
         WM_ERASEBKGND=>1,
         WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{PostMessageW(hwnd,WM_CLOSE,0,0);0}
-        WM_DPICHANGED=>{PostMessageW(hwnd,WM_CLOSE,0,0);0}
+        WM_DPICHANGED=>{DestroyWindow(hwnd);0}
+        WM_CLOSE=>{
+            let animated=PANEL.with(|s|{
+                let mut p=s.borrow_mut();let Some(p)=p.as_mut().filter(|p|p.hwnd==hwnd)else{return false;};
+                if cfg!(test)||!super::popup_motion_allowed(){return false;}
+                if p.motion.is_some_and(|t|t.to==0.0){return true;}
+                if SetTimer(hwnd,MOTION_TIMER,16,None)==0{return false;}
+                p.motion=Some(super::motion::Tween::new(false,super::motion::PANEL,p.motion));true
+            });
+            if !animated{DestroyWindow(hwnd);}0
+        }
+        WM_TIMER if w==MOTION_TIMER=>{
+            let mut finish=false;
+            PANEL.with(|s|if let Ok(mut slot)=s.try_borrow_mut(){
+                if let Some(p)=slot.as_mut().filter(|p|p.hwnd==hwnd){
+                    if p.motion.is_some_and(|t|t.progress()>=1.0||!super::popup_motion_allowed()){
+                        finish=p.motion.take().is_some_and(|t|t.to==0.0);KillTimer(hwnd,MOTION_TIMER);
+                    }
+                    if !finish{p.present();}
+                }else{KillTimer(hwnd,MOTION_TIMER);}
+            });
+            if finish{DestroyWindow(hwnd);}0
+        }
         WM_NCDESTROY=>{
             KillTimer(hwnd,TIMER);
+            KillTimer(hwnd,MOTION_TIMER);
             let owner=PANEL.with(|s|{
                 let mut p=s.borrow_mut();
                 if p.as_ref().is_some_and(|p|p.hwnd==hwnd){p.take().map(|p|p.owner)}else{None}
@@ -233,13 +266,13 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 if s.as_ref().is_some_and(|p|p.hwnd==hwnd&&p.dirty){s.take()}else{None}
             });
             if let Some(mut p)=panel{
-                p.paint();let _=p.layer.present(hwnd);
+                p.paint();let _=p.present();
                 if IsWindow(hwnd)!=0{PANEL.with(|s|{let mut s=s.borrow_mut();if s.is_none(){*s=Some(p);}});}
                 else{super::panel_closed(p.owner);}
             }
             0
         }
-        WM_KEYDOWN if w as u16==VK_ESCAPE=>{DestroyWindow(hwnd);0}
+        WM_KEYDOWN if w as u16==VK_ESCAPE=>{PostMessageW(hwnd,WM_CLOSE,0,0);0}
         WM_TIMER|WM_MOUSEMOVE|super::WM_DOCK_MOUSELEAVE|WM_LBUTTONDOWN|WM_LBUTTONUP|WM_CAPTURECHANGED|WM_KEYDOWN=>{
             let (dirty,capture)=PANEL.with(|s|{
                 let mut s=s.borrow_mut();

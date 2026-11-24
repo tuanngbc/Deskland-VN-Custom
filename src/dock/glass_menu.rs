@@ -1,8 +1,12 @@
 //! TLauncher draws its own context menus; a native HMENU remains the source
 //! for IDs, enabled state and submenus, and is used if rendering cannot start.
-use super::{glass::Glass,glass_probe::Layer,panel_chrome as chrome,surface::Palette};
+use super::{motion::{self,Tween},glass::Glass,glass_probe::Layer,panel_chrome as chrome,surface::Palette};
 use crate::desktop::wide;
-use std::{cell::RefCell,mem,ptr};
+use std::{cell::{Cell,RefCell},mem,ptr,time::Instant};
+const FRAME_TIMER:usize=8;
+thread_local!{static TRACKING:Cell<bool>=const{Cell::new(false)};}
+struct TrackScope;
+impl Drop for TrackScope{fn drop(&mut self){TRACKING.set(false);}}
 use windows_sys::Win32::{Foundation::*,Graphics::Gdi::*,System::LibraryLoader::GetModuleHandleW,
     UI::{HiDpi::GetDpiForWindow,Input::KeyboardAndMouse::*,WindowsAndMessaging::*}};
 
@@ -23,7 +27,8 @@ unsafe fn items(menu:HMENU,depth:usize)->Vec<Entry>{
     }).collect()
 }
 struct Menu{
-    layer:Layer,glass:Glass,font:HFONT,dark:bool,dpi:u32,
+    layer:Layer,scaled:Option<Layer>,glass:Glass,font:HFONT,dark:bool,dpi:u32,
+    tween:Option<Tween>,pivot:(f32,f32),hover_from:Option<usize>,hover_at:Option<Instant>,animate:bool,
     pages:Vec<(Vec<Entry>,usize,Option<usize>)>,hot:Option<usize>,offset:usize,pressed:Option<usize>,
     rows:usize,row:i32,pad:i32,done:bool,result:u32,
 }
@@ -64,10 +69,31 @@ impl Menu{
         }
     }
     fn hit(&self,x:i32,y:i32)->Option<usize>{
+        let (x,y)=self.tween.filter(|_|self.scaled.is_some()).map_or((x,y),|t|{
+            let z=motion::zoom(motion::MENU.scale,t.openness());
+            (motion::inverse(x as f32,self.pivot.0,z).floor() as i32,
+             motion::inverse(y as f32,self.pivot.1,z).floor() as i32)
+        });
         let (w,h)=self.layer.size;
         if x<0||x>=w||y<self.pad||y>=h-self.pad{return None;}
         let i=self.offset+((y-self.pad)/self.row) as usize;
         self.entries().get(i).filter(|e|!e.disabled&&!e.separator).map(|_|i)
+    }
+    unsafe fn present(&mut self,hwnd:HWND)->bool{
+        let Some(t)=self.tween else{return self.layer.present(hwnd);};
+        let k=t.openness();
+        let opacity=(255.0*k).round().clamp(1.0,255.0) as u8;
+        let Some(scaled)=self.scaled.as_mut()else{return self.layer.present_at(hwnd,None,opacity);};
+        let z=motion::zoom(motion::MENU.scale,k);
+        let (w,h)=self.layer.size;
+        let anchor=|p:f32|(p*(1.0-z)).round() as i32;
+        let (x,y)=(anchor(self.pivot.0),anchor(self.pivot.1));
+        GdiFlush();
+        scaled.pixels().fill(0);
+        let blend=BLENDFUNCTION{BlendOp:AC_SRC_OVER as u8,BlendFlags:0,SourceConstantAlpha:255,AlphaFormat:AC_SRC_ALPHA as u8};
+        AlphaBlend(scaled.dc(),x,y,(w as f32*z).round().max(1.0) as i32,(h as f32*z).round().max(1.0) as i32,
+            self.layer.dc(),0,0,w,h,blend);
+        scaled.present_at(hwnd,None,opacity)
     }
     unsafe fn render(&mut self,hwnd:HWND)->bool{
         let (w,h)=self.layer.size;
@@ -76,23 +102,28 @@ impl Menu{
         if !self.glass.draw(g,w,h){super::fill(g,RECT{left:0,top:0,right:w,bottom:h},chrome::color(palette.panel));}
         let old=SelectObject(g,self.font);
         let px=|n|chrome::scale(self.dpi,n);
-        for (slot,item) in self.entries().iter().skip(self.offset).take(self.rows).enumerate(){
+        let visible=self.entries().iter().skip(self.offset).take(self.rows).map(|e|
+            (e.text.clone(),e.separator,e.disabled,e.check,!e.children.is_empty())).collect::<Vec<_>>();
+        for (slot,(label,separator,disabled,checked,submenu)) in visible.into_iter().enumerate(){
             let top=self.pad+slot as i32*self.row;
             let r=RECT{left:px(7),top,right:w-px(7),bottom:top+self.row};
-            if item.separator{
+            if separator{
                 super::fill(g,RECT{left:px(15),top:top+self.row/2,right:w-px(15),bottom:top+self.row/2+1},chrome::color(palette.edge));
                 continue;
             }
-            if self.hot==Some(self.offset+slot){chrome::box_fill(g,r,px(11),if self.dark{[72,73,79]}else{[216,232,247]},None);}
+            let index=self.offset+slot;
+            let phase=self.hover_at.map_or(1.0,|t|motion::ease(t.elapsed().as_millis() as f32/motion::HOVER_MS as f32));
+            let lift=if self.hot==Some(index){phase}else if self.hover_from==Some(index){1.0-phase}else{0.0};
+            if lift>0.0{self.layer.shape(r,px(10) as f32,if self.dark{[83,84,90]}else{[221,235,248]},(215.0*lift).round() as u8);}
             let flags=DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS;
-            let ink=if item.disabled{palette.muted}else{palette.ink};
-            chrome::text(g,RECT{left:px(28),right:r.right-px(22),..r},&item.text,ink,flags);
-            if item.check{chrome::text(g,RECT{left:px(12),right:px(27),..r},"✓",ink,flags);}
-            if !item.children.is_empty(){chrome::text(g,RECT{left:r.right-px(18),..r},"›",ink,flags);}
+            let ink=if disabled{palette.muted}else{palette.ink};
+            chrome::text(g,RECT{left:px(28),right:r.right-px(22),..r},&label,ink,flags);
+            if checked{chrome::text(g,RECT{left:px(12),right:px(27),..r},"✓",ink,flags);}
+            if submenu{chrome::text(g,RECT{left:r.right-px(18),..r},"›",ink,flags);}
         }
         SelectObject(g,old);GdiFlush();
         chrome::mask_popup(self.layer.pixels(),w,h,px(16) as f32,255);
-        self.layer.present(hwnd)
+        self.present(hwnd)
     }
 }
 unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
@@ -107,9 +138,22 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             let mut ps=mem::zeroed();BeginPaint(hwnd,&mut ps);EndPaint(hwnd,&ps);
             if let Ok(mut m)=state.try_borrow_mut(){m.render(hwnd);}0
         }
+        WM_TIMER if w==FRAME_TIMER=>{
+            if let Ok(mut m)=state.try_borrow_mut(){
+                if m.tween.is_some_and(|t|t.progress()>=1.0&&t.to>0.0){m.tween=None;}
+                let hovering=m.hover_at.is_some();
+                if m.hover_at.is_some_and(|t|t.elapsed().as_millis()>=motion::HOVER_MS){
+                    m.hover_at=None;m.hover_from=None;
+                }
+                if hovering{m.render(hwnd);}else{m.present(hwnd);}
+                if m.tween.is_none()&&m.hover_at.is_none(){KillTimer(hwnd,FRAME_TIMER);}
+            }0
+        }
         WM_MOUSEMOVE|WM_LBUTTONDOWN|WM_RBUTTONDOWN|WM_LBUTTONUP|WM_RBUTTONUP|WM_MOUSEWHEEL|WM_KEYDOWN=>{
             let Ok(mut m)=state.try_borrow_mut()else{return 0;};
+            if m.done{return 0;}
             let hit=m.hit(x,y);
+            let previous=m.hot;
             match msg{
                 WM_MOUSEMOVE=>if m.hot==hit{return 0;}else{m.hot=hit;},
                 WM_LBUTTONDOWN|WM_RBUTTONDOWN=>{
@@ -130,6 +174,9 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 }
                 _=>{}
             }
+            if previous!=m.hot&&m.animate{
+                m.hover_from=previous;m.hover_at=Some(Instant::now());SetTimer(hwnd,FRAME_TIMER,16,None);
+            }
             if !m.done{InvalidateRect(hwnd,ptr::null(),0);}0
         }
         _=>DefWindowProcW(hwnd,msg,w,l),
@@ -137,6 +184,8 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
 }
 
 pub(crate) unsafe fn track(menu:HMENU,owner:HWND,point:POINT,flags:u32,dark:bool,transparency:u32)->u32{
+    if TRACKING.replace(true){return 0;}
+    let _scope=TrackScope;
     if let Some(result)=show(menu,owner,point,flags,dark,transparency){return result;}
     TrackPopupMenu(menu,flags,point.x,point.y,0,owner,ptr::null()) as u32
 }
@@ -168,7 +217,11 @@ unsafe fn show(menu:HMENU,owner:HWND,point:POINT,flags:u32,dark:bool,transparenc
         WS_POPUP,x,y,w,h,owner,ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
     if hwnd.is_null(){return None;}
     chrome::disable_system_border(hwnd);
-    let model=RefCell::new(Menu{layer,glass,font:chrome::choose_font(dpi,14,480),dark,dpi,pages:vec![(entries,0,None)],
+    let animate=super::popup_motion_allowed()&&SetTimer(hwnd,FRAME_TIMER,16,None)!=0;
+    let model=RefCell::new(Menu{layer,scaled:if animate{Layer::new(w,h)}else{None},
+        glass,font:chrome::choose_font(dpi,14,500),dark,dpi,pages:vec![(entries,0,None)],
+        tween:animate.then(||Tween::new(true,motion::MENU,None)),pivot:((point.x-x).clamp(0,w) as f32,(point.y-y).clamp(0,h) as f32),
+        hover_from:None,hover_at:None,animate,
         hot:None,offset:0,pressed:None,rows,row,pad,done:false,result:0});
     let ready=model.borrow_mut().render(hwnd);
     if !ready{DestroyWindow(hwnd);return None;}
@@ -189,9 +242,23 @@ unsafe fn show(menu:HMENU,owner:HWND,point:POINT,flags:u32,dark:bool,transparenc
     }
     let foreground=GetForegroundWindow();
     if GetCapture()==hwnd{ReleaseCapture();}
+    let mut restore=foreground==hwnd;
+    if restore&&IsWindow(hwnd)!=0&&model.borrow().animate&&model.borrow().result==0&&IsWindow(owner)!=0{
+        let old=model.borrow().tween;
+        model.borrow_mut().tween=Some(Tween::new(false,motion::MENU,old));
+        if SetTimer(hwnd,FRAME_TIMER,16,None)!=0{
+            while IsWindow(hwnd)!=0&&GetForegroundWindow()==hwnd&&model.borrow().tween.is_some_and(|t|t.progress()<1.0){
+                let running=GetMessageW(&mut msg,ptr::null_mut(),0,0);
+                if running<=0{if running==0{PostQuitMessage(msg.wParam as i32);}break;}
+                TranslateMessage(&msg);DispatchMessageW(&msg);
+            }
+        }
+        restore=GetForegroundWindow()==hwnd;
+    }
+    KillTimer(hwnd,FRAME_TIMER);
     drop(shadow);
     if IsWindow(hwnd)!=0{SetWindowLongPtrW(hwnd,GWLP_USERDATA,0);DestroyWindow(hwnd);}
-    if foreground==hwnd&&IsWindow(owner)!=0{SetForegroundWindow(owner);}
+    if restore&&IsWindow(owner)!=0{SetForegroundWindow(owner);}
     let result=model.borrow().result;
     Some(result)
 }

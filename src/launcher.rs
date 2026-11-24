@@ -327,7 +327,7 @@ fn dismiss_compact_with_focus(hwnd: HWND) {
     }
 }
 const COMPACT_TWEEN:usize=8;
-type Tween=fullscreen::Transition;
+use crate::dock::motion::{self,Tween};
 struct CompactFrame {
     source:crate::dock::PopupPixels,
     target:crate::dock::PopupPixels,
@@ -345,9 +345,7 @@ fn stop_compact_motion(hwnd:HWND){
 }
 fn start_compact_motion(hwnd:HWND,open:bool)->bool{
     if !fullscreen::motion_allowed(){return false;}
-    let from=COMPACT_MOTION.get().map_or(if open{0.0}else{1.0},Tween::openness);
-    let t=Tween{start:std::time::Instant::now(),duration:if open{fullscreen::OPEN_MS}else{fullscreen::CLOSE_MS},
-        from,to:if open{1.0}else{0.0}};
+    let t=Tween::new(open,motion::COMPACT,COMPACT_MOTION.get());
     if unsafe{SetTimer(hwnd,COMPACT_TWEEN,15,None)}==0{return false;}
     COMPACT_MOTION.set(Some(t));
     true
@@ -361,7 +359,7 @@ fn close_compact(hwnd:HWND,toggle:bool){
 }
 unsafe fn present_compact_transition(hwnd:HWND,frame:&mut CompactFrame,t:Tween){
     let k=t.openness();
-    let s=0.93+0.07*k;
+    let s=motion::zoom(motion::COMPACT.scale,k);
     let (w,h)=(frame.width,frame.height);
     let (sw,sh)=((w as f32*s).round() as i32,(h as f32*s).round() as i32);
     GdiFlush();
@@ -389,7 +387,7 @@ unsafe fn compact_transition_frame(hwnd:HWND,w:i32,h:i32,pixels:&[u8])->bool{
 fn compact_hit(l:LPARAM)->(i32,i32){
     let (x,y)=(l as i16 as i32,(l>>16) as i16 as i32);
     let Some(t)=COMPACT_MOTION.get()else{return(x,y);};
-    let k=0.93+0.07*t.openness();
+    let k=motion::zoom(motion::COMPACT.scale,t.openness());
     let center=COMPACT_FRAME.with(|p|p.borrow().as_ref().map(|f|(f.width as f32/2.0,f.height as f32/2.0)));
     center.map_or((x,y),|(cx,cy)|((cx+(x as f32-cx)/k).round() as i32,(cy+(y as f32-cy)/k).round() as i32))
 }
@@ -953,6 +951,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         _ => DefWindowProcW(hwnd, msg, w, l),
     }
 }
+
+pub(crate) fn spotlight_locale(value:&str){fullscreen::locale(value);}
 
 pub fn configure_spotlight(options: library::Preferences) {
     fullscreen::configure(options);

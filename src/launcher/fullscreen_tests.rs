@@ -428,6 +428,26 @@ fn native_isolated_library_search_navigation_and_100_toggles() {
         );
         open(p, String::new(), ptr::null_mut(), false);
         let hwnd = window().expect("created native overlay");
+        let click=|x:i32,y:i32|{
+            let l=(((y as u32&0xffff)<<16)|(x as u32&0xffff)) as LPARAM;
+            SendMessageW(hwnd,WM_LBUTTONDOWN,1,l);
+            SendMessageW(hwnd,WM_LBUTTONUP,0,l);
+        };
+        let search=PANEL.with(|p|{let p=p.borrow();let c=p.as_ref().unwrap();
+            let r=search_rect(c.width,c.dpi);
+            assert!(controls(c).iter().all(|(action,_,_)|matches!(action,Hit::Page(_))));
+            r
+        });
+        click(search.left+4,search.top+6);
+        assert_eq!(window(),Some(hwnd));
+        PANEL.with(|p|p.borrow_mut().as_mut().unwrap().editing=true);
+        click(5,5);
+        assert_eq!(window(),Some(hwnd));
+        PANEL.with(|p|p.borrow_mut().as_mut().unwrap().editing=false);
+        MODAL.set(true);
+        click(5,5);
+        MODAL.set(false);
+        assert_eq!(window(),Some(hwnd));
         println!(
             "SPOTLIGHT_NATIVE cold_hwnd_open_ms={:.3}",
             cold.elapsed().as_secs_f64() * 1000.0
@@ -553,6 +573,15 @@ fn native_isolated_library_search_navigation_and_100_toggles() {
                 .as_ref()
                 .is_some_and(|p| p.folder == folder && p.tiles.len() == 2)
         }));
+        click(5,5);
+        assert!(PANEL.with(|p|p.borrow().as_ref().is_some_and(|p|p.folder==0)));
+        configure(Preferences{animations:false,..Preferences::default()});
+        click(5,5);
+        assert!(window().is_none(),"background click closes only the outermost view");
+        println!("SPOTLIGHT_NATIVE minimal_chrome=PASS empty_click=PASS modal_edit_folder_protection=PASS");
+        open(p,String::new(),ptr::null_mut(),false);
+        let hwnd=window().unwrap();
+        use_fixture_entries(hwnd);
         let mut cfg = Preferences::default();
         cfg.theme = "dark".into();
         configure(cfg);

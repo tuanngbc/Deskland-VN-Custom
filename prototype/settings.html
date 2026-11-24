@@ -156,7 +156,7 @@
         <label><span data-i18n="spotlightFavorites">Ưu tiên yêu thích</span><input id="spotlightFavorites" type="checkbox" checked></label>
       </div>
       <p class="launcher-note" data-i18n="spotlightAcrylicNote">Nền kính lấy mẫu và làm mờ một lần khi mở Spotlight. Khi Windows tắt độ trong suốt, sử dụng nền theo màu giao diện. Phím Spotlight vẫn mở chế độ thu gọn.</p>
-      <div class="actions"><button type="button" id="spotlightHidden" data-i18n="spotlightHidden">Mục đã ẩn</button><button type="button" id="spotlightRefresh" data-i18n="spotlightRefresh">Làm mới thư viện</button><button type="button" id="spotlightReset" data-i18n="spotlightReset">Đặt lại bố cục</button></div>
+      <div class="actions"><button type="button" id="spotlightHidden" data-i18n="spotlightHidden">Mục đã ẩn</button><button type="button" id="spotlightRefresh" data-i18n="spotlightRefresh">Làm mới thư viện</button><button type="button" id="spotlightReset" data-i18n="spotlightReset">Đặt lại bố cục</button><button type="button" id="spotlightGuide" data-i18n="spotlightGuide">Hướng dẫn Spotlight</button></div>
     </section><section class="monitor-panel" aria-label="Mini tools">
       <h3 data-i18n="miniToolsTitle">Chụp và quay</h3>
       <div class="environment-controls">
@@ -407,6 +407,14 @@
 </div>
 
 
+<dialog class="modal" id="spotlightGuideDialog" aria-labelledby="spotlightGuideTitle" style="border:0;background:transparent;color:inherit;margin:auto"><div class="box">
+<h3 id="spotlightGuideTitle" data-i18n="spotlightGuide">Hướng dẫn Spotlight</h3>
+<p class="sub" id="spotlightGuideHotkey"></p>
+<ul><li data-i18n="spotlightGuideDismiss">Bấm vùng trống hoặc Esc để đóng.</li>
+<li data-i18n="spotlightGuideModes">Nhấn F6 để chuyển chế độ. Cuộn để chuyển trang.</li>
+<li data-i18n="spotlightGuideManage">Bấm chuột phải để quản lý. Vào Chỉnh sửa bố cục để kéo thả và tạo thư mục.</li></ul>
+<form method="dialog" class="actions"><button class="ghost-btn" type="submit" data-i18n="spotlightGuideSkip">Bỏ qua</button><button class="primary-btn" type="submit" data-i18n="spotlightGuideDone">Đã hiểu</button></form>
+</div></dialog>
 <div class="modal" id="shortcutModal" hidden role="dialog" aria-modal="true" aria-labelledby="shortcutModalTitle"><div class="box"><h3 id="shortcutModalTitle">Đổi phím tắt</h3><p class="sub" id="shortcutModalHint">Nhấn tổ hợp mới hoặc nhập bên dưới. Esc để hủy.</p><div class="shortcut-capture" id="shortcutCaptureBox" tabindex="0"><span id="shortcutCaptureLabel">Đang chuẩn bị ghi phím…</span><div id="shortcutCandidate"></div></div><label class="shortcut-manual"><span data-i18n="shortcutManual">Hoặc nhập tổ hợp</span><input id="shortcutManual" type="text" spellcheck="false" autocomplete="off" placeholder="Ctrl+Alt+K"></label><p class="shortcut-status" id="shortcutError" role="status" aria-live="polite"></p><div class="actions"><button class="ghost-btn" id="shortcutCancel" type="button" data-i18n="cancel">Hủy</button><button class="primary-btn" id="shortcutApply" type="button" disabled data-i18n="shortcutApply">Lưu phím tắt</button></div></div></div>
 
 <script src="thumbs-data.js"></script>
@@ -1340,6 +1348,21 @@ for (const id of ['launcherTheme', 'launcherTransparency', 'launcherBlur']) {
   $(id).addEventListener('input', syncLauncherAppearance);
   $(id).addEventListener('change', () => send({ t: 'launcherAppearance', theme: $('launcherTheme').value, transparency: Number($('launcherTransparency').value) / 100, blur: Number($('launcherBlur').value) }));
 }
+let spotlightGuideHandled=false, spotlightGuideTrigger=null, spotlightGuideShortcut='Alt + Space';
+function openSpotlightGuide(trigger){
+  const dialog=$('spotlightGuideDialog');
+  if(dialog.open)return;
+  spotlightGuideTrigger=trigger||null;
+  const localized=t('spotlightGuideOpen',{hotkey:spotlightGuideShortcut});
+  $('spotlightGuideHotkey').textContent=localized==='spotlightGuideOpen'?spotlightGuideShortcut:localized;
+  dialog.showModal();
+}
+$('spotlightGuide').addEventListener('click',e=>openSpotlightGuide(e.currentTarget));
+$('spotlightGuideDialog').addEventListener('close',()=>{
+  spotlightGuideHandled=true;
+  send({t:'spotlightGuideSeen'});
+  spotlightGuideTrigger?.focus();
+});
 const spotlightInputs=['spotlightEnabled','spotlightHotkeyMode','spotlightDockClick','spotlightFullTheme','spotlightIconSize','spotlightSpacing','spotlightGlassStrength','spotlightGlassBlur','spotlightAnimations','spotlightNames','spotlightFavorites'];
 for(const id of spotlightInputs) $(id).addEventListener('change',()=>send({t:'spotlightPreferences',value:{
   enabled:$('spotlightEnabled').checked,dockFullscreen:$('spotlightDockClick').value!=='compact',
@@ -1549,6 +1572,11 @@ function applyInitMessage(m) {
   state.langSetting = m.lang || 'auto';
   state.langSys = m.langSys || 'zh-CN';
   const initialLang = m.langEff || state.langSys;
+  spotlightGuideShortcut=m.launcherHotkey?.label||'Alt + Space';
+  if(m.spotlightGuideSeen===false&&!spotlightGuideHandled){
+    spotlightGuideHandled=true;
+    loadLang(initialLang).finally(()=>openSpotlightGuide(null));
+  }
   if (LANGS[initialLang]) lang = initialLang;
   localizeRegistry();
   applyStatic();

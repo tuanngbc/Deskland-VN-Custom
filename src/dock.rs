@@ -22,7 +22,10 @@ pub(crate) mod glass_menu;
 mod calendar;
 mod appearance;
 mod geometry;
-mod motion;
+pub(crate) mod motion;
+pub(crate) fn popup_motion_allowed()->bool{
+    motion::system_allowed()&&STATE.with(|s|s.try_borrow().is_ok_and(|s|!s.prefs.appearance.reduced_motion))
+}
 mod surface;
 mod icon_atlas;
 pub(crate) mod internal_app;

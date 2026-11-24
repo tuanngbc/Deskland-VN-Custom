@@ -25,12 +25,10 @@ const POLL: usize = 1;
 const SEARCH: usize = 2;
 const SHELL_REFRESH: usize = 3;
 const HOVER_ANIMATION: usize = 4;
-const HOVER_MS:u128=110;
+const HOVER_MS:u128=crate::dock::motion::HOVER_MS;
 const GRID_ANIMATION:usize=5;
-const GRID_MS:u128=96;
+const GRID_MS:u128=crate::dock::motion::PAGE_MS;
 const TRANSITION_TIMER:usize=6;
-pub(super) const OPEN_MS:u32=248;
-pub(super) const CLOSE_MS:u32=174;
 const CATALOG_CHANGE: u32 = WM_APP + 151;
 // WM_MOUSELEAVE is omitted by this windows-sys version's feature selection.
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -47,6 +45,7 @@ type Compositor=windows::UI::Composition::Compositor;
 type Sprite=windows::UI::Composition::SpriteVisual;
 struct HostLayer {
     _target:DesktopTarget,
+    root:windows::UI::Composition::ContainerVisual,
     brush:windows::UI::Composition::CompositionColorBrush,
     sheet:Sprite,
     compositor:Compositor,
@@ -117,7 +116,7 @@ impl HostLayer {
         children.InsertAtTop(&material)?;
         children.InsertAtTop(&sheet)?;
         target.SetRoot(&root)?;
-        Ok(Self{_target:target,brush,sheet,compositor})
+        Ok(Self{_target:target,root,brush,sheet,compositor})
     }
 }
 impl NativeBackdrop {
@@ -166,12 +165,12 @@ impl NativeBackdrop {
     }
     fn transition(&self,t:Transition,strength:i32)->windows::core::Result<()>{
         let Some(host)=&self.host else{return Ok(());};
-        let opacity=(strength as f32/100.0).clamp(0.20,0.48);
+        let _=strength; // Tint is configured independently; fade the entire glass visual.
         let animation=host.compositor.CreateScalarKeyFrameAnimation()?;
         animation.SetDuration(windows::Foundation::TimeSpan{Duration:i64::from(t.duration)*10_000})?;
-        animation.InsertKeyFrame(0.0,t.from*opacity)?;
-        animation.InsertKeyFrame(1.0,t.to*opacity)?;
-        host.sheet.StartAnimation(&windows::core::HSTRING::from("Opacity"),&animation)
+        animation.InsertKeyFrame(0.0,t.from)?;
+        animation.InsertKeyFrame(1.0,t.to)?;
+        host.root.StartAnimation(&windows::core::HSTRING::from("Opacity"),&animation)
     }
 }
 impl Drop for NativeBackdrop{
@@ -193,20 +192,8 @@ struct Foreground {
     effect:IDCompositionEffectGroup,
     surface:Option<(i32,i32,IDCompositionSurface)>,
 }
-#[derive(Clone,Copy)]
-pub(super) struct Transition {
-    pub(super) start:std::time::Instant,
-    pub(super) duration:u32,
-    pub(super) from:f32,
-    pub(super) to:f32,
-}
-impl Transition{
-    pub(super) fn progress(self)->f32 {(self.start.elapsed().as_secs_f32()*1000.0/self.duration as f32).min(1.0)}
-    pub(super) fn openness(self)->f32{
-        let t=self.progress();
-        self.from+(self.to-self.from)*(1.0-(1.0-t).powi(3))
-    }
-}
+use crate::dock::motion::{self,Tween as Transition};
+
 impl Foreground {
     unsafe fn new(hwnd:HWND)->windows::core::Result<Self>{
         let mut dev=None;let mut ctx=None;
@@ -262,7 +249,7 @@ impl Foreground {
             anim.End(seconds as f64,to)?;
             Ok(anim)
         };
-        let zoom=|v:f32|0.93+0.07*v;
+        let zoom=|v:f32|motion::zoom(motion::FULL.scale,v);
         let a=curve(zoom(t.from),zoom(t.to))?;
         self.scale.SetCenterX2(w as f32*0.5)?;
         self.scale.SetCenterY2(anchor_y as f32)?;
@@ -317,7 +304,8 @@ struct Tile {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Hit {
     Compact,
-    Close,
+    Search,
+    Backdrop,
     Edit,
     Add,
     Create,
@@ -326,8 +314,6 @@ enum Hit {
     Settings,
     Back,
     Tab(Category),
-    Prev,
-    Next,
     Page(usize),
     Tile(usize),
 }
@@ -343,31 +329,25 @@ struct Grid {
 }
 impl Grid {
     fn new(w: i32, h: i32, dpi: u32, cfg: &Preferences) -> Self {
-        let p = |n| px(n, dpi);
-        let edge = p(28).min(w / 10);
-        let mut area = rect(
-            edge,
-            p(if w < p(740) { 220 } else { 190 }).min(h / 2),
-            (w - edge).max(edge + 1),
-            (h - p(78)).max(p(if w < p(740) { 220 } else { 190 }).min(h / 2) + 1),
-        );
-        let icon = p(cfg.icon_size)
-            .min((area.bottom - area.top - p(28)).max(12))
-            .min(w / 4)
-            .max(8);
-        let want_x = (icon + p(cfg.spacing + 58)).max(p(126));
-        let want_y = (icon + p(cfg.spacing + 40)).max(p(102));
-        let aw = (area.right - area.left).max(1);
-        let ah = (area.bottom - area.top).max(1);
-        let columns = (aw / want_x).clamp(1, 9) as usize;
-        let rows = (ah / want_y).clamp(1, 6) as usize;
-        let dx = (aw / columns as i32).min(p(204)).max(1);
-        let dy = (ah / rows as i32).min(p(170)).max(1);
-        area.top += (ah - dy * rows as i32).max(0) / 2;
-        area.bottom = area.top + dy * rows as i32;
-        let left = area.left + (aw - dx * columns as i32) / 2;
-        area.left = left;
-        area.right = left + dx * columns as i32;
+        Self::with_toolbar(w,h,dpi,cfg,false)
+    }
+    fn with_toolbar(w:i32,h:i32,dpi:u32,cfg:&Preferences,toolbar:bool)->Self {
+        let p=|n|px(n,dpi);
+        let edge=p(34).min(w/10);
+        let top=p(if toolbar{159}else{112}).min(h/2);
+        let bottom=(h-p(72)).max(top+1);
+        let aw=(w-2*edge).max(1);
+        let ah=bottom-top;
+        let icon=p(cfg.icon_size).min((ah-p(28)).max(12)).min(w/4).max(8);
+        let want_x=(icon+p(cfg.spacing+36)).max(p(106));
+        let want_y=(icon+p(cfg.spacing+40)).max(p(96));
+        let columns=(aw/want_x).clamp(1,if w>h*2{11}else{9}) as usize;
+        let rows=(ah/want_y).clamp(1,12) as usize;
+        let dx=(aw/columns as i32).min(p(177)).max(1);
+        let dy=(ah/rows as i32).min(p(145)).max(1);
+        let left=edge+(aw-dx*columns as i32)/2;
+        let top=top+((ah-dy*rows as i32)/3).min(p(26));
+        let area=rect(left,top,left+dx*columns as i32,top+dy*rows as i32);
         Self {
             area,
             columns,
@@ -383,7 +363,9 @@ impl Grid {
     fn tiles(self, i: usize) -> RECT {
         let x = self.area.left + (i % self.columns) as i32 * self.dx;
         let y = self.area.top + (i / self.columns) as i32 * self.dy;
-        rect(x + 2, y + 2, x + self.dx - 2, y + self.dy - 2)
+        let inset=(self.dx/15).clamp(1,10).min((self.dx-1)/2);
+        let vertical=(self.dy/28).clamp(1,6).min((self.dy-1)/2);
+        rect(x+inset,y+vertical,x+self.dx-inset,y+self.dy-vertical)
     }
 }
 fn px(n: i32, dpi: u32) -> i32 {
@@ -425,6 +407,7 @@ struct Panel {
     dark: bool,
     high_contrast:bool,
     font: HFONT,
+    search_font:HFONT,
     apps: Vec<Entry>,
     catalog: Option<mpsc::Receiver<Vec<Entry>>>,
     watch: Option<catalog::ShellWatch>,
@@ -512,10 +495,7 @@ fn hover_transition(p: &mut Panel, next: Option<Hit>) -> Vec<RECT> {
 }
 
 pub(super) fn motion_allowed() -> bool {
-    let enabled=OPTIONS.with(|p|p.borrow().animations);
-    let mut system=1i32;
-    if !cfg!(test) { unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION,0,(&mut system as *mut i32).cast(),0); } }
-    enabled && system!=0
+    OPTIONS.with(|p|p.borrow().animations)&&motion::system_allowed()
 }
 
 fn hover_opacity(h:Hit,current:Option<Hit>,previous:Option<Hit>,progress:f32)->f32 {
@@ -598,7 +578,8 @@ fn palette(dark:bool, high_contrast:bool)->Palette {
     else { Palette{face:0x00e8e4dd,ink:0x00191412,secondary:0x003b312b,active:0x005b818d,fallback:0x00e4e9de} }
 }
 fn grid(p: &Panel) -> Grid {
-    OPTIONS.with(|o| Grid::new(p.width, p.height, p.dpi, &o.borrow()))
+    OPTIONS.with(|o| Grid::with_toolbar(p.width,p.height,p.dpi,&o.borrow(),
+        !p.input.trim().is_empty()||p.editing||p.folder!=0||p.hidden))
 }
 fn count_pages(p: &Panel) -> usize {
     p.tiles.len().div_ceil(grid(p).capacity()).max(1)
@@ -829,112 +810,64 @@ fn rebuild(hwnd: HWND, reset_page: bool) {
     refresh(hwnd);
 }
 
-fn controls(p: &Panel) -> Vec<(Hit, RECT, &'static str)> {
-    let u = |n| px(n, p.dpi);
-    let w = p.width;
-    let mid = w / 2;
-    let narrow = w < u(740);
-    let side = u(if narrow { 12 } else { 26 });
-    let button = |x, y, w| rect(x, y, x + w, y + u(32));
-    let mut result = vec![
-        (Hit::Close, button(w - side - u(44), u(22), u(44)), "×"),
-        (
-            Hit::Compact,
-            button(
-                w - side - u(if narrow { 116 } else { 152 }),
-                u(22),
-                u(if narrow { 66 } else { 102 }),
-            ),
-            "Thu gọn",
-        ),
-        (
-            Hit::Edit,
-            button(
-                w - side - u(if narrow { 196 } else { 270 }),
-                u(22),
-                u(if narrow { 74 } else { 110 }),
-            ),
-            if p.editing { "Xong" } else { "Chỉnh sửa" },
-        ),
-        (
-            Hit::Add,
-            button(
-                w - side - u(if narrow { 126 } else { 182 }),
-                u(150),
-                u(if narrow { 126 } else { 182 }),
-            ),
-            "+ Thêm ứng dụng",
-        ),
-        (
-            Hit::Refresh,
-            button(
-                w - side - u(if narrow { 204 } else { 284 }),
-                u(150),
-                u(if narrow { 72 } else { 94 }),
-            ),
-            "Làm mới",
-        ),
-    ];
-    if p.folder != 0 || p.hidden {
-        result.push((Hit::Back, button(side, u(150), u(88)), "‹ Thư viện"));
-    } else if p.editing {
-        result.push((
-            Hit::Create,
-            button(side, u(150), u(if narrow { 88 } else { 104 })),
-            "+ Thư mục",
-        ));
-        result.push((
-            Hit::Hidden,
-            button(
-                side + u(if narrow { 92 } else { 110 }),
-                u(150),
-                u(if narrow { 78 } else { 92 }),
-            ),
-            "Mục đã ẩn",
-        ));
-    } else {
-        result.push((Hit::Settings,button(side,u(150),u(96)),"Cài đặt"));
+fn search_rect(w:i32,dpi:u32)->RECT {
+    let u=|n|px(n,dpi);
+    let width=u(570).min((w-u(32)).max(1));
+    let x=(w-width)/2;
+    rect(x,u(42),x+width,u(91))
+}
+fn edit_rect(w:i32,dpi:u32)->RECT {
+    let r=search_rect(w,dpi);
+    let u=|n|px(n,dpi);
+    let x=(r.left+u(47)).min(r.right-1);
+    let y=r.top+u(13);
+    rect(x,y,(r.right-u(14)).max(x+1),y+u(24))
+}
+fn controls(p:&Panel)->Vec<(Hit,RECT,&'static str)>{
+    let u=|n|px(n,p.dpi);
+    let mid=p.width/2;
+    let button=|x,y,w|rect(x,y,x+w,y+u(32));
+    let mut out=Vec::new();
+    if p.folder!=0||p.hidden {out.push((Hit::Back,button(u(26),u(106),u(108)),words("‹ Thư viện","‹ Library","‹ 应用库")));}
+    if p.editing {
+        out.push((Hit::Edit,button(p.width-u(100),u(106),u(74)),words("Xong","Done","完成")));
     }
-    let tab_width = u(106).min(w / 5).max(1);
-    for (i, cat) in Category::ALL.into_iter().enumerate() {
-        result.push((
-            Hit::Tab(cat),
-            button(
-                mid - 2 * tab_width + i as i32 * tab_width,
-                u(109),
-                tab_width - 2,
-            ),
-            Category::LABELS[i],
-        ));
-    }
-    let y = p.height - u(61);
-    let pages = count_pages(p);
-    if pages > 1 {
-        result.push((Hit::Prev, button(mid - u(151), y, u(46)), "‹"));
-        result.push((Hit::Next, button(mid + u(105), y, u(46)), "›"));
-        if pages <= 9 {
-            for i in 0..pages {
-                result.push((
-                    Hit::Page(i),
-                    button(
-                        mid - (pages as i32 * u(21)) / 2 + i as i32 * u(21),
-                        y,
-                        u(21),
-                    ),
-                    if i == p.page { "●" } else { "○" },
-                ));
-            }
+    if !p.input.trim().is_empty(){
+        let width=u(104).min((p.width-u(24)).max(4)/4).max(1);
+        let labels=words_set(["Tất cả","Ứng dụng","Tệp tin","Hệ thống"],["All","Apps","Files","System"],["全部","应用","文件","系统"]);
+        for (i,cat) in Category::ALL.into_iter().enumerate(){
+            out.push((Hit::Tab(cat),button(mid-2*width+i as i32*width,u(103),(width-u(3)).max(1)),labels[i]));
         }
     }
-    result
+    let pages=count_pages(p);
+    if pages>1{
+        // Keep every page directly clickable, including large libraries.
+        let step=u(24).min(((p.width-u(32)).max(1)/pages as i32).max(1));
+        let y=p.height-u(55);
+        for i in 0..pages{
+            out.push((Hit::Page(i),button(mid-(pages as i32*step)/2+i as i32*step,y,step),""));
+        }
+    }
+    out
 }
+
+fn words<'a>(vi:&'a str,en:&'a str,zh:&'a str)->&'a str {
+    LOCALE.with(|lang|match lang.get(){0=>vi,2=>zh,_=>en})
+}
+fn words_set<const N:usize>(vi:[&'static str;N],en:[&'static str;N],zh:[&'static str;N])->[&'static str;N]{
+    LOCALE.with(|lang|match lang.get(){0=>vi,2=>zh,_=>en})
+}
+thread_local!{static LOCALE:Cell<u8>=const{Cell::new(0)};}
+pub(super) fn locale(value:&str){LOCALE.set(match value{"vi"=>0,"zh-CN"=>2,_=>1});}
 
 fn hit_at(p: &Panel, point: POINT) -> Option<Hit> {
     let point=if let Some(t)=p.transition{
-        let scale=0.93+0.07*t.openness();
-        let (x,y)=(p.width as f32*0.5,px(83,p.dpi) as f32);
-        POINT{x:(x+(point.x as f32-x)/scale).round() as i32,y:(y+(point.y as f32-y)/scale).round() as i32}
+        let scale=motion::zoom(motion::FULL.scale,t.openness());
+        let (x,y)=(p.width as f32*0.5,px(66,p.dpi) as f32);
+        POINT{x:motion::inverse(point.x as f32,x,scale).round() as i32,
+            y:motion::inverse(point.y as f32,y,scale).round() as i32}
     }else{point};
+    if hit(search_rect(p.width,p.dpi),point){return Some(Hit::Search);}
     if let Some((action, ..)) = controls(p).into_iter().find(|(_, r, _)| hit(*r, point)) {
         return Some(action);
     }
@@ -948,7 +881,7 @@ fn hit_at(p: &Panel, point: POINT) -> Option<Hit> {
         return None;
     }
     let i = p.page * g.capacity() + y * g.columns + x;
-    (i < p.tiles.len()).then_some(Hit::Tile(i))
+    (i < p.tiles.len()&&hit(g.tiles(i%g.capacity()),point)).then_some(Hit::Tile(i))
 }
 
 unsafe fn fill(dc: HDC, r: RECT, rgb: u32) {
@@ -1054,6 +987,22 @@ unsafe fn draw_icon_alpha(dc:HDC,icon:&IconPixels,x:i32,y:i32,opacity:u8) {
         DeleteDC(src);
     }
     DeleteObject(bm);
+}
+
+unsafe fn search_glyph(dc:HDC,r:RECT,ink:u32,dpi:u32){
+    let size=px(24,dpi);
+    let Some(mut layer)=crate::dock::PopupPixels::new(size,size)else{return;};
+    layer.pixels().fill(0);
+    let k=dpi as f32/96.0;
+    layer.shape_ink(rect(0,0,size,size),[(ink>>16) as u8,(ink>>8) as u8,ink as u8],|x,y|{
+        let (x,y)=(x/k,y/k);
+        let ring=((x-10.0).hypot(y-10.0)-4.8).abs();
+        let t=(((x-13.6)+(y-13.6))/8.8).clamp(0.0,1.0);
+        let handle=(x-13.6-4.4*t).hypot(y-13.6-4.4*t);
+        ((1.35-ring.min(handle))*k+0.5).clamp(0.0,1.0)*255.0
+    });
+    let pixels=layer.pixels().to_vec();
+    draw_icon(dc,&IconPixels{width:size,height:size,pixels},r.left+px(15,dpi),(r.top+r.bottom-size)/2);
 }
 
 unsafe fn draw_live_edit(dc:HDC,edit:HWND,area:RECT,face:u32,ink:u32,font:HFONT){
@@ -1214,6 +1163,7 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
             p.native.is_some(),
             p.edit,
             p.font,
+            p.search_font,
             grid.icon,
             tiles,
             controls(p),
@@ -1224,7 +1174,6 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
             p.pressed.map(|(h,_)|h),
             p.category,
             p.page,
-            count_pages(p),
             !p.pending.is_empty(),
             p.error.clone(),
             heading,
@@ -1243,6 +1192,7 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
         live,
         edit,
         font,
+        search_font,
         size,
         tiles,
         buttons,
@@ -1253,7 +1203,6 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
         pressed,
         category,
         page,
-        pages,
         busy,
         error,
         heading,
@@ -1276,38 +1225,27 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
             StretchDIBits(dc,0,0,w,h,0,0,bw,bh,glass.as_ptr().cast(),&info,DIB_RGB_COLORS,SRCCOPY);
         }
         let text:unsafe fn(HDC,&str,RECT,HFONT,u32,bool)=if live{text_alpha}else{text};
-        let header = crate::native_text::font_pixels(u(21), 600);
-        text(
-            dc,
-            "TLauncher Spotlight",
-            rect(
-                u(26),
-                u(16),
-                w.min(w - u(if w < u(740) { 210 } else { 300 })).max(u(60)),
-                u(57),
-            ),
-            header,
-            ink,
-            false,
-        );
-        let search_w = u(600).min(w - u(50)).max(1);
-        if intersects(rect((w-search_w)/2,u(64),(w+search_w)/2,u(102)),dirty) { round(
-            dc,
-            rect((w - search_w) / 2, u(64), (w + search_w) / 2, u(102)),
-            u(16),
-            face, 255,
-        );
-        text(dc,"⌕",rect((w-search_w)/2+u(10),u(64),(w-search_w)/2+u(44),u(102)),header,secondary,true);
-        if live {
-            let x=(w-search_w)/2+u(44);
-            draw_live_edit(dc,edit,rect(x,u(73),x+(search_w-u(58)).max(1),u(73)+u(24)),face,ink,font);
-        }
+        let header=crate::native_text::font_pixels(u(17),550);
+        let search=search_rect(w,dpi);
+        if intersects(search,dirty){
+            let field=edit_rect(w,dpi);
+            let field_face=if high_contrast{face}else if dark{0x00413934}else{0x00e0e6e7};
+            round(dc,search,u(23),field_face,if high_contrast||!live{255}else{204});
+            search_glyph(dc,search,secondary,dpi);
+            if live{draw_live_edit(dc,edit,field,field_face,ink,search_font);}
         }
         for (action, r, s) in buttons {
             if !intersects(r,dirty) { continue; }
+            if let Hit::Page(i)=action{
+                let center=(r.left+r.right)/2;
+                let y=(r.top+r.bottom)/2;
+                let radius=(u(if i==page{4}else{3})).min((r.right-r.left).max(1)/2).max(1);
+                round(dc,rect(center-radius,y-radius,center+radius,y+radius),radius,ink,if i==page{245}else{105});
+                continue;
+            }
             let selected = matches!(action,Hit::Tab(c) if c==category);
             let lift=hover_opacity(action,hover,hover_from,hover_progress);
-            if !matches!(action,Hit::Page(_)) { round(
+            round(
                 dc,
                 r,
                 u(12),
@@ -1317,30 +1255,13 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
                     face
                 },
                 if pressed == Some(action) { 230 } else if selected { 104 } else { (150.0+lift*65.0) as u8 },
-            ); }
+            );
             text(dc, s, r, font, ink, true);
         }
-        let label = if hidden {
-            "Ứng dụng đã ẩn"
-        } else {
-            heading.as_deref().unwrap_or(if empty_query {
-                "Thư viện ứng dụng"
-            } else {
-                "Kết quả tìm kiếm"
-            })
-        };
-        text(
-            dc,
-            label,
-            if w < u(740) {
-                rect(u(12), u(182), w - u(12), u(216))
-            } else {
-                rect(w / 3, u(147), w * 2 / 3, u(184))
-            },
-            header,
-            ink,
-            true,
-        );
+        if hidden||heading.is_some(){
+            let title=if hidden{words("Ứng dụng đã ẩn","Hidden apps","隐藏的应用")}else{heading.as_deref().unwrap_or_default()};
+            text(dc,title,rect(w/3,u(133),w*2/3,u(156)),header,ink,true);
+        }
         let names = OPTIONS.with(|o| o.borrow().show_names);
         for (i, (t, r, icon, preview, sel)) in &tiles {
             let lift=hover_opacity(Hit::Tile(*i),hover,hover_from,hover_progress);
@@ -1410,29 +1331,9 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
                 true,
             );
         }
-        if pages > 9 {
-            text(
-                dc,
-                &format!("{} / {}", page + 1, pages),
-                rect(w / 3, h - u(61), w * 2 / 3, h - u(29)),
-                font,
-                ink,
-                true,
-            );
+        if !error.is_empty(){
+            text(dc,&error,rect(u(12),h-u(27),w-u(12),h-u(3)),font,secondary,true);
         }
-        let footer = if error.is_empty() {
-            "Gõ để tìm · Cuộn hoặc PgUp/PgDn để chuyển trang · Esc để đóng"
-        } else {
-            &error
-        };
-        text(
-            dc,
-            footer,
-            rect(u(12), h - u(27), w - u(12), h - u(3)),
-            font,
-            secondary,
-            true,
-        );
         if !header.is_null() {
             DeleteObject(header);
         }
@@ -1672,7 +1573,7 @@ unsafe fn place(hwnd: HWND, point: POINT) {
         raw=Some(if transparency_allowed() { sample_backdrop(r) } else { Vec::new() });
         MODAL.set(was_modal);
     }
-    let Some((edit, old_font)) = PANEL.with(|p| {
+    let Some((edit,old_font,old_search_font)) = PANEL.with(|p| {
         let mut p = p.borrow_mut();
         let p = p.as_mut()?;
         let old = p.font;
@@ -1682,12 +1583,14 @@ unsafe fn place(hwnd: HWND, point: POINT) {
         p.height = height;
         p.bounds = r;
         if let Some(raw)=raw { p.backdrop=raw; }
-        p.font = crate::native_text::font_pixels(px(15, dpi), 450);
-        Some((p.edit, old))
+        p.font=crate::native_text::font_pixels(px(15,dpi),500);
+        let old_search=p.search_font;
+        p.search_font=crate::native_text::font_pixels(px(16,dpi),400);
+        Some((p.edit,old,old_search))
     }) else {
         return;
     };
-    let fw = px(600, dpi).min(width - px(50, dpi)).max(1);
+    let field=edit_rect(width,dpi);
     SetWindowPos(
         hwnd,
         HWND_TOPMOST,
@@ -1704,18 +1607,16 @@ unsafe fn place(hwnd: HWND, point: POINT) {
     SetWindowPos(
         edit,
         ptr::null_mut(),
-        (width - fw) / 2 + px(44, dpi),
-        px(73, dpi),
-        (fw - px(58, dpi)).max(1),
-        px(24, dpi),
+        field.left,field.top,field.right-field.left,field.bottom-field.top,
         SWP_NOZORDER | SWP_NOACTIVATE,
     );
-    if let Some(font) = PANEL.with(|p| p.borrow().as_ref().map(|s| s.font)) {
+    if let Some(font) = PANEL.with(|p| p.borrow().as_ref().map(|s| s.search_font)) {
         SendMessageW(edit, WM_SETFONT, font as WPARAM, 0);
     }
     if !old_font.is_null() {
         DeleteObject(old_font);
     }
+    if !old_search_font.is_null(){DeleteObject(old_search_font);}
     refresh_material(hwnd);
     rebuild(hwnd, false);
     if changed && visible&&!live { ShowWindow(hwnd,SW_SHOW); SetForegroundWindow(hwnd); SetFocus(edit); }
@@ -1742,6 +1643,7 @@ pub(super) fn dismiss(restore: bool) {
         if !p.font.is_null() {
             DeleteObject(p.font);
         }
+        if !p.search_font.is_null(){DeleteObject(p.search_font);}
         if restore && !p.prior.is_null() && IsWindow(p.prior) != 0 {
             SetForegroundWindow(p.prior);
         }
@@ -1757,9 +1659,8 @@ fn start_transition(hwnd:HWND,open:bool)->bool{
         let mut panel=cell.borrow_mut();let p=panel.as_mut()?;
         if !p.motion{return None;}
         let native=p.native.as_ref()?;
-        let t=Transition{start:std::time::Instant::now(),duration:if open{OPEN_MS}else{CLOSE_MS},
-            from:p.transition.map_or(if open{0.0}else{1.0},Transition::openness),to:if open{1.0}else{0.0}};
-        if unsafe{native.foreground.motion(t,p.width,px(83,p.dpi))}.is_err(){return None;}
+        let t=Transition::new(open,motion::FULL,p.transition);
+        if unsafe{native.foreground.motion(t,p.width,px(66,p.dpi))}.is_err(){return None;}
         let _=native.backdrop.transition(t,OPTIONS.with(|o|o.borrow().glass_strength));
         p.transition=Some(t);
         Some(t)
@@ -1874,17 +1775,10 @@ unsafe fn menu(hwnd: HWND, point: POINT, labels: &[&str]) -> usize {
     }
     let mut at = point;
     ClientToScreen(hwnd, &mut at);
-    MODAL.set(true);
-    let result = TrackPopupMenu(
-        menu,
-        TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
-        at.x,
-        at.y,
-        0,
-        hwnd,
-        ptr::null(),
-    ) as usize;
-    MODAL.set(false);
+    let was_modal=MODAL.replace(true);
+    let dark=PANEL.with(|p|p.borrow().as_ref().is_some_and(|p|p.dark));
+    let result=crate::dock::glass_menu::track(menu,hwnd,at,TPM_RETURNCMD|TPM_RIGHTBUTTON|TPM_NONOTIFY,dark,40) as usize;
+    MODAL.set(was_modal);
     DestroyMenu(menu);
     result
 }
@@ -2101,6 +1995,7 @@ fn internal_view(hwnd: HWND, folder: u64, hidden: bool) {
         p.hidden = hidden;
         p.category = Category::All;
     });
+    start_grid_motion(hwnd);
 }
 unsafe fn choose_folder(hwnd: HWND, id: &str, at: POINT) {
     let folders = LIBRARY.with(|l| l.borrow().folders.clone());
@@ -2113,6 +2008,25 @@ unsafe fn choose_folder(hwnd: HWND, id: &str, at: POINT) {
             l.move_to(id, if i == 1 { 0 } else { folders[i - 2].id });
             Ok(())
         });
+    }
+}
+
+unsafe fn library_menu(hwnd:HWND,point:POINT){
+    let Some((editing,hidden,nested))=PANEL.with(|p|p.borrow().as_ref().map(|p|(p.editing,p.hidden,p.folder!=0||p.hidden)))else{return;};
+    let mut rows=vec![
+        (Hit::Add,words("Thêm ứng dụng…","Add application…","添加应用…")),
+        (Hit::Edit,if editing{words("Xong","Done","完成")}else{words("Chỉnh sửa bố cục","Edit layout","编辑布局")}),
+        (Hit::Create,words("Tạo thư mục…","New folder…","新建文件夹…")),
+        (Hit::Refresh,words("Làm mới thư viện","Refresh library","刷新应用库")),
+    ];
+    if !hidden{rows.push((Hit::Hidden,words("Quản lý ứng dụng đã ẩn","Manage hidden apps","管理隐藏应用")));}
+    if nested{rows.push((Hit::Back,words("Về thư viện","Back to library","返回应用库")));}
+    rows.push((Hit::Settings,words("Cài đặt Spotlight","Spotlight settings","Spotlight 设置")));
+    rows.push((Hit::Compact,words("Thu gọn Spotlight","Show compact Spotlight","切换到精简 Spotlight")));
+    let labels=rows.iter().map(|(_,label)|*label).collect::<Vec<_>>();
+    let id=menu(hwnd,point,&labels);
+    if let Some((action_id,_))=id.checked_sub(1).and_then(|i|rows.get(i)){
+        action(hwnd,*action_id);
     }
 }
 
@@ -2287,7 +2201,14 @@ unsafe fn choose_icon(hwnd: HWND, path: &Path) {
 
 unsafe fn action(hwnd: HWND, which: Hit) {
     match which {
-        Hit::Close => request_close(),
+        Hit::Search => {
+            if let Some(edit)=PANEL.with(|p|p.borrow().as_ref().map(|p|p.edit)){SetFocus(edit);}
+        }
+        Hit::Backdrop => {
+            if MODAL.get(){return;}
+            let nested=PANEL.with(|s|s.borrow().as_ref().map(|p|(p.editing,p.folder!=0||p.hidden)));
+            match nested{Some((true,_))=>{},Some((false,true))=>internal_view(hwnd,0,false),Some((false,false))=>request_close(),None=>{}}
+        }
         Hit::Compact => {
             if let Some((point, query, prior)) = compact_query() {
                 dismiss(false);
@@ -2318,8 +2239,6 @@ unsafe fn action(hwnd: HWND, which: Hit) {
             p.folder = 0;
             p.hidden = false;
         }),
-        Hit::Prev => page(hwnd, -1),
-        Hit::Next => page(hwnd, 1),
         Hit::Page(page) => set_page(hwnd, page),
         Hit::Tile(i) => {
             let Some((tile, editing)) = PANEL.with(|s| {
@@ -2351,7 +2270,12 @@ fn set_page(hwnd: HWND, page: usize) {
         }
         false
     });
-    if changed { start_grid_motion(hwnd);refresh(hwnd); }
+    if changed{
+        start_grid_motion(hwnd);
+        let areas=PANEL.with(|p|p.borrow().as_ref().map(|p|
+            [grid(p).area,rect(0,p.height-px(59,p.dpi),p.width,p.height-px(22,p.dpi))]));
+        if let Some(areas)=areas{invalidate_regions(hwnd,areas);}
+    }
 }
 fn page(hwnd: HWND, delta: isize) {
     if let Some(value) = PANEL.with(|s| {
@@ -2441,8 +2365,7 @@ unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         if msg==WM_SETFOCUS{HideCaret(hwnd);}
         if msg!=WM_MOUSEMOVE||w&1!=0{
             let area=PANEL.with(|p|p.borrow().as_ref().map(|p|{
-                let width=px(600,p.dpi).min(p.width-px(50,p.dpi)).max(1);
-                rect((p.width-width)/2,px(64,p.dpi),(p.width+width)/2,px(102,p.dpi))
+                search_rect(p.width,p.dpi)
             }));
             if let Some(area)=area{InvalidateRect(GetParent(hwnd),&area,0);}
         }
@@ -2466,7 +2389,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         WM_CTLCOLOREDIT => {
             let (dark,high)=PANEL.with(|p|p.borrow().as_ref().map_or((false,false),|s|(s.dark,s.high_contrast)));
             let palette=palette(dark,high);
-            let bg=palette.face;
+            let bg=if high{palette.face}else if dark{0x00413934}else{0x00e0e6e7};
             SetTextColor(w as HDC, palette.ink);
             SetBkColor(w as HDC, bg);
             SetDCBrushColor(w as HDC, bg);
@@ -2482,7 +2405,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 if p.input == text {
                     return false;
                 }
+                let cleared=!p.input.trim().is_empty()&&text.trim().is_empty();
                 p.input = text;
+                if cleared{p.category=Category::All;p.folder=0;p.hidden=false;}
                 p.page = 0;
                 p.selected = 0;
                 p.hover = None;
@@ -2734,8 +2659,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 let Some(p) = s.as_mut() else {
                     return false;
                 };
-                p.pressed = hit_at(p, point).map(|h| (h, point));
-                p.pressed.is_some()
+                p.pressed = Some((hit_at(p,point).unwrap_or(Hit::Backdrop),point));
+                true
             });
             if pressed {
                 SetCapture(hwnd);
@@ -2756,7 +2681,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 let p = s.as_mut()?;
                 let (start, origin) = p.pressed.take()?;
                 changed=target_rect(p,start);
-                let end = hit_at(p, point)?;
+                let end = hit_at(p, point).unwrap_or(Hit::Backdrop);
                 let far = (point.x - origin.x).abs().max((point.y - origin.y).abs()) > px(7, p.dpi);
                 Some((start, end, far, p.editing, p.folder))
             });
@@ -2767,13 +2692,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             if let Some((start, end, far, editing, folder)) = targets {
                 match (start, end, far) {
                     (Hit::Tile(a), Hit::Tile(b), true) if editing => drop_tile(hwnd, a, b),
-                    (Hit::Tile(a), Hit::Next | Hit::Prev, true) if editing => {
-                        let dir = if end == Hit::Next { 1 } else { -1 };
+                    (Hit::Tile(a), Hit::Page(dest), true) if editing => {
                         if let Some(dest) = PANEL.with(|s| {
                             let s = s.borrow();
                             let p = s.as_ref()?;
-                            let page = p.page.saturating_add_signed(dir).min(count_pages(p) - 1);
-                            (page != p.page).then_some((page, page * grid(p).capacity()))
+                            (dest != p.page).then_some((dest,dest * grid(p).capacity()))
                         }) {
                             drop_tile(hwnd, a, dest.1);
                             set_page(hwnd, dest.0);
@@ -2801,10 +2724,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         }
         WM_RBUTTONUP => {
             let point = coords(l);
-            if let Some(Hit::Tile(i)) =
-                PANEL.with(|s| s.borrow().as_ref().and_then(|p| hit_at(p, point)))
-            {
-                tile_menu(hwnd, i, point);
+            let target=PANEL.with(|s|s.borrow().as_ref().and_then(|p|hit_at(p,point)));
+            match target{
+                Some(Hit::Tile(i))=>tile_menu(hwnd,i,point),
+                None=>library_menu(hwnd,point),
+                _=>{}
             }
             0
         }
@@ -2903,7 +2827,7 @@ fn open_native(point: POINT, query: String, prior: HWND, manage: bool, activate:
             edit,
             0x1501,
             1,
-            wide("Tìm ứng dụng, tệp, công cụ…").as_ptr() as LPARAM,
+            wide(words("Tìm kiếm…","Search…","搜索…")).as_ptr() as LPARAM,
         );
         let d = dark();
         surface_style(hwnd, d);
@@ -2927,6 +2851,7 @@ fn open_native(point: POINT, query: String, prior: HWND, manage: bool, activate:
                 dark: d,
                 high_contrast:high_contrast(),
                 font: ptr::null_mut(),
+                search_font:ptr::null_mut(),
                 apps,
                 catalog: catalog::request(true, false),
                 watch: None,
@@ -3002,8 +2927,8 @@ mod tests {
         assert!(ink.pixels.chunks_exact(4).all(|p|p[..3].iter().all(|c|*c<=p[3])));
         let i=(15*40+20)*4;
         assert_eq!(&ink.pixels[i..i+4],&[63,31,13,100]);
-        assert_eq!(hover_opacity(Hit::Close,Some(Hit::Close),None,0.5),0.5);
-        assert_eq!(hover_opacity(Hit::Close,None,Some(Hit::Close),0.5),0.5);
+        assert_eq!(hover_opacity(Hit::Edit,Some(Hit::Edit),None,0.5),0.5);
+        assert_eq!(hover_opacity(Hit::Edit,None,Some(Hit::Edit),0.5),0.5);
         assert_eq!(grid_opacity(0),192);
         assert_eq!(grid_opacity(GRID_MS),255);
     }
@@ -3018,6 +2943,10 @@ mod tests {
     }
     #[test]
     fn layout_keeps_tiles_inside_landscape_portrait_and_high_dpi() {
+        let portrait=Grid::new(1080,1920,96,&Preferences::default());
+        let landscape=Grid::new(2560,1080,96,&Preferences::default());
+        assert!(portrait.rows>landscape.rows&&portrait.columns<landscape.columns);
+        assert!(portrait.area.top<160&&portrait.area.bottom>1680);
         for (w, h) in [
             (2560, 1080),
             (1080, 1920),

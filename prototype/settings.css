@@ -70,3 +70,4 @@ html[data-appearance=dark] #page-dock{--dock-blue:#8ebfff;--dock-mist:#243953}
 .nav-group{display:grid;gap:4px}
 .nav-group .nav-caption{margin-bottom:1px}
 @media(max-width:760px){.app-nav{gap:11px}}
+#spotlightGuideDialog:not([open]){display:none}#spotlightGuideDialog::backdrop{background:#0c20284d}#spotlightGuideDialog ul{margin:16px 0 0;padding-left:18px;color:var(--muted);font-size:13px;line-height:1.6}

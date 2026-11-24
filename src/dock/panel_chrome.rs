@@ -91,11 +91,12 @@ pub(super) unsafe fn disable_system_border(hwnd:HWND){
 }
 /// Common shadow for the three Dock panels. Its transparent surface never
 /// covers the capsule; the Dock-facing falloff reaches zero within the gap.
-pub(crate) struct PanelShadow{pub(super) hwnd:HWND,style:(i32,i32,u32,DockSide,bool),inset:(i32,i32),at:(i32,i32)}
+pub(crate) struct PanelShadow{pub(super) hwnd:HWND,layer:Layer,style:(i32,i32,u32,DockSide,bool),inset:(i32,i32),at:(i32,i32)}
 impl Drop for PanelShadow{
     fn drop(&mut self){unsafe{DestroyWindow(self.hwnd);}}
 }
 impl PanelShadow{
+    pub(crate) unsafe fn opacity(&self,opacity:u8){let _=self.layer.present_at(self.hwnd,None,opacity);}
     pub(crate) unsafe fn sync(slot:&mut Option<Self>,panel:HWND,owner:HWND,rect:RECT,dpi:u32,side:DockSide,dark:bool){
         let (width,height)=(rect.right-rect.left,rect.bottom-rect.top);
         let style=(width,height,dpi,side,dark);
@@ -138,9 +139,9 @@ impl PanelShadow{
         let hwnd=CreateWindowExW(WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW|WS_EX_TOPMOST,
             name.as_ptr(),ptr::null(),WS_POPUP,at.0,at.1,w,h,owner,ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
         if hwnd.is_null(){return;}
-        let shadow=Self{hwnd,style,inset:(left,pad),at};
+        let shadow=Self{hwnd,layer,style,inset:(left,pad),at};
         disable_system_border(hwnd);
-        if layer.present_at(hwnd,Some(POINT{x:at.0,y:at.1}),255)&&
+        if shadow.layer.present_at(hwnd,Some(POINT{x:at.0,y:at.1}),255)&&
             SetWindowPos(hwnd,panel,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW)!=0{
             *slot=Some(shadow);
         }
@@ -154,6 +155,7 @@ impl Drop for StartCorners{
     fn drop(&mut self){unsafe{DestroyWindow(self.hwnd);}}
 }
 impl StartCorners{
+    pub(crate) unsafe fn opacity(&self,opacity:u8){let _=self.layer.present_at(self.hwnd,None,opacity);}
     pub(crate) unsafe fn paint(slot:&mut Option<Self>,owner:HWND,dc:HDC,w:i32,h:i32,dpi:u32){
         if slot.as_ref().is_none_or(|s|s.layer.size!=(w,h)){
             *slot=None;
