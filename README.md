@@ -57,7 +57,27 @@ Ghim và mở app bằng Dock, quản lý cửa sổ bằng Stage Manager, tìm 
 
 **Bản 1.0.1:** Khi bật tự khởi động, Windows mở TLauncher lúc đăng nhập qua Task Scheduler. Dock và Stage khởi tạo trước hình nền; nếu Explorer chưa sẵn sàng, hình nền thử gắn lại sau. Xem [ghi chú và điều kiện kiểm chứng](CHANGELOG.md#kiểm-chứng).
 
-**Ứng viên 1.0.2 — Unified Spotlight:** Gộp tìm kiếm và thư viện ứng dụng trong TLauncher. Dùng Alt+Space để tìm nhanh, F6 để chuyển chế độ hoặc bấm kính lúp trên Dock để mở thư viện toàn màn hình. Thư viện hỗ trợ thêm EXE/LNK, ghim, ẩn/khôi phục và thư mục tùy chỉnh. Nền kính lấy mẫu và làm mờ trong bộ nhớ mỗi lần mở, có nền sáng/tối dự phòng. Chất lượng hình ảnh đang chờ nghiệm thu. Xem [hướng dẫn kiểm thử](docs/unified-spotlight.md). Bản công khai vẫn là 1.0.1.
+## Có gì mới trong v1.0.2
+
+**Unified Spotlight** kết hợp tìm nhanh và thư viện ứng dụng. Phím **Alt+Space** mặc định mở chế độ thu gọn; kính lúp trên Dock mặc định mở thư viện toàn màn hình trên màn chứa Dock. Hai chế độ mở chỉnh độc lập, hoặc cho Dock dùng theo phím tắt. **F6** đổi chế độ và giữ nội dung tìm; **Esc** quay lại từ thư mục hoặc đóng. Bấm vùng trống để đóng toàn màn hình; cuộn hoặc dùng bàn phím để chuyển trang.
+
+Thư viện phát hiện ứng dụng Win32 từ Start Menu và ứng dụng đóng gói từ Windows AppsFolder. Dùng tìm kiếm cho ứng dụng, tệp đã lập chỉ mục và công cụ hệ thống. Thêm **EXE/LNK**, đổi tên và icon, yêu thích, ghim Dock, ẩn/khôi phục, sắp xếp hoặc kéo vào thư mục trong chế độ chỉnh bố cục. Ẩn hay bỏ mục tự thêm chỉ đổi thư viện, không gỡ ứng dụng. Hướng dẫn mở lần đầu trong Cài đặt với hồ sơ mới và có thể mở lại ở **Phím tắt & tiện ích → Unified Spotlight**.
+
+**Kính và chuyển động.** Toàn màn hình dùng HostBackdrop/Acrylic native khi Windows hỗ trợ; nếu không có thể dùng ảnh nền làm mờ một lần trong bộ nhớ, hoặc nền đặc khi tắt trong suốt/ở High Contrast. Giao diện sáng/tối dùng ô tìm thống nhất, chữ trắng ngà, bóng chữ và khử răng cưa grayscale. Trình nhập native vẫn giữ vùng chọn và xử lý bàn phím của Windows. Cài đặt tốc độ chung **0,25×–2,00×**, bước **0,05×**, mặc định hồ sơ mới **0,70×**; giữ tốc độ đã lưu. Spotlight, Start, menu Dock, Trung tâm điều khiển và lịch dùng chuyển động phù hợp từng bảng; Dock phóng icon, co/mở và tự ẩn. Cài đặt giảm chuyển động của hệ thống được tôn trọng khi bật tùy chọn tương ứng.
+
+**Tài nguyên.** Start, Spotlight và Dock tái sử dụng icon nguồn trong bộ nhớ giới hạn và cache đĩa; chỉ làm mới mục có nguồn thay đổi. Nạp trước có giới hạn, giữ icon tùy chỉnh. Độ nét và thời gian hiển thị lần đầu còn tùy icon nguồn. Spotlight tái sử dụng bộ dựng đồ họa, giải phóng bề mặt khi đóng; cache preview Stage có giới hạn. Chưa có benchmark toàn ứng dụng để xác nhận mốc RAM 100–150 MiB, GPU 3% hay CPU 1%.
+
+**Hiệu ứng cửa sổ:** bản public dùng **Windows Default**. Scale chưa đạt nghiệm thu của owner và được ẩn khỏi bản công khai; Genie và Stage Peek chưa có. Không cần tắt animation Windows. Kính và IME có thể khác theo build Windows, driver và ngôn ngữ nhập.
+
+| Thư viện Spotlight toàn màn hình, chế độ sáng | Thư mục ứng dụng Spotlight ở chế độ tối | Ô tìm Spotlight native có vùng chọn văn bản |
+| --- | --- | --- |
+| ![Thư viện Spotlight toàn màn hình, chế độ sáng](docs/images/showcase/v1.0.2/spotlight-fullscreen-light.png) | ![Thư mục ứng dụng Spotlight ở chế độ tối](docs/images/showcase/v1.0.2/spotlight-folder-dark.png) | ![Ô tìm Spotlight native có vùng chọn văn bản](docs/images/showcase/v1.0.2/spotlight-search-dark.png) |
+
+*Ảnh giao diện thật từ kiểm thử native Windows trên Actions với ứng dụng mẫu và nền kiểm thử. Xem [nguồn ảnh và giới hạn](docs/images/showcase/v1.0.2/README.md).*
+
+[Ghi chú phát hành](docs/releases/v1.0.2.vi.md)
+
+
 
 <!-- product-guide:start -->
 ## Chi tiết và ảnh minh họa
@@ -159,10 +179,19 @@ Một cửa sổ nhóm Hình nền, Màn hình, Thời tiết & ánh sáng, Đ�
 
 ## Cài đặt và nâng cấp
 
-1. Mở [Release mới nhất](https://github.com/tuanngbc/TLauncher/releases/latest). Trong **Assets**, tải **TLauncher-…-win-x64.zip**; dùng tệp `.zip.sha256` tương ứng để đối chiếu. **Source code** dành để xem hoặc tự build.
-2. Giải nén cả gói vào một thư mục rồi chạy `TLauncher.exe`. Giữ `prototype/` cho Cài đặt, shader và ảnh xem trước; giữ `assets/widget/` cho đồng hồ. Mở Cài đặt từ Dock hoặc khay hệ thống.
-3. Khi nâng cấp, thoát bản cũ và sao lưu thư mục cài đặt cùng `%USERPROFILE%\.deskland-rs`. Giữ hồ sơ này để dùng tiếp chủ đề, bố trí, mục ghim và phím tắt.
-4. Bật hoặc tắt tự mở tại **Cài đặt → Hệ thống → Khởi động cùng Windows**. Nếu đổi đường dẫn EXE, tắt rồi bật lại để đăng ký vị trí mới. Xem [các bước quay lại 1.0.0](CHANGELOG.md#nâng-cấp-và-quay-lại).
+1. Tải [TLauncher-1.0.2-win-x64.zip](https://github.com/tuanngbc/TLauncher/releases/download/v1.0.2/TLauncher-1.0.2-win-x64.zip) và đối chiếu [SHA-256](https://github.com/tuanngbc/TLauncher/releases/download/v1.0.2/TLauncher-1.0.2-win-x64.zip.sha256) nếu cần. Mục **Source code** dành cho người đọc mã hoặc tự build.
+2. Giải nén cả gói, giữ `prototype/` và `assets/widget/` cạnh EXE. Chạy `TLauncher.exe`; mở Cài đặt từ Dock hoặc khay để chỉnh chế độ Spotlight, giao diện, tốc độ và tự khởi động.
+3. Nhấn **Alt+Space**, **F6** để đổi chế độ, **Esc** để đóng. Bấm phải mục trong thư viện để thêm, chỉnh, ghim hoặc ẩn; vào **Chỉnh sửa bố cục** để quản lý thư mục, và **Mục đã ẩn** trong Settings để khôi phục. Chọn **Thoát** trong menu TLauncher để dọn Shell; **Ctrl+Alt+Shift+F12** khôi phục thanh Windows trong phiên hiện tại.
+4. **Nâng từ 1.0.1:** Thoát bản cũ và sao lưu thư mục cài đặt cùng `%USERPROFILE%\.deskland-rs`. Giải nén gói mới đầy đủ; giữ hồ sơ để dùng tiếp chủ đề, màn hình, mục ghim và phím tắt. Nếu EXE đổi chỗ, kiểm tra **Cài đặt → Hệ thống → Khởi động cùng Windows**; tắt rồi bật để cập nhật Task Scheduler nếu cần.
+5. **Quay lại 1.0.1:** Tắt startup trong bản mới, thoát, khôi phục gói cũ và bản sao hồ sơ trước nâng nếu cần; đăng ký startup lại từ bản cũ. Không giả định bản 1.0.1 hiểu dữ liệu thư viện mới. Không xóa hồ sơ hiện tại khi chưa sao lưu.
+
+### Thiết lập Windows khuyến nghị
+
+- **Kính mờ (tùy chọn):** Windows 11 → **Cài đặt → Cá nhân hóa → Màu sắc → Hiệu ứng trong suốt**. Cũng có tại **Trợ năng → Hiệu ứng hình ảnh** (`ms-settings:easeofaccess-visualeffects`). Chất lượng kính tùy compositor và driver; khi tắt hoặc dùng High Contrast, nền dự phòng là hành vi dự kiến.
+- **Chuyển động (tùy chọn):** Bật **Animation effects** tại **Trợ năng → Hiệu ứng hình ảnh** nếu muốn. Giữ hiệu ứng thu/phóng Windows mặc định; nếu từng tắt để thử Scale, mở **Win+R → SystemPropertiesPerformance.exe → Visual Effects**, đánh dấu **Animate windows when minimizing and maximizing** rồi Apply. Giữ làm mượt chữ nếu phù hợp; không cần đổi font hay cài theme macOS.
+- **TLauncher:** Bật animation, dùng **0,70×** làm điểm bắt đầu, chọn sáng/tối/theo hệ thống. Đặt Compact bằng phím tắt và Fullscreen bằng Dock hoặc chỉnh theo ý. Giữ chất lượng hình nền phù hợp driver; tự chạy khi đăng nhập là tùy chọn.
+
+
 
 ## Phím tắt bàn phím
 
@@ -219,7 +248,7 @@ TLauncher dùng cơ chế khóa và đăng nhập của Windows. Tác vụ tự 
 
 **Vì sao một số cửa sổ không có ảnh xem trước hoặc không quay được?** Windows có thể hạn chế nội dung được bảo vệ. Quay hỗ trợ tiếng phát từ máy; không có thu mic hoặc webcam trong bản hiện tại.
 
-**Hồ sơ lưu ở đâu? Quay lại bản cũ thế nào?** Hồ sơ nằm ở `%USERPROFILE%\.deskland-rs`. Sao lưu hồ sơ và thư mục cài đặt trước khi nâng cấp. Để về 1.0.0, tắt startup trong 1.0.1 trước khi thoát, khôi phục gói cũ, rồi bật lại startup trong bản cũ nếu muốn.
+**Hồ sơ và rollback:** Xem mục Cài đặt và nâng cấp ở trên.
 
 ## Build từ mã nguồn
 

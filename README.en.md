@@ -57,7 +57,27 @@ Pin and open apps with the Dock, organize windows with Stage Manager, find apps 
 
 **Version 1.0.1:** When startup is enabled, Windows starts TLauncher at sign-in through Task Scheduler. Dock and Stage Manager initialize before the wallpaper. If Explorer is still starting, the wallpaper tries to attach again. See the [verification notes and test conditions](CHANGELOG.md#kiểm-chứng).
 
-**1.0.2 candidate — Unified Spotlight:** Quick search and an app library share the same TLauncher catalog. Use Alt+Space for Compact, F6 to switch modes, or the Dock magnifier for the fullscreen library. Add EXE/LNK entries, pin, hide or restore apps, and organize them into folders. The frosted backdrop is sampled and blurred in memory on opening, with a solid theme fallback; visual acceptance is pending. See the [UAT guide](docs/unified-spotlight.md). The public release is still 1.0.1.
+## What's new in v1.0.2
+
+**Unified Spotlight** combines quick search and the app library. **Alt+Space** defaults to Compact and the Dock magnifier defaults to Fullscreen on the Dock's display. Set these independently or let Dock follow the shortcut. **F6** switches modes while retaining your query. Use **Esc** to leave a folder or dismiss Spotlight, click empty space to close Fullscreen, and scroll or use the keyboard to change pages.
+
+The shared catalog finds Win32 apps in Start Menu and packaged apps in Windows AppsFolder, filters helper shortcuts, and searches apps, indexed files and system tools. Add **EXE/LNK** entries, rename or change icons, favorite, pin to Dock, hide/restore, reorder, or drag into folders in layout editing mode. Hiding or removing a manual entry does not uninstall it. A new profile can show the guide on first opening Settings; reopen it under **Shortcuts & Utilities → Unified Spotlight**.
+
+**Materials and motion.** Fullscreen uses native HostBackdrop/Acrylic when available, a one-time in-memory blurred snapshot as a compatibility path, or a solid surface when transparency is disabled or High Contrast is active. Light/dark themes share the search field, ivory text, shadows and grayscale antialiasing. The native editor retains Windows input and selection. Global speed runs from **0.25× to 2.00×** in **0.05×** steps; new profiles start at **0.70×** and saved speeds are preserved. Spotlight, Start, Dock menus, Control Center and Calendar use motion suited to each panel; Dock magnification, reveal and auto-hide share the policy. System reduced motion is honored when configured.
+
+**Resources.** Start, Spotlight and Dock share bounded source icon caches in memory and on disk. Selective invalidation and bounded prefetch avoid unnecessary extraction and preserve custom icons. First paint and icon quality still depend on the source. Spotlight reuses graphics factories and releases surfaces on close; Stage preview retention is bounded. Whole-app RAM (100–150 MiB), GPU (3%) and CPU (1%) targets have not been verified.
+
+**Window transitions:** public builds use **Windows Default**. Scale failed owner acceptance and is hidden in the public release. Genie and Stage Peek are unavailable. Leave Windows minimize animation enabled. Glass and IME behavior can vary with the Windows build, graphics driver and input method.
+
+| Fullscreen Spotlight library in the light theme | Spotlight app folder in the dark theme | Native Spotlight search field with selected text |
+| --- | --- | --- |
+| ![Fullscreen Spotlight library in the light theme](docs/images/showcase/v1.0.2/spotlight-fullscreen-light.png) | ![Spotlight app folder in the dark theme](docs/images/showcase/v1.0.2/spotlight-folder-dark.png) | ![Native Spotlight search field with selected text](docs/images/showcase/v1.0.2/spotlight-search-dark.png) |
+
+*Actual Windows native fixture output on GitHub Actions, with example apps and a fixture backdrop. See [image provenance and limits](docs/images/showcase/v1.0.2/README.md).*
+
+[Release notes](docs/releases/v1.0.2.en.md)
+
+
 
 <!-- product-guide:start -->
 ## Features and screenshots
@@ -160,10 +180,19 @@ One window groups Wallpaper, Displays, Weather & Lighting, Clock, Dock & Stage M
 
 ## Install and upgrade
 
-1. Open the [latest release](https://github.com/tuanngbc/TLauncher/releases/latest). Under **Assets**, download **TLauncher-…-win-x64.zip** and check it against the corresponding `.zip.sha256` file. **Source code** is for inspection or building locally.
-2. Extract the full archive into one folder and run `TLauncher.exe`. Keep `prototype/` for Settings, shaders, and previews, and `assets/widget/` for the clocks. Open Settings from the Dock or system tray.
-3. To upgrade, exit the old version and back up your installation folder and `%USERPROFILE%\.deskland-rs`. Keep this profile to retain themes, layouts, pins, and shortcuts.
-4. Turn automatic launch on or off under **Settings → System → Start with Windows**. If you move the executable, toggle the setting off and back on to register its new location. See [how to roll back to 1.0.0](CHANGELOG.md#nâng-cấp-và-quay-lại).
+1. Download [TLauncher-1.0.2-win-x64.zip](https://github.com/tuanngbc/TLauncher/releases/download/v1.0.2/TLauncher-1.0.2-win-x64.zip) and optionally verify its [SHA-256](https://github.com/tuanngbc/TLauncher/releases/download/v1.0.2/TLauncher-1.0.2-win-x64.zip.sha256). **Source code** archives are for browsing or building the code.
+2. Extract the whole archive; keep `prototype/` and `assets/widget/` beside the EXE. Run `TLauncher.exe`, then open Settings from Dock or tray to set Spotlight activation, theme, speed and startup.
+3. Use **Alt+Space** to open, **F6** to switch modes and **Esc** to close. Right-click library items to manage, pin or hide. Use **Edit layout** for folders and **Hidden apps** in Settings to restore entries. Use **Exit** in the TLauncher menu, or **Ctrl+Alt+Shift+F12** to restore the Windows taskbar for the session.
+4. **Upgrade from 1.0.1:** Exit the old app and back up the installation and `%USERPROFILE%\.deskland-rs`. Extract the full new bundle and keep the profile for wallpapers, displays, pins and shortcuts. If the EXE path changed, check **Settings → System → Start with Windows**; switch it off and on to update Task Scheduler if needed.
+5. **Roll back to 1.0.1:** Disable startup in the new app, exit, restore the older bundle and the pre-upgrade profile backup if needed, and register startup again in the older app. Do not assume 1.0.1 understands newer library data; back it up before replacing any profile.
+
+### Recommended Windows settings
+
+- **Frosted glass (optional):** Windows 11 **Settings → Personalization → Colors → Transparency effects**, or **Accessibility → Visual effects** (`ms-settings:easeofaccess-visualeffects`). The compositor and driver determine the result. A solid fallback when transparency is off or High Contrast is active is expected.
+- **Motion (optional):** Enable **Animation effects** under **Accessibility → Visual effects** if desired. Keep Windows minimize/maximize animation at its default. To restore it after experimenting, use **Win+R → SystemPropertiesPerformance.exe → Visual Effects**, enable **Animate windows when minimizing and maximizing**, then Apply. Leave font smoothing on if appropriate; no font change, macOS theme or third-party glass utility is needed.
+- **TLauncher:** Start with animations on and **0.70×**, Compact by keyboard, Fullscreen from Dock, and Light, Dark or Follow System as preferred. Choose wallpaper quality for your driver. Startup at sign-in is optional.
+
+
 
 ## Keyboard shortcuts
 
@@ -221,7 +250,7 @@ TLauncher uses Windows session lock and sign-in. The 1.0.1 startup task runs und
 
 **Why can’t I preview or record some windows?** Windows may restrict protected content. Recording supports system audio. This release does not capture microphone audio or a webcam.
 
-**Where is my profile stored, and how can I roll back?** The profile is in `%USERPROFILE%\.deskland-rs`. Back up the profile and installation folder before upgrading. To return to 1.0.0, disable startup in 1.0.1 before exiting, restore the older package, and re-enable startup in the older version if desired.
+**Profile and rollback:** See Install and upgrade above.
 
 ## Build from source
 

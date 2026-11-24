@@ -163,23 +163,20 @@ cargo build --release
 
 - Không port các lớp ảnh PNG/Canvas phụ của 2 chủ đề đầu (`beach-palms.js`, `meadow-boy.js`, `meadow-cat.js`) và tính năng xuất GIF/PNG chia sẻ mạng xã hội (`share.js`); giao diện Cài đặt tự động ẩn các tùy chọn này qua cờ `caps` để đồng nhất với cảnh thực tế trên Desktop.
 - Không vẽ đè đồng hồ Glassmorphism giả lập lên màn hình khóa và không chặn `Win+L`, đảm bảo an toàn bảo mật tuyệt đối thông qua màn hình đăng nhập thật của Windows (`Winlogon` / Windows Hello / PIN hệ thống).
-# Dock & Stage Manager development branch
+## Runtime bundle and development policy
 
-On `codex/rust-dock`, Dock and the initial Stage sidebar are managed by the
-existing `TLauncher.exe`. Open **Settings → Dock & Stage Manager** or use
-TLauncher's tray to enable wallpaper, Dock and Stage independently. No separate
-manual `--dock` launch or configuration application is required. Enabled modules
-start through the existing Windows autostart entry and stop with Deskland.
+The release bundle is Windows 11 x64. Keep the full `prototype/` tree for
+Settings, shaders and previews, and `assets/widget/` for desktop clocks next to
+TLauncher.exe. Dock, Stage and wallpaper can be enabled independently in the
+same process. Start with Windows uses a per-account Task Scheduler entry.
 
-Settings remain in `%USERPROFILE%\.deskland-rs\settings.json`. When its `dock`
-object is absent, legacy `dock.json` pins/scope/side are imported without enabling
-new overlays. The legacy file is retained. Existing theme/widget/shortcut fields
-and unknown settings are preserved by atomic writes. Do not delete the profile
-to roll back; restore the accepted binary/bundle instead. Before any RC trial,
-retain a copy of settings.json: the accepted older binary can rewrite settings
-without newer Dock fields. A downgrade is not a substitute for a profile backup.
+Use `%USERPROFILE%\.deskland-rs` for the production profile; preserve it when
+upgrading or rolling back. The public v1.0.2 runtime always uses Windows Default
+for window minimize/restore. The Scale implementation remains isolated to TEST
+profiles for future work; see [release closeout](docs/releases/v1.0.2-closeout.md).
 
-This branch is not an accepted release. Stage is still a sidebar, not completed
-workspace management. Windows taskbar/tray remain available. Track actual CI and
-native acceptance separately in `docs/DOCK_STATUS.md` and
-`docs/DOCK_ACCEPTANCE_MATRIX.md`; no merge before `OWNER_NATIVE_ACCEPTED`.
+Contributors may build on their own Windows environment. On the owner's PC,
+all builds, automated tests and packaging run in the
+[Windows workflow](https://github.com/tuanngbc/TLauncher/actions/workflows/build-rust-test.yml).
+The figures above are historical wallpaper-engine measurements, not a
+whole-application benchmark of v1.0.2.

@@ -2,7 +2,7 @@ name: Build TLauncher Rust
 
 on:
   push:
-    branches: [main, codex/rust-dock]
+    branches: [main, codex/rust-dock, codex/unified-spotlight-v1.0.2]
     tags: [v*]
   workflow_dispatch:
 
@@ -174,7 +174,23 @@ jobs:
             Copy-Item tools\owner-resource-diagnostics.ps1 "$dir\owner-resource-diagnostics.ps1"
             Copy-Item tools\REPORT-RESOURCE.cmd "$dir\REPORT-RESOURCE.cmd"
           }
-          Copy-Item (Join-Path $env:RUNNER_TEMP "start-native.png") "$dir\START-NATIVE-CI.png"
+          if ($env:GITHUB_REF_TYPE -ne 'tag') {
+            Copy-Item (Join-Path $env:RUNNER_TEMP "start-native.png") "$dir\START-NATIVE-CI.png"
+          } else {
+            if (Test-Path "$dir\prototype\serve.mjs") { Remove-Item -LiteralPath "$dir\prototype\serve.mjs" }
+            foreach ($required in 'TLauncher.exe','prototype\settings.html','prototype\settings.css','prototype\i18n\vi.json','prototype\themes.json','prototype\aquarium.frag','assets\widget\clock-bg.png','LICENSE','NOTICE','THIRD_PARTY_NOTICES.md','TRADEMARKS.md') {
+              if (!(Test-Path -LiteralPath (Join-Path $dir $required) -PathType Leaf)) { throw "Release package missing $required" }
+            }
+            $forbidden = @(Get-ChildItem -LiteralPath $dir -File -Recurse | Where-Object { $_.Name -match '(?i)(?:^owner-|^UAT-|^REPORT-RESOURCE|^START-NATIVE-CI|^settings\.json$|\.(?:log|pdb|lnk)$)' })
+            if ($forbidden.Count) { throw "Unexpected private/test files: $($forbidden.Name -join ', ')" }
+            $stream=[IO.File]::OpenRead("$dir\TLauncher.exe")
+            try {
+              $reader=[IO.BinaryReader]::new($stream)
+              if ($reader.ReadUInt16() -ne 0x5A4D) { throw 'Invalid executable DOS header' }
+              $stream.Position=0x3C; $stream.Position=$reader.ReadUInt32()
+              if ($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne 0x8664) { throw 'Release binary is not PE x64' }
+            } finally { $stream.Dispose() }
+          }
           $version | Set-Content "$dir\VERSION.txt" -Encoding ascii
           '${{ github.sha }}' | Set-Content "$dir\BUILD-COMMIT.txt" -Encoding ascii
           @"

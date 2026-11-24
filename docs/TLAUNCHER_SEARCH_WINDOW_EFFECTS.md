@@ -1,5 +1,11 @@
 # TLauncher 1.0.2 – search and Dock Scale candidate
 
+> **Release outcome:** Scale still failed on the owner's Windows 11 machine at
+> 3a3e512 despite a passing hosted fixture. Public v1.0.2 uses Windows Default
+> and hides Scale. The engineering results below are historical and do not
+> imply owner acceptance. See [closeout](releases/v1.0.2-closeout.md).
+
+
 Reference: b33c2d3dc4bef82fee5e74e552d0848ec26204dd. No release or production upgrade.
 
 ## Search field

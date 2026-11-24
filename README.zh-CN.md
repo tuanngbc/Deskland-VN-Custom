@@ -57,7 +57,27 @@ TLauncher 是一款专为 Windows 11 打造的开源桌面工作空间工具。�
 
 **1.0.1 版：**启用自动启动后，Windows 任务计划程序会在用户登录时启动 TLauncher。Dock 和台前调度先于壁纸初始化；若 Explorer 尚未就绪，壁纸稍后会重新尝试挂载。参见[验证记录和测试条件](CHANGELOG.md#kiểm-chứng)。
 
-**1.0.2 候选版 — 统一 Spotlight：** 快速搜索与应用库共用 TLauncher 的应用目录。按 Alt+Space 打开紧凑搜索，按 F6 切换模式；单击 Dock 上的放大镜可打开全屏应用库。支持添加 EXE/LNK、固定、隐藏或恢复应用，以及自定义文件夹。打开时在内存中采样并模糊背景，并提供纯色主题后备；视觉效果仍待验收。详见[验收指南](docs/unified-spotlight.md)。公开版本仍为 1.0.1。
+## v1.0.2 新功能
+
+**统一 Spotlight**结合快速搜索与应用库。**Alt+Space** 默认打开紧凑模式，Dock 放大镜默认在 Dock 所在屏幕打开全屏模式。两者可分别设置，Dock 也可跟随快捷键。按 **F6** 保留查询并切换模式；按 **Esc** 返回上级文件夹或关闭，点击空白区域退出全屏，滚轮和键盘可翻页。
+
+共享目录从开始菜单发现 Win32 应用，从 Windows AppsFolder 发现打包应用，过滤辅助快捷方式，并搜索应用、已索引文件和系统工具。支持添加 **EXE/LNK**、更名、换图标、收藏、固定至 Dock、隐藏/恢复、排序，以及在编辑布局模式下拖入文件夹。隐藏或移除手动添加的项目不会卸载程序。新配置首次打开设置时可显示引导，也可从 **快捷键和实用工具 → 统一 Spotlight** 重新打开。
+
+**材质和动画。** 全屏优先使用兼容 Windows 上的原生 HostBackdrop/Acrylic；必要时使用内存中一次性模糊快照，关闭透明或启用高对比度时使用纯色后备。浅色/深色主题共享搜索框、象牙白文字、阴影和灰度抗锯齿。原生编辑框保留 Windows 文本输入和选择。全局速度为 **0.25×–2.00×**，步长 **0.05×**；新配置默认 **0.70×**，保留已有设置。Spotlight、开始菜单、Dock 菜单、控制中心和日历各自使用合适的动效；Dock 支持放大、显隐和自动隐藏。可选择遵循系统减少动画设置。
+
+**资源管理。** 开始菜单、Spotlight 和 Dock 共享有大小限制的内存和磁盘源图标缓存。选择性更新和有限预取减少反复提取，保留自定义图标。冷启动速度与图标清晰度仍取决于来源。Spotlight 复用图形工厂并在关闭时释放表面；台前调度预览缓存有上限。尚未验证整机应用的内存 100–150 MiB、GPU 3% 与 CPU 1% 目标。
+
+**窗口动画：**公开版使用 **Windows 默认**动画。缩放特效未通过所有者验收，在公开版中隐藏；Genie 和 Stage Peek 暂不可用。无需关闭 Windows 最小化动画。玻璃效果及输入法兼容性会因系统版本、驱动和输入法而异。
+
+| 浅色主题的全屏 Spotlight 应用库 | 深色主题的 Spotlight 应用文件夹 | 原生 Spotlight 搜索框及选中文字 |
+| --- | --- | --- |
+| ![浅色主题的全屏 Spotlight 应用库](docs/images/showcase/v1.0.2/spotlight-fullscreen-light.png) | ![深色主题的 Spotlight 应用文件夹](docs/images/showcase/v1.0.2/spotlight-folder-dark.png) | ![原生 Spotlight 搜索框及选中文字](docs/images/showcase/v1.0.2/spotlight-search-dark.png) |
+
+*图片为 GitHub Actions 上实际运行的 Windows 原生界面，使用示例应用和测试背景。请参阅[图片来源与限制](docs/images/showcase/v1.0.2/README.md)。*
+
+[发行说明](docs/releases/v1.0.2.zh-CN.md)
+
+
 
 <!-- product-guide:start -->
 ## 功能详情与截图
@@ -160,10 +180,19 @@ TLauncher 是一款专为 Windows 11 打造的开源桌面工作空间工具。�
 
 ## 安装与升级
 
-1. 打开[最新发行版](https://github.com/tuanngbc/TLauncher/releases/latest)。在 **Assets** 中下载 **TLauncher-…-win-x64.zip**，并用对应的 `.zip.sha256` 文件核验。**Source code** 用于查看源码或自行构建。
-2. 将整个压缩包解压到同一个文件夹，再运行 `TLauncher.exe`。保留设置、着色器和预览所需的 `prototype/`，以及桌面时钟所需的 `assets/widget/`。可从 Dock 或系统托盘打开设置。
-3. 升级前退出旧版，备份安装文件夹和 `%USERPROFILE%\.deskland-rs`。保留此配置目录，即可继续使用原来的主题、布局、固定项和快捷键。
-4. 在**设置 → 系统 → 随 Windows 启动**中开关自动启动。若移动了 EXE，请先关闭再开启，以注册新路径。参见[回退到 1.0.0 的步骤](CHANGELOG.md#nâng-cấp-và-quay-lại)。
+1. 下载 [TLauncher-1.0.2-win-x64.zip](https://github.com/tuanngbc/TLauncher/releases/download/v1.0.2/TLauncher-1.0.2-win-x64.zip)，可使用 [SHA-256](https://github.com/tuanngbc/TLauncher/releases/download/v1.0.2/TLauncher-1.0.2-win-x64.zip.sha256) 校验。**Source code** 压缩包用于阅读代码或自行构建。
+2. 完整解压，保留与 EXE 同级的 `prototype/` 和 `assets/widget/`，运行 `TLauncher.exe`。从 Dock 或托盘进入设置，调整 Spotlight、主题、动画速度及自启动。
+3. **Alt+Space** 打开、**F6** 切换、**Esc** 关闭。右键管理、固定或隐藏应用，在 **编辑布局** 中管理文件夹，从设置的 **隐藏应用** 恢复条目。使用 TLauncher 菜单的 **退出**；**Ctrl+Alt+Shift+F12** 可在当前会话恢复 Windows 任务栏。
+4. **从 1.0.1 升级：** 退出旧版，备份安装目录和 `%USERPROFILE%\.deskland-rs`。完整解压新版并保留配置，以继续使用主题、屏幕布局、固定项和快捷键。若 EXE 移动，在 **设置 → 系统 → 随 Windows 启动** 检查，必要时关闭再开启以更新任务计划。
+5. **回退至 1.0.1：** 在新版中关闭自启动并退出，恢复旧安装包，必要时恢复升级前的配置备份，在旧版重新登记自启动。旧版未必读取新版应用库数据；替换配置前先备份。
+
+### 建议的 Windows 设置
+
+- **磨砂玻璃（可选）：** Windows 11 **设置 → 个性化 → 颜色 → 透明效果**，也可从 **辅助功能 → 视觉效果**（`ms-settings:easeofaccess-visualeffects`）打开。效果取决于合成器和驱动；关闭透明度或使用高对比度时会使用后备材质。
+- **动画（可选）：** 可在 **辅助功能 → 视觉效果** 开启动画效果。建议保留 Windows 的最小化/最大化动画。如曾为测试关闭，可通过 **Win+R → SystemPropertiesPerformance.exe → 视觉效果** 勾选 **在最大化和最小化时显示窗口动画**，点击应用。可保留字体平滑；无需更换字体、安装 macOS 主题或第三方玻璃工具。
+- **TLauncher：** 建议以 **0.70×** 开启动画，快捷键打开紧凑模式、Dock 打开全屏；按喜好选择浅色/深色/跟随系统。壁纸质量按驱动能力调整。登录时自动启动为可选项。
+
+
 
 ## 键盘快捷键
 
@@ -221,7 +250,7 @@ TLauncher 是一款专为 Windows 11 打造的开源桌面工作空间工具。�
 
 **为什么有些窗口无法预览或录制？** Windows 可能限制受保护的内容。录屏支持系统音频；目前不支持麦克风或摄像头。
 
-**配置保存在哪里？如何回退？** 配置位于 `%USERPROFILE%\.deskland-rs`。升级前请备份配置和安装目录。要回退到 1.0.0，请先在 1.0.1 中关闭自动启动并退出，再恢复旧安装包；如有需要可在旧版中重新启用自动启动。
+**配置与回退：** 请参见上文安装与升级。
 
 ## 从源码构建
 

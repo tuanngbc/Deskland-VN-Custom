@@ -1,5 +1,7 @@
 # TLauncher 1.0.2 — resource and motion audit
 
+> **v1.0.2 release:** The owner reported substantially less RAM than an earlier build that reached about 600 MB. This is qualitative, not a controlled whole-app result. The CI lifecycle data below cannot certify 100–150 MiB RAM, 3% GPU or 1% CPU on owner hardware. Scale is deferred; public runtime uses Windows transitions.
+
 Owner baseline: the existing a6bb16d isolated UAT log corroborates the Task Manager report (532 periodic main-process samples). Before repeated Fullscreen Spotlight opens/closures: 181.8 MiB working set and 312.9 MiB private bytes. Median 633.4 MiB working set / 1179.5 MiB private bytes; p95 647.1 / 1202.8; peak 669.9 / 1225.2; last 637.8 / 1179.5. At idle with both wallpapers occluded, the main process still retained ~634 MiB working set and ~1179.5 MiB private bytes, at 0 wallpaper FPS. The log repeatedly shows ~30–35 MiB private-byte growth per full-screen native HostBackdrop open/close while source icon RAM stays 4–5 MiB. This is strong evidence of graphics-session retention associated with Fullscreen, not standalone proof of the precise driver allocation. The benchmark is observational, not a matched controlled A/B; child-process and GPU counters were not recorded. Owner targets: 100–150 MiB aggregate working set, GPU about 3%, average CPU below 1% on Ryzen 5 4600G / GTX 1070 / 2560×1080 + 1080×1920. GitHub hosted Windows cannot certify these targets.
 
 ## Architecture and evidence

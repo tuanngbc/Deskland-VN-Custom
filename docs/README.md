@@ -19,3 +19,5 @@ Các báo cáo theo đợt kiểm thử ghi nhận trạng thái tại commit đ
 - Khi thay đổi tính năng đã phát hành, giới hạn, số liệu, phiên bản hoặc hướng dẫn cài đặt, kiểm tra và đồng bộ [README.en.md](../README.en.md) và [README.zh-CN.md](../README.zh-CN.md) trong cùng lần cập nhật. Giữ ngữ cảnh kiểm chứng và ghi nhận tác giả ở cả ba bản.
 - Ba bản dùng chung ảnh tại `docs/images/` và logo tại `assets/branding/`. Dịch alt text, chú thích, mục lục, bảng và FAQ; không nhân bản ảnh. Giữ vùng `product-guide:start/end` quanh phần giới thiệu chi tiết.
 - Kiểm tra liên kết giữa các bản, các mục lục và đường dẫn tài nguyên trên GitHub trước khi đưa lên nhánh chính.
+
+- [Unified Spotlight v1.0.2](unified-spotlight.md) · [release notes](releases/v1.0.2.vi.md) · [release closeout](releases/v1.0.2-closeout.md)

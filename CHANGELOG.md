@@ -1,11 +1,19 @@
 # Nhật ký thay đổi TLauncher
 
-## 1.0.2 — Unified Spotlight (ứng viên, chưa phát hành)
+## 1.0.2 — Unified Spotlight & Premium Desktop Experience (2026-11-24)
 
-- Giữ Spotlight thu gọn và phím Alt+Space. F6 chuyển giữa chế độ thu gọn và toàn màn hình, giữ nội dung đang tìm. Nút kính lúp trên Dock mặc định mở thư viện trên màn hình của Dock.
-- Lưới phân trang và bốn bộ lọc cho ứng dụng, tệp và công cụ hệ thống. Start, Dock và Spotlight dùng chung dữ liệu ứng dụng đã phát hiện, gồm Start Menu và Windows AppsFolder.
-- Thêm ứng dụng EXE/LNK, đổi tên và icon, ghim vào Dock, đánh dấu yêu thích, ẩn/khôi phục, sắp xếp và nhóm vào thư mục. Các thay đổi được lưu cùng hồ sơ TLauncher; ẩn hoặc bỏ mục tự thêm giữ nguyên tệp gốc.
-- Thư viện chạy trong TLauncher.exe với cửa sổ Win32 native. Sau phản hồi UAT, thay đường vẽ DWM/GDI lỗi bằng nền kính lấy mẫu một lần, làm mờ trong bộ nhớ và vẽ qua bộ đệm RGB. Bổ sung hover cục bộ, icon lớn hơn, lọc shortcut theo đích thực và quy trình thử cách ly có khôi phục production. Xem [hướng dẫn kiểm thử cách ly](docs/unified-spotlight.md). Chất lượng hình ảnh thực tế vẫn chờ OWNER UAT.
+**Added:** Gộp Spotlight thu gọn và thư viện toàn màn hình, cùng catalog Start/Dock. Cấu hình riêng phím tắt và Dock; mặc định Compact/Fullscreen. F6 giữ truy vấn; hỗ trợ phân trang, EXE/LNK, ghim, yêu thích, ẩn/khôi phục, đổi tên/icon và thư mục kéo thả.
+
+**Improved:** Native HostBackdrop/Acrylic trên hệ thống tương thích, nền snapshot hoặc đặc dự phòng; ô tìm kính, chữ trắng ngà và DirectWrite grayscale. Chuyển động Spotlight, Start, Dock, menu, lịch và Trung tâm điều khiển dùng chính sách chung 0,25×–2,00×, mặc định 0,70×.
+
+**Fixed:** Lọc theo đích shortcut, xác minh icon đúng nguồn; bỏ nền chữ nhật đục ở ô tìm toàn màn hình, giữ nhập/chọn text native; chuẩn bị khung đầu khi mở popup, xử lý Escape/reduced motion và chuyển hướng animation. Giữ hồ sơ và khởi động qua Task Scheduler như 1.0.1.
+
+**Performance:** Cache icon RAM/đĩa giới hạn, nạp trước có giới hạn và chỉ làm mới mục bị đổi. Tái sử dụng graphics factories, giải phóng surface khi đóng Spotlight; giới hạn preview Stage và tạm dừng dựng hình khi màn hình phiên tắt.
+
+**Known limitations:** Windows Default là hiệu ứng cửa sổ public. Scale không đạt owner UAT, giữ implementation ngoài hồ sơ thường; Genie và Stage Peek chưa triển khai. Kính và IME tùy hệ thống; mục tiêu RAM/GPU/CPU toàn ứng dụng chưa xác nhận.
+
+[Xem ghi chú phát hành](docs/releases/v1.0.2.vi.md) · [English](docs/releases/v1.0.2.en.md) · [简体中文](docs/releases/v1.0.2.zh-CN.md)
+
 
 ## 1.0.1 — Khởi động cùng Windows, Dock sẵn sàng sớm hơn
 

@@ -38,7 +38,12 @@ impl Settings {
 }
 static ACTIVE:AtomicU32=AtomicU32::new(70|256|512);
 static SYSTEM:AtomicBool=AtomicBool::new(true);
-pub(crate) fn settings()->Settings{Settings::unpack(ACTIVE.load(Ordering::Relaxed))}
+pub(crate) fn scale_experiment_available()->bool{cfg!(test)||crate::trial::active()}
+pub(crate) fn settings()->Settings{
+    let mut s=Settings::unpack(ACTIVE.load(Ordering::Relaxed));
+    s.scale_windows &= scale_experiment_available();
+    s
+}
 pub(crate) fn configure(value:Settings){
     refresh_system();
     ACTIVE.store(value.packed(),Ordering::Relaxed);
