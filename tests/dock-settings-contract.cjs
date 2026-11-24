@@ -355,7 +355,7 @@ test('global motion controls round-trip independently of Dock and Spotlight',()=
   vm.runInContext(html.slice(begin,finish),context);
   context.syncMotion({animationSpeed:0.75,animationsEnabled:true,respectSystemReducedMotion:true});
   assert.equal($('motionSpeed').value,'0.75');
-  for(const speed of [0.25,0.50,0.75,1,1.50,2]){
+  for(const speed of [0.25,0.50,0.70,0.75,1,1.50,2]){
     $('motionSpeed').value=String(speed);
     $('motionSpeed').listeners.input();
     assert($('motionSpeedLabel').textContent.startsWith(speed.toFixed(2)+'x'));
@@ -368,6 +368,6 @@ test('global motion controls round-trip independently of Dock and Spotlight',()=
   $('motionRespect').checked=false;$('motionRespect').listeners.change();
   assert.equal(messages.pop().value.respectSystemReducedMotion,false);
   $('motionReset').listeners.click();
-  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'motionPreferences',value:{animationsEnabled:true,animationSpeed:0.75,respectSystemReducedMotion:true}});
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'motionPreferences',value:{animationsEnabled:true,animationSpeed:0.70,respectSystemReducedMotion:true}});
 });
 console.log('TOTAL: '+count+' PASS / 0 FAIL');

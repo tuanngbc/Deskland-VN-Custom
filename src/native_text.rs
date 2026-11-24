@@ -23,6 +23,8 @@ struct Ctx{
     lines:VecDeque<(Key,String,IDWriteTextLayout)>,
 }
 thread_local!{static CTX:RefCell<Option<Ctx>>=const{RefCell::new(None)};}
+// Release the native DCRenderTarget and any bound bitmap after Fullscreen UI closes.
+pub(crate) fn release(){CTX.with(|slot|{slot.borrow_mut().take();});}
 
 impl Ctx{
     unsafe fn new()->windows::core::Result<Self>{

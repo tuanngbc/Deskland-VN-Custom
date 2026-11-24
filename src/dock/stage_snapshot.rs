@@ -335,8 +335,8 @@ fn settings_tile()->Frame{
     (pixels,W,H)
 }
 const MAX_ENTRIES:usize=80;
-const MAX_FRAME_BYTES:usize=40*1024*1024;
-const MAX_PROJECTION_BYTES:usize=28*1024*1024;
+const MAX_FRAME_BYTES:usize=12*1024*1024;
+const MAX_PROJECTION_BYTES:usize=12*1024*1024;
 const MAX_AGE:Duration=Duration::from_secs(30*60);
 
 #[derive(Clone,PartialEq,Eq)]
@@ -372,7 +372,7 @@ impl Worker{
             let mut device=None;
             loop{
                 let req=if device.is_some(){
-                    match rx.recv_timeout(Duration::from_secs(15)){
+                    match rx.recv_timeout(Duration::from_secs(3)){
                         Ok(req)=>req,
                         Err(mpsc::RecvTimeoutError::Timeout)=>{device=None;continue;},
                         Err(mpsc::RecvTimeoutError::Disconnected)=>break,
@@ -510,6 +510,11 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
             if !visited.contains(&job.source)||state.sources.get(&job.source).and_then(|s|s.stamp.as_ref())!=Some(&job.stamp){
                 job.live.store(false,Ordering::Relaxed);
             }
+        }
+        if targets.is_empty(){
+            // A hidden Stage has no live projection or active capture. Retain
+            // only the bounded source cache for minimized application previews.
+            state.next_capture=None;
         }
         if state.job.is_none()&&!wanted.is_empty(){
             if let Some(delay)=state.next_capture.and_then(|t|t.checked_duration_since(now)){

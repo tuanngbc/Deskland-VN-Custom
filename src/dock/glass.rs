@@ -31,6 +31,15 @@ impl Glass{
         true
     }
     pub(crate) fn is_ready(&self)->bool{!self.pixels.is_empty()}
+    // Resample the captured glass once, independently of the driver's DIB
+    // stretch mode. The menu paints against an explicitly opaque BGRA base.
+    pub(super) fn menu_base(&self,w:i32,h:i32, fallback:[u8;3])->Vec<u8>{
+        if let Some(src)=image::RgbaImage::from_raw(self.width as u32,self.height as u32,self.pixels.clone()){
+            let mut data=image::imageops::resize(&src,w as u32,h as u32,image::imageops::FilterType::Triangle).into_raw();
+            for p in data.chunks_exact_mut(4){p[3]=255;}
+            data
+        }else{[fallback[0],fallback[1],fallback[2],255].repeat(w as usize*h as usize)}
+    }
     pub(crate) unsafe fn draw(&self,dc:HDC,w:i32,h:i32)->bool{
         if !self.is_ready(){return false;}
         let mut info:BITMAPINFO=std::mem::zeroed();

@@ -443,7 +443,7 @@ type IconResult = (IconKey, Option<Arc<IconPixels>>);
 type IconJob = (IconKey, std::sync::mpsc::Sender<IconResult>);
 type RasterRows=std::collections::VecDeque<(IconKey,Option<Arc<IconPixels>>,u64,std::time::Instant,Option<String>)>;
 static RASTERS:LazyLock<Mutex<RasterRows>>=LazyLock::new(||Mutex::new(RasterRows::new()));
-const RASTER_BUDGET:usize=16*1024*1024;
+const RASTER_BUDGET:usize=8*1024*1024;
 static PREFETCH_SIZE:std::sync::atomic::AtomicI32=std::sync::atomic::AtomicI32::new(0);
 pub(crate) fn prewarm_spotlight(icon_size:i32){
     use std::sync::atomic::Ordering::Relaxed;
@@ -464,7 +464,7 @@ fn prefetch_catalog(rows:&[Entry]){
     let (requests,_rx)=icon_worker();
     let mut apps=rows.iter().filter(|app|app_entry(app)).collect::<Vec<_>>();
     apps.sort_by_cached_key(|app|app.name.to_lowercase());
-    for app in apps.into_iter().take(36) {
+    for app in apps.into_iter().take(24) {
         let key=(app.path.clone(),size);
         if warm_raster(&key).is_none()&&requests.send(key).is_err(){break;}
     }
@@ -532,7 +532,7 @@ unsafe fn extract_icon(path: &Path, size: i32) -> Option<Arc<IconPixels>> {
     let command=path.to_str().and_then(crate::dock::command_pin::decode);
     let id=catalog::identity(path);
     let source=command.as_ref().map_or(path,|c|Path::new(&c.exe));
-    let icon=crate::app_icons::shared_source(path,source,Path::new(&id),crate::app_icons::source_tier(size*2))?;
+    let icon=crate::app_icons::shared_source(path,source,Path::new(&id),crate::app_icons::source_tier((size*3+1)/2))?;
     // Do not manufacture detail by enlarging small shell icons. Keep their
     // native raster centred in a larger tile when no large source exists.
     let scale = (size as f32 / icon.width.max(icon.height) as f32).min(1.0);

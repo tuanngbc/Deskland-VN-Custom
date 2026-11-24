@@ -1228,7 +1228,7 @@ mod tests {
             toggle(ptr::null_mut(),anchor);
             SendMessageW(host,APPLY,VK_ESCAPE as usize,0);
             assert_eq!(IsWindowVisible(host),0);
-            for speed in [25,50,75,100,150,200]{
+            for speed in [25,50,70,75,100,150,200]{
                 super::motion::native_fixture(speed,||{
                     toggle(ptr::null_mut(),anchor);
                     let t=START_MOTION.get().expect("native Start opening transition");

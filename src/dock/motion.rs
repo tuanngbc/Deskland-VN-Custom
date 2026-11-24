@@ -7,10 +7,10 @@ use serde_json::{Value,json};
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub(crate) struct Settings { pub enabled:bool,pub speed:u32,pub respect_system:bool }
 impl Default for Settings{
-    fn default()->Self{Self{enabled:true,speed:75,respect_system:true}}
+    fn default()->Self{Self{enabled:true,speed:70,respect_system:true}}
 }
 fn normalize_speed(value:&Value)->u32{
-    let Some(value)=value.as_f64().filter(|v|v.is_finite()&&*v>0.0)else{return 75;};
+    let Some(value)=value.as_f64().filter(|v|v.is_finite()&&*v>0.0)else{return 70;};
     ((value.clamp(0.25,2.0)*20.0).round() as u32)*5
 }
 impl Settings {
@@ -22,7 +22,7 @@ impl Settings {
     pub fn from_profile(root:&Value,legacy:&Value)->Self{
         if root["motion"].is_object(){return Self::from_json(&root["motion"]);}
         let speed=legacy["animationSpeed"].as_u64().filter(|s|*s!=100&&*s>0)
-            .map_or(75,|s|normalize_speed(&json!(s as f64/100.0)));
+            .map_or(70,|s|normalize_speed(&json!(s as f64/100.0)));
         Self{speed,enabled:root["spotlight"]["animations"].as_bool().unwrap_or(true)
             &&!legacy["reducedMotion"].as_bool().unwrap_or(false),..Self::default()}
     }
@@ -35,7 +35,7 @@ impl Settings {
     fn allowed(self,system:bool)->bool{self.enabled&&(!self.respect_system||system)}
     fn duration(self,base:u32)->u32{((base as f64*100.0/self.speed as f64).round() as u32).max(1)}
 }
-static ACTIVE:AtomicU32=AtomicU32::new(75|256|512);
+static ACTIVE:AtomicU32=AtomicU32::new(70|256|512);
 static SYSTEM:AtomicBool=AtomicBool::new(true);
 pub(crate) fn settings()->Settings{Settings::unpack(ACTIVE.load(Ordering::Relaxed))}
 pub(crate) fn configure(value:Settings){
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn speed_round_trip_migration_clamping_and_all_surface_curves(){
-        for speed in [25,50,75,100,150,200]{
+        for speed in [25,50,70,75,100,150,200]{
             let policy=Settings{speed,..Default::default()};
             let parsed=Settings::from_json(&policy.json());
             assert_eq!(parsed,policy);
@@ -174,12 +174,14 @@ mod tests {
             assert_eq!(parsed.duration(PAGE_MS as u32),(22000.0/speed as f64).round() as u32);
             assert_eq!(parsed.duration(FOLDER_MS),(24000.0/speed as f64).round() as u32);
         }
-        for invalid in [json!(null),json!(0),json!(-1),json!("NaN"),json!("Infinity")]{assert_eq!(normalize_speed(&invalid),75);}
+        for invalid in [json!(null),json!(0),json!(-1),json!("NaN"),json!("Infinity")]{assert_eq!(normalize_speed(&invalid),70);}
         assert_eq!(normalize_speed(&json!(0.01)),25);
         assert_eq!(normalize_speed(&json!(9)),200);
         assert_eq!(normalize_speed(&json!(0.77)),75);
         assert_eq!(Settings::from_profile(&json!({}),&json!({"animationSpeed":100})),Settings::default());
         assert_eq!(Settings::from_profile(&json!({}),&json!({"animationSpeed":125})).speed,125);
+        assert_eq!(Settings::default().speed,70);
+        assert_eq!(Settings::from_profile(&json!({"motion":{"animationSpeed":0.75}}),&json!({})).speed,75);
         assert!(!Settings::from_profile(&json!({"spotlight":{"animations":false}}),&json!({})).enabled);
         assert!(!Settings::from_profile(&json!({}),&json!({"reducedMotion":true})).enabled);
         assert!(!Settings::default().allowed(false));
@@ -194,7 +196,7 @@ mod tests {
         configure(Settings{speed:25,..Default::default()});
         let slow=Tween::new(true,FULL,None);
         assert_eq!(slow.duration,1200);
-        for speed in [25,50,75,100,150,200]{
+        for speed in [25,50,70,75,100,150,200]{
             configure(Settings{speed,..Default::default()});
             std::thread::spawn(move||{
                 assert_eq!(settings().speed,speed);

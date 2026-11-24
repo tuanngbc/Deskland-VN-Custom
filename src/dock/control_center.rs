@@ -587,7 +587,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             assert_ne!(GetWindowLongPtrW(shadow,GWL_EXSTYLE)&WS_EX_TRANSPARENT as isize,0);
             close_for(owner);
             assert_eq!(IsWindow(shadow),0);
-            for speed in [25,50,75,100,150,200]{
+            for speed in [25,50,70,75,100,150,200]{
                 super::super::motion::native_fixture(speed,||{
                     show_hub(owner,chrome::Anchor{point:POINT{x:220,y:550},side:super::super::DockSide::Bottom,dark:false,transparency:30},
                         View{title:"Control Center".into(),hint:String::new(),cards:vec![],metrics:None});

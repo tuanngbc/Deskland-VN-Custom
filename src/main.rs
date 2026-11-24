@@ -943,8 +943,9 @@ struct Wallpaper {
     attach: Option<desktop::Attach>,
     // Panorama owns one simulation on output 0; other outputs only present it.
     theme: Option<Box<dyn Theme>>,
-    fbo: glow::Framebuffer,
-    fbo_tex: glow::Texture,
+    // Panorama's direct GPU path samples its shared canvas. No redundant
+    // per-output scene texture is needed unless the compatibility path uses it.
+    scene: Option<(glow::Framebuffer,glow::Texture)>,
     buf_w: i32,
     buf_h: i32,
     phys_w: i32,
@@ -1476,7 +1477,12 @@ impl App {
             let scale = m.dpr.min(0.72);
             let (buf_w, buf_h) = ((w * scale).round() as i32, (h * scale).round() as i32);
             let gl = &ctx.gl;
-            let (fbo, fbo_tex) = unsafe {
+            let gpu=if let Some(device)=&self.gpu_device {
+                match gpu_present::Output::new(device.clone(),gl,hwnd,buf_w,buf_h,pw,ph) {
+                    Ok(output)=>Some(output),Err(e)=>{log!("Màn hình {idx} dùng GDI dự phòng: {e}");None}
+                }
+            } else {None};
+            let scene=if panorama_world.is_some()&&gpu.is_some()&&!self.headless&&!self.legacy_panorama_post {None}else{Some(unsafe{
                 let t = gl.create_texture()?;
                 gl.bind_texture(glow::TEXTURE_2D, Some(t));
                 gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::RGBA8 as i32, buf_w, buf_h, 0, glow::RGBA, glow::UNSIGNED_BYTE, None);
@@ -1486,12 +1492,7 @@ impl App {
                 gl.framebuffer_texture_2d(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(t), 0);
                 gl.bind_framebuffer(glow::FRAMEBUFFER, None);
                 (f, t)
-            };
-            let gpu=if let Some(device)=&self.gpu_device {
-                match gpu_present::Output::new(device.clone(),gl,hwnd,buf_w,buf_h,pw,ph) {
-                    Ok(output)=>Some(output),Err(e)=>{log!("Màn hình {idx} dùng GDI dự phòng: {e}");None}
-                }
-            } else {None};
+            })};
             let out = if self.gdi && gpu.is_none() {Some(output_surface(gl,buf_w,buf_h)?)}else{None};
             // Ở panorama, mọi theme nhận cùng kích thước canvas ảo. Chỉ theme
             // của màn hình đầu tiên được vẽ; các cửa sổ còn lại nhận viewport
@@ -1525,8 +1526,7 @@ impl App {
                 dpr: m.dpr,
                 attach,
                 theme,
-                fbo,
-                fbo_tex,
+                scene,
                 buf_w,
                 buf_h,
                 phys_w: pw,
@@ -1596,8 +1596,7 @@ impl App {
                 if let Some(mut gpu)=wp.gpu.take(){gpu.destroy(&ctx.gl);}
                 if let Some(theme)=wp.theme.as_mut() { theme.destroy(&ctx.gl); }
                 unsafe {
-                    ctx.gl.delete_framebuffer(wp.fbo);
-                    ctx.gl.delete_texture(wp.fbo_tex);
+                    if let Some((fbo,texture))=wp.scene.take(){ctx.gl.delete_framebuffer(fbo);ctx.gl.delete_texture(texture);}
                     if let Some((f, t, b)) = wp.out.take() {
                         ctx.gl.delete_framebuffer(f);
                         ctx.gl.delete_texture(t);
@@ -1930,9 +1929,9 @@ impl App {
                 ctx.make_current(wp.gl_dc);
                 if !Self::ensure_output(gl,wp,self.gdi) {continue;}
                 let source=PostSource::panorama(pan,wp.screen);
-                let source=if wp.gpu.is_none() || self.legacy_panorama_post {
-                    Self::crop_panorama(gl,shared,source.texture,wp.fbo,wp.buf_w,wp.buf_h,source.rect[0],source.rect[1],source.rect[2],source.rect[3],source.size[0],source.size[1]);
-                    PostSource::full(wp.fbo_tex)
+                let source=if let Some((scene,texture))=wp.scene.filter(|_|wp.gpu.is_none()||self.legacy_panorama_post){
+                    Self::crop_panorama(gl,shared,source.texture,scene,wp.buf_w,wp.buf_h,source.rect[0],source.rect[1],source.rect[2],source.rect[3],source.size[0],source.size[1]);
+                    PostSource::full(texture)
                 } else {source};
                 Self::present_output(gl,shared,wp,source,now,self.gdi);
                 drew = true;
@@ -1953,8 +1952,9 @@ impl App {
             // Chế độ gdi: hiện khung đã đọc về ở lượt trước (GPU xong từ lâu, map không phải chờ)
             Self::present_gdi(gl, wp,&self.staging,self.benchmark_direct_readback);
             let theme=wp.theme.as_mut().unwrap();
+            let (scene,texture)=wp.scene.expect("independent output scene");
             unsafe {
-                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(wp.fbo));
+                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(scene));
                 gl.viewport(0, 0, wp.buf_w, wp.buf_h);
             }
             if settle {
@@ -1966,7 +1966,7 @@ impl App {
                 theme.frame(gl, shared, dt, now);
             }
             theme.draw_overlay(gl, shared, now);
-            Self::present_output(gl,shared,wp,PostSource::full(wp.fbo_tex),now,self.gdi);
+            Self::present_output(gl,shared,wp,PostSource::full(texture),now,self.gdi);
             drew = true;
         }
         if drew {
@@ -1989,8 +1989,9 @@ impl App {
             for(wp,target)in self.walls.iter().zip(&targets) {
                 let source=PostSource::panorama(pan,wp.screen);
                 let source=if legacy {
-                    Self::crop_panorama(gl,shared,source.texture,wp.fbo,wp.buf_w,wp.buf_h,source.rect[0],source.rect[1],source.rect[2],source.rect[3],source.size[0],source.size[1]);
-                    PostSource::full(wp.fbo_tex)
+                    let (scene,texture)=wp.scene.expect("headless benchmark scene");
+                    Self::crop_panorama(gl,shared,source.texture,scene,wp.buf_w,wp.buf_h,source.rect[0],source.rect[1],source.rect[2],source.rect[3],source.size[0],source.size[1]);
+                    PostSource::full(texture)
                 }else{source};
                 Self::post_process_texture(gl,shared,source,Some(target.0),wp.buf_w,wp.buf_h,now,true);
             }
@@ -2041,7 +2042,7 @@ impl App {
         }).to_string());
         for i in 0..self.walls.len() {
             let path = format!("{dir}\\{}-screen{i}.bmp", self.cfg.theme);
-            match std::fs::write(&path, self.read_bmp(i)) {
+            match self.read_bmp(i).and_then(|bmp|std::fs::write(&path,bmp)) {
                 Ok(_) => log!("Đã lưu ảnh kiểm tra {path}"),
                 Err(e) => log!("Lưu ảnh kiểm tra lỗi: {e}"),
             }
@@ -2050,21 +2051,20 @@ impl App {
 
     /// Đọc khung hình của màn hình `i` từ GPU thành file BMP 32-bit
     /// (độ phân giải thật nếu có FBO phóng to, không thì độ phân giải bộ đệm vẽ).
-    fn read_bmp(&self, i: usize) -> Vec<u8> {
+    fn read_bmp(&self, i: usize) -> std::io::Result<Vec<u8>> {
         let ctx = self.ctx.as_ref().unwrap();
         let gl = &ctx.gl;
         let wp = &self.walls[i];
         ctx.make_current(wp.gl_dc);
-        let (fbo, w, h) = match wp.out {
-            Some((f, _, _)) => (f, wp.buf_w as usize, wp.buf_h as usize),
-            None => (wp.fbo, wp.buf_w as usize, wp.buf_h as usize),
-        };
+        let fbo=wp.out.map(|(f,_,_)|f).or_else(||wp.scene.map(|(f,_)|f));
+        let (w,h)=(wp.buf_w as usize,wp.buf_h as usize);
         let gpu_pixels=wp.gpu.as_ref().and_then(|gpu|gpu.read_bgra().map_err(|e|log!("Đọc ảnh GPU lỗi: {e}")).ok());
         let mut px = vec![0u8; w * h * 4];
         if let Some(top_down)=gpu_pixels {
             let stride=w*4;
             for(y,row)in px.chunks_exact_mut(stride).enumerate(){row.copy_from_slice(&top_down[(h-1-y)*stride..(h-y)*stride]);}
         } else { unsafe {
+            let fbo=fbo.ok_or_else(||std::io::Error::other("GPU frame unavailable"))?;
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(fbo));
             gl.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
             gl.read_pixels(0, 0, w as i32, h as i32, glow::BGRA, glow::UNSIGNED_BYTE, glow::PixelPackData::Slice(&mut px));
@@ -2085,7 +2085,7 @@ impl App {
         f.extend_from_slice(&(px.len() as u32).to_le_bytes());
         f.extend_from_slice(&[0u8; 16]);
         f.extend_from_slice(&px);
-        f
+        Ok(f)
     }
 
     /// Chụp cảnh màn hình chính rồi đặt làm ảnh màn khóa Windows (chạy nền).
@@ -2095,7 +2095,7 @@ impl App {
             return;
         }
         let path = lock::data_dir().join("lockscreen.bmp");
-        match std::fs::write(&path, self.read_bmp(0)) {
+        match self.read_bmp(0).and_then(|bmp|std::fs::write(&path,bmp)) {
             Ok(_) => lock::sync_lock_image(&path),
             Err(e) => log!("Lưu ảnh màn khóa lỗi: {e}"),
         }
@@ -2109,7 +2109,7 @@ impl App {
             return;
         }
         let path = lock::data_dir().join("wallpaper.bmp");
-        match std::fs::write(&path, self.read_bmp(0)) {
+        match self.read_bmp(0).and_then(|bmp|std::fs::write(&path,bmp)) {
             Ok(_) => lock::set_static_wallpaper(path),
             Err(e) => log!("Lưu ảnh hình nền tĩnh lỗi: {e}"),
         }
@@ -2574,14 +2574,15 @@ fn main() {
             ctx.make_current(wp.gl_dc);
             let gpu=wp.gpu.as_mut().expect("GPU presentation required for this diagnostic; GDI fallback is not a pass");
             let reference=output_surface(gl,wp.buf_w,wp.buf_h).unwrap();
-            let source=app.panorama.as_ref().map_or(PostSource::full(wp.fbo_tex),|pan|PostSource::panorama(pan,wp.screen));
+            let (scene,texture)=wp.scene.expect("headless benchmark scene");
+            let source=app.panorama.as_ref().map_or(PostSource::full(texture),|pan|PostSource::panorama(pan,wp.screen));
             if source.crop {
-                App::crop_panorama(gl,shared,source.texture,wp.fbo,wp.buf_w,wp.buf_h,source.rect[0],source.rect[1],source.rect[2],source.rect[3],source.size[0],source.size[1]);
+                App::crop_panorama(gl,shared,source.texture,scene,wp.buf_w,wp.buf_h,source.rect[0],source.rect[1],source.rect[2],source.rect[3],source.size[0],source.size[1]);
             }
             let lighting=(shared.day_phase,shared.weather);
             for(day,weather)in [(0.1,0.0),(0.5,0.55),(0.9,1.0)] {
                 shared.day_phase=day;shared.weather=weather;
-                App::post_process_texture(gl,shared,PostSource::full(wp.fbo_tex),Some(reference.0),wp.buf_w,wp.buf_h,now,false);
+                App::post_process_texture(gl,shared,PostSource::full(texture),Some(reference.0),wp.buf_w,wp.buf_h,now,false);
                 let mut expected=vec![0u8;(wp.buf_w*wp.buf_h*4) as usize];
                 unsafe{
                     gl.bind_framebuffer(glow::READ_FRAMEBUFFER,Some(reference.0));

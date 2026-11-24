@@ -27,12 +27,19 @@ unsafe fn items(menu:HMENU,depth:usize)->Vec<Entry>{
     }).collect()
 }
 struct Menu{
-    layer:Layer,scaled:Option<Layer>,glass:Glass,font:HFONT,dark:bool,dpi:u32,
+    layer:Layer,scaled:Option<Layer>,base:Vec<u8>,glyphs:Layer,font:HFONT,dark:bool,dpi:u32,
     tween:Option<Tween>,pivot:(f32,f32),hover_from:Option<usize>,hover_at:Option<motion::Span>,shadow:Option<chrome::PanelShadow>,
     pages:Vec<(Vec<Entry>,usize,Option<usize>)>,hot:Option<usize>,offset:usize,pressed:Option<usize>,
     rows:usize,row:i32,pad:i32,done:bool,result:u32,
 }
 impl Drop for Menu{fn drop(&mut self){unsafe{if !self.font.is_null(){DeleteObject(self.font);}}}}
+fn composite_glyphs(dst:&mut[u8],mask:&[u8],ink:[u8;3]){
+    for (p,m) in dst.chunks_exact_mut(4).zip(mask.chunks_exact(4)){
+        let a=(u32::from(m[0])+u32::from(m[1])+u32::from(m[2])+1)/3;
+        for c in 0..3{p[c]=((u32::from(ink[c])*a+u32::from(p[c])*(255-a)+127)/255) as u8;}
+        p[3]=255;
+    }
+}
 impl Menu{
     unsafe fn prepare_open(&mut self,hwnd:HWND)->bool{
         self.tween=Some(Tween::new(true,motion::MENU,None).prepared());
@@ -100,16 +107,18 @@ impl Menu{
         GdiFlush();
         scaled.pixels().fill(0);
         let blend=BLENDFUNCTION{BlendOp:AC_SRC_OVER as u8,BlendFlags:0,SourceConstantAlpha:255,AlphaFormat:AC_SRC_ALPHA as u8};
-        AlphaBlend(scaled.dc(),x,y,(w as f32*z).round().max(1.0) as i32,(h as f32*z).round().max(1.0) as i32,
-            self.layer.dc(),0,0,w,h,blend);
+        if AlphaBlend(scaled.dc(),x,y,(w as f32*z).round().max(1.0) as i32,(h as f32*z).round().max(1.0) as i32,
+            self.layer.dc(),0,0,w,h,blend)==0{return self.layer.present_at(hwnd,None,opacity);}
+        GdiFlush();
         scaled.present_at(hwnd,None,opacity)
     }
     unsafe fn render(&mut self,hwnd:HWND)->bool{
         let (w,h)=self.layer.size;
         let g=self.layer.dc();
         let palette=Palette::new(self.dark);
-        if !self.glass.draw(g,w,h){super::fill(g,RECT{left:0,top:0,right:w,bottom:h},chrome::color(palette.panel));}
-        let old=SelectObject(g,self.font);
+        GdiFlush();
+        self.layer.pixels().copy_from_slice(&self.base);
+        let old=SelectObject(self.glyphs.dc(),self.font);
         let px=|n|chrome::scale(self.dpi,n);
         let visible=self.entries().iter().skip(self.offset).take(self.rows).map(|e|
             (e.text.clone(),e.separator,e.disabled,e.check,!e.children.is_empty())).collect::<Vec<_>>();
@@ -126,11 +135,20 @@ impl Menu{
             if lift>0.0{self.layer.shape(r,px(10) as f32,if self.dark{[83,84,90]}else{[221,235,248]},(215.0*lift).round() as u8);}
             let flags=DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS;
             let ink=if disabled{palette.muted}else{palette.ink};
-            chrome::text(g,RECT{left:px(28),right:r.right-px(22),..r},&label,ink,flags);
-            if checked{chrome::text(g,RECT{left:px(12),right:px(27),..r},"✓",ink,flags);}
-            if submenu{chrome::text(g,RECT{left:r.right-px(18),..r},"›",ink,flags);}
+            // DirectWrite's alpha-ignored target is confined to a black mask.
+            // Never mix its output or a GDI-written alpha byte into the glass.
+            GdiFlush();
+            let stride=w as usize*4;
+            let extent=top as usize*stride..(top+self.row) as usize*stride;
+            self.glyphs.pixels()[extent.clone()].fill(0);
+            let mask=self.glyphs.dc();
+            chrome::text(mask,RECT{left:px(28),right:r.right-px(22),..r},&label,[255;3],flags);
+            if checked{chrome::text(mask,RECT{left:px(12),right:px(27),..r},"✓",[255;3],flags);}
+            if submenu{chrome::text(mask,RECT{left:r.right-px(18),..r},"›",[255;3],flags);}
+            GdiFlush();
+            composite_glyphs(&mut self.layer.pixels()[extent.clone()],&self.glyphs.pixels()[extent],ink);
         }
-        SelectObject(g,old);GdiFlush();
+        SelectObject(self.glyphs.dc(),old);GdiFlush();
         chrome::mask_popup(self.layer.pixels(),w,h,px(16) as f32,255);
         self.present(hwnd)
     }
@@ -220,6 +238,8 @@ unsafe fn show(menu:HMENU,owner:HWND,point:POINT,flags:u32,dark:bool,transparenc
     let rect=RECT{left:x,top:y,right:x+w,bottom:y+h};
     let glass=Glass::capture(rect,dpi,dark,transparency);
     let layer=Layer::new(w,h)?;
+    let glyphs=Layer::new(w,h)?;
+    let base=glass.menu_base(w,h,Palette::new(dark).panel);
     let class=wide("TLauncherGlassMenu");
     if !chrome::register_with_style(&class,Some(proc),0){return None;}
     let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST|WS_EX_LAYERED,class.as_ptr(),wide("Menu TLauncher").as_ptr(),
@@ -228,7 +248,7 @@ unsafe fn show(menu:HMENU,owner:HWND,point:POINT,flags:u32,dark:bool,transparenc
     chrome::disable_system_border(hwnd);
     let animate=super::popup_motion_allowed()&&SetTimer(hwnd,FRAME_TIMER,16,None)!=0;
     let model=RefCell::new(Menu{layer,scaled:if animate{Layer::new(w,h)}else{None},
-        glass,font:chrome::choose_font(dpi,14,500),dark,dpi,pages:vec![(entries,0,None)],
+        base,glyphs,font:chrome::choose_font(dpi,14,500),dark,dpi,pages:vec![(entries,0,None)],
         tween:None,pivot:((point.x-x).clamp(0,w) as f32,(point.y-y).clamp(0,h) as f32),
         hover_from:None,hover_at:None,shadow:None,
         hot:None,offset:0,pressed:None,rows,row,pad,done:false,result:0});
@@ -289,15 +309,21 @@ mod tests{
             let hwnd=CreateWindowExW(WS_EX_LAYERED|WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW,name.as_ptr(),ptr::null(),
                 WS_POPUP,30,30,220,80,ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
             assert!(!hwnd.is_null());
-            for speed in [25,50,75,100,150,200]{
+            for speed in [25,50,70,75,100,150,200]{
                 motion::native_fixture(speed,||{
                     let mut m=Menu{layer:Layer::new(220,80).unwrap(),scaled:Layer::new(220,80),
-                        glass:Glass::capture(RECT{left:30,top:30,right:250,bottom:110},96,false,30),
+                        base:Glass::capture(RECT{left:30,top:30,right:250,bottom:110},96,false,30).menu_base(220,80,Palette::new(false).panel),
+                        glyphs:Layer::new(220,80).unwrap(),
                         font:chrome::choose_font(96,14,500),dark:false,dpi:96,pages:vec![(vec![Entry{id:1,text:"Open".into(),
                             disabled:false,check:false,separator:false,children:vec![]}],0,None)],
                         tween:None,pivot:(0.0,0.0),hover_from:None,hover_at:None,shadow:None,
                         hot:None,offset:0,pressed:None,rows:1,row:32,pad:8,done:false,result:0};
-                    assert!(m.render(hwnd));assert!(m.prepare_open(hwnd));
+                    assert!(m.render(hwnd));
+                    let clean=m.layer.pixels().to_vec();
+                    assert!(clean.chunks_exact(4).all(|p|p[..3].iter().all(|c|*c<=p[3])));
+                    m.layer.pixels().fill(0xe7);m.glyphs.pixels().fill(0xb5);
+                    assert!(m.render(hwnd));assert_eq!(m.layer.pixels(),clean.as_slice(),"repaint must overwrite all stale pixels");
+                    assert!(m.prepare_open(hwnd));
                     let first=m.tween.unwrap();
                     assert_eq!(first.openness(),0.0);
                     assert_eq!(first.duration,(18000.0/speed as f64).round() as u32);

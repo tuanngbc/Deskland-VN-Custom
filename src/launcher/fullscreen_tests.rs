@@ -267,7 +267,7 @@ fn native_activation_modes_apply_live_on_one_overlay(){
     assert!(window().is_some());
     dismiss(false);
     configure(Preferences::default());
-    for speed in [25,50,75,100,150,200]{
+    for speed in [25,50,70,75,100,150,200]{
         motion::native_fixture(speed,||unsafe{
             super::super::toggle(ptr::null_mut());
             let (h,_,_,_)=handles().unwrap();
@@ -632,7 +632,7 @@ fn native_isolated_library_search_navigation_and_100_toggles() {
         configure(Preferences::default());
         open(p,String::new(),ptr::null_mut(),false);
         let motion_hwnd=window().unwrap();
-        for speed in [25,50,75,100,150,200]{
+        for speed in [25,50,70,75,100,150,200]{
             motion::native_fixture(speed,||{
                 PANEL.with(|p|p.borrow_mut().as_mut().unwrap().folder=1);
                 start_grid_motion(motion_hwnd);
@@ -647,6 +647,7 @@ fn native_isolated_library_search_navigation_and_100_toggles() {
         println!("MOTION_SPEED folder_page_native=PASS six_speeds=PASS");
         pump();
         let before = resources();
+        let memory_before=crate::private_mb();
         let mut elapsed = Vec::new();
         // Focus/IME activation on a non-input desktop is a different OS path;
         // stress the real native creation, show and destroy without activating it.
@@ -661,6 +662,9 @@ fn native_isolated_library_search_navigation_and_100_toggles() {
         }
         pump();
         let after = resources();
+        let memory_after=crate::private_mb();
+        println!("RESOURCE_SPOTLIGHT private_working_set_mib_before={memory_before:?} private_working_set_mib_after={memory_after:?} tuple=private_bytes,working_set");
+        assert!(PANEL.with(|p|p.borrow().is_none())&&FRAME.with(|f|f.borrow().is_none()));
         elapsed.sort_by(f64::total_cmp);
         println!(
             "SPOTLIGHT_NATIVE toggles=100 gdi_user_handles_before={before:?} after={after:?} warm_nonactivating_open_median_ms={:.3} p95_ms={:.3}",

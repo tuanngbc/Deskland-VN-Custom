@@ -70,6 +70,8 @@ impl Layer {
         if previous.is_null() || previous as isize == -1 {
             DeleteObject(bitmap);DeleteDC(dc);return None;
         }
+        // DIBSection memory is not an alpha contract. Initialize before first use.
+        GdiFlush();ptr::write_bytes(bits.cast::<u8>(),0,width as usize*height as usize*4);
         Some(Self{dc,bitmap,previous,bits:bits.cast(),size:(width,height)})
     }
     pub(crate) fn pixels(&mut self) -> &mut [u8] {

@@ -166,23 +166,50 @@ impl Motion {
     fn tick(&mut self, now:std::time::Instant, speed:u32, reveal:&mut motion::Spring, shown:bool,start_goal:f32)->bool{
         let dt=self.at.replace(now).map_or(0.016,|t|now.duration_since(t).as_secs_f32().clamp(0.001,0.090));
         let speed=speed as f32/100.0;
-        let start_moving=self.start.advance(start_goal,dt,35.0*speed.clamp(0.7,2.0),0.005);
-        let moving=reveal.advance(if shown{1.0}else{0.0},dt,25.0*speed,0.003);
-        // A reveal already transforms the entire Dock. Finish that motion
-        // before asking the layout to magnify individual icons again.
+        // Critically damped springs reach the 0.3% rest band near
+        // 8/frequency seconds. Every channel honors the entire speed range.
+        let start_moving=self.start.advance(start_goal,dt,36.0*speed,0.005);
+        let moving=reveal.advance(if shown{1.0}else{0.0},dt,if shown{29.0*speed}else{36.0*speed},0.003);
+        // Freeze the rendered geometry during whole-Dock contraction/reveal;
+        // reuse one motion bitmap rather than rebuilding glass each frame.
         if moving{return true;}
-        if !shown{
-            self.zoom=motion::Spring::rest(0.0);self.focus=None;
-            return start_moving;
-        }
-        let goal=if self.target.is_some(){1.0}else{0.0};
-        let mut unsettled=self.zoom.advance(goal,dt,23.0*speed.clamp(0.7,2.0),0.0025);
+        let goal=if shown&&self.target.is_some(){1.0}else{0.0};
+        if !shown{self.zoom=motion::Spring::rest(0.0);self.focus=None;return start_moving;}
+        let mut unsettled=self.zoom.advance(goal,dt,36.0*speed,0.0025);
         if let Some(target)=self.target{
             let focus=self.focus.get_or_insert_with(||motion::Spring::rest(target));
-            unsettled|=focus.advance(target,dt,20.0+15.0*speed.clamp(0.7,2.0),0.12);
+            unsettled|=focus.advance(target,dt,38.0*speed,0.12);
         }
-        if self.target.is_none() && self.zoom.value==0.0 { self.focus=None; }
-        unsettled||start_moving
+        if goal==0.0 && self.zoom.value==0.0 { self.focus=None; }
+        moving||unsettled||start_moving
+    }
+}
+#[cfg(test)]
+#[test]
+fn dock_motion_tracks_speed_and_reverses_from_displayed_state(){
+    let start=std::time::Instant::now();
+    for speed in [25,70,100,200]{
+        let mut motion=Motion::default();
+        let mut reveal=motion::Spring::rest(1.0);
+        motion.at=Some(start);
+        let mut previous=1.0;
+        for step in 1..=12{
+            motion.tick(start+Duration::from_millis(step*16),speed,&mut reveal,false,0.0);
+            assert!(reveal.value<=previous+0.001);
+            previous=reveal.value;
+        }
+        let reversed=reveal.value;
+        let mut ticks=0;
+        for step in 13..=250{
+            ticks+=1;
+            if !motion.tick(start+Duration::from_millis(step*16),speed,&mut reveal,true,0.0){break;}
+        }
+        assert_eq!(reveal.value,1.0);
+        assert!(reversed<1.0&&ticks<238);
+        motion.target=Some(220.0);
+        let at=motion.at.unwrap();
+        motion.tick(at+Duration::from_millis(16),speed,&mut reveal,true,0.0);
+        assert!(motion.zoom.value>0.0&&motion.zoom.value<1.0);
     }
 }
 impl Bar {

@@ -123,7 +123,7 @@ fn override_path(path:&Path)->Option<PathBuf>{
 // Source rasters are shared across the launcher worker and the Dock worker.
 // Keep the source separate from destination size and never cache derived
 // pixels across two different source stamps.
-const SOURCE_RAM:usize=24*1024*1024;
+const SOURCE_RAM:usize=12*1024*1024;
 const SOURCE_DISK:u64=128*1024*1024;
 const MAX_BYTES:usize=512*512*4;
 const MAGIC:&[u8;8]=b"TLBGRA01";

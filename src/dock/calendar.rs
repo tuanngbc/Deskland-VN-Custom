@@ -393,7 +393,7 @@ mod tests{
                 assert!(!open_for(owner));
                 assert_eq!(IsWindow(hwnd),0);
             }
-            for speed in [25,50,75,100,150,200]{
+            for speed in [25,50,70,75,100,150,200]{
                 super::super::motion::native_fixture(speed,||{
                     let anchor=chrome::Anchor{point:POINT{x:260,y:480},side:super::super::DockSide::Bottom,dark:false,transparency:32};
                     show(owner,anchor);

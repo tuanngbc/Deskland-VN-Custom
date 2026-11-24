@@ -150,9 +150,11 @@ impl NativeBackdrop {
     }
     unsafe fn material(&self,dark:bool,strength:i32){
         if let Some(host)=&self.host{
-            let tone=if dark {18}else{245};
-            let _=host.brush.SetColor(windows::UI::Color{A:255,R:tone,G:tone,B:tone});
-            let _=host.sheet.SetOpacity((strength as f32/100.0).clamp(0.20,0.48));
+            // Ivory labels require contrast even against white windows.
+            // Keep real HostBackdrop color/detail, with a neutral cool tint.
+            let (r,g,b)=if dark{(13,17,25)}else{(28,40,48)};
+            let _=host.brush.SetColor(windows::UI::Color{A:255,R:r,G:g,B:b});
+            let _=host.sheet.SetOpacity((if dark{0.50}else{0.53}+strength as f32*0.002).clamp(0.54,0.64));
         }else{
             let value=i32::from(dark);
             let _=DwmSetWindowAttribute(self.hwnd,DWMWA_USE_IMMERSIVE_DARK_MODE as u32,(&value as *const i32).cast(),4);
@@ -280,7 +282,10 @@ impl Foreground {
     }
 }
 impl Drop for Foreground{
-    fn drop(&mut self){unsafe{let _=self.target.SetRoot(None::<&IDCompositionVisual>);let _=self.comp.Commit();}}
+    fn drop(&mut self){unsafe{
+        let _=self.target.SetRoot(None::<&IDCompositionVisual>);
+        let _=self.comp.Commit();self.surface.take();self.ctx.ClearState();self.ctx.Flush();
+    }}
 }
 
 struct LiveMaterial { backdrop:NativeBackdrop, foreground:Foreground }
@@ -590,8 +595,9 @@ fn palette(dark:bool, high_contrast:bool)->Palette {
     if high_contrast { unsafe {
         return Palette{face:GetSysColor(COLOR_WINDOW),ink:GetSysColor(COLOR_WINDOWTEXT),secondary:GetSysColor(COLOR_WINDOWTEXT),active:GetSysColor(COLOR_HIGHLIGHT),fallback:GetSysColor(COLOR_WINDOW)};
     } }
-    if dark { Palette{face:0x003e3531,ink:0x00fdfbf8,secondary:0x00f1e8df,active:0x00917b65,fallback:0x00352a22} }
-    else { Palette{face:0x00e8e4dd,ink:0x00191412,secondary:0x003b312b,active:0x005b818d,fallback:0x00e4e9de} }
+    // COLORREF: 0x00BBGGRR. Ivory #F5F8FC in both non-HC themes.
+    if dark { Palette{face:0x00493d34,ink:0x00fcf8f5,secondary:0x00e4ddd5,active:0x00938170,fallback:0x00352a22} }
+    else { Palette{face:0x00776c62,ink:0x00fcf8f5,secondary:0x00eee7df,active:0x00b8a89a,fallback:0x00746a5b} }
 }
 fn grid(p: &Panel) -> Grid {
     OPTIONS.with(|o| Grid::with_toolbar(p.width,p.height,p.dpi,&o.borrow(),
@@ -952,9 +958,30 @@ unsafe fn text_alpha(dc:HDC,s:&str,r:RECT,f:HFONT,ink:u32,center:bool){
         text(mask.dc(),s,area,f,0x00ffffff,center);
     }
     GdiFlush();
+    let coverage=mask.pixels().chunks_exact(4).map(|p|((u16::from(p[0])+u16::from(p[1])+u16::from(p[2])+1)/3) as u8).collect::<Vec<_>>();
+    // A small separable Gaussian-like kernel, scaled with font DPI.
+    // Shadow is independent of foreground glyph coverage.
+    let radius=(h/18).clamp(1,3);
+    let mut shadow=vec![0;w as usize*h as usize*4];
+    let mut horizontal=vec![0u16;w as usize*h as usize];
+    let weight=((radius+1)*(radius+1)) as u32;
+    for y in 0..h{for x in 0..w{
+        let sum=(-radius..=radius).filter_map(|dx|{
+            let sx=x+dx;(0..w).contains(&sx).then(||u32::from(coverage[(y*w+sx) as usize])*(radius+1-dx.abs()) as u32)
+        }).sum::<u32>();
+        horizontal[(y*w+x) as usize]=sum as u16;
+    }}
+    for y in 0..h{for x in 0..w{
+        let sum=(-radius..=radius).filter_map(|dy|{
+            let sy=y+dy-radius;(0..h).contains(&sy).then(||u32::from(horizontal[(sy*w+x) as usize])*(radius+1-dy.abs()) as u32)
+        }).sum::<u32>();
+        let a=(sum*105/(weight*weight*255)) as u8;
+        let i=((y*w+x)*4) as usize;shadow[i]=a/12;shadow[i+1]=a/24;shadow[i+3]=a;
+    }}
+    draw_icon(dc,&IconPixels{width:w,height:h,pixels:shadow},r.left,r.top);
     let mut pixels=vec![0;w as usize*h as usize*4];
-    for (out,input) in pixels.chunks_exact_mut(4).zip(mask.pixels().chunks_exact(4)){
-        let a=u32::from(input[0]);
+    for (out,a) in pixels.chunks_exact_mut(4).zip(coverage){
+        let a=u32::from(a);
         for (c,shift) in [16,8,0].into_iter().enumerate(){out[c]=((((ink>>shift)&255)*a+127)/255) as u8;}
         out[3]=a as u8;
     }
@@ -1045,8 +1072,24 @@ unsafe fn draw_live_edit(dc:HDC,edit:HWND,area:RECT,face:u32,ink:u32,font:HFONT)
         }
     }
     GdiFlush();
-    for row in raster.pixels().chunks_exact_mut(4){row[3]=255;}
-    BitBlt(dc,area.left,area.top,w,h,edc,0,0,SRCCOPY);
+    // Keep native EDIT input, IME, selection and caret. Extract grayscale
+    // foreground coverage from its opaque print surface; the matching
+    // background is transparent. Selection colors are preserved as solid.
+    let bg=[(face>>16) as u8,(face>>8) as u8,face as u8];
+    let fg=[(ink>>16) as u8,(ink>>8) as u8,ink as u8];
+    let channel=(0..3).max_by_key(|&i|fg[i].abs_diff(bg[i])).unwrap();
+    let denom=f32::from(fg[channel])-f32::from(bg[channel]);
+    for pixel in raster.pixels().chunks_exact_mut(4){
+        if denom.abs()<1.0{pixel[3]=255;continue;}
+        let a=((f32::from(pixel[channel])-f32::from(bg[channel]))/denom).clamp(0.0,1.0);
+        if (0..3).all(|i|(f32::from(pixel[i])-(f32::from(bg[i])+(f32::from(fg[i])-f32::from(bg[i]))*a)).abs()<=5.0){
+            let alpha=(a*255.0).round() as u8;
+            for i in 0..3{pixel[i]=((u16::from(fg[i])*u16::from(alpha)+127)/255) as u8;}
+            pixel[3]=alpha;
+        }else{pixel[3]=255;}
+    }
+    AlphaBlend(dc,area.left,area.top,w,h,edc,0,0,w,h,BLENDFUNCTION{
+        BlendOp:AC_SRC_OVER as u8,BlendFlags:0,SourceConstantAlpha:255,AlphaFormat:AC_SRC_ALPHA as u8});
 }
 
 type PaintTile = (
@@ -1141,6 +1184,13 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
             .take(grid.capacity())
             .cloned()
             .collect::<Vec<_>>();
+        // Only the visible page owns decoded rasters. Previous pages use the
+        // bounded shared RAM/disk caches, not an extra overlay-wide cache.
+        let visible_keys=visible.iter().flat_map(|t|{
+            std::iter::once((t.entry.path.clone(),grid.icon.clamp(8,192)))
+                .chain(t.preview.iter().map(|path|(path.clone(),(grid.icon/3).clamp(8,192))))
+        }).collect::<std::collections::HashSet<_>>();
+        p.icons.retain(|key,_|visible_keys.contains(key));
         let tiles = visible
             .into_iter()
             .enumerate()
@@ -1240,13 +1290,20 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
             SetStretchBltMode(dc, HALFTONE);
             StretchDIBits(dc,0,0,w,h,0,0,bw,bh,glass.as_ptr().cast(),&info,DIB_RGB_COLORS,SRCCOPY);
         }
-        let text:unsafe fn(HDC,&str,RECT,HFONT,u32,bool)=if live{text_alpha}else{text};
+        let text:unsafe fn(HDC,&str,RECT,HFONT,u32,bool)=if high_contrast{text}else{text_alpha};
         let header=crate::native_text::font_pixels(u(17),550);
         let search=search_rect(w,dpi);
-        if intersects(search,dirty){
+        let halo=rect(search.left-u(5),search.top-u(5),search.right+u(5),search.bottom+u(7));
+        if intersects(halo,dirty){
             let field=edit_rect(w,dpi);
-            let field_face=if high_contrast{face}else if dark{0x00413934}else{0x00e0e6e7};
-            round(dc,search,u(23),field_face,if high_contrast||!live{255}else{204});
+            let field_face=face;
+            if high_contrast{round(dc,search,u(32),face,255);}
+            else{
+                round(dc,rect(search.left-u(2),search.top,search.right+u(2),search.bottom+u(4)),u(36),0x00151008,48);
+                round(dc,search,u(32),0x00fcf8f5,if GetFocus()==edit{120}else{82});
+                let inner=rect(search.left+1,search.top+1,search.right-1,search.bottom-1);
+                round(dc,inner,u(30),field_face,if live{155}else{255});
+            }
             search_glyph(dc,search,secondary,dpi);
             if live{draw_live_edit(dc,edit,field,field_face,ink,search_font);}
         }
@@ -1458,8 +1515,8 @@ fn transparency_allowed() -> bool {
 fn frosted(raw: &[u8], w:i32,h:i32,dpi:u32,dark:bool, cfg:&Preferences) -> Vec<u8> {
     if raw.is_empty() { return Vec::new(); }
     let mut glass=super::frost(raw,w,h,dpi as f32/96.0,&Appearance {
-        theme: if dark { "dark" } else { "light" }.into(),
-        transparency: cfg.glass_strength.clamp(20,48) as f32/100.0,
+        theme: "dark".into(),
+        transparency: if dark{0.40}else{0.62}+cfg.glass_strength.clamp(20,48) as f32*0.001,
         blur: cfg.glass_blur.clamp(24,64) as f32,
     });
     // Preserve hue while bounding the extreme brightness of a desktop sample.
@@ -1469,8 +1526,8 @@ fn frosted(raw: &[u8], w:i32,h:i32,dpi:u32,dark:bool, cfg:&Preferences) -> Vec<u
             let max=*pixel[..3].iter().max().unwrap() as u32;
             if max>94 {for c in &mut pixel[..3]{*c=(*c as u32*94/max) as u8;}}
         } else {
-            let min=*pixel[..3].iter().min().unwrap() as u32;
-            if min<166 {for c in &mut pixel[..3]{*c=(255-(255-*c as u32)*89/(255-min)) as u8;}}
+            let max=*pixel[..3].iter().max().unwrap() as u32;
+            if max>117 {for c in &mut pixel[..3]{*c=(*c as u32*117/max) as u8;}}
         }
     }
     glass
@@ -1601,7 +1658,7 @@ unsafe fn place(hwnd: HWND, point: POINT) {
         if let Some(raw)=raw { p.backdrop=raw; }
         p.font=crate::native_text::font_pixels(px(15,dpi),500);
         let old_search=p.search_font;
-        p.search_font=crate::native_text::font_pixels(px(16,dpi),400);
+        p.search_font=crate::native_text::font_pixels(px(16,dpi),500);
         Some((p.edit,old,old_search))
     }) else {
         return;
@@ -1656,6 +1713,7 @@ pub(super) fn dismiss(restore: bool) {
         drop(p.native.take());
         DestroyWindow(p.hwnd);
         FRAME.with(|frame| { frame.borrow_mut().take(); });
+        crate::native_text::release();
         if !p.font.is_null() {
             DeleteObject(p.font);
         }
@@ -2411,7 +2469,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         WM_CTLCOLOREDIT => {
             let (dark,high)=PANEL.with(|p|p.borrow().as_ref().map_or((false,false),|s|(s.dark,s.high_contrast)));
             let palette=palette(dark,high);
-            let bg=if high{palette.face}else if dark{0x00413934}else{0x00e0e6e7};
+            let bg=palette.face;
             SetTextColor(w as HDC, palette.ink);
             SetBkColor(w as HDC, bg);
             SetDCBrushColor(w as HDC, bg);
@@ -2502,23 +2560,17 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     return (Vec::new(), false, None, false);
                 };
                 let mut icons = Vec::new();
-                let grid_capacity = grid(p).capacity();
                 while let Ok((key, image)) = p.icon_rx.try_recv() {
                     p.pending.remove(&key);
-                    if p.icons.len() >= 512 {
-                        p.icons.retain(|(path, _), _| {
-                            p.tiles
-                                .iter()
-                                .skip(p.page * grid_capacity)
-                                .take(grid_capacity)
-                                .any(|tile| &tile.entry.path == path || tile.preview.contains(path))
-                        });
-                    }
                     let g=grid(p);
+                    let mut visible=false;
                     for (i,t) in p.tiles.iter().skip(p.page*g.capacity()).take(g.capacity()).enumerate() {
-                        if t.entry.path==key.0 || t.preview.contains(&key.0) { icons.push(g.tiles(i)); }
+                        if (t.entry.path==key.0 && key.1==g.icon.clamp(8,192))
+                            || (t.preview.contains(&key.0) && key.1==(g.icon/3).clamp(8,192)){
+                            icons.push(g.tiles(i));visible=true;
+                        }
                     }
-                    p.icons.insert(key, image);
+                    if visible{p.icons.insert(key,image);}
                 }
                 let mut apps = false;
                 if let Some(rx) = &p.catalog {
@@ -2980,7 +3032,7 @@ mod tests {
         let dark=frosted(&white,32,32,96,true,&prefs);
         let light=frosted(&black,32,32,96,false,&prefs);
         assert!(dark.chunks_exact(4).all(|p|p[3]==255 && p[..3].iter().all(|c|*c<=94)));
-        assert!(light.chunks_exact(4).all(|p|p[3]==255 && p[..3].iter().all(|c|*c>=166)));
+        assert!(light.chunks_exact(4).all(|p|p[3]==255 && p[..3].iter().all(|c|*c<=117)));
     }
     #[test]
     fn layout_keeps_tiles_inside_landscape_portrait_and_high_dpi() {

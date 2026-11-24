@@ -344,7 +344,7 @@
     </label></div><div class="setting-row"><div><b data-i18n="settingsAppearance">Giao diện cài đặt</b><small data-i18n="settingsAppearanceHint">Chỉ áp dụng cho cửa sổ này.</small></div><select id="settingsAppearance" aria-label="Giao diện cài đặt"><option value="system" data-i18n="appearanceSystem">Theo hệ thống</option><option value="light" data-i18n="launcherLight">Sáng</option><option value="dark" data-i18n="launcherDark">Tối</option></select></div></section>
     <section class="setting-card" id="globalMotion"><h3 data-i18n="motionTitle">Hiệu ứng chuyển động</h3>
       <label class="setting-row switch-row"><span><b data-i18n="motionEnabled">Bật hiệu ứng chuyển động</b><small data-i18n="motionHint">Áp dụng cho Spotlight, Start, Dock, Stage và các bảng tiện ích.</small></span><input type="checkbox" id="motionEnabled" role="switch" checked><i class="switch" aria-hidden="true"></i></label>
-      <label class="setting-row"><b data-i18n="motionSpeed">Tốc độ chuyển động</b><span><input type="range" id="motionSpeed" min="0.25" max="2" step="0.05" value="0.75"><output id="motionSpeedLabel">0.75x</output></span></label>
+      <label class="setting-row"><b data-i18n="motionSpeed">Tốc độ chuyển động</b><span><input type="range" id="motionSpeed" min="0.25" max="2" step="0.05" value="0.70"><output id="motionSpeedLabel">0.70x</output></span></label>
       <label class="setting-row switch-row"><span><b data-i18n="motionRespect">Tôn trọng giảm chuyển động của Windows</b><small data-i18n="motionRespectHint">Tắt hiệu ứng nếu Windows tắt animation trong Accessibility.</small></span><input type="checkbox" id="motionRespect" role="switch" checked><i class="switch" aria-hidden="true"></i></label>
       <div class="actions"><button class="ghost-btn" type="button" id="motionPreview" data-i18n="motionPreview">Xem thử hiệu ứng</button><button class="ghost-btn" type="button" id="motionReset" data-i18n="motionReset">Khôi phục mặc định</button></div>
       <div id="motionPreviewArea" aria-hidden="true"><div id="motionPreviewCard" hidden><span></span><span></span><span></span></div></div>
@@ -1369,11 +1369,11 @@ $('spotlightGuideDialog').addEventListener('close',()=>{
   send({t:'spotlightGuideSeen'});
   spotlightGuideTrigger?.focus();
 });
-const motionDefaults={animationsEnabled:true,animationSpeed:0.75,respectSystemReducedMotion:true};
+const motionDefaults={animationsEnabled:true,animationSpeed:0.70,respectSystemReducedMotion:true};
 let motionPreferences={...motionDefaults};
 let motionPreviewAnimation=null;
 function motionSpeedLabel(){
-  const value=Number($('motionSpeed').value)||0.75;
+  const value=Number($('motionSpeed').value)||0.70;
   const key=value<=0.25?'motionVerySlow':value<0.65?'motionSlow':value<0.95?'motionSmooth':value<1.25?'motionStandard':value<1.75?'motionFast':'motionVeryFast';
   $('motionSpeedLabel').textContent=value.toFixed(2)+'x — '+t(key);
 }
@@ -1397,7 +1397,7 @@ $('motionPreview').addEventListener('click',()=>{
   if(motionPreviewAnimation){motionPreviewAnimation.cancel();motionPreviewAnimation=null;}
   card.hidden=false;
   if(!$('motionEnabled').checked||($('motionRespect').checked&&matchMedia('(prefers-reduced-motion: reduce)').matches))return;
-  const speed=Math.max(0.25,Math.min(2,Number($('motionSpeed').value)||0.75));
+  const speed=Math.max(0.25,Math.min(2,Number($('motionSpeed').value)||0.70));
   motionPreviewAnimation=card.animate([{opacity:0,transform:'scale(.90)'},{opacity:1,transform:'scale(1)'}],
     {duration:300/speed,easing:'cubic-bezier(.22,.61,.36,1)'});
 });
