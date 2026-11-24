@@ -182,19 +182,34 @@ mod tests {
         std::fs::create_dir(&directory).unwrap();
         let proof=directory.join("argv check.txt");
         let fixture=directory.join("fixture command.ps1");
-        std::fs::write(&fixture,r#"if ($args.Count -eq 2 -and $args[0] -ceq 'A & B' -and $args[1] -ceq 'CaseSensitive' -and (Get-Location).Path -ieq $PSScriptRoot) {
-    $temp = Join-Path $PSScriptRoot 'argv partial.txt'
-    [IO.File]::WriteAllText($temp, 'fixture reached')
-    [IO.File]::Move($temp, (Join-Path $PSScriptRoot 'argv check.txt'))
-}"#).unwrap();
+        std::fs::write(&fixture,r#"$ErrorActionPreference = 'Stop'
+$temp = Join-Path $PSScriptRoot 'argv partial.txt'
+$result = [ordered]@{ args = @($args); location = (Get-Location).Path; expected = $PSScriptRoot }
+[IO.File]::WriteAllText($temp, ($result | ConvertTo-Json -Compress -Depth 4))
+[IO.File]::Move($temp, (Join-Path $PSScriptRoot 'argv check.txt'))"#).unwrap();
         let executable=Path::new(&std::env::var_os("SystemRoot").unwrap()).join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
         let line=format!("\"{}\" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\" \"A & B\" CaseSensitive",
             executable.display(),fixture.display());
         let launch=Launch{directory:directory.to_string_lossy().into_owned(),..parse(&line,"Fixture").unwrap()};
-        assert!(unsafe{open(&key(&launch))}>32);
-        let start=Instant::now();
-        while !proof.exists()&&start.elapsed()<Duration::from_secs(8){std::thread::sleep(Duration::from_millis(25));}
-        assert_eq!(std::fs::read(&proof).unwrap(),b"fixture reached");
+        // Both the legacy string parser and the new library's explicit fields
+        // must produce the same launch target, arguments, and working directory.
+        let encoded = encode_application(&executable, "Fixture", &launch.parameters, &launch.directory).unwrap();
+        assert_eq!(encoded, key(&launch));
+        let result = unsafe { open(&encoded) };
+        assert!(result > 32, "ShellExecuteW returned {result}");
+        let start = Instant::now();
+        // The hosted runner can still be initializing PowerShell and Defender
+        // after ShellExecuteW returns. Preserve the exact assertions rather
+        // than treating an arbitrary 8-second startup delay as a launch failure.
+        while !proof.exists() && start.elapsed() < Duration::from_secs(30) {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let data = std::fs::read(&proof).expect("PowerShell launch fixture did not report within 30 seconds");
+        let actual: serde_json::Value = serde_json::from_slice(&data).expect("fixture must report actual arguments and directory");
+        assert_eq!(actual["args"], serde_json::json!(["A & B", "CaseSensitive"]));
+        assert!(actual["location"].as_str().unwrap().eq_ignore_ascii_case(&launch.directory),
+            "unexpected location: {}", actual["location"]);
+        assert!(actual["expected"].as_str().unwrap().eq_ignore_ascii_case(&launch.directory));
         std::fs::remove_file(proof).unwrap();
         std::fs::remove_file(fixture).unwrap();
         // Explorer returns before the process exits. Windows keeps the
