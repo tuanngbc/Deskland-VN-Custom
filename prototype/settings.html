@@ -151,7 +151,6 @@
         <label><span data-i18n="spotlightSpacing">Khoảng cách ô</span><input id="spotlightSpacing" type="range" min="8" max="42" step="2" value="18"></label>
         <label><span data-i18n="spotlightGlassStrength">Màu nền kính</span><input id="spotlightGlassStrength" type="range" min="20" max="48" step="2" value="44"></label>
         <label><span data-i18n="spotlightGlassBlur">Độ mờ nền kính</span><input id="spotlightGlassBlur" type="range" min="24" max="64" step="2" value="48"></label>
-        <label><span data-i18n="spotlightAnimations">Chuyển động</span><input id="spotlightAnimations" type="checkbox" checked></label>
         <label><span data-i18n="spotlightNames">Hiện tên ứng dụng</span><input id="spotlightNames" type="checkbox" checked></label>
         <label><span data-i18n="spotlightFavorites">Ưu tiên yêu thích</span><input id="spotlightFavorites" type="checkbox" checked></label>
       </div>
@@ -229,12 +228,10 @@
     <label class="setting-row"><b data-i18n="dockSpacing">Khoảng cách biểu tượng</b><span><input id="dockLook_spacing" type="range" min="4" max="22" value="10"> <output id="dockValue_spacing">10</output></span></label>
     <label class="setting-row"><b data-i18n="dockTransparency">Độ trong suốt</b><span><input id="dockLook_transparency" type="range" min="4" max="74" value="36"> <output id="dockValue_transparency">36</output></span></label>
     <label class="setting-row"><b data-i18n="dockMagnification">Phóng đại khi rê chuột</b><span><input id="dockLook_magnification" type="range" min="0" max="55" value="38"> <output id="dockValue_magnification">38</output></span></label>
-    <label class="setting-row"><b data-i18n="dockMotionSpeed">Tốc độ chuyển động</b><span><input id="dockLook_animationSpeed" type="range" min="50" max="170" value="100"> <output id="dockValue_animationSpeed">100</output></span></label>
     <label class="setting-row"><b data-i18n="dockPosition">Cạnh màn hình</b><select id="dockLook_position">
       <option value="bottom" data-i18n="dockBottom">Bên dưới</option><option value="left" data-i18n="dockLeft">Bên trái</option><option value="right" data-i18n="dockRight">Bên phải</option>
     </select></label>
     <label class="setting-row"><b>Màu Dock</b><select id="dockLook_theme"><option value="auto" data-i18n="appearanceSystem">Theo hệ thống</option><option value="light" data-i18n="launcherLight">Sáng</option><option value="dark" data-i18n="launcherDark">Tối</option></select></label>
-    <label class="setting-row switch-row"><b data-i18n="dockReducedMotion">Giảm chuyển động</b><input type="checkbox" id="dockLook_reducedMotion" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <label class="setting-row switch-row"><b data-i18n="dockAutoHide">Ẩn Dock khi cửa sổ phóng tối đa</b><input type="checkbox" id="dockLook_autoHide" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <p class="monitor-detail" data-i18n="dockAlphaHint">Điều chỉnh mức trong suốt của lớp kính trên Dock.</p>
     <button class="ghost-btn" id="dockLookReset" type="button" data-i18n="dockLookReset">Khôi phục kiểu hiển thị Dock</button>
@@ -344,7 +341,15 @@
     </label></div><div class="setting-row"><div><b data-i18n="language">Ngôn ngữ</b><small data-i18n="languageHint">Ngôn ngữ của cửa sổ cài đặt.</small></div><label class="lang-row">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M1.8 8h12.4M8 1.8c1.8 1.7 2.7 3.8 2.7 6.2S9.8 12.5 8 14.2C6.2 12.5 5.3 10.4 5.3 8S6.2 3.5 8 1.8z"/></svg>
       <select id="lang" data-i18n-title="language" aria-label="Language"></select>
-    </label></div><div class="setting-row"><div><b data-i18n="settingsAppearance">Giao diện cài đặt</b><small data-i18n="settingsAppearanceHint">Chỉ áp dụng cho cửa sổ này.</small></div><select id="settingsAppearance" aria-label="Giao diện cài đặt"><option value="system" data-i18n="appearanceSystem">Theo hệ thống</option><option value="light" data-i18n="launcherLight">Sáng</option><option value="dark" data-i18n="launcherDark">Tối</option></select></div></section><details open class="monitor-panel" id="awayPanel">
+    </label></div><div class="setting-row"><div><b data-i18n="settingsAppearance">Giao diện cài đặt</b><small data-i18n="settingsAppearanceHint">Chỉ áp dụng cho cửa sổ này.</small></div><select id="settingsAppearance" aria-label="Giao diện cài đặt"><option value="system" data-i18n="appearanceSystem">Theo hệ thống</option><option value="light" data-i18n="launcherLight">Sáng</option><option value="dark" data-i18n="launcherDark">Tối</option></select></div></section>
+    <section class="setting-card" id="globalMotion"><h3 data-i18n="motionTitle">Hiệu ứng chuyển động</h3>
+      <label class="setting-row switch-row"><span><b data-i18n="motionEnabled">Bật hiệu ứng chuyển động</b><small data-i18n="motionHint">Áp dụng cho Spotlight, Start, Dock, Stage và các bảng tiện ích.</small></span><input type="checkbox" id="motionEnabled" role="switch" checked><i class="switch" aria-hidden="true"></i></label>
+      <label class="setting-row"><b data-i18n="motionSpeed">Tốc độ chuyển động</b><span><input type="range" id="motionSpeed" min="0.25" max="2" step="0.05" value="0.75"><output id="motionSpeedLabel">0.75x</output></span></label>
+      <label class="setting-row switch-row"><span><b data-i18n="motionRespect">Tôn trọng giảm chuyển động của Windows</b><small data-i18n="motionRespectHint">Tắt hiệu ứng nếu Windows tắt animation trong Accessibility.</small></span><input type="checkbox" id="motionRespect" role="switch" checked><i class="switch" aria-hidden="true"></i></label>
+      <div class="actions"><button class="ghost-btn" type="button" id="motionPreview" data-i18n="motionPreview">Xem thử hiệu ứng</button><button class="ghost-btn" type="button" id="motionReset" data-i18n="motionReset">Khôi phục mặc định</button></div>
+      <div id="motionPreviewArea" aria-hidden="true"><div id="motionPreviewCard" hidden><span></span><span></span><span></span></div></div>
+    </section>
+    <details open class="monitor-panel" id="awayPanel">
       <summary data-i18n="awayTitle">Màn hình chờ và tiết kiệm tài nguyên</summary>
       <p class="monitor-detail" data-i18n="awayDescription">Phát vòng cảnh đã lưu ở 6 khung/giây, kèm đồng hồ trôi nhẹ. Giải phóng hình nền khi khóa máy hoặc tắt màn hình.</p>
       <div class="monitor-config"><label><span data-i18n="awayAfter">Bắt đầu sau</span> <select id="awayMinutes"><option value="1">1</option><option value="3">3</option><option value="5" selected>5</option><option value="10">10</option><option value="15">15</option><option value="30">30</option><option value="60">60</option><option value="120">120</option></select> <span data-i18n="awayMinutes">phút</span></label></div>
@@ -512,6 +517,7 @@ function applyStatic() {
     Object.entries(LANGS).map(([c, n]) => `<option value="${c}">${n}</option>`).join('');
   $('lang').value = state.langSetting in LANGS ? state.langSetting : 'auto';
   $('lang').setAttribute('aria-label', t('language'));
+  motionSpeedLabel();
 }
 async function setLang(code) {
   if (!LANGS[code]) code = 'en';
@@ -956,9 +962,9 @@ const dockFallbackText={
   dockDisplayNone:'Chưa có màn hình',dockDisplayOff:'Đã tắt',dockDisplayTarget:'Màn hình hiển thị'
 };
 const dockText=key=>{const value=t(key);return value===key?dockFallbackText[key]||value:value;};
-const dockLookDefaults={size:100,iconSize:44,startIcon:'windows',spacing:10,edgeGap:8,transparency:36,position:'bottom',theme:'auto',magnification:38,animationSpeed:100,reducedMotion:false,autoHide:false};
-const dockLookRanges=['size','iconSize','spacing','edgeGap','transparency','magnification','animationSpeed'];
-const dockLookSwitches=['reducedMotion','autoHide'];
+const dockLookDefaults={size:100,iconSize:44,startIcon:'windows',spacing:10,edgeGap:8,transparency:36,position:'bottom',theme:'auto',magnification:38,autoHide:false};
+const dockLookRanges=['size','iconSize','spacing','edgeGap','transparency','magnification'];
+const dockLookSwitches=['autoHide'];
 const dockLookKeys=[...dockLookRanges,'position','theme','startIcon',...dockLookSwitches];
 function showDockAppearance(){
   const appearance={...dockLookDefaults,...dockOptions.appearance};
@@ -1363,12 +1369,44 @@ $('spotlightGuideDialog').addEventListener('close',()=>{
   send({t:'spotlightGuideSeen'});
   spotlightGuideTrigger?.focus();
 });
-const spotlightInputs=['spotlightEnabled','spotlightHotkeyMode','spotlightDockClick','spotlightFullTheme','spotlightIconSize','spotlightSpacing','spotlightGlassStrength','spotlightGlassBlur','spotlightAnimations','spotlightNames','spotlightFavorites'];
+const motionDefaults={animationsEnabled:true,animationSpeed:0.75,respectSystemReducedMotion:true};
+let motionPreferences={...motionDefaults};
+let motionPreviewAnimation=null;
+function motionSpeedLabel(){
+  const value=Number($('motionSpeed').value)||0.75;
+  const key=value<=0.25?'motionVerySlow':value<0.65?'motionSlow':value<0.95?'motionSmooth':value<1.25?'motionStandard':value<1.75?'motionFast':'motionVeryFast';
+  $('motionSpeedLabel').textContent=value.toFixed(2)+'x — '+t(key);
+}
+function syncMotion(value){
+  motionPreferences={...motionDefaults,...value};
+  $('motionEnabled').checked=motionPreferences.animationsEnabled;
+  $('motionRespect').checked=motionPreferences.respectSystemReducedMotion;
+  $('motionSpeed').value=String(motionPreferences.animationSpeed);
+  motionSpeedLabel();
+}
+function saveMotion(){
+  motionPreferences={animationsEnabled:$('motionEnabled').checked,animationSpeed:Number($('motionSpeed').value),
+    respectSystemReducedMotion:$('motionRespect').checked};
+  send({t:'motionPreferences',value:motionPreferences});
+}
+$('motionSpeed').addEventListener('input',motionSpeedLabel);
+for(const id of ['motionEnabled','motionSpeed','motionRespect'])$(id).addEventListener('change',saveMotion);
+$('motionReset').addEventListener('click',()=>{syncMotion(motionDefaults);saveMotion();});
+$('motionPreview').addEventListener('click',()=>{
+  const card=$('motionPreviewCard');
+  if(motionPreviewAnimation){motionPreviewAnimation.cancel();motionPreviewAnimation=null;}
+  card.hidden=false;
+  if(!$('motionEnabled').checked||($('motionRespect').checked&&matchMedia('(prefers-reduced-motion: reduce)').matches))return;
+  const speed=Math.max(0.25,Math.min(2,Number($('motionSpeed').value)||0.75));
+  motionPreviewAnimation=card.animate([{opacity:0,transform:'scale(.90)'},{opacity:1,transform:'scale(1)'}],
+    {duration:300/speed,easing:'cubic-bezier(.22,.61,.36,1)'});
+});
+const spotlightInputs=['spotlightEnabled','spotlightHotkeyMode','spotlightDockClick','spotlightFullTheme','spotlightIconSize','spotlightSpacing','spotlightGlassStrength','spotlightGlassBlur','spotlightNames','spotlightFavorites'];
 for(const id of spotlightInputs) $(id).addEventListener('change',()=>send({t:'spotlightPreferences',value:{
   enabled:$('spotlightEnabled').checked,dockFullscreen:$('spotlightDockClick').value!=='compact',
   dockFollowHotkey:$('spotlightDockClick').value==='follow',hotkeyFullscreen:$('spotlightHotkeyMode').value==='full',theme:$('spotlightFullTheme').value,
   iconSize:Number($('spotlightIconSize').value),spacing:Number($('spotlightSpacing').value),
-  glassStrength:Number($('spotlightGlassStrength').value),glassBlur:Number($('spotlightGlassBlur').value),animations:$('spotlightAnimations').checked,
+  glassStrength:Number($('spotlightGlassStrength').value),glassBlur:Number($('spotlightGlassBlur').value),
   showNames:$('spotlightNames').checked,favoritesFirst:$('spotlightFavorites').checked
 }}));
 for(const [id,action] of [['spotlightHidden','hidden'],['spotlightRefresh','refresh'],['spotlightReset','reset']])
@@ -1596,6 +1634,7 @@ function applyInitMessage(m) {
   syncMiniTools(m);
   syncSystemMonitor(m);
   syncDockSettings(m);
+  syncMotion(m.motion||motionDefaults);
   state.launcherHotkey = Object.assign(state.launcherHotkey, m.launcherHotkey || {});
   state.saverHotkey = Object.assign({mods:16387,vk:76}, m.saverHotkey || {});
   setHotkeyButton($('saverRecord'), state.saverHotkey.mods, state.saverHotkey.vk);
@@ -1611,7 +1650,6 @@ function applyInitMessage(m) {
     $('spotlightSpacing').value=p.spacing;
     $('spotlightGlassStrength').value=p.glassStrength??44;
     $('spotlightGlassBlur').value=p.glassBlur??48;
-    $('spotlightAnimations').checked=p.animations!==false;
     $('spotlightNames').checked=p.showNames;
     $('spotlightFavorites').checked=p.favoritesFirst;
   }
@@ -1662,6 +1700,8 @@ function onHost(m) {
     syncMiniTools(m);
   } else if (m.t === 'systemMonitorState') {
     syncSystemMonitor(m);
+  } else if (m.t === 'motionState') {
+    syncMotion(m.motion);
   } else if (m.t === 'dockState') {
     syncDockSettings(m);
     renderSecondClock();

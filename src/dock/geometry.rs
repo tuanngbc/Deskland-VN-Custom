@@ -219,7 +219,7 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     let group_gap=(10.0*scale).min(content*0.06);
     let apps=count;
     let gaps=apps.saturating_sub(1) as f32*spacing;
-    let zoom=if style.reduced_motion{0.0}else{style.magnification as f32/100.0};
+    let zoom=if style.motion_reduced(){0.0}else{style.magnification as f32/100.0};
     // The sum of these Gaussian weights is below 2.6 over all slot phases.
     let spill=2.6*zoom;
     let min_icon=(style.icon_size.min(29) as f32)*scale;

@@ -233,6 +233,7 @@ unsafe fn start_opacity(hwnd:HWND,open:f32){
 unsafe fn transition(hwnd:HWND,open:bool)->bool{
     if cfg!(test)||!crate::dock::popup_motion_allowed(){return false;}
     let t=super::motion::Tween::new(open,super::motion::START,START_MOTION.get());
+    let t=if open&&IsWindowVisible(hwnd)==0{t.prepared()}else{t};
     if SetTimer(hwnd,START_TWEEN,16,None)==0{return false;}
     START_MOTION.set(Some(t));
     start_opacity(hwnd,t.openness());
@@ -249,7 +250,7 @@ unsafe fn place(hwnd:HWND){
         if w>m.work.right-m.work.left||h>m.work.bottom-m.work.top{return None;}
         let (mut x,mut y)=m.anchor.position(m.work,w,h,chrome::scale(m.dock_dpi,chrome::PANEL_GAP));
         if let Some(t)=START_MOTION.get(){
-            let shift=(chrome::scale(m.dock_dpi,6) as f32*(1.0-t.openness())).round() as i32;
+            let shift=(chrome::scale(m.dock_dpi,14) as f32*(1.0-t.openness())).round() as i32;
             match m.anchor.side{crate::dock::DockSide::Bottom=>y+=shift,crate::dock::DockSide::Left=>x-=shift,crate::dock::DockSide::Right=>x+=shift}
         }
         Some((RECT{left:x,top:y,right:x+w,bottom:y+h},m.dock_dpi,m.anchor.side,m.dark))
@@ -590,7 +591,8 @@ unsafe fn search_focus(hwnd:HWND,edit:HWND){
 }
 unsafe fn show(hwnd:HWND,edit:HWND){
     let input=super::InputHandoff::capture();
-    if !transition(hwnd,true){SetLayeredWindowAttributes(hwnd,0,255,LWA_ALPHA);}
+    let animated=transition(hwnd,true);
+    if !animated{SetLayeredWindowAttributes(hwnd,0,255,LWA_ALPHA);}
     if SetWindowPos(hwnd,HWND_TOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW|SWP_NOACTIVATE)==0{return;}
     // Foreground permission is best effort; TOPMOST still makes Start visible
     // even when Windows declines focus for an asynchronous Win-key request.
@@ -601,6 +603,12 @@ unsafe fn show(hwnd:HWND,edit:HWND){
     place(hwnd);
     if IsWindowVisible(hwnd)==0{return;}
     search_focus(hwnd,edit);
+    // Ensure the first GDI frame (including the native EDIT) exists before
+    // releasing the opening clock. The first visible surface is transparent.
+    if animated{
+        UpdateWindow(hwnd);
+        if let Some(t)=START_MOTION.get(){start_opacity(hwnd,t.from);START_MOTION.set(Some(t.restart_clock()));}
+    }
     if FOCUS.get().is_some(){SetTimer(hwnd,FOCUS_TIMER,40,None);}
     touch();
     VISIBLE_START.store(hwnd as usize,std::sync::atomic::Ordering::Relaxed);

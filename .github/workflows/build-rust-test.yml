@@ -27,6 +27,8 @@ jobs:
           rustup default stable
           cargo test --release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::motion::tests::live_speed_reaches_both_ui_threads_without_restarting_active_tweens -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::tests -- --nocapture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # Isolated same-process HWND/thread test; never loads the owner's profile.

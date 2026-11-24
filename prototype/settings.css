@@ -71,3 +71,5 @@ html[data-appearance=dark] #page-dock{--dock-blue:#8ebfff;--dock-mist:#243953}
 .nav-group .nav-caption{margin-bottom:1px}
 @media(max-width:760px){.app-nav{gap:11px}}
 #spotlightGuideDialog:not([open]){display:none}#spotlightGuideDialog::backdrop{background:#0c20284d}#spotlightGuideDialog ul{margin:16px 0 0;padding-left:18px;color:var(--muted);font-size:13px;line-height:1.6}
+
+#globalMotion .setting-row>span:first-child{display:grid;gap:4px}#motionSpeedLabel{display:inline-block;min-width:110px;text-align:right;font-variant-numeric:tabular-nums}#motionPreviewArea{display:flex;justify-content:center;perspective:400px}#motionPreviewCard:not([hidden]){display:flex;gap:10px;padding:14px 18px;margin-top:12px;border:1px solid currentColor;border-radius:16px;background:color-mix(in srgb,currentColor 8%,transparent);transform-origin:center;box-shadow:0 8px 20px #0002}#motionPreviewCard>span{width:28px;height:28px;border-radius:8px;background:currentColor;opacity:.4}

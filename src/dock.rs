@@ -24,7 +24,7 @@ mod appearance;
 mod geometry;
 pub(crate) mod motion;
 pub(crate) fn popup_motion_allowed()->bool{
-    motion::system_allowed()&&STATE.with(|s|s.try_borrow().is_ok_and(|s|!s.prefs.appearance.reduced_motion))
+    motion::allowed()
 }
 mod surface;
 mod icon_atlas;
@@ -156,7 +156,7 @@ impl Press {
 #[derive(Clone, Copy)]
 enum FeedbackKind { Launch, Restore, Minimize, Failed }
 #[derive(Clone)]
-struct Feedback { path:String, kind:FeedbackKind, start:std::time::Instant }
+struct Feedback { path:String, kind:FeedbackKind, motion:motion::Span }
 #[derive(Clone,Default)]
 struct Motion {
     focus:Option<motion::Spring>, target:Option<f32>, zoom:motion::Spring, start:motion::Spring, at:Option<std::time::Instant>, scheduled:bool,
@@ -166,7 +166,7 @@ impl Motion {
     fn tick(&mut self, now:std::time::Instant, speed:u32, reveal:&mut motion::Spring, shown:bool,start_goal:f32)->bool{
         let dt=self.at.replace(now).map_or(0.016,|t|now.duration_since(t).as_secs_f32().clamp(0.001,0.090));
         let speed=speed as f32/100.0;
-        let start_moving=self.start.advance(start_goal,dt,35.0,0.005);
+        let start_moving=self.start.advance(start_goal,dt,35.0*speed.clamp(0.7,2.0),0.005);
         let moving=reveal.advance(if shown{1.0}else{0.0},dt,25.0*speed,0.003);
         // A reveal already transforms the entire Dock. Finish that motion
         // before asking the layout to magnify individual icons again.
@@ -176,10 +176,10 @@ impl Motion {
             return start_moving;
         }
         let goal=if self.target.is_some(){1.0}else{0.0};
-        let mut unsettled=self.zoom.advance(goal,dt,23.0*speed,0.0025);
+        let mut unsettled=self.zoom.advance(goal,dt,23.0*speed.clamp(0.7,2.0),0.0025);
         if let Some(target)=self.target{
             let focus=self.focus.get_or_insert_with(||motion::Spring::rest(target));
-            unsettled|=focus.advance(target,dt,20.0+15.0*speed,0.12);
+            unsettled|=focus.advance(target,dt,20.0+15.0*speed.clamp(0.7,2.0),0.12);
         }
         if self.target.is_none() && self.zoom.value==0.0 { self.focus=None; }
         unsettled||start_moving
@@ -245,7 +245,7 @@ struct StageEmphasis {
     index:Option<usize>,
     strength:u8,
     from:u8,
-    start:Option<std::time::Instant>,
+    start:Option<motion::Span>,
 }
 impl StageEmphasis {
     fn change(&mut self,hover:Option<usize>,reduced:bool)->bool{
@@ -258,7 +258,7 @@ impl StageEmphasis {
         }
         if self.index.is_none(){return false;}
         self.from=self.strength;
-        self.start=Some(std::time::Instant::now());
+        self.start=Some(motion::Span::hover());
         true
     }
     fn tick(&mut self,hover:Option<usize>,elapsed:f32)->bool{
@@ -272,9 +272,9 @@ impl StageEmphasis {
         keyboard.map(|i|(i,255)).or_else(||self.index.map(|i|(i,self.strength)))
     }
 }
-const GROUP_SWITCH_MS:f32=190.0;
+const GROUP_SWITCH_MS:u32=190;
 const GROUP_SWITCH_INK:u8=190;
-struct GroupSwitch{source:usize,started:Instant,ink:u8}
+struct GroupSwitch{source:usize,started:motion::Span,ink:u8}
 fn group_switch_ink(t:f32)->u8{
     (255.0-(255-GROUP_SWITCH_INK) as f32*(1.0-t.clamp(0.0,1.0)).powi(2)).round() as u8
 }
@@ -286,7 +286,7 @@ const RAIL_DIM:f32=0.68;
 struct RailFade {
     opacity:f32,
     waiting:bool,
-    started:Option<Instant>,
+    started:Option<motion::Span>,
 }
 impl Default for RailFade {
     fn default()->Self{Self{opacity:1.0,waiting:false,started:None}}
@@ -297,7 +297,7 @@ fn rail_opacity(elapsed:std::time::Duration,reduced:bool)->f32{
 }
 
 struct Stage { hwnd:HWND, rail:HWND, collapsed:bool, auto_hide:bool, preview_hwnd:HWND, preview_boxes:Vec<RECT>, preview_cutouts:Vec<RECT>, preview_visible:bool, layered:bool, opacity:u32, dark:bool, bounds:RECT, display:String, items:Vec<Item>, keys:Vec<String>, session_heights:HashMap<String,u32>, representatives:HashMap<String,WindowIdentity>, groups:Vec<Option<u64>>, members:Vec<Vec<usize>>, order:Vec<String>, selected:Option<u64>, layout:Option<stage_surface::Layout>, page:usize, pages:usize, hidden:bool, hover:Option<usize>, emphasis:StageEmphasis, keyboard:Option<usize>, previous_focus:usize, previews:previews::Previews,
-    resting:RECT, slide:Option<(std::time::Instant,i32)>, offset:i32, group_switch:Option<GroupSwitch>, pressed:Option<(StageTarget,bool)> }
+    resting:RECT, slide:Option<(motion::Span,i32)>, offset:i32, group_switch:Option<GroupSwitch>, pressed:Option<(StageTarget,bool)> }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 enum StageTarget { Picker(WindowIdentity), Cycle(WindowIdentity, bool), Window(usize,u32,u32), Close(usize,u32,u32), Page(usize) }
 impl Stage {
@@ -351,7 +351,7 @@ impl Stage {
         let dpi=windows_sys::Win32::UI::HiDpi::GetDpiForWindow(self.hwnd).clamp(72,288) as i32;
         let travel=(6*dpi+48)/96;
         self.offset=if layout.right{travel}else{-travel};
-        self.slide=Some((std::time::Instant::now(),self.offset));
+        self.slide=Some((motion::Span::new(195),self.offset));
         if SetTimer(self.hwnd,STAGE_MOTION_TIMER,16,None)==0{self.offset=0;self.slide=None;}
     }
     unsafe fn finish_group_switch(&mut self){
@@ -672,7 +672,7 @@ fn available_items(all:&[AppWindow],screen:RECT,prefs:&Preferences)->Vec<Item>{
 }
 fn dock_depth(screen:&Screen,style:&Appearance,cluster:geometry::Cluster)->i32 {
     let scale=style.pixel_scale(screen.dpi);
-    let zoom=if style.reduced_motion{0.0}else{style.magnification as f32/100.0};
+    let zoom=if style.motion_reduced(){0.0}else{style.magnification as f32/100.0};
     let cross=(screen.bounds.right-screen.bounds.left).min(screen.bounds.bottom-screen.bounds.top) as f32;
     (style.edge_pixels(screen.dpi,cross)+((style.icon_size as f32*(1.0+zoom)+18.0).max(cluster.cross())*scale+12.0*scale).ceil()).ceil() as i32
 }
@@ -833,7 +833,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
     let material_changed=if topology||state.material.is_none(){
         let style=&state.prefs.appearance;
         state.system_dark=surface::Material::system_dark();
-        let material=surface::Material::themed(style.theme,state.system_dark,style.transparency,style.reduced_motion);
+        let material=surface::Material::themed(style.theme,state.system_dark,style.transparency,style.motion_reduced());
         state.material.replace(material)!=Some(material)
     }else{false};
     state.windows=if state.suspended||!state.prefs.any_enabled(){Vec::new()}else{windows(state.prefs.stage_enabled&&!crate::trial::benchmark_active()&&!crate::trial::demo_active())};
@@ -878,12 +878,16 @@ unsafe fn refresh(state:&mut State, topology:bool) {
                 b.auto_hide=auto;
                 let interaction=b.pointer.is_some()||b.keyboard.is_some()||b.pressed.is_some()||utilities::panel_open_for(b.hwnd);
                 let collapse=auto&&b.layout.is_some()&&!interaction;
-                if b.collapse(collapse,b.hidden||state.prefs.appearance.reduced_motion)
+                if b.collapse(collapse,b.hidden||state.prefs.appearance.motion_reduced())
                     &&SetTimer(b.hwnd,MOTION_TIMER,16,None)==0 {
                     b.motion.scheduled=false;
                     b.reveal=motion::Spring::rest(if collapse{0.0}else{1.0});
                 }
                 changed=true;
+            }
+            if state.prefs.appearance.motion_reduced()&&b.motion.scheduled{
+                b.motion=Motion::default();b.reveal=motion::Spring::rest(if b.collapsed{0.0}else{1.0});
+                KillTimer(b.hwnd,MOTION_TIMER);changed=true;
             }
             let r=if b.layout.is_some(){
                 b.pinned_widgets=dock_status_widgets(state.prefs.utility_profiles.get(&screen.id));
@@ -1004,7 +1008,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         layout.stack_design=automatic&&style.stack_groups&&stage.layered;
         layout.height=layout.content_height();
         bounds.bottom=bounds.top+layout.height;
-        if topology || state.prefs.appearance.reduced_motion {
+        if topology || state.prefs.appearance.motion_reduced() {
             stage.slide=None;stage.offset=0;
             stage.finish_group_switch();
         }
@@ -1087,7 +1091,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
                     sources[layer]=WindowIdentity::read_stage(handle as HWND);
                 }
                 targets.push(stage_snapshot::Target{owner:stage.hwnd as usize,layout,index,
-                    reduced:state.prefs.appearance.reduced_motion,dark,dpi:screen.dpi,sources});
+                    reduced:state.prefs.appearance.motion_reduced(),dark,dpi:screen.dpi,sources});
             }
         }
         stage_updates.push((stage_index,layout,style,automatic,hide,changed,fixture_positions,model_count,rows));
@@ -1184,7 +1188,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         let dock=state.bars.iter().filter(|b|!b.hidden).flat_map(|b|&b.items);
         let stage=state.stages.iter().filter(|s|!s.hidden).flat_map(|s|&s.items);
         let style=&state.prefs.appearance;
-        let magnify=if style.reduced_motion{1.0}else{1.0+style.magnification as f32/100.0};
+        let magnify=if style.motion_reduced(){1.0}else{1.0+style.magnification as f32/100.0};
         let dock_edge=state.bars.iter().filter_map(|b|b.layout.as_ref())
             .map(|layout|style.icon_size as f32*layout.scale*magnify*0.84)
             .fold(0.0,f32::max);
@@ -1301,7 +1305,7 @@ fn stage_caption<'a>(title:&str,peers:impl Iterator<Item=&'a str>)->String{
 unsafe fn retarget_start(hwnd:HWND){
     let state=STATE.with(|s|{
         let mut state=s.borrow_mut();
-        let reduced=state.prefs.appearance.reduced_motion;
+        let reduced=state.prefs.appearance.motion_reduced();
         let b=state.bars.iter_mut().find(|b|b.hwnd==hwnd)?;
         let goal=b.start_goal();
         if b.motion.start.value==goal{return None;}
@@ -1317,10 +1321,10 @@ unsafe fn paint(hwnd:HWND){
         let state=s.borrow();
         let bar=state.bars.iter().find(|b|b.hwnd==hwnd)?;
         let feedback=bar.feedback.as_ref().and_then(|f|bar.items.iter().position(|i|i.path.eq_ignore_ascii_case(&f.path))
-            .map(|i|(i,f.kind,if state.prefs.appearance.reduced_motion{0.2}else{f.start.elapsed().as_secs_f32()/0.42})));
+            .map(|i|(i,f.kind,if state.prefs.appearance.motion_reduced(){0.2}else{f.motion.progress()})));
         Some((bar.layout.clone()?,bar.items.clone(),bar.hovered,bar.keyboard,state.material?,bar.active,bar.minimized,bar.attention,bar.drop_target(),bar.reveal.value.clamp(0.0,1.0),feedback,bar.motion.at,state.prefs.appearance.start_icon,
             state.screens.iter().find(|d|same_rect(d.bounds,bar.bounds))
-                .and_then(|d|state.prefs.utility_profiles.get(&d.id)).map(|p|p.metrics),bar.rail_face,bar.rail.opacity,if state.prefs.appearance.reduced_motion{bar.start_goal()}else{bar.motion.start.value}))
+                .and_then(|d|state.prefs.utility_profiles.get(&d.id)).map(|p|p.metrics),bar.rail_face,bar.rail.opacity,if state.prefs.appearance.motion_reduced(){bar.start_goal()}else{bar.motion.start.value}))
     });
     let mut ps:PAINTSTRUCT=mem::zeroed();let dc=BeginPaint(hwnd,&mut ps);
     if let Some((layout,items,hovered,keyboard,material,active,minimized,attention,drop_target,openness,feedback,animation_tick,start_icon,metrics,rail_face,rail_opacity,start_motion))=layered{
@@ -1371,7 +1375,7 @@ unsafe fn paint(hwnd:HWND){
         let dark=stage.dark;
         let switch=stage.group_switch.as_ref().and_then(|swap|
             stage.items.iter().position(|item|item.hwnd as usize==swap.source).map(|i|(i,swap.ink)));
-        Some((stage.items.clone(),ready,stage.groups.clone(),stage.members.clone(),stage.layout?,stage.page,stage.pages,state.foreground,dpi,dark,stage.emphasis.highlight(stage.keyboard),stage.hover,stage.layered,stage.opacity,state.prefs.appearance.reduced_motion,switch,stage.resting))
+        Some((stage.items.clone(),ready,stage.groups.clone(),stage.members.clone(),stage.layout?,stage.page,stage.pages,state.foreground,dpi,dark,stage.emphasis.highlight(stage.keyboard),stage.hover,stage.layered,stage.opacity,state.prefs.appearance.motion_reduced(),switch,stage.resting))
     });
     if let Some((items,ready,groups,members,layout,page,pages,foreground,dpi,dark,emphasis,hover,layered,opacity,reduced,switch,resting))=stage {
         let key=hwnd as usize;
@@ -1694,9 +1698,9 @@ unsafe fn open_task_manager(){
 unsafe fn show_feedback(hwnd:HWND,item:&Item,kind:FeedbackKind){
     let (start,reduced)=STATE.with(|s|{
         let mut s=s.borrow_mut();
-        let reduced=s.prefs.appearance.reduced_motion;
+        let reduced=s.prefs.appearance.motion_reduced();
         let Some(bar)=s.bars.iter_mut().find(|b|b.hwnd==hwnd&&!b.hidden&&b.layout.is_some())else{return(false,reduced);};
-        bar.feedback=Some(Feedback{path:item.path.clone(),kind,start:std::time::Instant::now()});
+        bar.feedback=Some(Feedback{path:item.path.clone(),kind,motion:motion::Span::fixed(motion::duration(420).clamp(170,550))});
         (if reduced{true}else{bar.schedule()},reduced)
     });
     if start {SetTimer(hwnd,if reduced{FEEDBACK_TIMER}else{MOTION_TIMER},if reduced{420}else{16},None);}
@@ -2776,7 +2780,7 @@ fn cycle_group(members:&[WindowIdentity],current:WindowIdentity,forward:bool)->O
 }
 unsafe fn cycle_stage_group(hwnd:HWND,front:WindowIdentity,forward:bool){
     update_state(|s|{
-        let reduced=s.prefs.appearance.reduced_motion;
+        let reduced=s.prefs.appearance.motion_reduced();
         let changed=s.stages.iter_mut().find(|stage|stage.hwnd==hwnd&&!stage.hidden).is_some_and(|stage|{
             let Some(i)=stage.items.iter().position(|item|item.hwnd as usize==front.hwnd)else{return false;};
             let live=stage.members[i].iter().filter_map(|&h|WindowIdentity::read_stage(h as HWND)).collect::<Vec<_>>();
@@ -2784,7 +2788,7 @@ unsafe fn cycle_stage_group(hwnd:HWND,front:WindowIdentity,forward:bool){
             stage.representatives.insert(stage.keys[i].clone(),next);
             stage.finish_group_switch();
             if !reduced&&SetTimer(hwnd,STAGE_MOTION_TIMER,16,None)!=0{
-                stage.group_switch=Some(GroupSwitch{source:next.hwnd,started:Instant::now(),ink:GROUP_SWITCH_INK});
+                stage.group_switch=Some(GroupSwitch{source:next.hwnd,started:motion::Span::new(GROUP_SWITCH_MS),ink:GROUP_SWITCH_INK});
             }
             true
         });
@@ -2852,7 +2856,7 @@ unsafe fn activate_stage_member(hwnd:HWND,i:usize,member:Option<HWND>){
             let mut focus=None;
             update_state(|state|{
                 focus=state.workspaces.switch(&display,id);
-                let reduced=state.prefs.appearance.reduced_motion;
+                let reduced=state.prefs.appearance.motion_reduced();
                 if let Some(p)=state.stages.iter_mut().find(|p|p.hwnd==hwnd&&p.selected!=Some(id)){p.begin_slide(reduced);}
                 refresh(state,false);
             });
@@ -2882,7 +2886,7 @@ unsafe fn turn_stage_page(hwnd:HWND,forward:bool)->bool{
 unsafe fn go_to_stage_page(hwnd:HWND,next:usize)->bool{
     let changed=STATE.with(|s|{
         let mut state=s.borrow_mut();
-        let reduced=state.prefs.appearance.reduced_motion;
+        let reduced=state.prefs.appearance.motion_reduced();
         let Some(stage)=state.stages.iter_mut().find(|p|p.hwnd==hwnd) else{return false;};
         let next=next.min(stage.pages-1);
         if next==stage.page{return false;}
@@ -2971,7 +2975,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             KillTimer(hwnd,STATUS_TIP_TIMER);close_status_tip(hwnd);
             let stage=STATE.with(|s|{
                 let mut state=s.borrow_mut();
-                let reduced=state.prefs.appearance.reduced_motion;
+                let reduced=state.prefs.appearance.motion_reduced();
                 state.stages.iter_mut().find(|p|p.hwnd==hwnd).map(|p|{
                     let changed=p.hover.take().is_some();
                     p.pressed=None;
@@ -2986,7 +2990,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             }
             let tracked=STATE.with(|s|{
                 let mut state=s.borrow_mut();
-                let animate=!state.prefs.appearance.reduced_motion;
+                let animate=!state.prefs.appearance.motion_reduced();
                 if let Some(b)=state.bars.iter_mut().find(|b|b.hwnd==hwnd){
                     b.hovered=-1;b.status_hover=None;b.motion.target=None;b.pointer=None;
                     // Outside the visible surface is never a valid drop.
@@ -3007,14 +3011,13 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER if w==STAGE_MOTION_TIMER=>{
             let step=STATE.with(|s|{
                 let mut state=s.borrow_mut();
-                let reduced=state.prefs.appearance.reduced_motion;
-                let speed=state.prefs.appearance.animation_speed;
+                let reduced=state.prefs.appearance.motion_reduced();
                 let p=state.stages.iter_mut().find(|p|p.hwnd==hwnd&&!p.hidden)?;
-                let duration=|start:std::time::Instant,ms:f32|if reduced{1.0}else{(start.elapsed().as_secs_f32()*speed as f32*10.0/ms).clamp(0.0,1.0)};
-                let emphasis=p.emphasis.start.map(|s|p.emphasis.tick(p.hover,duration(s,160.0)));
+                let progress=|span:motion::Span|if reduced{1.0}else{span.progress()};
+                let emphasis=p.emphasis.start.map(|s|p.emphasis.tick(p.hover,progress(s)));
                 let mut next_position=None;
                 if let Some((start,from))=p.slide {
-                    let t=duration(start,195.0);
+                    let t=progress(start);
                     let offset=(from as f32*(1.0-t).powi(3)).round() as i32;
                     if offset!=p.offset{
                         p.offset=offset;
@@ -3023,7 +3026,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                     if t>=1.0{p.slide=None;}
                 }
                 let swap_redraw=if let Some(swap)=p.group_switch.as_mut() {
-                    let ink=group_switch_ink(duration(swap.started,GROUP_SWITCH_MS));
+                    let ink=group_switch_ink(progress(swap.started));
                     swap.ink=ink;
                     p.previews.set_opacity(swap.source,ink);
                     if ink==255{p.group_switch=None;}
@@ -3073,7 +3076,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if open||WindowFromPoint(pt)==hwnd{return 0;}
             let start=STATE.with(|state|{
                 let mut state=state.borrow_mut();
-                let reduced=state.prefs.appearance.reduced_motion;
+                let reduced=state.prefs.appearance.motion_reduced();
                 state.bars.iter_mut().find(|b|b.hwnd==hwnd&&b.auto_hide&&b.layout.is_some()&&b.keyboard.is_none())
                     .is_some_and(|b|b.collapse(true,reduced))
             });
@@ -3085,13 +3088,12 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER if w==RAIL_FADE_TIMER=>{
             let step=STATE.with(|s|{
                 let mut s=s.borrow_mut();
-                let reduced=s.prefs.appearance.reduced_motion;
+                let reduced=s.prefs.appearance.motion_reduced();
                 let b=s.bars.iter_mut().find(|b|b.hwnd==hwnd&&b.collapsed&&!b.hidden)?;
                 let first=std::mem::take(&mut b.rail.waiting);
-                let now=Instant::now();
-                if first{b.rail.started=Some(now);}
-                let elapsed=now.saturating_duration_since(b.rail.started?);
-                b.rail.opacity=rail_opacity(elapsed,reduced);
+                if first{b.rail.started=Some(motion::Span::new(RAIL_FADE_MS));}
+                let progress=b.rail.started?.progress();
+                b.rail.opacity=rail_opacity(Duration::from_secs_f32(progress*RAIL_FADE_MS as f32/1000.0),reduced);
                 let done=b.rail.opacity<=RAIL_DIM;
                 if done{b.rail.started=None;}
                 Some((first,done))
@@ -3118,8 +3120,10 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let now=std::time::Instant::now();
                 let old_zoom=b.motion.zoom.value;
                 let old_focus=b.motion.focus_value();
-                let goal=if prefs.appearance.reduced_motion{0.0}else{b.start_goal()};
-                let mut again=b.motion.tick(now,prefs.appearance.animation_speed,&mut b.reveal,!b.collapsed,goal);
+                let goal=if prefs.appearance.motion_reduced(){0.0}else{b.start_goal()};
+                let mut again=if prefs.appearance.motion_reduced(){
+                    b.motion=Motion::default();b.reveal=motion::Spring::rest(if b.collapsed{0.0}else{1.0});false
+                }else{b.motion.tick(now,motion::settings().speed,&mut b.reveal,!b.collapsed,goal)};
                 if old_zoom!=b.motion.zoom.value||old_focus!=b.motion.focus_value(){
                     let placement=appbars.dock_placement(display,prefs.appearance.position);
                     let layout=geometry::measure_cluster(&placement,&prefs.appearance,b.items.len(),b.motion.focus_value(),b.motion.zoom.value,&b.pinned_widgets,prefs.utility_cluster(&display.id));
@@ -3131,7 +3135,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                         b.rail_face=stage_rail::sample(surface::rail_bounds(layout),layout.side,false,0);
                     }
                 }
-                if b.feedback.as_ref().is_some_and(|f|now.duration_since(f.start).as_millis()>=420){b.feedback=None;}
+                if b.feedback.as_ref().is_some_and(|f|f.motion.progress()>=1.0||!motion::allowed()){b.feedback=None;}
                 again|=b.feedback.is_some();
                 if !again{b.motion.at=None;b.motion.scheduled=false;}
                 Some(again)
@@ -3172,6 +3176,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}else{refresh_dock_clock();sync_win_key();request_dock_status();}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
         WM_TIMECHANGE=>{refresh_dock_clock();0},
         WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_THEMECHANGED|WM_DPICHANGED=>{
+            if msg==WM_SETTINGCHANGE{motion::refresh_system();}
             if msg==WM_DISPLAYCHANGE&&taskbar_active(){show_taskbar(taskbar_guard::Exit::ExplorerChanged,"Đã hiện lại thanh tác vụ khi thay đổi màn hình.");}
             DISPLAY_DIRTY.with(|d|d.set(true));queue_refresh();0
         },
@@ -3180,7 +3185,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             let y=(l>>16) as i16 as i32;
             let stage=STATE.with(|s|{
                 let mut state=s.borrow_mut();
-                let reduced=state.prefs.appearance.reduced_motion;
+                let reduced=state.prefs.appearance.motion_reduced();
                 let p=state.stages.iter_mut().find(|p|p.hwnd==hwnd)?;
                 let hit=p.layout.and_then(|layout|p.hit(layout,x,y));
                 let old=std::mem::replace(&mut p.hover,hit);
@@ -3201,7 +3206,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             }
             let (changed,animate,track)=STATE.with(|s|{
                 let mut state=s.borrow_mut();
-                let reduced=state.prefs.appearance.reduced_motion;
+                let reduced=state.prefs.appearance.motion_reduced();
                 let magnify=!reduced&&state.prefs.appearance.magnification!=0;
                 let Some(b)=state.bars.iter_mut().find(|b|b.hwnd==hwnd) else{return (false,false,false)};
                 let prev=b.hovered;
@@ -3513,7 +3518,7 @@ unsafe extern "system" fn stage_rail_proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->
         WM_MOUSEMOVE=>{
             let mut stage=ptr::null_mut();
             update_state(|s|{
-                let reduced=s.prefs.appearance.reduced_motion;
+                let reduced=s.prefs.appearance.motion_reduced();
                 if let Some(p)=s.stages.iter_mut().find(|p|p.rail==hwnd){p.collapsed=false;p.begin_slide(reduced);stage=p.hwnd;}
                 if !stage.is_null(){refresh(s,false);}
             });

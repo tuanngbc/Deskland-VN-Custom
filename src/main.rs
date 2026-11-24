@@ -228,6 +228,7 @@ unsafe fn register_hotkey_logged(hwnd: HWND, id: i32, mods: u32, vk: u32, name: 
 }
 
 unsafe extern "system" fn msg_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if m==WM_SETTINGCHANGE{dock::motion::refresh_system();}
     if m!=0 && TASKBAR_CREATED.with(|id|id.get())==m {
         TRAY_RESTORE_PENDING.with(|p|p.set(true));
         DISPLAY_CHANGED.with(|p|p.set(true));
@@ -618,6 +619,7 @@ struct Config {
     launcher_vk: u32,
     launcher_appearance: launcher::Appearance,
     spotlight:launcher::library::Preferences,
+    motion:dock::motion::Settings,
     spotlight_guide_seen:bool,
     tools: mini_tools::Options,
     system_monitor: system_monitor::Options,
@@ -664,9 +666,15 @@ fn load_config(cli_theme: Option<String>) -> Config {
             "beach".into()
         }
     };
+    let mut dock=dock::Options::migrate(&root,legacy_dock.as_ref());
+    let motion=dock::motion::Settings::from_profile(&root,&dock.appearance.json());
+    // Legacy per-surface flags are migrated once; the global settings own policy.
+    dock.appearance.reduced_motion=false;
+    let mut spotlight=launcher::library::Preferences::from_json(&root["spotlight"]);
+    spotlight.animations=true;
     Config {
         wallpaper_enabled: root["wallpaperEnabled"].as_bool().unwrap_or(true),
-        dock: dock::Options::migrate(&root, legacy_dock.as_ref()),
+        dock,
         theme,
         params: root.get("params").cloned().unwrap_or(serde_json::Value::Null),
         mode: root.get("mode").and_then(|v| v.as_str()).map(|v| v.to_ascii_lowercase()).filter(|v| matches!(v.as_str(), "mirror" | "independent" | "panorama")).unwrap_or_else(|| "mirror".to_string()),
@@ -699,7 +707,8 @@ fn load_config(cli_theme: Option<String>) -> Config {
             if normalize_hotkey(root.get("launcherHotkey").and_then(|v| v.get("mods")).and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(MOD_ALT | MOD_NOREPEAT), vk).is_some() { vk } else { VK_SPACE as u32 }
         },
         launcher_appearance: launcher::Appearance::from_json(&root["launcherAppearance"]),
-        spotlight:launcher::library::Preferences::from_json(&root["spotlight"]),
+        spotlight,
+        motion,
         spotlight_guide_seen:root["spotlightGuideSeen"].as_bool().unwrap_or(root.is_object()),
         tools: mini_tools::Options::from_json(&root["miniTools"]),
         system_monitor: system_monitor::Options::from_json(&root["systemMonitor"]),
@@ -761,6 +770,7 @@ fn save_config(cfg: &Config) {
         "launcherHotkey": { "mods": cfg.launcher_mods, "vk": cfg.launcher_vk },
         "launcherAppearance": cfg.launcher_appearance.json(),
         "spotlight": &cfg.spotlight,
+        "motion": cfg.motion.json(),
         "spotlightGuideSeen":cfg.spotlight_guide_seen,
         "miniTools": cfg.tools.json(),
         "systemMonitor": cfg.system_monitor.json(),
@@ -889,6 +899,7 @@ fn web_init(app: &App) -> serde_json::Value {
         },
     });
     init["spotlight"]=serde_json::json!(&app.cfg.spotlight);
+    init["motion"]=app.cfg.motion.json();
     init["spotlightGuideSeen"]=serde_json::json!(app.cfg.spotlight_guide_seen);
     app.dock_taskbar.add_fields(&mut init);
     init["dockWinKeyStatus"]=serde_json::json!(app.dock_win_key_status);
@@ -1033,6 +1044,7 @@ struct App {
 
 impl App {
     fn configure_dock(&mut self) {
+        self.cfg.dock.appearance.reduced_motion=false;
         if app_icons::set(&self.cfg.dock.app_icons){launcher::start::icons_changed();}
         launcher::dock_pins(&self.cfg.dock.pinned);
         self.dock_error=None;
@@ -2385,6 +2397,7 @@ fn main() {
     let fps: f64 = arg_value(&args, "--fps").and_then(|s| s.parse().ok()).unwrap_or(30.0);
     let interval = 1000.0 / fps.max(1.0);
     let mut cfg = load_config(arg_value(&args, "--theme"));
+    dock::motion::configure(cfg.motion);
     launcher::spotlight_locale(&lang_eff(&cfg.lang).0);
     if let Some(mode) = arg_value(&args, "--mode") {
         if matches!(mode.as_str(), "mirror" | "independent" | "panorama") {
@@ -3114,6 +3127,7 @@ fn main() {
                 "spotlightPreferences" => {
                     let enabled=app.cfg.spotlight.enabled;
                     app.cfg.spotlight=launcher::library::Preferences::from_json(&m["value"]);
+                    app.cfg.spotlight.animations=true;
                     launcher::configure_spotlight(app.cfg.spotlight.clone());
                     if enabled!=app.cfg.spotlight.enabled {
                         unsafe{UnregisterHotKey(msg_hwnd,HOTKEY_LAUNCHER);}
@@ -3122,6 +3136,17 @@ fn main() {
                         }));
                     }
                     web_changed=true;
+                }
+                "motionPreferences" => {
+                    let next=dock::motion::Settings::from_json(&m["value"]);
+                    if next!=app.cfg.motion{
+                        let policy_changed=next.enabled!=app.cfg.motion.enabled||next.respect_system!=app.cfg.motion.respect_system;
+                        app.cfg.motion=next;
+                        dock::motion::configure(next);
+                        if policy_changed{app.configure_dock();}
+                        save_config(&app.cfg);
+                    }
+                    web::post(&serde_json::json!({"t":"motionState","motion":app.cfg.motion.json()}).to_string());
                 }
                 "spotlightGuideSeen" => {
                     if !app.cfg.spotlight_guide_seen {

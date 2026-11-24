@@ -25,9 +25,7 @@ const POLL: usize = 1;
 const SEARCH: usize = 2;
 const SHELL_REFRESH: usize = 3;
 const HOVER_ANIMATION: usize = 4;
-const HOVER_MS:u128=crate::dock::motion::HOVER_MS;
 const GRID_ANIMATION:usize=5;
-const GRID_MS:u128=crate::dock::motion::PAGE_MS;
 const TRANSITION_TIMER:usize=6;
 const CATALOG_CHANGE: u32 = WM_APP + 151;
 // WM_MOUSELEAVE is omitted by this windows-sys version's feature selection.
@@ -163,6 +161,10 @@ impl NativeBackdrop {
     unsafe fn show_behind(&self,foreground:HWND,r:RECT){
         SetWindowPos(self.hwnd,foreground,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_SHOWWINDOW);
     }
+    fn prepare_open(&self)->windows::core::Result<()>{
+        if let Some(host)=&self.host{host.root.SetOpacity(0.0)?;}
+        Ok(())
+    }
     fn transition(&self,t:Transition)->windows::core::Result<()>{
         let Some(host)=&self.host else{return Ok(());};
         // Tint is configured independently; fade the entire glass visual.
@@ -242,6 +244,11 @@ impl Foreground {
         let result=surface.EndDraw();
         updated?;
         result?;
+        self.comp.Commit()
+    }
+    unsafe fn prepare_open(&self)->windows::core::Result<()>{
+        self.effect.SetOpacity2(0.0)?;
+        self.visual.SetEffect(&self.effect)?;
         self.comp.Commit()
     }
     unsafe fn motion(&self,t:Transition,w:i32,anchor_y:i32)->windows::core::Result<()>{
@@ -433,8 +440,8 @@ struct Panel {
     error: String,
     hover: Option<Hit>,
     hover_from: Option<Hit>,
-    hover_started: Option<std::time::Instant>,
-    grid_started:Option<std::time::Instant>,
+    hover_started:Option<motion::Span>,
+    grid_started:Option<motion::Span>,
     motion: bool,
     tracking: bool,
     keyboard: bool,
@@ -496,13 +503,14 @@ fn hover_transition(p: &mut Panel, next: Option<Hit>) -> Vec<RECT> {
     let previous = p.hover_from;
     let old = p.hover;
     p.hover = next;
-    p.hover_from = if p.motion { old } else { None };
-    p.hover_started = p.motion.then(std::time::Instant::now);
+    let animate=p.motion&&motion::allowed();
+    p.hover_from = if animate { old } else { None };
+    p.hover_started = animate.then(motion::Span::hover);
     previous.into_iter().chain(old).chain(next).filter_map(|h| target_rect(p, h)).collect()
 }
 
 pub(super) fn motion_allowed() -> bool {
-    OPTIONS.with(|p|p.borrow().animations)&&motion::system_allowed()
+    OPTIONS.with(|p|p.borrow().animations)&&motion::allowed()
 }
 
 fn hover_opacity(h:Hit,current:Option<Hit>,previous:Option<Hit>,progress:f32)->f32 {
@@ -516,16 +524,17 @@ fn animate_hover(hwnd:HWND,regions:Vec<RECT>) {
     invalidate_regions(hwnd,regions);
 }
 
-fn grid_opacity(elapsed:u128)->u8 {
-    // A new page is visible immediately, then its icons settle gently.
-    // No blank frame or delayed hit testing.
-    (192+63*elapsed.min(GRID_MS)/GRID_MS) as u8
+fn grid_opacity(progress:f32)->u8 {
+    // The new content is immediately interactive, then fades to full opacity.
+    (150.0+105.0*motion::ease(progress)).round() as u8
 }
 
 fn start_grid_motion(hwnd:HWND) {
+    if unsafe{IsWindowVisible(hwnd)}==0{return;}
     let active=PANEL.with(|p|{
         let mut p=p.borrow_mut();let Some(p)=p.as_mut() else{return false;};
-        p.grid_started=p.motion.then(std::time::Instant::now);p.grid_started.is_some()
+        let base=if p.folder!=0||p.hidden{motion::FOLDER_MS}else{motion::PAGE_MS as u32};
+        p.grid_started=(p.motion&&motion::allowed()).then(||motion::Span::new(base));p.grid_started.is_some()
     });
     if active {unsafe{SetTimer(hwnd,GRID_ANIMATION,16,None);}}
 }
@@ -1176,8 +1185,8 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
             controls(p),
             p.hover,
             p.hover_from,
-            p.hover_started.map_or(1.0,|t| (t.elapsed().as_millis().min(HOVER_MS) as f32/HOVER_MS as f32).clamp(0.0,1.0)),
-            p.grid_started.map_or(255,|t|grid_opacity(t.elapsed().as_millis())),
+            p.hover_started.map_or(1.0,|t|motion::ease(t.progress())),
+            p.grid_started.map_or(255,|t|grid_opacity(t.progress())),
             p.pressed.map(|(h,_)|h),
             p.category,
             p.page,
@@ -1609,7 +1618,7 @@ unsafe fn place(hwnd: HWND, point: POINT) {
     );
     let backdrop=PANEL.with(|p|p.borrow().as_ref().and_then(|p|p.native.as_ref().map(|n|n.backdrop.hwnd)));
     if let Some(backdrop)=backdrop{
-        SetWindowPos(backdrop,hwnd,r.left,r.top,width,height,SWP_NOACTIVATE|SWP_SHOWWINDOW);
+        SetWindowPos(backdrop,hwnd,r.left,r.top,width,height,SWP_NOACTIVATE|if visible{SWP_SHOWWINDOW}else{0});
     }
     SetWindowPos(
         edit,
@@ -1664,11 +1673,12 @@ pub(super) fn dismiss(restore: bool) {
 fn start_transition(hwnd:HWND,open:bool)->bool{
     let transition=PANEL.with(|cell|{
         let mut panel=cell.borrow_mut();let p=panel.as_mut()?;
-        if !p.motion{return None;}
+        if !p.motion||!motion::allowed(){return None;}
         let native=p.native.as_ref()?;
         let t=Transition::new(open,motion::FULL,p.transition);
         if unsafe{native.foreground.motion(t,p.width,px(66,p.dpi))}.is_err(){return None;}
         let _=native.backdrop.transition(t);
+        let t=t.restart_clock();
         p.transition=Some(t);
         Some(t)
     });
@@ -2463,7 +2473,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 let mut s=s.borrow_mut();let Some(p)=s.as_mut() else {return (Vec::new(),false);};
                 let Some(start)=p.hover_started else {return(Vec::new(),false);};
                 let regions=p.hover_from.into_iter().chain(p.hover).filter_map(|h|target_rect(p,h)).collect::<Vec<_>>();
-                let active=start.elapsed().as_millis()<HOVER_MS;
+                let active=motion::allowed()&&start.progress()<1.0;
                 if !active {p.hover_started=None;p.hover_from=None;}
                 (regions,active)
             });
@@ -2474,7 +2484,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             let (region,active)=PANEL.with(|s|{
                 let mut s=s.borrow_mut();let Some(p)=s.as_mut()else{return(None,false);};
                 let Some(start)=p.grid_started else{return(None,false);};
-                let active=start.elapsed().as_millis()<GRID_MS;
+                let active=motion::allowed()&&start.progress()<1.0;
                 if !active {p.grid_started=None;}
                 (Some(grid(p).area),active)
             });
@@ -2563,6 +2573,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             0
         }
         WM_SETTINGCHANGE | WM_THEMECHANGED | WM_DWMCOMPOSITIONCHANGED => {
+            if msg==WM_SETTINGCHANGE{motion::refresh_system();}
             let dark = dark();
             surface_style(hwnd, dark);
             let motion=motion_allowed();
@@ -2898,7 +2909,20 @@ fn open_native(point: POINT, query: String, prior: HWND, manage: bool, activate:
         });
         SetWindowTextW(edit, wide(&query).as_ptr());
         place(hwnd, point);
-        if activate {start_transition(hwnd,true);}
+        // The input HWND and passive glass companion have not been shown yet.
+        // Present the foreground while the composition root is transparent.
+        // Do not spend the opening clock on HWND/layout/icon initialization.
+        let (prepared,backdrop)=PANEL.with(|s|{
+            let b=s.borrow();let Some(p)=b.as_ref()else{return (false,None);};
+            let Some(n)=&p.native else{return (false,None);};
+            let ready=activate&&p.motion&&motion::allowed()
+                &&n.foreground.prepare_open().is_ok()&&n.backdrop.prepare_open().is_ok();
+            if !ready{let _=n.foreground.settle();n.backdrop.settle();}
+            (ready,Some((n.backdrop.hwnd,p.bounds)))
+        });
+        if let Some((bg,r))=backdrop{
+            SetWindowPos(bg,hwnd,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_SHOWWINDOW);
+        }
         if activate {
             ShowWindow(hwnd, SW_SHOW);
             UpdateWindow(hwnd);
@@ -2908,6 +2932,11 @@ fn open_native(point: POINT, query: String, prior: HWND, manage: bool, activate:
         } else {
             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             UpdateWindow(hwnd);
+        }
+        if prepared&&!start_transition(hwnd,true){
+            PANEL.with(|s|if let Some(n)=s.borrow().as_ref().and_then(|p|p.native.as_ref()){
+                let _=n.foreground.settle();n.backdrop.settle();
+            });
         }
         SendMessageW(edit, 0x00b1, usize::MAX, -1);
         if crate::trial::active(){
@@ -2941,8 +2970,8 @@ mod tests {
         assert_eq!(&ink.pixels[i..i+4],&[63,31,13,100]);
         assert_eq!(hover_opacity(Hit::Edit,Some(Hit::Edit),None,0.5),0.5);
         assert_eq!(hover_opacity(Hit::Edit,None,Some(Hit::Edit),0.5),0.5);
-        assert_eq!(grid_opacity(0),192);
-        assert_eq!(grid_opacity(GRID_MS),255);
+        assert_eq!(grid_opacity(0.0),150);
+        assert_eq!(grid_opacity(1.0),255);
     }
     #[test]
     fn extreme_backdrops_keep_readable_theme_brightness() {

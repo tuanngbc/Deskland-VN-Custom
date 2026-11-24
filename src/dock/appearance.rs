@@ -46,6 +46,7 @@ impl Default for Appearance {
         magnification:38,animation_speed:100,reduced_motion:false,auto_hide:false}}
 }
 impl Appearance {
+    pub(super) fn motion_reduced(&self)->bool{self.reduced_motion||!super::motion::allowed()}
     pub(super) fn edge_pixels(&self,dpi:u32,cross:f32)->f32{
         (self.edge_gap as f32*(dpi as f32/96.0).clamp(0.75,3.0)).min(cross*0.10)
     }
@@ -65,7 +66,7 @@ impl Appearance {
             position:DockSide::parse(&v["position"]),
             theme:Theme::parse(&v["theme"]),
             magnification:bounded(&v["magnification"],old.magnification,0,55),
-            animation_speed:bounded(&v["animationSpeed"],old.animation_speed,50,170),
+            animation_speed:bounded(&v["animationSpeed"],old.animation_speed,25,200),
             reduced_motion:v["reducedMotion"].as_bool().unwrap_or(false),
             auto_hide:v["autoHide"].as_bool().unwrap_or(false),
         }

@@ -208,7 +208,7 @@ pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor){
         dirty:true,hover:None,focus:None,pressed:None,motion:None};
     panel.paint();
     if !cfg!(test)&&super::popup_motion_allowed()&&SetTimer(hwnd,MOTION_TIMER,16,None)!=0{
-        panel.motion=Some(super::motion::Tween::new(true,super::motion::PANEL,None));
+        panel.motion=Some(super::motion::Tween::new(true,super::motion::CALENDAR,None).prepared());
     }
     if !panel.present(){DestroyWindow(hwnd);return;}
     PANEL.with(|slot|slot.replace(Some(panel)));
@@ -219,6 +219,9 @@ pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor){
     });
     SetForegroundWindow(hwnd);
     SetFocus(hwnd);
+    PANEL.with(|s|if let Some(p)=s.borrow_mut().as_mut().filter(|p|p.hwnd==hwnd){
+        if let Some(t)=p.motion{let _=p.present();p.motion=Some(t.restart_clock());}
+    });
 }
 
 unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
@@ -232,7 +235,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 if cfg!(test)||!super::popup_motion_allowed(){return false;}
                 if p.motion.is_some_and(|t|t.to==0.0){return true;}
                 if SetTimer(hwnd,MOTION_TIMER,16,None)==0{return false;}
-                p.motion=Some(super::motion::Tween::new(false,super::motion::PANEL,p.motion));true
+                p.motion=Some(super::motion::Tween::new(false,super::motion::CALENDAR,p.motion));true
             });
             if !animated{DestroyWindow(hwnd);}0
         }

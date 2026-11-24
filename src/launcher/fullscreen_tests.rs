@@ -525,7 +525,7 @@ fn native_isolated_library_search_navigation_and_100_toggles() {
         UpdateWindow(hwnd);
         SendMessageW(hwnd,WM_MOUSEMOVE,0,mouse(x+1,y+1));
         assert_eq!(GetUpdateRect(hwnd,&mut dirty,0),0);
-        std::thread::sleep(Duration::from_millis(130));
+        std::thread::sleep(Duration::from_millis(motion::hover_ms() as u64+30));
         // On the private non-input desktop TrackMouseEvent may queue a real
         // leave for the physical pointer, which is outside our synthetic tile.
         // Deliver the timer to the same native window procedure before pumping

@@ -382,7 +382,7 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bo
     // A hidden HWND can't be relied on to dispatch WM_PAINT. Submit the
     // completed bitmap directly, then show the window with content.
     p.paint();
-    if animated&&SetTimer(hwnd,ENTRANCE_TIMER,16,None)!=0{p.entrance=Some(super::motion::Tween::new(true,super::motion::PANEL,None));}
+    if animated&&SetTimer(hwnd,ENTRANCE_TIMER,16,None)!=0{p.entrance=Some(super::motion::Tween::new(true,super::motion::CONTROL,None).prepared());}
     if !p.present(){
         crate::log!("DOCK_PANEL layered submission failed: {}",GetLastError());
         p.layered=false;
@@ -400,6 +400,9 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bo
         });
     }
     SetForegroundWindow(hwnd);SetFocus(hwnd);
+    PANE.with(|s|if let Some(p)=s.borrow_mut().as_mut().filter(|p|p.hwnd==hwnd){
+        if let Some(t)=p.entrance{let _=p.present();p.entrance=Some(t.restart_clock());}
+    });
     crate::log!("DOCK_PANEL first frame {} in {} ms",if list{"list"}else{"cards"},start.elapsed().as_millis());
     PANE.with(|s|{if let Some(m)=s.borrow().as_ref().and_then(|p|p.metrics.as_ref()){
         if m.cfg.mask!=0{
@@ -420,7 +423,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 if cfg!(test)||!super::popup_motion_allowed(){return false;}
                 if p.entrance.is_some_and(|t|t.to==0.0){return true;}
                 if SetTimer(hwnd,ENTRANCE_TIMER,16,None)==0{return false;}
-                p.entrance=Some(super::motion::Tween::new(false,super::motion::PANEL,p.entrance));
+                p.entrance=Some(super::motion::Tween::new(false,super::motion::CONTROL,p.entrance));
                 p.pressed=None;
                 true
             });

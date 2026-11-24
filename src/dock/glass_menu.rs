@@ -2,7 +2,7 @@
 //! for IDs, enabled state and submenus, and is used if rendering cannot start.
 use super::{motion::{self,Tween},glass::Glass,glass_probe::Layer,panel_chrome as chrome,surface::Palette};
 use crate::desktop::wide;
-use std::{cell::{Cell,RefCell},mem,ptr,time::Instant};
+use std::{cell::{Cell,RefCell},mem,ptr};
 const FRAME_TIMER:usize=8;
 thread_local!{static TRACKING:Cell<bool>=const{Cell::new(false)};}
 struct TrackScope;
@@ -28,7 +28,7 @@ unsafe fn items(menu:HMENU,depth:usize)->Vec<Entry>{
 }
 struct Menu{
     layer:Layer,scaled:Option<Layer>,glass:Glass,font:HFONT,dark:bool,dpi:u32,
-    tween:Option<Tween>,pivot:(f32,f32),hover_from:Option<usize>,hover_at:Option<Instant>,animate:bool,
+    tween:Option<Tween>,pivot:(f32,f32),hover_from:Option<usize>,hover_at:Option<motion::Span>,shadow:Option<chrome::PanelShadow>,
     pages:Vec<(Vec<Entry>,usize,Option<usize>)>,hot:Option<usize>,offset:usize,pressed:Option<usize>,
     rows:usize,row:i32,pad:i32,done:bool,result:u32,
 }
@@ -80,9 +80,13 @@ impl Menu{
         self.entries().get(i).filter(|e|!e.disabled&&!e.separator).map(|_|i)
     }
     unsafe fn present(&mut self,hwnd:HWND)->bool{
-        let Some(t)=self.tween else{return self.layer.present(hwnd);};
+        let Some(t)=self.tween else{
+            if let Some(shadow)=&self.shadow{shadow.opacity(255);}
+            return self.layer.present(hwnd);
+        };
         let k=t.openness();
         let opacity=(255.0*k).round().clamp(1.0,255.0) as u8;
+        if let Some(shadow)=&self.shadow{shadow.opacity(opacity);}
         let Some(scaled)=self.scaled.as_mut()else{return self.layer.present_at(hwnd,None,opacity);};
         let z=motion::zoom(motion::MENU.scale,k);
         let (w,h)=self.layer.size;
@@ -112,7 +116,7 @@ impl Menu{
                 continue;
             }
             let index=self.offset+slot;
-            let phase=self.hover_at.map_or(1.0,|t|motion::ease(t.elapsed().as_millis() as f32/motion::HOVER_MS as f32));
+            let phase=self.hover_at.map_or(1.0,|t|motion::ease(t.progress()));
             let lift=if self.hot==Some(index){phase}else if self.hover_from==Some(index){1.0-phase}else{0.0};
             if lift>0.0{self.layer.shape(r,px(10) as f32,if self.dark{[83,84,90]}else{[221,235,248]},(215.0*lift).round() as u8);}
             let flags=DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS;
@@ -140,9 +144,9 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         }
         WM_TIMER if w==FRAME_TIMER=>{
             if let Ok(mut m)=state.try_borrow_mut(){
-                if m.tween.is_some_and(|t|t.progress()>=1.0&&t.to>0.0){m.tween=None;}
+                if m.tween.is_some_and(|t|(t.progress()>=1.0||!motion::allowed())&&t.to>0.0){m.tween=None;}
                 let hovering=m.hover_at.is_some();
-                if m.hover_at.is_some_and(|t|t.elapsed().as_millis()>=motion::HOVER_MS){
+                if m.hover_at.is_some_and(|t|t.progress()>=1.0||!motion::allowed()){
                     m.hover_at=None;m.hover_from=None;
                 }
                 if hovering{m.render(hwnd);}else{m.present(hwnd);}
@@ -174,8 +178,8 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 }
                 _=>{}
             }
-            if previous!=m.hot&&m.animate{
-                m.hover_from=previous;m.hover_at=Some(Instant::now());SetTimer(hwnd,FRAME_TIMER,16,None);
+            if previous!=m.hot&&motion::allowed(){
+                m.hover_from=previous;m.hover_at=Some(motion::Span::hover());SetTimer(hwnd,FRAME_TIMER,16,None);
             }
             if !m.done{InvalidateRect(hwnd,ptr::null(),0);}0
         }
@@ -220,11 +224,15 @@ unsafe fn show(menu:HMENU,owner:HWND,point:POINT,flags:u32,dark:bool,transparenc
     let animate=super::popup_motion_allowed()&&SetTimer(hwnd,FRAME_TIMER,16,None)!=0;
     let model=RefCell::new(Menu{layer,scaled:if animate{Layer::new(w,h)}else{None},
         glass,font:chrome::choose_font(dpi,14,500),dark,dpi,pages:vec![(entries,0,None)],
-        tween:animate.then(||Tween::new(true,motion::MENU,None)),pivot:((point.x-x).clamp(0,w) as f32,(point.y-y).clamp(0,h) as f32),
-        hover_from:None,hover_at:None,animate,
+        tween:None,pivot:((point.x-x).clamp(0,w) as f32,(point.y-y).clamp(0,h) as f32),
+        hover_from:None,hover_at:None,shadow:None,
         hot:None,offset:0,pressed:None,rows,row,pad,done:false,result:0});
     let ready=model.borrow_mut().render(hwnd);
     if !ready{DestroyWindow(hwnd);return None;}
+    if animate{
+        let mut m=model.borrow_mut();m.tween=Some(Tween::new(true,motion::MENU,None).prepared());
+        if !m.present(hwnd){DestroyWindow(hwnd);return None;}
+    }
     SetWindowLongPtrW(hwnd,GWLP_USERDATA,&model as *const _ as isize);
     ShowWindow(hwnd,SW_SHOW);
     SetForegroundWindow(hwnd);
@@ -234,6 +242,10 @@ unsafe fn show(menu:HMENU,owner:HWND,point:POINT,flags:u32,dark:bool,transparenc
     SetFocus(hwnd);SetCapture(hwnd);
     let mut shadow=None;
     chrome::PanelShadow::sync(&mut shadow,hwnd,owner,rect,dpi,if prefer_above{anchor.side}else{super::DockSide::Right},dark);
+    {
+        let mut m=model.borrow_mut();m.shadow=shadow.take();
+        if let Some(t)=m.tween{let _=m.present(hwnd);m.tween=Some(t.restart_clock());}
+    }
     let mut msg:MSG=mem::zeroed();
     while !model.borrow().done&&IsWindow(hwnd)!=0{
         let running=GetMessageW(&mut msg,ptr::null_mut(),0,0);
@@ -243,11 +255,11 @@ unsafe fn show(menu:HMENU,owner:HWND,point:POINT,flags:u32,dark:bool,transparenc
     let foreground=GetForegroundWindow();
     if GetCapture()==hwnd{ReleaseCapture();}
     let mut restore=foreground==hwnd;
-    if restore&&IsWindow(hwnd)!=0&&model.borrow().animate&&model.borrow().result==0&&IsWindow(owner)!=0{
+    if restore&&IsWindow(hwnd)!=0&&motion::allowed()&&model.borrow().result==0&&IsWindow(owner)!=0{
         let old=model.borrow().tween;
         model.borrow_mut().tween=Some(Tween::new(false,motion::MENU,old));
         if SetTimer(hwnd,FRAME_TIMER,16,None)!=0{
-            while IsWindow(hwnd)!=0&&GetForegroundWindow()==hwnd&&model.borrow().tween.is_some_and(|t|t.progress()<1.0){
+            while motion::allowed()&&IsWindow(hwnd)!=0&&GetForegroundWindow()==hwnd&&model.borrow().tween.is_some_and(|t|t.progress()<1.0){
                 let running=GetMessageW(&mut msg,ptr::null_mut(),0,0);
                 if running<=0{if running==0{PostQuitMessage(msg.wParam as i32);}break;}
                 TranslateMessage(&msg);DispatchMessageW(&msg);
@@ -256,7 +268,7 @@ unsafe fn show(menu:HMENU,owner:HWND,point:POINT,flags:u32,dark:bool,transparenc
         restore=GetForegroundWindow()==hwnd;
     }
     KillTimer(hwnd,FRAME_TIMER);
-    drop(shadow);
+    drop(model.borrow_mut().shadow.take());
     if IsWindow(hwnd)!=0{SetWindowLongPtrW(hwnd,GWLP_USERDATA,0);DestroyWindow(hwnd);}
     if restore&&IsWindow(owner)!=0{SetForegroundWindow(owner);}
     let result=model.borrow().result;

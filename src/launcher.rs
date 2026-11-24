@@ -346,6 +346,7 @@ fn stop_compact_motion(hwnd:HWND){
 fn start_compact_motion(hwnd:HWND,open:bool)->bool{
     if !fullscreen::motion_allowed(){return false;}
     let t=Tween::new(open,motion::COMPACT,COMPACT_MOTION.get());
+    let t=if open&&unsafe{IsWindowVisible(hwnd)}==0{t.prepared()}else{t};
     if unsafe{SetTimer(hwnd,COMPACT_TWEEN,15,None)}==0{return false;}
     COMPACT_MOTION.set(Some(t));
     true
@@ -380,6 +381,8 @@ unsafe fn compact_transition_frame(hwnd:HWND,w:i32,h:i32,pixels:&[u8])->bool{
         }
         let Some(frame)=cache.as_mut()else{return false;};
         frame.source.pixels().copy_from_slice(pixels);
+        // Prepare the source raster first; opening must not consume the
+        // transition while the initial icons and glass are being painted.
         present_compact_transition(hwnd,frame,t);
         true
     })
@@ -843,7 +846,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         WM_PAINT => { paint(hwnd); 0 }
         WM_TIMER if w==COMPACT_TWEEN=>{
             if let Some(t)=COMPACT_MOTION.get(){
-                if t.progress()>=1.0{
+                if t.progress()>=1.0||!motion::allowed(){
                     stop_compact_motion(hwnd);
                     if t.to==0.0{dismiss_compact_with_focus(hwnd);}else{paint(hwnd);}
                 }else{
@@ -1103,6 +1106,7 @@ fn toggle_at(at:Option<POINT>, query:Option<String>, prior:Option<HWND>) {
         SetTimer(hwnd,7,60,None);
         let input=InputHandoff::capture();
         ShowWindow(hwnd, SW_SHOW); SetForegroundWindow(hwnd); SetFocus(hwnd);
+        if let Some(t)=COMPACT_MOTION.get(){COMPACT_MOTION.set(Some(t.restart_clock()));}
         input.finish(hwnd,"Spotlight");
     }
 }
