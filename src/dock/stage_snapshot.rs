@@ -496,10 +496,14 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
         // different monitor or the front of the next visible card.
         let mut visited=std::collections::HashSet::new();
         let mut wanted=Vec::new();
+        // Reserve enough for the worst possible 360px square frame per
+        // selected source. Prioritize front cards across displays. Deeper
+        // layers can use DWM and never thrash this bounded snapshot cache.
+        let max_visible=MAX_FRAME_BYTES/(360*360*4);
         for layer in 0..5{
             for t in targets{
                 let Some(id)=t.sources[layer] else{continue;};
-                if !visited.insert(id)||!unsafe{retainable(id)}{continue;}
+                if visited.len()>=max_visible||!visited.insert(id)||!unsafe{retainable(id)}{continue;}
                 let entry=state.sources.entry(id).or_default();
                 entry.observe(unsafe{stamp(id)},now);
                 if entry.wants_frame(now){wanted.push(id);}
@@ -515,6 +519,7 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
             // A hidden Stage has no live projection or active capture. Retain
             // only the bounded source cache for minimized application previews.
             state.next_capture=None;
+            unsafe{KillTimer(controller,super::STAGE_CAPTURE_TIMER);}
         }
         if state.job.is_none()&&!wanted.is_empty(){
             if let Some(delay)=state.next_capture.and_then(|t|t.checked_duration_since(now)){

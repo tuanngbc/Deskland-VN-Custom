@@ -971,6 +971,7 @@ pub fn configure_spotlight(options: library::Preferences) {
 pub fn initialize_spotlight(value: library::Library) { fullscreen::initialize(value); }
 pub fn close_spotlight(){
     fullscreen::dismiss(false);
+    fullscreen::reset_graphics_factories();
     if let Some((hwnd,_,_,_))=handles(){
         unsafe{if IsWindowVisible(hwnd)!=0{dismiss(hwnd);}}
     }

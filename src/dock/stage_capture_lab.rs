@@ -152,6 +152,67 @@ pub(super) fn native_wgc_projects_one_owned_hwnd_or_reports_blocked() {
 }
 
 
+// Explicit proof of the DWM thumbnail API on owned synthetic windows only.
+// This is not the product transition backend: source freshness and interaction
+// with native Windows animations still require owner-hardware acceptance.
+#[cfg(test)]
+#[test]
+#[ignore="owned-window DWM transition feasibility on Actions desktop"]
+fn native_dwm_scale_proxy_feasibility(){
+    if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+    use windows_sys::Win32::Graphics::Dwm::*;
+    unsafe{
+        let source=window(true).unwrap();
+        let dst=Fixture(CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,
+            wide("STATIC").as_ptr(),std::ptr::null(),WS_POPUP,480,60,450,300,
+            null_mut(),null_mut(),GetModuleHandleW(std::ptr::null()),null_mut()));
+        if dst.0.is_null(){println!("WINDOW_PROXY_POC=BLOCKED destination HWND unavailable");return;}
+        ShowWindow(dst.0,SW_SHOWNOACTIVATE);
+        let mut link=0isize;
+        let hr=DwmRegisterThumbnail(dst.0,source.0,&mut link);
+        if hr<0||link==0{println!("WINDOW_PROXY_POC=BLOCKED DWM registration {hr:#x}");return;}
+        struct Thumbnail(isize);
+        impl Drop for Thumbnail{fn drop(&mut self){unsafe{DwmUnregisterThumbnail(self.0);}}}
+        let thumb=Thumbnail(link);
+        let mut before:WINDOWPLACEMENT=std::mem::zeroed();before.length=std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+        assert_ne!(GetWindowPlacement(source.0,&mut before),0);
+        let update=|k:f32|{
+            let left=(12.0+310.0*k).round() as i32;let top=(12.0+192.0*k).round() as i32;
+            let size=(400.0-352.0*k).round() as i32;
+            let props=DWM_THUMBNAIL_PROPERTIES{dwFlags:DWM_TNP_RECTDESTINATION|DWM_TNP_OPACITY|DWM_TNP_VISIBLE,
+                rcDestination:RECT{left,top,right:left+size,bottom:top+(size as f32*0.58).round() as i32},
+                opacity:(255.0-128.0*k).round() as u8,fVisible:1,..std::mem::zeroed()};
+            DwmUpdateThumbnailProperties(thumb.0,&props)>=0
+        };
+        let mut size:SIZE=std::mem::zeroed();
+        if DwmQueryThumbnailSourceSize(thumb.0,&mut size)<0||size.cx<=0||size.cy<=0||!update(0.0){
+            println!("WINDOW_PROXY_POC=BLOCKED invalid DWM source or destination");return;
+        }
+        let mut submitted=0;
+        for speed in [25,70,100,200]{
+            let duration=30000.0/speed as f32;
+            let start=Instant::now();
+            loop{
+                let t=(start.elapsed().as_secs_f32()*1000.0/duration).min(1.0);
+                assert!(update(super::motion::ease(t)));
+                submitted+=1;
+                if t>=1.0{break;}
+                std::thread::sleep(Duration::from_millis(16));
+            }
+            assert!(update(0.0));
+        }
+        ShowWindow(source.0,SW_SHOWMINNOACTIVE);
+        let minimized=IsIconic(source.0)!=0;
+        let valid_after_minimize=update(0.7);
+        ShowWindow(source.0,SW_RESTORE);
+        let mut after:WINDOWPLACEMENT=std::mem::zeroed();after.length=before.length;
+        assert_ne!(GetWindowPlacement(source.0,&mut after),0);
+        let placement=super::same_rect(before.rcNormalPosition,after.rcNormalPosition);
+        println!("WINDOW_PROXY_POC api_frames={submitted} minimized={minimized} update_after_minimize={valid_after_minimize} placement_preserved={placement} pixel_freshness=NOT_VERIFIED native_overlap=NOT_VERIFIED");
+        if !placement||IsIconic(source.0)!=0||!minimized{println!("WINDOW_PROXY_POC=BLOCKED native placement/visibility transition");}
+    }
+}
+
 // Separate fixture process exercises the same external-HWND eligibility and
 // persistent worker used by Stage, without touching a runner or owner app.
 #[cfg(test)]

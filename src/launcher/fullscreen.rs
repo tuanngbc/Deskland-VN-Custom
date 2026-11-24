@@ -42,11 +42,35 @@ type DesktopTarget=windows::UI::Composition::Desktop::DesktopWindowTarget;
 type Compositor=windows::UI::Composition::Compositor;
 type Sprite=windows::UI::Composition::SpriteVisual;
 struct HostLayer {
-    _target:DesktopTarget,
+    target:DesktopTarget,
     root:windows::UI::Composition::ContainerVisual,
     brush:windows::UI::Composition::CompositionColorBrush,
     sheet:Sprite,
+    material:Sprite,
+    backdrop_brush:windows::UI::Composition::CompositionBackdropBrush,
     compositor:Compositor,
+}
+// The owner log shows ~30 MiB private bytes of growth per repeat open of
+// native glass. One WinRT compositor session and one DComp/D3D factory per
+// UI thread avoid repeated driver/compositor session allocation. Only these
+// lightweight owners remain warm; each overlay still closes its own visuals.
+struct HostFactory(Compositor);
+impl Drop for HostFactory{fn drop(&mut self){let _=self.0.Close();}}
+thread_local!{static HOST_FACTORY:RefCell<Option<HostFactory>>=const{RefCell::new(None)};}
+fn close_composition<T:Interface>(object:&T){
+    if let Ok(close)=object.cast::<windows::Foundation::IClosable>(){let _=close.Close();}
+}
+impl Drop for HostLayer{
+    fn drop(&mut self){
+        let _=self.root.StopAnimation(&windows::core::HSTRING::from("Opacity"));
+        if let Ok(children)=self.root.Children(){let _=children.RemoveAll();}
+        close_composition(&self.target);
+        close_composition(&self.material);
+        close_composition(&self.sheet);
+        close_composition(&self.backdrop_brush);
+        close_composition(&self.brush);
+        close_composition(&self.root);
+    }
 }
 struct NativeBackdrop {
     hwnd:HWND,
@@ -97,7 +121,11 @@ impl HostLayer {
             };
             DISPATCHER.with(|s|s.replace(Some(Dispatcher{queue})));
         }
-        let compositor=Compositor::new()?;
+        let compositor=HOST_FACTORY.with(|slot|->windows::core::Result<Compositor>{
+            let mut slot=slot.borrow_mut();
+            if slot.is_none(){*slot=Some(HostFactory(Compositor::new()?));}
+            Ok(slot.as_ref().unwrap().0.clone())
+        })?;
         let api:ICompositorDesktopInterop=compositor.cast()?;
         let target=api.CreateDesktopWindowTarget(WinHwnd(hwnd),false)?;
         let root=compositor.CreateContainerVisual()?;
@@ -105,7 +133,8 @@ impl HostLayer {
         root.SetRelativeSizeAdjustment(relative)?;
         let material=compositor.CreateSpriteVisual()?;
         material.SetRelativeSizeAdjustment(relative)?;
-        material.SetBrush(&compositor.CreateHostBackdropBrush()?)?;
+        let backdrop_brush=compositor.CreateHostBackdropBrush()?;
+        material.SetBrush(&backdrop_brush)?;
         let sheet=compositor.CreateSpriteVisual()?;
         sheet.SetRelativeSizeAdjustment(relative)?;
         let brush=compositor.CreateColorBrushWithColor(Color{A:255,R:24,G:25,B:29})?;
@@ -114,7 +143,7 @@ impl HostLayer {
         children.InsertAtTop(&material)?;
         children.InsertAtTop(&sheet)?;
         target.SetRoot(&root)?;
-        Ok(Self{_target:target,root,brush,sheet,compositor})
+        Ok(Self{target,root,brush,sheet,material,backdrop_brush,compositor})
     }
 }
 impl NativeBackdrop {
@@ -154,7 +183,8 @@ impl NativeBackdrop {
             // Keep real HostBackdrop color/detail, with a neutral cool tint.
             let (r,g,b)=if dark{(13,17,25)}else{(28,40,48)};
             let _=host.brush.SetColor(windows::UI::Color{A:255,R:r,G:g,B:b});
-            let _=host.sheet.SetOpacity((if dark{0.50}else{0.53}+strength as f32*0.002).clamp(0.54,0.64));
+            let base:f32=if dark{0.50}else{0.53};
+            let _=host.sheet.SetOpacity((base+strength as f32*0.002).clamp(0.54,0.64));
         }else{
             let value=i32::from(dark);
             let _=DwmSetWindowAttribute(self.hwnd,DWMWA_USE_IMMERSIVE_DARK_MODE as u32,(&value as *const i32).cast(),4);
@@ -204,13 +234,30 @@ struct Foreground {
 }
 use crate::dock::motion::{self,Tween as Transition};
 
-impl Foreground {
-    unsafe fn new(hwnd:HWND)->windows::core::Result<Self>{
+struct ForegroundFactory{comp:IDCompositionDevice,ctx:ID3D11DeviceContext}
+thread_local!{static FOREGROUND_FACTORY:RefCell<Option<ForegroundFactory>>=const{RefCell::new(None)};}
+impl ForegroundFactory{
+    unsafe fn new()->windows::core::Result<Self>{
         let mut dev=None;let mut ctx=None;
         D3D11CreateDevice(None,D3D_DRIVER_TYPE_HARDWARE,HMODULE::default(),D3D11_CREATE_DEVICE_BGRA_SUPPORT,
             None,D3D11_SDK_VERSION,Some(&mut dev),None,Some(&mut ctx))?;
         let dxgi:IDXGIDevice=dev.expect("D3D device").cast()?;
         let comp:IDCompositionDevice=DCompositionCreateDevice(&dxgi)?;
+        Ok(Self{comp,ctx:ctx.expect("D3D immediate context")})
+    }
+}
+pub(super) fn reset_graphics_factories(){
+    HOST_FACTORY.with(|x|{x.borrow_mut().take();});
+    FOREGROUND_FACTORY.with(|x|{x.borrow_mut().take();});
+}
+impl Foreground {
+    unsafe fn new(hwnd:HWND)->windows::core::Result<Self>{
+        let (comp,ctx)=FOREGROUND_FACTORY.with(|slot|->windows::core::Result<_>{
+            let mut slot=slot.borrow_mut();
+            if slot.is_none(){*slot=Some(ForegroundFactory::new()?);}
+            let factory=slot.as_ref().unwrap();
+            Ok((factory.comp.clone(),factory.ctx.clone()))
+        })?;
         // The native EDIT remains interactive below this visual. Its GDI
         // output is supplied by draw_live_edit, so the child must not clip it.
         let target=comp.CreateTargetForHwnd(WinHwnd(hwnd),true)?;
@@ -219,7 +266,7 @@ impl Foreground {
         let effect=comp.CreateEffectGroup()?;
         target.SetRoot(&visual)?;
         comp.Commit()?;
-        Ok(Self{comp,ctx:ctx.expect("D3D immediate context"),target,visual,scale,effect,surface:None})
+        Ok(Self{comp,ctx,target,visual,scale,effect,surface:None})
     }
     unsafe fn upload(&mut self,frame:&Frame,area:RECT)->windows::core::Result<()>{
         let (w,h)=(frame.w,frame.h);
@@ -283,8 +330,12 @@ impl Foreground {
 }
 impl Drop for Foreground{
     fn drop(&mut self){unsafe{
+        let _=self.visual.SetContent(None::<&windows::core::IUnknown>);
+        let _=self.visual.SetTransform(None::<&IDCompositionTransform>);
+        let _=self.visual.SetEffect(None::<&IDCompositionEffect>);
         let _=self.target.SetRoot(None::<&IDCompositionVisual>);
-        let _=self.comp.Commit();self.surface.take();self.ctx.ClearState();self.ctx.Flush();
+        self.surface.take();
+        let _=self.comp.Commit();self.ctx.ClearState();self.ctx.Flush();
     }}
 }
 
@@ -1586,6 +1637,7 @@ fn ensure_live(hwnd:HWND)->bool{
             true
         }
         Err(e)=>{
+            reset_graphics_factories();
             set_redirection_alpha(hwnd,false);
             PANEL.with(|p|if let Some(panel)=p.borrow_mut().as_mut(){panel.native_rejected=true;});
             crate::log!("Spotlight material: compatibility fallback ({e})");
@@ -1604,6 +1656,7 @@ fn fallback_material(hwnd:HWND){
     });
     if let Some((point,native))=old{
         drop(native);
+        reset_graphics_factories();
         set_redirection_alpha(hwnd,false);
         unsafe{KillTimer(hwnd,TRANSITION_TIMER);place(hwnd,point);}
     }

@@ -215,8 +215,59 @@ fn native_live_backdrop_retains_color_and_filters_detail() {
                 UpdateWindow(bg.0);
             }
         }
+        reset_graphics_factories();
+        settle();
         let (end_gdi,end_user,_)=resources();
         assert!(end_gdi<=gdi+12&&end_user<=user+12,"compositor fixture leaked GDI/USER resources");
+    }
+}
+
+#[test]
+#[ignore="real DComp/WinRT graphics resource lifecycle on GitHub Actions"]
+fn native_repeated_live_graphics_reuses_factories_without_retaining_surfaces(){
+    if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+    unsafe{
+        let run=|with_host:bool|->Result<(usize,Option<usize>),String>{
+            let backdrop=if with_host{Some(NativeBackdrop::create(BackdropKind::Host)?)}else{None};
+            let hwnd=CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP|WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW,
+                wide("STATIC").as_ptr(),ptr::null(),WS_POPUP,40,40,720,400,
+                ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
+            if hwnd.is_null(){return Err("fixture HWND unavailable".into());}
+            let result=(||->Result<(usize,Option<usize>),String>{
+                let mut fg=Foreground::new(hwnd).map_err(|e|e.to_string())?;
+                let frame=Frame::new(ptr::null_mut(),720,400).ok_or("frame allocation")?;
+                for pixel in std::slice::from_raw_parts_mut(frame.bits,720*400*4).chunks_exact_mut(4){pixel.copy_from_slice(&[100,140,200,255]);}
+                fg.upload(&frame,rect(0,0,720,400)).map_err(|e|e.to_string())?;
+                if let Some(bg)=&backdrop{bg.material(false,36);bg.show_behind(hwnd,rect(40,40,760,440));}
+                ShowWindow(hwnd,SW_SHOWNOACTIVATE);
+                fg.comp.WaitForCommitCompletion().map_err(|e|e.to_string())?;
+                let _=DwmFlush();
+                let comp=fg.comp.as_raw() as usize;
+                let host=backdrop.as_ref().and_then(|bg|bg.host.as_ref()).map(|x|x.compositor.as_raw() as usize);
+                drop(fg);
+                Ok((comp,host))
+            })();
+            DestroyWindow(hwnd);
+            drop(backdrop);
+            pump();
+            Ok(result?)
+        };
+        let with_host=NativeBackdrop::create(BackdropKind::Host).is_ok();
+        if !with_host{println!("RESOURCE_LIVE_HOST=BLOCKED Windows runner did not provide HostBackdrop");}
+        let expected=match run(with_host){
+            Ok(ids)=>ids,
+            Err(e)=>{println!("RESOURCE_LIVE_GRAPHICS=BLOCKED {e}");reset_graphics_factories();return;},
+        };
+        for _ in 0..5{assert_eq!(run(with_host).unwrap(),expected);}
+        let before=crate::private_mb();
+        let handles=resources();
+        for _ in 0..24{assert_eq!(run(with_host).unwrap(),expected,"a distinct compositor or D3D factory was created");}
+        for _ in 0..10{pump();std::thread::sleep(Duration::from_millis(50));}
+        let after=crate::private_mb();let end=resources();
+        println!("RESOURCE_LIVE_GRAPHICS=PASS host={with_host} reused_factories=PASS cycles=24 private_bytes_working_set_mib_before={before:?} after={after:?} handles_before={handles:?} after={end:?}");
+        assert!(after.0-before.0<128.0,"unbounded private-byte growth after warmed native overlays");
+        assert!(end.0<=handles.0+4&&end.1<=handles.1+4,"GDI/USER growth after live graphics cycles");
+        reset_graphics_factories();
     }
 }
 

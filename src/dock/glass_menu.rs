@@ -323,6 +323,13 @@ mod tests{
                     assert!(clean.chunks_exact(4).all(|p|p[..3].iter().all(|c|*c<=p[3])));
                     m.layer.pixels().fill(0xe7);m.glyphs.pixels().fill(0xb5);
                     assert!(m.render(hwnd));assert_eq!(m.layer.pixels(),clean.as_slice(),"repaint must overwrite all stale pixels");
+                    if speed==70{
+                        m.dark=true;
+                        m.base=Glass::capture(RECT{left:30,top:30,right:250,bottom:110},96,true,30).menu_base(220,80,Palette::new(true).panel);
+                        m.hot=Some(0);
+                        assert!(m.render(hwnd));
+                        assert!(m.layer.pixels().chunks_exact(4).all(|p|p[..3].iter().all(|c|*c<=p[3])));
+                    }
                     assert!(m.prepare_open(hwnd));
                     let first=m.tween.unwrap();
                     assert_eq!(first.openness(),0.0);
