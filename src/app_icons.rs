@@ -141,7 +141,7 @@ fn package_stamp(raw:&str)->Option<String>{
     let family=crate::desktop::wide(family);
     unsafe{
         let mut count=0u32;let mut len=0u32;
-        if GetPackagesByPackageFamily(family.as_ptr(),&mut count,std::ptr::null_mut(),&mut len,std::ptr::null_mut())!=ERROR_INSUFFICIENT_BUFFER as i32 ||
+        if GetPackagesByPackageFamily(family.as_ptr(),&mut count,std::ptr::null_mut(),&mut len,std::ptr::null_mut())!=ERROR_INSUFFICIENT_BUFFER ||
             !(1..=64).contains(&count)||!(1..=32768).contains(&len){return None;}
         let mut names=vec![std::ptr::null_mut();count as usize];
         let mut buffer=vec![0u16;len as usize];
