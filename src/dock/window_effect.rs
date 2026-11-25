@@ -659,6 +659,9 @@ pub(super) unsafe fn probe_mesh_pixels(source:HWND,frame:&stage_snapshot::Frame)
     struct Apartment(bool);
     impl Drop for Apartment{fn drop(&mut self){if self.0{unsafe{CoUninitialize();}}}}
     let _com=Apartment(CoInitializeEx(None,COINIT_APARTMENTTHREADED).is_ok());
+    let mut value=-1i32;
+    let hr=DwmGetWindowAttribute(source,DWMWA_TRANSITIONS_FORCEDISABLED as u32,(&mut value as *mut i32).cast(),4);
+    println!("FOREIGN_TRANSITION_POLICY_READBACK_PROBE owned_fixture_hr={hr:#x} changed={}",value!=-1);
     let area=visible_area(source).unwrap();
     if !valid_pixels(frame,area){println!("FLUIDWIN_GENIE_SCREEN_PIXELS=NOT_VERIFIED invalid WGC frame");return;}
     let icon=RECT{left:area.right-40,top:area.bottom+8,right:area.right,bottom:area.bottom+48};
@@ -711,6 +714,7 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
     assert_ne!(GetMonitorInfoW(monitor,&mut mi),0);
     let display=super::Display{id:"fixture".into(),name:"fixture".into(),bounds:mi.rcMonitor,work:mi.rcWork,primary:true,
         dpi:windows_sys::Win32::UI::HiDpi::GetDpiForWindow(source)};
+    super::stage_peek::probe_external_window(ids[0],display.bounds);
     let style=super::Appearance::default();
     // A real displayed Dock layout with a magnified icon and in-flight reveal.
     let layout=super::geometry::measure(&display,&style,1,Some(0.0),0.83);
@@ -827,6 +831,47 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
     release_factory();
     println!("WINDOW_SCALE_PRODUCTION=PASS gestures=double-click/activate source_identities={} restore_after_16s=PASS magnification=PASS duration=PASS placement=PASS compositor_pixels={} samples={pixel_matches} memory={before:?}->{:?} peak={peak:?}",
         ids.len(),if pixel_matches>0{"MATCH"}else{"NOT_VERIFIED"},crate::private_mb());
+    if cfg!(target_env="msvc"){
+        let id=ids[0];
+        let original=placement(source).unwrap().rcNormalPosition;
+        for effect in [motion::WindowEffect::Genie,motion::WindowEffect::Drop]{
+            motion::configure(motion::Settings{window_effect:effect,..policy});
+            let start=||super::finish_double_click(AppClick{owner:bar as usize,key:ClickKey::Dock(path.into()),
+                window:Some(id),was_open:true,at:Instant::now()});
+            let pump=|until_reversible:bool|{
+                let started=Instant::now();
+                while ACTIVE.with(|a|a.borrow().as_ref().is_some_and(|t|!until_reversible||t.last_progress<=0.18)){
+                    assert!(started.elapsed()<Duration::from_secs(5),"experimental Dock transition did not settle");
+                    timer();std::thread::sleep(Duration::from_millis(16));
+                }
+            };
+            assert!(start().is_some());
+            pump(true);
+            assert!(ACTIVE.with(|a|a.borrow().is_some()),"reverse during visible minimize frames");
+            let proxy=ACTIVE.with(|a|match a.borrow().as_ref().and_then(|t|t.phase.as_ref()){
+                Some(Phase::Animate{proxy,..})=>proxy.hwnd,
+                _=>ptr::null_mut()
+            });
+            assert_ne!(IsIconic(source),0);
+            super::activate(bar,&item(id));
+            assert!(ACTIVE.with(|a|matches!(a.borrow().as_ref().and_then(|t|t.phase.as_ref()),
+                Some(Phase::Animate{proxy:p,..}) if p.hwnd==proxy)));
+            pump(false);
+            let result=last();
+            assert_eq!(result["actualEffect"],effect.name(),"{result}");
+            assert_eq!(result["reversals"],1);
+            assert_eq!(IsIconic(source),0);
+            assert!(super::same_rect(placement(source).unwrap().rcNormalPosition,original));
+            assert_eq!(IsWindow(proxy),0);
+            assert!(start().is_some());
+            pump(false);assert_ne!(IsIconic(source),0);
+            assert_eq!(last()["actualEffect"],effect.name());
+            super::activate(bar,&item(id));pump(false);
+            assert_eq!(last()["actualEffect"],effect.name());
+            assert_eq!(IsIconic(source),0);
+            println!("FLUIDWIN_DOCK_PRODUCTION {} minimize=PASS restore=PASS reversal=PASS placement=PASS",effect.name());
+        }
+    }
 }
 
 #[cfg(test)]

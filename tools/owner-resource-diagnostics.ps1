@@ -5,7 +5,11 @@ $ErrorActionPreference = 'Stop'
 $exe = Join-Path $PSScriptRoot 'TLauncher.exe'
 if (!(Test-Path -LiteralPath $exe)) { throw 'Run from the verified candidate directory.' }
 $roots = @(Get-CimInstance Win32_Process -Filter "Name='TLauncher.exe'" |
-    Where-Object { $_.ExecutablePath -and $_.ExecutablePath -ieq $exe })
+    Where-Object {
+        $_.ExecutablePath -and $_.ExecutablePath -ieq $exe -and $_.CommandLine -and
+        $_.CommandLine -match '(?:^|\s)--trial-dir(?:\s|$)' -and
+        $_.CommandLine -notmatch '(?:^|\s)--dock-taskbar-guard(?:\s|$)'
+    })
 if ($roots.Count -ne 1) { throw 'Open this candidate using the Desktop TEST shortcut first.' }
 $rootId = [int]$roots[0].ProcessId
 $rootCreated = $roots[0].CreationDate

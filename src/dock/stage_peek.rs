@@ -82,6 +82,10 @@ pub(super) unsafe fn show(owner: HWND) {
         Some((source,stage.bounds,stage.layout?.right))
     });
     let Some((source,display,right))=candidate else{return;};
+    show_at(owner,source,display,right);
+}
+
+unsafe fn show_at(owner:HWND,source:WindowIdentity,display:RECT,right:bool){
     let hwnd=source.hwnd as HWND;
     if !eligible(source){return;}
     let is_min=IsIconic(hwnd)!=0;
@@ -122,4 +126,25 @@ pub(super) unsafe fn show(owner: HWND) {
     OPEN.with(|slot|{slot.replace(Some(peek));});
     ShowWindow(window,SW_SHOWNOACTIVATE);
     InvalidateRect(window,ptr::null(),0);
+}
+
+#[cfg(test)]
+pub(super) unsafe fn probe_external_window(source:WindowIdentity,display:RECT){
+    let owner=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,wide("STATIC").as_ptr(),ptr::null(),
+        WS_POPUP,display.left+4,display.top+100,70,200,ptr::null_mut(),ptr::null_mut(),
+        GetModuleHandleW(ptr::null()),ptr::null_mut());
+    assert!(!owner.is_null());
+    ShowWindow(owner,SW_SHOWNOACTIVATE);
+    let foreground=GetForegroundWindow();
+    show_at(owner,source,display,false);
+    let peek=OPEN.with(|slot|slot.borrow().as_ref().map(|p|p.window));
+    if let Some(window)=peek{
+        assert_eq!(GetForegroundWindow(),foreground);
+        assert_eq!(IsIconic(source.hwnd as HWND),0);
+        assert_ne!(GetWindowLongPtrW(window,GWL_EXSTYLE)&WS_EX_NOACTIVATE as isize,0);
+        validate(owner,None);
+        assert_eq!(IsWindow(window),0);
+        println!("STAGE_PEEK_NATIVE=PASS live_thumbnail=true no_activation=true released=true");
+    }else{println!("STAGE_PEEK_NATIVE=NOT_VERIFIED DWM thumbnail unavailable");}
+    DestroyWindow(owner);
 }

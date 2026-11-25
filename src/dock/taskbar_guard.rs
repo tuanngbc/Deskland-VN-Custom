@@ -10,7 +10,7 @@ use std::{
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::{GetMonitorInfoW,MonitorFromWindow,MONITORINFO,MONITOR_DEFAULTTONEAREST},
-    System::Threading::{CreateEventW,OpenEventW,OpenProcess,QueryFullProcessImageNameW,SetEvent,WaitForSingleObject,PROCESS_QUERY_LIMITED_INFORMATION},
+    System::Threading::{CreateEventW,GetCurrentProcess,GetProcessTimes,OpenEventW,OpenProcess,QueryFullProcessImageNameW,SetEvent,WaitForSingleObject,PROCESS_QUERY_LIMITED_INFORMATION},
     UI::{Accessibility::{SetWinEventHook,UnhookWinEvent,HWINEVENTHOOK},Input::KeyboardAndMouse::{RegisterHotKey,UnregisterHotKey,MOD_ALT,MOD_CONTROL,MOD_NOREPEAT,MOD_SHIFT,VK_F12},
         Shell::{SHAppBarMessage,APPBARDATA,ABM_GETSTATE,ABS_AUTOHIDE},WindowsAndMessaging::*},
 };
@@ -280,6 +280,7 @@ impl Watch {
         let hidden=all.iter().filter(|item|item.visible).map(|item|item.id).collect::<Vec<_>>();
         if hidden.is_empty(){return Err("Không thấy thanh tác vụ để ẩn.".into());}
         let pid=std::process::id();
+        let birth=process_birth(GetCurrentProcess()).ok_or("Không xác minh được phiên tiến trình TLauncher.")?;
         let token=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e|e.to_string())?.as_nanos();
         let event=|role,manual|Handle::from_raw(CreateEventW(ptr::null(),manual,0,name(pid,token,role).as_ptr())).map_err(|e|e.to_string());
         let stop=event("Stop",1)?;
@@ -289,7 +290,7 @@ impl Watch {
         let expected=all.iter().map(|v|format!("{}:{}:{}:{}",v.id.handle,v.id.pid,v.id.thread,u8::from(v.visible))).collect::<Vec<_>>().join(",");
         let exe=env::current_exe().map_err(|e|e.to_string())?;
         let mut command=Command::new(exe);
-        command.arg(ARG).arg(pid.to_string()).arg(format!("{token:032x}")).arg(expected)
+        command.arg(ARG).arg(pid.to_string()).arg(format!("{token:032x}")).arg(expected).arg(format!("{birth:016x}"))
             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).creation_flags(QUIET_PROCESS)
             .env_remove("TUANPC_DESK_TASKBAR_TRIAL_TRACE");
         if let Some(profile)=crate::trial::data_dir(){command.env("TUANPC_DESK_TASKBAR_TRIAL_TRACE",profile);}
@@ -328,12 +329,19 @@ unsafe fn same_executable(handle:HANDLE)->bool{
     let candidate=String::from_utf16_lossy(&path[..len as usize]);
     env::current_exe().is_ok_and(|own|own.to_string_lossy().eq_ignore_ascii_case(&candidate))
 }
+unsafe fn process_birth(handle:HANDLE)->Option<u64>{
+    let (mut created,mut exited,mut kernel,mut user):(FILETIME,FILETIME,FILETIME,FILETIME)=mem::zeroed();
+    (GetProcessTimes(handle,&mut created,&mut exited,&mut kernel,&mut user)!=0)
+        .then_some((u64::from(created.dwHighDateTime)<<32)|u64::from(created.dwLowDateTime))
+        .filter(|stamp|*stamp!=0)
+}
 
 pub(crate) fn watchdog(args:&[String])->bool{
     if args.get(1).map(String::as_str)!=Some(ARG){return false;}
-    if args.len()!=5{return true;}
+    if args.len()!=6{return true;}
     let Some(pid)=args[2].parse::<u32>().ok().filter(|&p|p!=0&&p!=std::process::id())else{return true;};
     let Ok(token)=u128::from_str_radix(&args[3],16)else{return true;};
+    let Ok(birth)=u64::from_str_radix(&args[5],16)else{return true;};
     let parse=|item:&str|->Option<Snapshot>{
         let mut f=item.split(':');
         let id=WindowId{handle:f.next()?.parse().ok()?,pid:f.next()?.parse().ok()?,thread:f.next()?.parse().ok()?};
@@ -343,7 +351,7 @@ pub(crate) fn watchdog(args:&[String])->bool{
     let Some(expected)=args[4].split(',').map(parse).collect::<Option<Vec<_>>>()else{return true;};
     unsafe{
         let Ok(parent)=Handle::from_raw(OpenProcess(SYNC|PROCESS_QUERY_LIMITED_INFORMATION,0,pid))else{return true;};
-        if !same_executable(parent.0){return true;}
+        if process_birth(parent.0)!=Some(birth)||parent.fired()||!same_executable(parent.0){return true;}
         let event=|role,access|Handle::from_raw(OpenEventW(access,0,name(pid,token,role).as_ptr()));
         let (Ok(stop),Ok(ready),Ok(armed),Ok(pulse))=(event("Stop",SYNC),event("Ready",SIGNAL),
             event("Armed",SIGNAL),event("Pulse",SYNC))else{return true;};

@@ -141,7 +141,14 @@ try {
     if ((Get-Content -LiteralPath (Join-Path $target 'BUILD-COMMIT.txt') -Raw).Trim() -cne $Commit -or
         (Get-Content -LiteralPath (Join-Path $target 'VERSION.txt') -Raw).Trim() -cne $version -or
         (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion -cne $version -or
-        !(Test-Path -LiteralPath $launcher -PathType Leaf)) { throw 'Candidate version, source commit, or launcher is wrong.' }
+          !(Test-Path -LiteralPath $launcher -PathType Leaf)) { throw 'Candidate version, source commit, or launcher is wrong.' }
+    $binary=[IO.BinaryReader]::new([IO.File]::OpenRead($exe))
+    try {
+        if ($binary.ReadUInt16() -ne 0x5a4d) { throw 'Invalid Windows executable header.' }
+        $binary.BaseStream.Position=0x3c
+        $binary.BaseStream.Position=$binary.ReadUInt32()
+        if ($binary.ReadUInt32() -ne 0x4550 -or $binary.ReadUInt16() -ne 0x8664) { throw 'Expected a Windows x64 executable.' }
+    } finally { $binary.Dispose() }
     $expectedExe=(Get-FileHash -LiteralPath $exe).Hash.ToLowerInvariant()
     $manifestData=@{sourceCommit=$Commit;runId=$RunId;artifactId=$artifact[0].id;artifactSha256=$check.Substring(7);
         archiveSha256=$want;exeSha256=$expectedExe;profile=$profile;productionExe=$ProductionExe;version=$version}
