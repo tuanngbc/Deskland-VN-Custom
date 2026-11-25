@@ -253,7 +253,7 @@ struct Layer {
         if (!painted) return 0;
         const HRESULT hr = chain->Present(1, DXGI_PRESENT_DO_NOT_WAIT);
         if (hr == DXGI_ERROR_WAS_STILL_DRAWING) return 2;
-        return hr == S_OK ? 1 : 0;
+        return hr == S_OK ? 1 : static_cast<int>(hr);
     }
 };
 }

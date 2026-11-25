@@ -113,7 +113,10 @@ impl Attempt{
                 if self.last_submit.is_some_and(|last|last.elapsed()>PRESENT_TIMEOUT){return Err("proxy-present-timeout");}
                 Ok(()) // keep the last accepted frame
             }
-            _=>Err("proxy-present-failed"),
+            status=>{
+                self.values["proxyPresentStatus"]=json!(format!("{status:#010x}"));
+                Err("proxy-present-failed")
+            }
         }
     }
     fn finish(&mut self,reason:Option<Reason>){
@@ -373,12 +376,14 @@ impl Proxy{
             }
             Render::Mesh(mesh)=>{
                 let status={let _batch=self.gpu.context();mesh.paint(progress,opacity)};
-                if status!=1{return if first{0}else{status};}
+                if status!=1{return status;}
                 if !first{return 1;} // canvas stays fixed over the source and Dock
                 r=mesh.canvas;
             }
         }
-        if first&&self.comp.WaitForCommitCompletion().is_err(){return 0;}
+        if first{
+            if let Err(error)=self.comp.WaitForCommitCompletion(){return error.code().0;}
+        }
         let (w,h)=dims(r);
         let shown=SetWindowPos(self.hwnd,HWND_TOPMOST,r.left,r.top,w,h,SWP_NOACTIVATE|SWP_SHOWWINDOW)!=0;
         if shown&&first{let _=DwmFlush();}
@@ -387,12 +392,39 @@ impl Proxy{
 }
 enum Phase{
     Capture{job:stage_snapshot::TransitionCapture,started:Instant},
+    // Keep the real window in its current state until the proxy has a frame.
+    Priming{proxy:Proxy,frame:Option<stage_snapshot::Frame>,started:Instant},
     WaitingMinimize{proxy:Proxy,frame:stage_snapshot::Frame,started:Instant},
     Animate{proxy:Proxy,span:motion::Span},
     WaitingRestore{_proxy:Proxy,started:Instant},
 }
 struct Transition{req:Request,phase:Option<Phase>,attempt:Attempt,last_progress:f64}
 impl Transition{
+    unsafe fn prime(&mut self,proxy:Proxy,frame:Option<stage_snapshot::Frame>,started:Instant)->Result<Phase,Reason>{
+        let h=self.req.source.hwnd as HWND;
+        let restoring=self.req.action==Action::Restore;
+        if restoring!=(IsIconic(h)!=0)||(!restoring&&visible_area(h).is_none_or(|r|!super::same_rect(r,self.req.area))){
+            return Err("window-placement-changed");
+        }
+        let (r,progress,opacity)=if restoring{
+            (icon_fit(self.req.area,self.req.icon),f64::from(self.req.effect.mesh() as u8),if self.req.effect.mesh(){255}else{64})
+        }else{(self.req.area,0.0,255)};
+        let submitted=self.attempt.frames;
+        self.attempt.present(&proxy,r,progress,opacity)?;
+        if self.attempt.frames==submitted{
+            if started.elapsed()>=PRESENT_TIMEOUT{return Err("proxy-present-timeout");}
+            return Ok(Phase::Priming{proxy,frame,started});
+        }
+        if let Some(frame)=frame{
+            if ShowWindowAsync(h,if super::taskbar_hidden(){SW_SHOWMINNOACTIVE}else{SW_MINIMIZE})==0{
+                return Err("state-transition-timeout");
+            }
+            Ok(Phase::WaitingMinimize{proxy,frame,started:Instant::now()})
+        }else{
+            self.attempt.animation=Some(Instant::now());
+            Ok(Phase::Animate{proxy,span:motion::Span::new(if self.req.effect.mesh(){450}else{340})})
+        }
+    }
     unsafe fn fallback(&mut self,reason:Reason)->bool{
         self.phase.take();
         let id=self.req.source;let h=id.hwnd as HWND;
@@ -430,11 +462,7 @@ impl Transition{
                     Ok(Ok(frame))=>{
                         self.attempt.values["captureDurationMs"]=json!(started.elapsed().as_millis() as u64);
                         let proxy=match self.attempt.proxy(&frame,&self.req){Ok(p)=>p,Err(r)=>return self.fallback(r)};
-                        if let Err(reason)=self.attempt.present(&proxy,self.req.area,0.0,255){drop(proxy);return self.fallback(reason);}
-                        if ShowWindowAsync(h,if super::taskbar_hidden(){SW_SHOWMINNOACTIVE}else{SW_MINIMIZE})==0{
-                            drop(proxy);return self.fallback("state-transition-timeout");
-                        }
-                        Phase::WaitingMinimize{proxy,frame,started:Instant::now()}
+                        match self.prime(proxy,Some(frame),Instant::now()){Ok(p)=>p,Err(r)=>return self.fallback(r)}
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) if started.elapsed()<PREPARE=>Phase::Capture{job,started},
                     other=>{
@@ -451,6 +479,9 @@ impl Transition{
                         drop(job);return self.fallback(reason);
                     }
                 }
+            }
+            Phase::Priming{proxy,frame,started}=>{
+                match self.prime(proxy,frame,started){Ok(p)=>p,Err(r)=>return self.fallback(r)}
             }
             Phase::WaitingMinimize{proxy,frame,started}=>{
                 if IsIconic(h)!=0{
@@ -519,11 +550,7 @@ unsafe fn begin(owner:HWND,path:&str,id:WindowIdentity,action:Action)->bool{
                 attempt.values["cachedCapture"]=json!(true);
                 attempt.values["captureDurationMs"]=json!(started.elapsed().as_millis() as u64);
                 let proxy=attempt.proxy(&frame,&req)?;
-                let (opacity,progress)=if req.effect.mesh(){(255,1.0)}else{(64,0.0)};
-                attempt.present(&proxy,icon_fit(req.area,req.icon),progress,opacity)?;
-                attempt.animation=Some(Instant::now());
-                let span=motion::Span::new(if req.effect.mesh(){450}else{340});
-                Phase::Animate{proxy,span}
+                Phase::Priming{proxy,frame:None,started:Instant::now()}
             }
         };
         if SetTimer(controller,TIMER,FRAME_INTERVAL_MS,None)==0{return Err("dock-not-ready");}
@@ -534,7 +561,10 @@ unsafe fn begin(owner:HWND,path:&str,id:WindowIdentity,action:Action)->bool{
     match result{
         Ok((req,phase))=>{
             let last_progress=if req.action==Action::Restore{1.0}else{0.0};
-            ACTIVE.with(|a|{a.replace(Some(Transition{req,phase:Some(phase),attempt,last_progress}));});true
+            let restoring=req.action==Action::Restore;
+            ACTIVE.with(|a|{a.replace(Some(Transition{req,phase:Some(phase),attempt,last_progress}));});
+            if restoring{timer();}
+            true
         }
         Err(reason)=>{attempt.finish(Some(reason));schedule_release();false}
     }
@@ -698,20 +728,25 @@ pub(super) unsafe fn probe_mesh_pixels(source:HWND,frame:&stage_snapshot::Frame)
         let mips=mesh.source_mips();
         assert!(mips>0,"motion source must keep premultiplied BGRA and use mipmaps when supported");
         println!("FLUIDWIN_SOURCE_SAMPLING {} premultiplied_bgra=true mip_levels={mips}",effect.name());
-        assert_eq!(probe.paint(area,0.0,255),1);
+        let submit=|progress|{
+            let started=Instant::now();
+            loop{
+                let status=probe.paint(area,progress,255);
+                if status!=2||started.elapsed()>=PRESENT_TIMEOUT{return status;}
+                std::thread::sleep(Duration::from_millis(u64::from(FRAME_INTERVAL_MS)));
+            }
+        };
+        let status=submit(0.0);
+        assert_eq!(status,1,"{} could not submit the first frame ({status:#010x})",effect.name());
         ShowWindow(source,SW_HIDE);
         let full=pixel();
-        let mut status=probe.paint(area,0.68,255);
-        for _ in 0..8{
-            if status!=2{break;}
-            let _=DwmFlush();
-            status=probe.paint(area,0.68,255);
-        }
-        assert_eq!(status,1,"an intermediate mesh was not submitted");
+        let status=submit(0.68);
+        assert_eq!(status,1,"{} could not submit an intermediate frame ({status:#010x})",effect.name());
         let bent=pixel();
         let matched=full!=u32::MAX&&[full as u8,(full>>8) as u8,(full>>16) as u8].into_iter()
             .zip(probe.marker).all(|(a,b)|a.abs_diff(b)<35);
         let hwnd=probe.hwnd;drop(probe);assert_eq!(IsWindow(hwnd),0);
+        ShowWindow(source,SW_SHOWNOACTIVATE);
         println!("FLUIDWIN_{}_SCREEN_PIXELS={} proxy_released=true",effect.name().to_uppercase(),
             if matched&&bent!=u32::MAX&&bent!=full{"MATCH_AND_INTERMEDIATE_CHANGED"}else{"NOT_VERIFIED"});
     }
