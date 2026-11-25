@@ -14,7 +14,9 @@ pub(super) const RELEASE_TIMER:usize=18;
 const PREPARE:Duration=Duration::from_millis(550);
 const SETTLE:Duration=Duration::from_millis(350);
 const MAX_PREVIEW_AGE:Duration=Duration::from_secs(30*60);
-const MAX_TEXTURE_SIDE:i32=768;
+const MAX_TEXTURE_SIDE:i32=stage_snapshot::MOTION_EDGE as i32;
+const FRAME_INTERVAL_MS:u32=10;
+const PRESENT_TIMEOUT:Duration=Duration::from_millis(150);
 type Reason=&'static str;
 #[derive(Clone,Copy,PartialEq,Eq)]
 enum Action{Minimize,Restore}
@@ -65,7 +67,8 @@ pub(super) fn diagnostics()->Value{
 }
 struct Attempt{
     values:Value,source:WindowIdentity,started:Instant,animation:Option<Instant>,
-    timing:Option<stage_snapshot::CaptureTimingHandle>,frames:u32,done:bool
+    timing:Option<stage_snapshot::CaptureTimingHandle>,frames:u32,done:bool,
+    last_submit:Option<Instant>,longest_gap_us:u64,
 }
 impl Attempt{
     unsafe fn new(source:WindowIdentity,action:Action,policy:Policy)->Self{
@@ -78,7 +81,7 @@ impl Attempt{
         values["captureDurationMs"]=Value::Null;values["captureValid"]=Value::Null;
         values["dockTarget"]=json!(false);values["proxyCreated"]=json!(false);values["proxyPresented"]=json!(false);
         values["reversals"]=json!(0);
-        Self{values,source,started:Instant::now(),animation:None,timing:None,frames:0,done:false}
+        Self{values,source,started:Instant::now(),animation:None,timing:None,frames:0,done:false,last_submit:None,longest_gap_us:0}
     }
     fn area(&mut self,r:RECT){
         let (w,h)=dims(r);self.values["windowWidth"]=json!(w);self.values["windowHeight"]=json!(h);
@@ -98,9 +101,16 @@ impl Attempt{
     }
     unsafe fn present(&mut self,p:&Proxy,r:RECT,progress:f64,opacity:u8)->Result<(),Reason>{
         match p.paint(r,progress,opacity){
-            1=>{self.values["proxyPresented"]=json!(true);self.frames+=1;Ok(())}
+            1=>{
+                let now=Instant::now();
+                if let Some(prev)=self.last_submit.replace(now){
+                    self.longest_gap_us=self.longest_gap_us.max(now.duration_since(prev).as_micros() as u64);
+                }
+                self.values["proxyPresented"]=json!(true);self.frames+=1;Ok(())
+            }
             2=>{
                 self.values["compositorBusyFrames"]=json!(self.values["compositorBusyFrames"].as_u64().unwrap_or(0)+1);
+                if self.last_submit.is_some_and(|last|last.elapsed()>PRESENT_TIMEOUT){return Err("proxy-present-timeout");}
                 Ok(()) // keep the last accepted frame
             }
             _=>Err("proxy-present-failed"),
@@ -111,6 +121,7 @@ impl Attempt{
         if reason.is_none(){self.values["actualEffect"]=self.values["requestedEffect"].clone();}
         self.values["fallbackReason"]=json!(reason);
         self.values["presentedFrames"]=json!(self.frames);
+        self.values["longestSubmitGapUs"]=json!(self.longest_gap_us);
         self.values["transitionDurationMs"]=json!(self.animation.map(|t|t.elapsed().as_millis() as u64));
         self.values["totalDurationMs"]=json!(self.started.elapsed().as_millis() as u64);
         if let Some(t)=&self.timing{if let Ok(t)=t.lock(){self.values["captureTiming"]=json!(*t);}}
@@ -302,6 +313,7 @@ impl Proxy{
             Some((f.comp.clone(),f.gpu.clone(),f.mesh.clone()))
         })?;
         let mesh=if effect.mesh(){
+            let _batch=gpu.context();
             Some(fluidwin_mesh::Layer::new(mesh?,frame,area,icon,side,effect==motion::WindowEffect::Drop,dpi)?)
         }else{None};
         let class=wide("TLauncherScaleProxy");
@@ -468,7 +480,9 @@ impl Transition{
                 let submitted=self.attempt.frames;
                 if let Err(reason)=self.attempt.present(&proxy,interpolate(a,b,k),progress,opacity){drop(proxy);return self.fallback(reason);}
                 if self.attempt.frames!=submitted{self.last_progress=progress;}
-                if t>=1.0{
+                // Do not restore/minimize over an old pose if DXGI declined
+                // the terminal frame. Retry within the bounded present timeout.
+                if t>=1.0&&self.attempt.frames!=submitted{
                     if action==Action::Minimize{self.attempt.finish(None);return false;}
                     if ShowWindowAsync(h,SW_RESTORE)==0{drop(proxy);return self.fallback("state-transition-timeout");}
                     Phase::WaitingRestore{_proxy:proxy,started:Instant::now()}
@@ -512,7 +526,7 @@ unsafe fn begin(owner:HWND,path:&str,id:WindowIdentity,action:Action)->bool{
                 Phase::Animate{proxy,span}
             }
         };
-        if SetTimer(controller,TIMER,16,None)==0{return Err("dock-not-ready");}
+        if SetTimer(controller,TIMER,FRAME_INTERVAL_MS,None)==0{return Err("dock-not-ready");}
         KillTimer(controller,RELEASE_TIMER);
         // Transfer the diagnostic into the active transition below.
         Ok((req,phase))
@@ -559,6 +573,9 @@ pub(super) unsafe fn timer(){
     let next=active.and_then(|mut t|if t.tick(){Some(t)}else{None});
     if next.is_none(){schedule_release();}
     ACTIVE.with(|a|{a.replace(next);});
+}
+pub(super) unsafe fn capture_ready(){
+    if ACTIVE.with(|a|a.borrow().as_ref().is_some_and(|t|matches!(t.phase.as_ref(),Some(Phase::Capture{..})))){timer();}
 }
 pub(super) fn restoring(id:WindowIdentity)->bool{
     ACTIVE.with(|a|a.borrow().as_ref().is_some_and(|t|t.req.source==id&&t.req.action==Action::Restore))
@@ -882,8 +899,8 @@ mod tests{
         for (w,h) in [(432,246),(2560,1080),(1080,1920),(3840,2160)]{
             let area=RECT{left:-w,top:0,right:0,bottom:h};
             assert!(valid_area(area));
-            let side=w.max(h);
-            let tw=w*768/side;let th=h*768/side;
+            let side=w.max(h).max(MAX_TEXTURE_SIDE);
+            let tw=w*MAX_TEXTURE_SIDE/side;let th=h*MAX_TEXTURE_SIDE/side;
             let mut pixels=vec![255;(tw*th*4) as usize];
             let half=pixels.len()/2;pixels[..half].fill(35);
             assert!(validate_pixels(&(pixels,tw,th),area).is_ok());

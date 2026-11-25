@@ -271,16 +271,28 @@ fn prune_cache(dir:&Path,limit:u64)->u64{
 }
 
 pub(crate) fn shared_source(path:&Path,shell_path:&Path,identity:&Path,tier:i32)->Option<Arc<IconPixels>>{
+    source(path,shell_path,identity,tier,true,&cache_dir())
+}
+pub(crate) fn cached_source(path:&Path,shell_path:&Path,identity:&Path,tier:i32)->Option<Arc<IconPixels>>{
+    source(path,shell_path,identity,tier,false,&cache_dir())
+}
+fn cache_dir()->PathBuf{
+    if cfg!(test){
+        std::env::temp_dir().join(format!("tlauncher-ci-icon-sources-{}",std::process::id()))
+    }else{crate::lock::data_dir().join("cache").join("app-icons-v1")}
+}
+fn source(path:&Path,shell_path:&Path,identity:&Path,tier:i32,allow_extract:bool,cache:&Path)->Option<Arc<IconPixels>>{
     let _serialize=SOURCE_FETCH.lock().ok()?;
     let custom=override_path(path).or_else(||override_path(identity));
     let stamp=if let Some(custom)=&custom {stamp(custom)} else{
         source_stamp(shell_path).or_else(||if shell_path.is_absolute(){None}else{source_stamp(identity)})
     };
-    let key=stamp.map(|s| {
+    let key_at=|edge|stamp.as_ref().map(|s| {
         // Custom files are already resolution-normalized and identical at all tiers.
         format!("v1|{}|{}|{}|{s}",normalized(identity.to_str().unwrap_or("")).unwrap_or_default(),
-            if custom.is_some(){0}else{tier},u8::from(custom.is_some()))
+            if custom.is_some(){0}else{edge},u8::from(custom.is_some()))
     });
+    let key=key_at(tier);
     if let Some(key)=&key{
         let mut ram=SOURCES.lock().ok()?;
         if let Some(index)=ram.iter().position(|(k,_)|k==key){
@@ -291,15 +303,21 @@ pub(crate) fn shared_source(path:&Path,shell_path:&Path,identity:&Path,tier:i32)
             return Some(image);
         }
     }
-    let cache=if cfg!(test){
-        std::env::temp_dir().join(format!("tlauncher-ci-icon-sources-{}",std::process::id()))
-    }else{crate::lock::data_dir().join("cache").join("app-icons-v1")};
-    let file=key.as_ref().map(|k|cache_path(&cache,k));
-    let mut result=file.as_ref().zip(key.as_ref()).and_then(|(f,k)|read_raster(f,k));
+    let file=key.as_ref().map(|k|cache_path(cache,k));
+    let mut result=file.as_ref().zip(key.as_ref()).and_then(|(f,k)|read_raster(f,k)).or_else(||{
+        if custom.is_some()||key.is_none(){return None;}
+        // Compact and Fullscreen can reuse the same larger cached source.
+        // Never enlarge a lower-tier icon or duplicate the file on disk.
+        [96,128,192,256].into_iter().filter(|&edge|edge>tier).find_map(|edge|{
+            let k=key_at(edge)?;
+            read_raster(&cache_path(cache,&k),&k)
+        })
+    });
     if result.is_some(){DISK_HITS.fetch_add(1,Ordering::Relaxed);}
+    if !allow_extract&&result.is_none(){return None;}
     if let Ok(mut last)=LAST_PRUNE.lock(){
         if last.is_none_or(|t|t.elapsed()>Duration::from_secs(30)){
-            DISK_BYTES.store(prune_cache(&cache,SOURCE_DISK),Ordering::Relaxed);*last=Some(Instant::now());
+            DISK_BYTES.store(prune_cache(cache,SOURCE_DISK),Ordering::Relaxed);*last=Some(Instant::now());
         }
     }
     if result.is_none(){
@@ -314,7 +332,7 @@ pub(crate) fn shared_source(path:&Path,shell_path:&Path,identity:&Path,tier:i32)
                 let total=DISK_BYTES.load(Ordering::Relaxed).saturating_sub(prev).saturating_add(size);
                 DISK_BYTES.store(total,Ordering::Relaxed);
                 if total>SOURCE_DISK {
-                    DISK_BYTES.store(prune_cache(&cache,SOURCE_DISK*9/10),Ordering::Relaxed);
+                    DISK_BYTES.store(prune_cache(cache,SOURCE_DISK*9/10),Ordering::Relaxed);
                 }
             }
         }
@@ -353,20 +371,33 @@ mod tests{
     #[test]
     fn disk_raster_survives_a_new_process(){
         const IT:&str="TLAUNCHER_ICON_PROOF_DIR";
-        let key="v1|test-app|96|0|fixture";
         let pixel=vec![20,40,60,90];
         if let Some(dir)=std::env::var_os(IT){
-            let path=cache_path(&PathBuf::from(dir),key);
-            assert_eq!(read_raster(&path,key).unwrap().pixels,pixel);
+            let cache=PathBuf::from(dir);
+            let app=cache.join("cache-fixture.exe");
+            let before=cache_metrics();
+            let icon=source(&app,&app,&app,96,false,&cache).expect("compact can use the persisted fullscreen source");
+            assert_eq!(icon.pixels,pixel);
+            let after=cache_metrics();
+            assert_eq!(after.1,before.1+1);
+            assert_eq!(after.2,before.2,"disk warming cannot extract an icon");
+            let missing=cache.join("missing.exe");
+            assert!(source(&missing,&missing,&missing,96,false,&cache).is_none());
+            assert_eq!(cache_metrics().2,before.2);
             return;
         }
         let dir=std::env::temp_dir().join(format!("tlauncher-restart-cache-{}-{}",std::process::id(),SERIAL.fetch_add(1,Ordering::Relaxed)));
-        let path=cache_path(&dir,key);
-        write_raster(&path,key,&IconPixels{width:1,height:1,pixels:pixel}).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let app=dir.join("cache-fixture.exe");
+        std::fs::write(&app,b"fixture; never executed").unwrap();
+        let key=format!("v1|{}|192|0|{}",normalized(app.to_str().unwrap()).unwrap(),stamp(&app).unwrap());
+        let path=cache_path(&dir,&key);
+        write_raster(&path,&key,&IconPixels{width:1,height:1,pixels:pixel}).unwrap();
         let out=std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact","app_icons::tests::disk_raster_survives_a_new_process","--nocapture"])
             .env(IT,&dir).output().unwrap();
         std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(app).unwrap();
         std::fs::remove_dir(dir).unwrap();
         assert!(out.status.success(),"{}",String::from_utf8_lossy(&out.stderr));
         assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));

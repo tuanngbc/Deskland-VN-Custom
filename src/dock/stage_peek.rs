@@ -70,6 +70,24 @@ fn eligible(source:WindowIdentity)->bool{
     }
 }
 
+fn fit_preview(w:i32,h:i32,max_w:i32,max_h:i32)->Option<(i32,i32)>{
+    if w<1||h<1||max_w<1||max_h<1{return None;}
+    // A cached Stage card is often much smaller than the hover panel. Keep
+    // its source pixels rather than stretching them across the entire panel.
+    let scale=(max_w as f32/w as f32).min(max_h as f32/h as f32).min(1.0);
+    let (w,h)=((w as f32*scale).round() as i32,(h as f32*scale).round() as i32);
+    (w>=64&&h>=48).then_some((w,h))
+}
+
+#[cfg(test)]
+#[test]
+fn peek_shrinks_to_fit_without_enlarging_cached_pixels(){
+    assert_eq!(fit_preview(360,168,1000,600),Some((360,168)));
+    assert_eq!(fit_preview(2106,974,1000,600),Some((1000,463)));
+    assert_eq!(fit_preview(568,1024,512,768),Some((426,768)));
+    assert_eq!(fit_preview(0,168,1000,600),None);
+}
+
 pub(super) unsafe fn show(owner: HWND) {
     KillTimer(owner,TIMER);
     close(ptr::null_mut());
@@ -106,20 +124,26 @@ unsafe fn show_at(owner:HWND,source:WindowIdentity,display:RECT,right:bool){
     let max_w=(right-left).min((display.right-display.left)*3/5);
     let max_h=(work.bottom-work.top)*3/5;
     if max_w<160||max_h<100{return;}
-    let scale=(max_w as f32/w as f32).min(max_h as f32/h as f32);
-    let (w,h)=((w as f32*scale).round() as i32,(h as f32*scale).round() as i32);
-    if w<64||h<48{return;}
+    let Some((w,h))=fit_preview(w,h,max_w,max_h)else{return;};
+    let xy=|w,h|(left+(right-left-w)/2,work.top+(work.bottom-work.top-h)/2);
+    let (x,y)=xy(w,h);
     let class=wide("TLauncher.StagePeek");
     let inst=GetModuleHandleW(ptr::null());
     let wc=WNDCLASSW{style:CS_DROPSHADOW,lpfnWndProc:Some(proc),hInstance:inst,lpszClassName:class.as_ptr(),..mem::zeroed()};
     if RegisterClassW(&wc)==0&&GetLastError()!=ERROR_CLASS_ALREADY_EXISTS{return;}
     let window=CreateWindowExW(WS_EX_NOACTIVATE|WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_TRANSPARENT,
-        class.as_ptr(),ptr::null(),WS_POPUP,left+(right-left-w)/2,work.top+(work.bottom-work.top-h)/2,
+        class.as_ptr(),ptr::null(),WS_POPUP,x,y,
         w,h,ptr::null_mut(),ptr::null_mut(),inst,ptr::null_mut());
     if window.is_null(){return;}
     let mut live=Previews::default();
     if !is_min&&!live.peek(window,hwnd,RECT{left:0,top:0,right:w,bottom:h}){
         saved=stage_snapshot::peek_frame(source);
+        if let Some((_,sw,sh))=saved.as_ref(){
+            if let Some((w,h))=fit_preview(*sw,*sh,max_w,max_h){
+                let (x,y)=xy(w,h);
+                if SetWindowPos(window,ptr::null_mut(),x,y,w,h,SWP_NOACTIVATE|SWP_NOZORDER)==0{saved=None;}
+            }else{saved=None;}
+        }
     }
     let peek=Peek{owner,source,window,live,saved};
     if !peek.live.includes(hwnd)&&peek.saved.is_none(){return;}

@@ -87,7 +87,10 @@ struct Pipeline {
         buf.CPUAccessFlags = 0;
         if (FAILED(device->CreateBuffer(&buf, nullptr, &cb))) return false;
         D3D11_SAMPLER_DESC s{};
-        s.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        // A Genie row can become very short while staying wide. Filter the
+        // compressed axis without smearing the other one into color bands.
+        s.Filter = D3D11_FILTER_ANISOTROPIC;
+        s.MaxAnisotropy = 4;
         s.AddressU = s.AddressV = s.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
         s.ComparisonFunc = D3D11_COMPARISON_NEVER;
         s.MaxLOD = D3D11_FLOAT32_MAX;
@@ -116,7 +119,7 @@ struct Layer {
 
     bool init(Pipeline& q, UINT width, UINT height, const void* bgra, UINT sourceW, UINT sourceH) {
         if (!bgra || !width || !height || width > 8192 || height > 8192 ||
-            uint64_t(width) * height > 8400000 || !sourceW || !sourceH || sourceW > 768 || sourceH > 768)
+            uint64_t(width) * height > 8400000 || !sourceW || !sourceH || sourceW > 1024 || sourceH > 1024)
             return false;
         w = width; h = height; tw = sourceW; th = sourceH;
         DXGI_SWAP_CHAIN_DESC1 sc{};
@@ -134,12 +137,29 @@ struct Layer {
             FAILED(q.device->CreateRenderTargetView(back.Get(), nullptr, &target))) return false;
         D3D11_TEXTURE2D_DESC tx{};
         tx.Width = tw; tx.Height = th;
-        tx.Format = DXGI_FORMAT_B8G8R8X8_UNORM;
+        // WGC returns premultiplied BGRA. Keep alpha at the window edge so the
+        // unchanged FluidWin shader doesn't make transparent pixels opaque.
+        tx.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
         tx.MipLevels = tx.ArraySize = tx.SampleDesc.Count = 1;
         tx.Usage = D3D11_USAGE_IMMUTABLE;
         tx.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         const D3D11_SUBRESOURCE_DATA pixels{bgra, tw * 4, 0};
         ComPtr<ID3D11Texture2D> picture;
+        UINT support = 0;
+        if (SUCCEEDED(q.device->CheckFormatSupport(tx.Format,&support)) && (support & D3D11_FORMAT_SUPPORT_MIP_AUTOGEN)) {
+            auto mip = tx;
+            mip.MipLevels = 0;
+            mip.Usage = D3D11_USAGE_DEFAULT;
+            mip.BindFlags |= D3D11_BIND_RENDER_TARGET;
+            mip.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+            if (SUCCEEDED(q.device->CreateTexture2D(&mip, nullptr, &picture)) &&
+                SUCCEEDED(q.device->CreateShaderResourceView(picture.Get(), nullptr, &texture))) {
+                q.context->UpdateSubresource(picture.Get(),0,nullptr,bgra,tw*4,0);
+                q.context->GenerateMips(texture.Get());
+                return true;
+            }
+            picture.Reset();
+        }
         return SUCCEEDED(q.device->CreateTexture2D(&tx, &pixels, &picture)) &&
                SUCCEEDED(q.device->CreateShaderResourceView(picture.Get(), nullptr, &texture));
     }
@@ -168,6 +188,7 @@ struct Layer {
         const float zero[4]{};
         auto rtv = target.Get();
         ctx->OMSetRenderTargets(1, &rtv, nullptr);
+        ctx->OMSetDepthStencilState(nullptr,0);
         ctx->OMSetBlendState(q.blend.Get(), nullptr, 0xffffffff);
         ctx->ClearRenderTargetView(rtv, zero);
         ctx->RSSetViewports(1, &viewport);
@@ -179,6 +200,10 @@ struct Layer {
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
         ctx->VSSetShader(q.vs.Get(), nullptr, 0);
         ctx->PSSetShader(q.ps.Get(), nullptr, 0);
+        ctx->GSSetShader(nullptr,nullptr,0);
+        ctx->HSSetShader(nullptr,nullptr,0);
+        ctx->DSSetShader(nullptr,nullptr,0);
+        ctx->SetPredication(nullptr,FALSE);
         auto cb = q.cb.Get();
         ctx->VSSetConstantBuffers(0, 1, &cb);
         ctx->PSSetConstantBuffers(0, 1, &cb);

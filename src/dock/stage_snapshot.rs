@@ -159,7 +159,7 @@ impl CaptureDevice {
 pub(super) unsafe fn frame(hwnd:HWND,valid:impl Fn()->bool)->Result<Frame,String>{
     if !valid(){return Err("window identity, visibility or affinity denied".into());}
     let _apartment=Apartment::enter()?;
-    CaptureDevice::new()?.frame(hwnd,valid,360,Duration::from_secs(2),None)
+    CaptureDevice::new()?.frame(hwnd,valid,CARD_EDGE,Duration::from_secs(2),None)
 }
 
 pub(super) const READY:u32=WM_APP+58;
@@ -320,11 +320,19 @@ impl Preview{
     }
 }
 pub(super) type Frame=(Vec<u8>,i32,i32);
+pub(super) const MOTION_EDGE:usize=1024;
+const CARD_EDGE:usize=360;
+fn motion_size(w:i32,h:i32,stamp:&Stamp)->bool{
+    // Allow for the difference between GetWindowRect and the captured frame's
+    // invisible resize border. Do not animate a magnified Stage thumbnail.
+    let wanted=stamp.i.max(stamp.j).min(MOTION_EDGE as i32);
+    w.max(h)>=wanted-(wanted/20).min(24)
+}
 fn shrink_transition_frame(frame:&mut Frame)->bool{
     let (bytes,w,h)=frame;
-    if (*w).max(*h)<=360{return false;}
+    if (*w).max(*h)<=CARD_EDGE as i32{return false;}
     let (sw,sh)=(*w as usize,*h as usize);
-    let (dw,dh)=thumb_size(sw,sh,360);
+    let (dw,dh)=thumb_size(sw,sh,CARD_EDGE);
     *bytes=super::stage_projection::downsample_rows(sw,sh,dw,dh,|y|&bytes[y*sw*4..(y+1)*sw*4]);
     *w=dw as i32;*h=dh as i32;
     true
@@ -536,7 +544,7 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
         // Reserve enough for the worst possible 360px square frame per
         // selected source. Prioritize front cards across displays. Deeper
         // layers can use DWM and never thrash this bounded snapshot cache.
-        let max_visible=MAX_FRAME_BYTES/(360*360*4);
+        let max_visible=MAX_FRAME_BYTES/(CARD_EDGE*CARD_EDGE*4);
         for layer in 0..5{
             for t in targets{
                 let Some(id)=t.sources[layer] else{continue;};
@@ -570,7 +578,7 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
                 let live=Arc::new(AtomicBool::new(true));
                 let (reply,receiver)=mpsc::sync_channel(1);
                 if state.worker.is_none(){state.worker=Worker::new(controller as usize).ok();}
-                let req=Request{source:id,stamp:stamp.clone(),live:live.clone(),reply,limit:360,wait:Duration::from_secs(2),queued:Instant::now(),timing:None};
+                let req=Request{source:id,stamp:stamp.clone(),live:live.clone(),reply,limit:CARD_EDGE,wait:Duration::from_secs(2),queued:Instant::now(),timing:None};
                 if state.worker.as_ref().is_some_and(|w|w.sender.try_send(req).is_ok()){
                     state.job=Some(Job{source:id,stamp,live,receiver});
                 }
@@ -621,14 +629,15 @@ pub(super) fn transition_capture(source:WindowIdentity,controller:HWND)->Result<
         let (reply,receiver)=mpsc::sync_channel(1);
         let timing=Arc::new(Mutex::new(CaptureTiming::default()));
         if let Some(frame)=state.sources.get(&source).filter(|s|!s.dirty&&s.stamp.as_ref()==Some(&stamp)
-            &&s.captured_at.is_some_and(|t|t.elapsed()<=Duration::from_millis(800))).and_then(|s|s.frame.clone()){
+            &&s.captured_at.is_some_and(|t|t.elapsed()<=Duration::from_millis(800)))
+            .and_then(|s|s.frame.as_ref()).filter(|(_,w,h)| motion_size(*w,*h,&stamp)).cloned(){
             let _=reply.send(Ok(frame));
             return Ok(TransitionCapture{receiver,timing,cached:true,live});
         }
         if let Some(job)=state.job.take(){job.live.store(false,Ordering::Relaxed);}
         if state.worker.is_none(){state.worker=Worker::new(controller as usize).ok();}
         state.worker.as_ref().ok_or("capture-worker-busy")?.sender.try_send(Request{
-            source,stamp,live:live.clone(),reply,limit:768,wait:Duration::from_millis(350),
+            source,stamp,live:live.clone(),reply,limit:MOTION_EDGE,wait:Duration::from_millis(350),
             queued:Instant::now(),timing:Some(timing.clone())
         }).map_err(|_|"capture-worker-busy")?;
         state.transition_capture=Some(live.clone());
@@ -636,7 +645,7 @@ pub(super) fn transition_capture(source:WindowIdentity,controller:HWND)->Result<
     })
 }
 // Transition frames share the Stage cache even when Stage is hidden.
-// Only the newest frame stays at 768px; older minimized sources shrink to
+// Only the newest frame stays at motion resolution; older sources shrink to
 // 360px. Raster revisions can change without invalidating restore identity.
 pub(super) fn remember_transition(source:WindowIdentity,frame:Frame)->Option<u64>{
     CURRENT.with(|cell|{
@@ -662,9 +671,8 @@ pub(super) fn recent_transition(source:WindowIdentity,revision:u64)->Result<Fram
         let entry=state.sources.get_mut(&source).ok_or("restore-preview-evicted")?;
         if entry.transition_revision!=Some(revision){return Err("restore-preview-replaced");}
         if entry.captured_at.is_none_or(|t|t.elapsed()>MAX_AGE){return Err("restore-preview-expired");}
-        let frame=entry.frame.clone().ok_or("restore-preview-missing")?;
-        if entry.frame.as_mut().is_some_and(shrink_transition_frame){entry.revision^=1u64<<63;}
-        Ok(frame)
+        entry.last_used=Some(Instant::now());
+        entry.frame.clone().ok_or("restore-preview-missing")
     })
 }
 pub(super) fn peek_frame(source:WindowIdentity)->Option<Frame>{
@@ -678,21 +686,22 @@ pub(super) fn peek_frame(source:WindowIdentity)->Option<Frame>{
         entry.frame.clone()
     })
 }
-pub(super) fn complete(){
+pub(super) fn complete()->bool{
     CURRENT.with(|cell|{
         let mut state=cell.borrow_mut();
-        let Some(job)=state.job.take() else{return;};
+        let Some(job)=state.job.take() else{return false;};
         let result=job.receiver.try_recv();
-        if matches!(result,Err(mpsc::TryRecvError::Empty)){state.job=Some(job);return;}
-        if !job.live.load(Ordering::Relaxed)||unsafe{stamp(job.source)}.as_ref()!=Some(&job.stamp){return;}
+        if matches!(result,Err(mpsc::TryRecvError::Empty)){state.job=Some(job);return false;}
+        if !job.live.load(Ordering::Relaxed)||unsafe{stamp(job.source)}.as_ref()!=Some(&job.stamp){return true;}
         state.generation=state.generation.wrapping_add(1).max(1);
         let generation=state.generation;
-        let Some(entry)=state.sources.get_mut(&job.source)else{return;};
+        let Some(entry)=state.sources.get_mut(&job.source)else{return true;};
         match result{
             Ok(Ok(f))=>{entry.frame=Some(f);entry.captured_at=Some(Instant::now());entry.revision=generation;entry.transition_revision=None;entry.dirty=false;entry.retry=None;}
             _=>entry.retry=Some(Instant::now()+Duration::from_secs(30)),
         }
-    });
+        true
+    })
 }
 pub(super) fn masks(owner:usize)->[u8;8]{
     CURRENT.with(|c|{
@@ -735,6 +744,16 @@ pub(super) fn shutdown(){
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn motion_never_reuses_a_magnified_stage_card(){
+        let wide=Stamp{i:2110,j:980,title:String::new()};
+        assert!(!motion_size(360,167,&wide));
+        assert!(motion_size(1024,475,&wide));
+        let portrait=Stamp{i:1096,j:1936,title:String::new()};
+        assert!(motion_size(568,1024,&portrait));
+        let small=Stamp{i:336,j:222,title:String::new()};
+        assert!(motion_size(320,206,&small));
+    }
     #[test]
     fn minimize_has_no_capture_request_and_restore_keeps_last_frame(){
         assert!(budget(3856,2176),"UHD includes invisible maximized window borders");

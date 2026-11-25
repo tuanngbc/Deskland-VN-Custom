@@ -2664,8 +2664,7 @@ unsafe fn move_normal_window(hwnd:HWND,target_id:&str){
     }
 }
 fn finish_stage_snapshot(){
-    stage_snapshot::complete();
-    queue_refresh();
+    if stage_snapshot::complete(){queue_refresh();}
 }
 unsafe fn stage_menu(hwnd:HWND,x:i32,y:i32){
     let card=STATE.with(|s|{
@@ -3040,7 +3039,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             }
             0
         },
-        stage_snapshot::READY if hwnd==CONTROL.get()=>{finish_stage_snapshot();0},
+        stage_snapshot::READY if hwnd==CONTROL.get()=>{window_effect::capture_ready();finish_stage_snapshot();0},
         WM_CLIPBOARDUPDATE if hwnd==CONTROL.get()=>{clipboard_history::changed(hwnd);0},
         clipboard_history::READY if hwnd==CONTROL.get()=>{clipboard_history::complete(hwnd);0},
         WM_CONFIG=>{drain_commands();0},

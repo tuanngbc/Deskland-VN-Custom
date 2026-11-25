@@ -1153,7 +1153,7 @@ mod tests {
                     m.all=fixtures.iter().map(|(name,path)|Entry{name:(*name).into(),path:path.clone(),kind:"Application",detail:String::new()}).collect();
                     for (_,path) in &fixtures{
                         for size in [px(GRID_ICON,m.scale).max(16),px(LIST_ICON,m.scale).max(16)]{
-                            m.icons.insert((path.clone(),size),extract_icon(path,size));
+                            m.icons.insert((path.clone(),size),extract_icon(path,size,true));
                         }
                     }
                     assert!(m.icons.values().any(Option::is_some),"real Shell icon at least once in evidence");

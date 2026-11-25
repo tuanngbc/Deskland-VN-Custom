@@ -484,15 +484,17 @@ unsafe fn execute(hwnd: HWND, path: &Path) -> isize {
 // One bounded icon queue and cache. Popups own only their reply endpoints.
 type IconKey = (PathBuf, i32);
 type IconResult = (IconKey, Option<Arc<IconPixels>>);
-type IconJob = (IconKey, std::sync::mpsc::Sender<IconResult>);
+type IconJob = (IconKey, Option<std::sync::mpsc::Sender<IconResult>>);
 type RasterRows=std::collections::VecDeque<(IconKey,Option<Arc<IconPixels>>,u64,std::time::Instant,Option<String>)>;
 static RASTERS:LazyLock<Mutex<RasterRows>>=LazyLock::new(||Mutex::new(RasterRows::new()));
 const RASTER_BUDGET:usize=8*1024*1024;
 static PREFETCH_SIZE:std::sync::atomic::AtomicI32=std::sync::atomic::AtomicI32::new(0);
+static PREFETCH_COMPACT:std::sync::atomic::AtomicI32=std::sync::atomic::AtomicI32::new(36);
 pub(crate) fn prewarm_spotlight(icon_size:i32){
     use std::sync::atomic::Ordering::Relaxed;
     if cfg!(test){return;}
     let dpi=unsafe{windows_sys::Win32::UI::HiDpi::GetDpiForSystem()}.clamp(72,288);
+    PREFETCH_COMPACT.store((36*dpi as i32+48)/96,Relaxed);
     PREFETCH_SIZE.store(((icon_size*dpi as i32+48)/96).clamp(8,192),Relaxed);
     // A Spotlight or Start open during boot may already have populated the
     // catalog. Consume an immediately available result; otherwise the shared
@@ -505,12 +507,15 @@ fn prefetch_catalog(rows:&[Entry]){
     use std::sync::atomic::Ordering::Relaxed;
     let size=PREFETCH_SIZE.swap(0,Relaxed);
     if size==0{return;}
-    let (requests,_rx)=icon_worker();
+    let Some(work)=icon_queue()else{return;};
     let mut apps=rows.iter().filter(|app|app_entry(app)).collect::<Vec<_>>();
     apps.sort_by_cached_key(|app|app.name.to_lowercase());
-    for app in apps.into_iter().take(24) {
-        let key=(app.path.clone(),size);
-        if warm_raster(&key).is_none()&&requests.send(key).is_err(){break;}
+    let compact=PREFETCH_COMPACT.load(Relaxed);
+    for app in apps.into_iter().take(32) {
+        for edge in [size,compact] {
+            let key=(app.path.clone(),edge);
+            if warm_raster(&key).is_none()&&work.enqueue(key,None).is_err(){return;}
+        }
     }
 }
 fn lookup_raster(key:&IconKey,allow_stale:bool)->Option<(Option<Arc<IconPixels>>,bool)>{
@@ -543,40 +548,72 @@ fn retain_raster(key:IconKey,icon:Option<Arc<IconPixels>>,revision:u64){
     }
 }
 struct IconRequests(std::sync::mpsc::Sender<IconResult>);
+#[derive(Default)]
+struct IconWork {
+    jobs:Mutex<(std::collections::VecDeque<IconJob>,std::collections::VecDeque<IconKey>)>,
+    ready:std::sync::Condvar,
+}
+impl IconWork {
+    fn enqueue(&self,key:IconKey,reply:Option<std::sync::mpsc::Sender<IconResult>>)->Result<(),()>{
+        let mut jobs=self.jobs.lock().map_err(|_|())?;
+        if let Some(reply)=reply {
+            if jobs.0.len()>=64{return Err(());}
+            jobs.0.push_back((key,Some(reply)));
+        }else{
+            if jobs.1.len()>=64{return Err(());}
+            if !jobs.1.contains(&key){jobs.1.push_back(key);}
+        }
+        self.ready.notify_one();
+        Ok(())
+    }
+    fn next(&self)->Option<IconJob>{
+        let mut jobs=self.jobs.lock().ok()?;
+        loop{
+            if let Some(job)=jobs.0.pop_front(){return Some(job);}
+            if let Some(key)=jobs.1.pop_front(){return Some((key,None));}
+            jobs=self.ready.wait(jobs).ok()?;
+        }
+    }
+}
+fn icon_queue()->Option<&'static Arc<IconWork>>{
+    static WORK:std::sync::OnceLock<Option<Arc<IconWork>>>=std::sync::OnceLock::new();
+    WORK.get_or_init(||{
+        let work=Arc::new(IconWork::default());
+        let worker=work.clone();
+        std::thread::Builder::new().name("tlauncher-shell-icons".into()).spawn(move||unsafe{
+            use windows::Win32::System::Com::*;
+            let com=CoInitializeEx(None,COINIT_APARTMENTTHREADED);
+            while let Some((key,reply))=worker.next(){
+                let revision=crate::app_icons::revision();
+                let visible=reply.is_some();
+                let icon=warm_raster(&key).unwrap_or_else(||{
+                    let loaded=extract_icon(&key.0,key.1.clamp(8,192),visible);
+                    // A speculative miss cannot suppress a real request later.
+                    if visible||loaded.is_some(){retain_raster(key.clone(),loaded.clone(),revision);}
+                    loaded
+                });
+                if let Some(reply)=reply{let _=reply.send((key,icon));}
+            }
+            if com.is_ok(){CoUninitialize();}
+        }).ok()?;
+        Some(work)
+    }).as_ref()
+}
 impl IconRequests {
     fn send(&self, key: IconKey) -> Result<(), ()> {
-        use std::sync::{OnceLock, mpsc};
-        static WORK: OnceLock<Option<mpsc::SyncSender<IconJob>>> = OnceLock::new();
-        let work = WORK.get_or_init(|| {
-            let (tx, rx) = mpsc::sync_channel::<IconJob>(64);
-            std::thread::Builder::new().name("tlauncher-shell-icons".into()).spawn(move || unsafe {
-                use windows::Win32::System::Com::*;
-                let com = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-                while let Ok((key, reply)) = rx.recv() {
-                    let revision=crate::app_icons::revision();
-                    let icon=warm_raster(&key).unwrap_or_else(||{
-                        let loaded=extract_icon(&key.0,key.1.clamp(8,192));
-                        retain_raster(key.clone(),loaded.clone(),revision);
-                        loaded
-                    });
-                    let _ = reply.send((key, icon));
-                }
-                if com.is_ok() { CoUninitialize(); }
-            }).ok()?;
-            Some(tx)
-        });
-        work.as_ref().ok_or(())?.try_send((key, self.0.clone())).map_err(|_| ())
+        icon_queue().ok_or(())?.enqueue(key,Some(self.0.clone()))
     }
 }
 fn icon_worker() -> (IconRequests, std::sync::mpsc::Receiver<IconResult>) {
     let (tx, rx) = std::sync::mpsc::channel();
     (IconRequests(tx), rx)
 }
-unsafe fn extract_icon(path: &Path, size: i32) -> Option<Arc<IconPixels>> {
+unsafe fn extract_icon(path: &Path, size: i32, allow_extract:bool) -> Option<Arc<IconPixels>> {
     let command=path.to_str().and_then(crate::dock::command_pin::decode);
     let id=catalog::identity(path);
     let source=command.as_ref().map_or(path,|c|Path::new(&c.exe));
-    let icon=crate::app_icons::shared_source(path,source,Path::new(&id),crate::app_icons::source_tier((size*3+1)/2))?;
+    let load=if allow_extract{crate::app_icons::shared_source}else{crate::app_icons::cached_source};
+    let icon=load(path,source,Path::new(&id),crate::app_icons::source_tier((size*3+1)/2))?;
     // Do not manufacture detail by enlarging small shell icons. Keep their
     // native raster centred in a larger tile when no large source exists.
     let scale = (size as f32 / icon.width.max(icon.height) as f32).min(1.0);
