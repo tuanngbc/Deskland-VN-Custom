@@ -31,6 +31,11 @@ function Assert-NoReparse([string]$Path) {
 Assert-NoReparse $root
 Assert-NoReparse $ProductionExe
 $headers=@{Accept='application/vnd.github+json';'X-GitHub-Api-Version'='2022-11-28'}
+$credentials=@('protocol=https','host=github.com','') | git credential fill 2>$null
+$secret=$credentials | Where-Object {$_ -like 'password=*'} | Select-Object -First 1
+if (!$secret) { throw 'GitHub artifact retrieval requires the repository credential.' }
+$headers.Authorization='Bearer '+$secret.Substring(9)
+Remove-Variable credentials,secret
 $run=Invoke-RestMethod -Uri "$api/actions/runs/$RunId" -Headers $headers
 if ($run.head_sha -cne $Commit -or $run.head_branch -cne 'codex/fluidwin-integration-v1.0.3' -or
     $run.path -cne '.github/workflows/build-rust-test.yml' -or $run.status -ne 'completed' -or $run.conclusion -ne 'success') {
@@ -47,18 +52,10 @@ $archive=Join-Path $staging 'actions.zip'
 Assert-NoReparse $archive
 New-Item -ItemType Directory -Path $staging -Force | Out-Null
 if (!(Test-Path -LiteralPath $archive) -or ('sha256:'+(Get-FileHash -LiteralPath $archive).Hash.ToLowerInvariant()) -cne $check) {
-    $credentials=@('protocol=https','host=github.com','') | git credential fill 2>$null
-    $secret=$credentials | Where-Object {$_ -like 'password=*'} | Select-Object -First 1
-    if (!$secret) { throw 'GitHub artifact download requires the repository credential.' }
-    try {
-        $headers.Authorization='Bearer '+$secret.Substring(9)
-        $uri="$api/actions/artifacts/$($artifact[0].id)/zip"
-        Invoke-WebRequest -Uri $uri -Headers $headers -OutFile $archive
-    } finally {
-        $headers.Remove('Authorization')
-        Remove-Variable credentials,secret -ErrorAction SilentlyContinue
-    }
+    $uri="$api/actions/artifacts/$($artifact[0].id)/zip"
+    Invoke-WebRequest -UseBasicParsing -Uri $uri -Headers $headers -OutFile $archive
 }
+$headers.Remove('Authorization')
 if (('sha256:'+(Get-FileHash -LiteralPath $archive).Hash.ToLowerInvariant()) -cne $check) { throw 'GitHub artifact checksum mismatch.' }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -67,9 +64,14 @@ $zip=Join-Path $staging "$zipName.zip"
 Assert-NoReparse $zip
 $container=[IO.Compression.ZipFile]::OpenRead($archive)
 try {
-    $image=$container.GetEntry("$zipName.zip")
-    $checksum=$container.GetEntry("$zipName.zip.sha256")
-    if (!$image -or !$checksum -or $checksum.Length -gt 256 -or $image.Length -gt 150MB) { throw 'Unexpected artifact contents.' }
+    # The upload also includes Cargo.lock, so Actions can retain the dist/
+    # prefix when it chooses the repository root as the common upload path.
+    $images=@($container.Entries | Where-Object { $_.FullName -cin @("$zipName.zip","dist/$zipName.zip") })
+    $checksums=@($container.Entries | Where-Object { $_.FullName -cin @("$zipName.zip.sha256","dist/$zipName.zip.sha256") })
+    if ($images.Count -ne 1 -or $checksums.Count -ne 1) { throw 'Candidate archive or checksum is missing or ambiguous.' }
+    $image=$images[0]
+    $checksum=$checksums[0]
+    if ($checksum.FullName -cne ($image.FullName+'.sha256') -or $checksum.Length -gt 256 -or $image.Length -gt 150MB) { throw 'Unexpected artifact contents.' }
     $reader=[IO.StreamReader]::new($checksum.Open())
     try { $want=($reader.ReadToEnd().Trim() -split '\s+')[0] }finally{$reader.Dispose()}
     if ($want -cnotmatch '^[a-f0-9]{64}$') { throw 'Invalid package checksum.' }

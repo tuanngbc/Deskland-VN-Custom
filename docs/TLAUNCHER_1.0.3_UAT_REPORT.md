@@ -2,7 +2,9 @@
 
 This branch has intermediate changes; it is not the release or a claim of FluidWin feature parity. Stable production v1.0.2 remains available. See the feature parity ledger for the scope still open.
 
-Start from the Desktop shortcut **TLauncher 1.0.3 — TEST** once a verified candidate has been delivered. It opens the packaged PowerShell launcher with the isolated profile and preserves the installed v1.0.2. Do not run the candidate EXE directly. Exit normally from the launcher menu. The shortcut's session requests a normal production exit, waits for the singleton and restores production if it was running before. If needed, after TEST has exited, reopen the existing production shortcut.
+Delivered intermediate build: `442861d7ac77beaf247c7df3123bc92cef17ef70`, [Actions run 45524299059](https://github.com/tuanngbc/TLauncher/actions/runs/45524299059). The Windows x64 package SHA-256 is `7b972b2988cc7221a250fe397d78ef5d12ed22db25043474224d21864b12abc8`. The Desktop shortcut and separate profile were staged without running the candidate.
+
+Start from the Desktop shortcut **TLauncher 1.0.3 — TEST** once a verified candidate has been delivered. The shortcut's session requests a normal production exit, waits for it to release the desktop, and starts the candidate with a separate profile. Leave its launcher window open. Exit normally from the TLauncher menu; the launcher restores production if it was previously running. If needed, after TEST has completely exited, reopen the existing production shortcut. The candidate directory contains `uat-launch.log` if switching stops with an error. Run the candidate through the shortcut so it gets the isolated profile.
 
 Suggested checks:
 
@@ -12,4 +14,4 @@ Suggested checks:
 4. In Settings → Dock & Stage, enable Stage Peek. Hover a card, leave it, and click it. Check that hovering does not take focus. With a minimized source, the preview is available only if a permitted snapshot is cached.
 5. In Settings → Dock & Stage → Utilities, enable Clipboard history. Copy sample text and a small image. Open the history in Control Center, copy an entry back and delete it. Turn the setting off to clear the in-memory session.
 
-Known limits: native animation overlap can make Genie and Drop fall back; no full animated foreign-window lifecycle or expanded Guardian yet. Owner acceptance, resource measurements, demonstrations and public release are pending.
+Known limits: native animation overlap can make Genie and Drop fall back. If it does, record the requested effect, actual effect and fallback reason instead of changing Windows settings. Jelly, Snap, globally animated window lifecycle and expanded Guardian are still in scope and not delivered in this milestone. The existing Ctrl+Alt+Shift+F12 recovery hotkey shows the Windows taskbar in the current session. Owner acceptance, resource measurements, demonstrations and public release are pending.

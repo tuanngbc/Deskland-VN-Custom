@@ -19,3 +19,16 @@ Reference: [FluidWin v1.3.1](https://github.com/clooudfn/FluidWin/tree/2f773a873
 | `compila.ps1`, `icona.*`, `sfondi/*`, `docs/gif/*` | Upstream GNU build uses D3D/DXGI/DComp, D2D/DWrite, shell, COM/WinRT, WIC and system libraries. Keep the current Actions/MSVC pipeline, and do not import logos, wallpapers or GIFs. |
 
 Use an isolated source reference. Import qualified source and the original license only, attributed by file and commit. Preserve TLauncher's GPL and the original wallpaper credits. The table records architectural boundaries; the parity matrix records implementation and evidence separately.
+
+## Native Settings decision
+
+`impostazioni.h` paints its own settings rows, hover areas and navigation with Direct2D/DirectWrite and shared factories from `fabbriche.h`. Its `WM_KEYDOWN` case handles Escape and Up/Down section changes; this is not keyboard operation for every control. There is no Settings `WM_GETOBJECT` handler or UI Automation provider in that implementation. The upstream settings use per-user registry values. Its seven languages are Italian, English, Spanish, French, German, Portuguese and Arabic; TLauncher also requires Vietnamese and Simplified Chinese.
+
+Keep the WebView2 Settings coordinator and profile JSON now. Reuse native drawing, factory lifetimes and metrics as appropriate, but require named accessible elements, complete keyboard interaction, scaling, and settings parity before the replacement becomes the default. Do not import the upstream registry store or startup toggle.
+
+## Other compatibility findings
+
+- `destro.h` obtains the active Shell view's `IContextMenu`, negotiates `IContextMenu2/3` and dispatches the selected verb. The later integration must preserve owner-drawn extension and cascading menu messages; when equivalent handling is unavailable use Windows's menu.
+- `banner.h` changes per-app `ShowBanner` registry values. The copy/restore policy persists independently of the popup. Keep original settings and do not port the banner suppression by default; `notifiche.h` models permission and partial enumeration separately.
+- `comodita.h` implements Keep Awake, silence and timers independently of the Notch; `widget.h` already uses Open-Meteo and bounded RSS sources. Integrate with TLauncher's existing time/weather owners.
+- The cursor pack and wallpaper paths are not licensed by inference from the source license. This branch imports no upstream cursor pack, wallpaper, logo, or video. Cursor archive validation and original-theme recovery remain requirements for importing user packs.
