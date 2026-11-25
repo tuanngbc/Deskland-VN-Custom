@@ -37,6 +37,7 @@ mod stage_rail;
 mod stage_projection;
 mod stage_snapshot;
 mod window_effect;
+mod fluidwin_mesh;
 pub(crate) fn motion_diagnostics()->serde_json::Value{window_effect::diagnostics()}
 mod stage_capture_lab;
 pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>{stage_capture_lab::inspect(path,true)}

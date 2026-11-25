@@ -181,6 +181,21 @@ fn native_scale_proxy_owned_source_100_cycles(){
     }
 }
 
+#[cfg(all(test,target_env="msvc"))]
+#[test]
+#[ignore="actual WGC and upstream Genie compositor probe on Actions"]
+fn native_fluidwin_genie_presented_pixels(){
+    if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+    unsafe{
+        let source=window(true).unwrap();
+        let frame=match pump_capture(&source){
+            Ok(frame)=>frame,
+            Err(reason)=>{println!("FLUIDWIN_GENIE_SCREEN_PIXELS=NOT_VERIFIED {reason}");return;}
+        };
+        super::window_effect::probe_genie_pixels(source.0,&frame);
+    }
+}
+
 // Explicit proof of the DWM thumbnail API on owned synthetic windows only.
 // This is not the product transition backend: source freshness and interaction
 // with native Windows animations still require owner-hardware acceptance.

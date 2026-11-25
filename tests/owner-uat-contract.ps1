@@ -73,7 +73,7 @@ Copy-Item -LiteralPath $Exe -Destination $target
 Copy-Item -LiteralPath $source -Destination $launcher
 $build='0123456789abcdef0123456789abcdef01234567'
 Set-Content -LiteralPath (Join-Path $trial 'BUILD-COMMIT.txt') -Value $build -Encoding ascii
-Set-Content -LiteralPath (Join-Path $trial 'VERSION.txt') -Value '1.0.2' -Encoding ascii
+Set-Content -LiteralPath (Join-Path $trial 'VERSION.txt') -Value (Get-Item -LiteralPath $target).VersionInfo.ProductVersion -Encoding ascii
 Set-Content -LiteralPath (Join-Path $trial 'prototype\settings.html') -Value '<!doctype html>' -Encoding ascii
 $manifest=Join-Path $trial 'verified-artifact.json'
 $data=@{sourceCommit=$build;exeSha256=(Get-FileHash -LiteralPath $target).Hash;profile=$profile;productionExe=$Exe}

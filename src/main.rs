@@ -942,6 +942,7 @@ fn web_init(app: &App) -> serde_json::Value {
     init["spotlight"]=serde_json::json!(&app.cfg.spotlight);
     init["motion"]=app.cfg.motion.json();
     init["motionDiagnostics"]=dock::motion_diagnostics(); init["motionScaleExperiment"]=dock::motion::scale_experiment_available().into();
+    init["motionGenieAvailable"]=(dock::motion::scale_experiment_available() && cfg!(target_env="msvc")).into();
     init["spotlightGuideSeen"]=serde_json::json!(app.cfg.spotlight_guide_seen);
     app.dock_taskbar.add_fields(&mut init);
     init["dockWinKeyStatus"]=serde_json::json!(app.dock_win_key_status);
@@ -3184,7 +3185,7 @@ fn main() {
                     web_changed=true;
                 }
                 "motionPreferences" => {
-                    let mut next=dock::motion::Settings::from_json(&m["value"]); next.scale_windows &= dock::motion::scale_experiment_available();
+                    let next=dock::motion::Settings::from_json(&m["value"]);
                     if next!=app.cfg.motion{
                         let policy_changed=next.enabled!=app.cfg.motion.enabled||next.respect_system!=app.cfg.motion.respect_system;
                         app.cfg.motion=next;

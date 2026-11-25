@@ -1,6 +1,6 @@
 [package]
 name = "tlauncher"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 license = "GPL-3.0-only"
 description = "TLauncher native (Rust + OpenGL) - hình nền động tương tác thích ứng 16 chủ đề cho Windows"
@@ -73,3 +73,4 @@ strip = true
 
 [build-dependencies]
 embed-manifest = "1"
+cc = "1"

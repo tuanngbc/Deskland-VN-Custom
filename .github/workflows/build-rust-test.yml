@@ -2,7 +2,7 @@ name: Build TLauncher Rust
 
 on:
   push:
-    branches: [main, codex/rust-dock, codex/unified-spotlight-v1.0.2]
+    branches: [main, codex/rust-dock, codex/unified-spotlight-v1.0.2, codex/fluidwin-integration-v1.0.3]
     tags: [v*]
   workflow_dispatch:
 
@@ -98,6 +98,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_capture_lab::native_scale_proxy_owned_source_100_cycles -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::stage_capture_lab::native_fluidwin_genie_presented_pixels -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_capture_lab::native_scale_production_owned_external_windows -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:TUANPC_DESK_TYPE_EVIDENCE = Join-Path $env:RUNNER_TEMP "typography-evidence"
@@ -166,6 +168,7 @@ jobs:
           foreach ($file in 'README.md','CHANGELOG.md','LICENSE','NOTICE','THIRD_PARTY_NOTICES.md','TRADEMARKS.md') {
             if (Test-Path $file) { Copy-Item $file $dir }
           }
+          Copy-Item third_party\fluidwin\LICENSE "$dir\FLUIDWIN-LICENSE.txt"
           Copy-Item README-rust.md "$dir\README-rust.md"
           if ($env:GITHUB_REF_TYPE -ne 'tag') {
             Copy-Item tools\owner-uat.ps1 "$dir\owner-uat.ps1"
@@ -205,7 +208,7 @@ jobs:
           if ($env:GITHUB_REF_TYPE -ne 'tag') {
             @"
           TLauncher Windows TEST candidate.
-          Start only with the TLauncher 1.0.2 TEST Desktop shortcut configured for this verified package.
+          Start only with the TLauncher $version TEST Desktop shortcut configured for this verified package.
           Do not run TLauncher.exe directly: the shortcut selects the isolated TEST profile.
           Exit TLauncher from its menu and leave the launcher window open until production is restored.
           "@ | Set-Content "$dir\DOC-TRUOC.txt" -Encoding utf8

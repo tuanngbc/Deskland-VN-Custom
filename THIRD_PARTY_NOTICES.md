@@ -15,3 +15,11 @@ The host uses the Microsoft Edge WebView2 SDK and Runtime. SDK binaries are down
 ## NSIS
 
 Windows 安装包使用 NSIS 3.13 制作。便携编译器仅在构建时下载，不作为项目源码提交。NSIS 及其压缩模块适用各自许可，详见 https://nsis.sourceforge.io/License 。安装包附带项目对应源码 ZIP。
+
+## FluidWin
+
+Copyright (c) 2026 Clooudy. MIT License. Genie mesh geometry and shader from
+`genio.h`, and effect timing from `fluidwin.cpp`, at
+[FluidWin v1.3.1, commit 2f773a8](https://github.com/clooudfn/FluidWin/tree/2f773a8733b84c7dbee88fff6628d14e9ac802b9).
+See [the original license](third_party/fluidwin/LICENSE). No FluidWin executables,
+wallpapers, cursors, logos, or showcase media are bundled.

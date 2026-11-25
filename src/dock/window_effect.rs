@@ -1,9 +1,8 @@
-//! Dock window Scale. The WGC worker supplies one bounded texture; the
-//! compositor scales that texture to physical window geometry. Never animate
-//! or change the DWM policy of the source HWND.
-use super::{motion,stage_snapshot,WindowIdentity,STATE,CONTROL,queue_refresh};
+//! Dock window transitions. The existing Stage WGC worker supplies a bounded
+//! frame. Scale and FluidWin Genie share one Dock-thread D3D device.
+use super::{fluidwin_mesh,motion,stage_snapshot,DockSide,WindowIdentity,STATE,CONTROL,queue_refresh};
 use crate::desktop::wide;
-use std::{cell::RefCell,collections::HashMap,mem,ptr,sync::Mutex,time::{Duration,Instant}};
+use std::{cell::RefCell,collections::HashMap,mem,ptr,rc::Rc,sync::Mutex,time::{Duration,Instant}};
 use serde_json::{json,Value};
 use windows::{core::Interface,Win32::{Foundation::{HWND as WinHwnd,HMODULE,POINT as WinPoint},
     Graphics::{Direct3D::D3D_DRIVER_TYPE_HARDWARE,Direct3D11::*,DirectComposition::*,
@@ -24,7 +23,7 @@ impl Action{fn name(self)->&'static str{match self{Self::Minimize=>"minimize",Se
 #[derive(Clone)]
 struct Request{
     source:WindowIdentity,area:RECT,normal:RECT,dpi:u32,monitor:usize,title:String,
-    action:Action,icon:RECT,
+    action:Action,icon:RECT,side:DockSide,effect:motion::WindowEffect,
 }
 struct Recent{request:Request,revision:u64,stored:Instant}
 thread_local!{
@@ -45,14 +44,14 @@ impl Policy{
         Self{motion:motion::settings(),client_animation,native_minimize}
     }
     fn gate(self)->Result<(),Reason>{
-        if !self.motion.scale_windows{return Err("scale-not-selected");}
+        if self.motion.window_effect==motion::WindowEffect::Windows{return Err("scale-not-selected");}
         if !self.motion.enabled{return Err("motion-disabled");}
         if self.motion.respect_system&&self.client_animation!=Some(true){return Err("system-reduced-motion");}
         if self.native_minimize!=Some(0){return Err("native-animation-overlap");}
         Ok(())
     }
     fn json(self)->Value{json!({
-        "requestedEffect":if self.motion.scale_windows{"scale"}else{"windows"},
+        "requestedEffect":self.motion.window_effect.name(),
         "animationsEnabled":self.motion.enabled,"animationSpeed":self.motion.speed as f64/100.0,
         "respectSystemReducedMotion":self.motion.respect_system,
         "SPI_GETCLIENTAREAANIMATION":self.client_animation,
@@ -91,19 +90,22 @@ impl Attempt{
         self.values["validationMs"]=json!(t.elapsed().as_millis() as u64);
         self.values["captureValid"]=json!(result.is_ok());result
     }
-    unsafe fn proxy(&mut self,frame:&stage_snapshot::Frame,area:RECT)->Result<Proxy,Reason>{
-        self.capture(frame,area)?;
-        let t=Instant::now();let proxy=Proxy::new(frame,area);
+    unsafe fn proxy(&mut self,frame:&stage_snapshot::Frame,req:&Request)->Result<Proxy,Reason>{
+        self.capture(frame,req.area)?;
+        let t=Instant::now();let proxy=Proxy::new_for(frame,req.area,req.icon,req.side,req.effect);
         self.values["proxyPreparationMs"]=json!(t.elapsed().as_millis() as u64);
         self.values["proxyCreated"]=json!(proxy.is_some());proxy.ok_or("proxy-create-failed")
     }
-    unsafe fn present(&mut self,p:&Proxy,r:RECT,opacity:u8)->Result<(),Reason>{
-        let ok=p.present(r,opacity);self.values["proxyPresented"]=json!(ok);
-        if ok{self.frames+=1;Ok(())}else{Err("proxy-present-failed")}
+    unsafe fn present(&mut self,p:&Proxy,r:RECT,progress:f64,opacity:u8)->Result<(),Reason>{
+        match p.paint(r,progress,opacity){
+            1=>{self.values["proxyPresented"]=json!(true);self.frames+=1;Ok(())}
+            2=>Ok(()), // compositor still busy; keep the last accepted frame
+            _=>Err("proxy-present-failed"),
+        }
     }
     fn finish(&mut self,reason:Option<Reason>){
         if self.done{return;}self.done=true;
-        self.values["actualEffect"]=json!(if reason.is_none(){"scale"}else{"windows"});
+        if reason.is_none(){self.values["actualEffect"]=self.values["requestedEffect"].clone();}
         self.values["fallbackReason"]=json!(reason);
         self.values["presentedFrames"]=json!(self.frames);
         self.values["transitionDurationMs"]=json!(self.animation.map(|t|t.elapsed().as_millis() as u64));
@@ -186,7 +188,7 @@ unsafe fn permitted(id:WindowIdentity)->Result<(),Reason>{
         _=>Err("source-unavailable"),
     }
 }
-unsafe fn target(owner:HWND,path:&str)->Result<RECT,Reason>{
+unsafe fn target(owner:HWND,path:&str)->Result<(RECT,DockSide),Reason>{
     let (slot,layout,openness)=STATE.with(|s|{
         let s=s.borrow();
         let b=s.bars.iter().find(|b|b.hwnd==owner&&!b.hidden).ok_or("dock-not-ready")?;
@@ -212,7 +214,7 @@ unsafe fn target(owner:HWND,path:&str)->Result<RECT,Reason>{
     if size<8{return Err("dock-not-ready");}
     let mut p=POINT{x:(center_x-size as f32*0.5).round() as i32,y:(center_y-size as f32*0.5).round() as i32};
     if ClientToScreen(owner,&mut p)==0{return Err("dock-not-ready");}
-    Ok(RECT{left:p.x,top:p.y,right:p.x+size,bottom:p.y+size})
+    Ok((RECT{left:p.x,top:p.y,right:p.x+size,bottom:p.y+size},side))
 }
 unsafe fn request(owner:HWND,path:&str,id:WindowIdentity,action:Action,policy:Policy,attempt:&mut Attempt)->Result<Request,Reason>{
     let h=id.hwnd as HWND;
@@ -240,14 +242,14 @@ unsafe fn request(owner:HWND,path:&str,id:WindowIdentity,action:Action,policy:Po
     };
     attempt.area(area);
     if !valid_area(area){return Err("window-area-limit");}
-    let icon=target(owner,path)?;attempt.values["dockTarget"]=json!(true);
-    Ok(Request{source:id,area,normal:p.rcNormalPosition,dpi,monitor:monitor as usize,title:name,action,icon})
+    let (icon,side)=target(owner,path)?;attempt.values["dockTarget"]=json!(true);
+    Ok(Request{source:id,area,normal:p.rcNormalPosition,dpi,monitor:monitor as usize,title:name,action,icon,side,effect:policy.motion.window_effect})
 }
 
 // One small uploaded composition texture, no physical-size CPU DIB and
 // no per-frame readback/StretchBlt. Reuse the device across a burst; release
 // it after the same idle period as the existing Stage capture worker.
-struct ProxyFactory{comp:IDCompositionDevice,ctx:ID3D11DeviceContext}
+struct ProxyFactory{comp:IDCompositionDevice,ctx:ID3D11DeviceContext,mesh:Option<Rc<fluidwin_mesh::Pipeline>>}
 impl ProxyFactory{
     unsafe fn new()->windows::core::Result<Self>{
         let mut device=None;let mut ctx=None;
@@ -255,13 +257,17 @@ impl ProxyFactory{
             None,D3D11_SDK_VERSION,Some(&mut device),None,Some(&mut ctx))?;
         let dxgi:IDXGIDevice=device.expect("D3D device").cast()?;
         let comp:IDCompositionDevice=DCompositionCreateDevice(&dxgi)?;
-        Ok(Self{comp,ctx:ctx.expect("D3D context")})
+        Ok(Self{comp,ctx:ctx.expect("D3D context"),mesh:None})
     }
 }
 struct Proxy{
     hwnd:HWND,comp:IDCompositionDevice,target:IDCompositionTarget,visual:IDCompositionVisual,
-    scale:IDCompositionScaleTransform,effect:IDCompositionEffectGroup,_surface:IDCompositionSurface,w:i32,h:i32,
+    render:Render,
     #[cfg(test)] marker:[u8;3],
+}
+enum Render{
+    Scale{transform:IDCompositionScaleTransform,effect:IDCompositionEffectGroup,_surface:IDCompositionSurface,w:i32,h:i32},
+    Mesh(fluidwin_mesh::Layer),
 }
 unsafe extern "system" fn proxy_proc(h:HWND,m:u32,w:WPARAM,l:LPARAM)->LRESULT{
     match m{WM_NCHITTEST=>HTTRANSPARENT as isize,WM_MOUSEACTIVATE=>MA_NOACTIVATE as isize,_=>DefWindowProcW(h,m,w,l)}
@@ -273,13 +279,22 @@ impl Drop for Proxy{fn drop(&mut self){unsafe{
     DestroyWindow(self.hwnd);
 }}}
 impl Proxy{
+    #[cfg(test)]
     unsafe fn new(frame:&stage_snapshot::Frame,area:RECT)->Option<Self>{
+        Self::new_for(frame,area,area,DockSide::Bottom,motion::WindowEffect::Scale)
+    }
+    unsafe fn new_for(frame:&stage_snapshot::Frame,area:RECT,icon:RECT,side:DockSide,effect:motion::WindowEffect)->Option<Self>{
         if !valid_pixels(frame,area){return None;}
         let (data,w,h)=frame;
-        let (comp,ctx)=FACTORY.with(|f|->Option<_>{
+        let (comp,ctx,mesh)=FACTORY.with(|f|->Option<_>{
             let mut f=f.borrow_mut();if f.is_none(){*f=ProxyFactory::new().ok();}
-            let f=f.as_ref()?;Some((f.comp.clone(),f.ctx.clone()))
+            let f=f.as_mut()?;
+            if effect==motion::WindowEffect::Genie&&f.mesh.is_none(){f.mesh=fluidwin_mesh::Pipeline::new(&f.ctx);}
+            Some((f.comp.clone(),f.ctx.clone(),f.mesh.clone()))
         })?;
+        let mesh=if effect==motion::WindowEffect::Genie{
+            Some(fluidwin_mesh::Layer::new(mesh?,frame,area,icon,side)?)
+        }else{None};
         let class=wide("TLauncherScaleProxy");
         let instance=GetModuleHandleW(ptr::null());
         let wc=WNDCLASSW{lpfnWndProc:Some(proxy_proc),hInstance:instance,lpszClassName:class.as_ptr(),..mem::zeroed()};
@@ -293,7 +308,11 @@ impl Proxy{
         let _=DwmSetWindowAttribute(hwnd,DWMWA_TRANSITIONS_FORCEDISABLED as u32,(&disable as *const i32).cast(),4);
         let result=(||->windows::core::Result<Self>{
             let target=comp.CreateTargetForHwnd(WinHwnd(hwnd),true)?;
-            let visual=comp.CreateVisual()?;let scale=comp.CreateScaleTransform()?;let effect=comp.CreateEffectGroup()?;
+            let visual=comp.CreateVisual()?;
+            let render=if let Some(mesh)=mesh{
+                mesh.attach(&visual)?;Render::Mesh(mesh)
+            }else{
+            let scale=comp.CreateScaleTransform()?;let effect=comp.CreateEffectGroup()?;
             let surface=comp.CreateSurface(*w as u32,*h as u32,DXGI_FORMAT_B8G8R8A8_UNORM,DXGI_ALPHA_MODE_IGNORE)?;
             let mut offset=WinPoint::default();
             let drawing:IDXGISurface=surface.BeginDraw(None,&mut offset)?;
@@ -306,28 +325,43 @@ impl Proxy{
             })();
             let end=surface.EndDraw();upload?;end?;
             visual.SetContent(&surface)?;visual.SetTransform(&scale)?;visual.SetEffect(&effect)?;
+            Render::Scale{transform:scale,effect,_surface:surface,w:*w,h:*h}
+            };
             target.SetRoot(&visual)?;comp.Commit()?;
-            Ok(Self{hwnd,comp,target,visual,scale,effect,_surface:surface,w:*w,h:*h,
+            Ok(Self{hwnd,comp,target,visual,render,
                 #[cfg(test)] marker:{let i=((*h/2)* *w+*w/10) as usize*4;[data[i+2],data[i+1],data[i]]}})
         })();
         if result.is_err(){DestroyWindow(hwnd);}
         result.ok()
     }
-    unsafe fn present(&self,r:RECT,opacity:u8)->bool{
-        let (w,h)=dims(r);if !valid_area(r){return false;}
+    #[cfg(test)]
+    unsafe fn present(&self,r:RECT,opacity:u8)->bool{self.paint(r,0.0,opacity)==1}
+    unsafe fn paint(&self,mut r:RECT,progress:f64,opacity:u8)->i32{
         let first=IsWindowVisible(self.hwnd)==0;
-        let updated=(||->windows::core::Result<()>{
-            self.scale.SetScaleX2(w as f32/self.w as f32)?;
-            self.scale.SetScaleY2(h as f32/self.h as f32)?;
-            self.effect.SetOpacity2(opacity as f32/255.0)?;
-            self.comp.Commit()?;
-            if first{self.comp.WaitForCommitCompletion()?;}
-            Ok(())
-        })();
-        if updated.is_err(){return false;}
+        match &self.render{
+            Render::Scale{transform,effect,w,h,..}=>{
+                if !valid_area(r){return 0;}
+                let (rw,rh)=dims(r);
+                let updated=(||->windows::core::Result<()>{
+                    transform.SetScaleX2(rw as f32/ *w as f32)?;
+                    transform.SetScaleY2(rh as f32/ *h as f32)?;
+                    effect.SetOpacity2(opacity as f32/255.0)?;
+                    self.comp.Commit()
+                })();
+                if updated.is_err(){return 0;}
+            }
+            Render::Mesh(mesh)=>{
+                let status=mesh.paint(progress,opacity);
+                if status!=1{return if first{0}else{status};}
+                if !first{return 1;} // canvas stays fixed over the source and Dock
+                r=mesh.canvas;
+            }
+        }
+        if first&&self.comp.WaitForCommitCompletion().is_err(){return 0;}
+        let (w,h)=dims(r);
         let shown=SetWindowPos(self.hwnd,HWND_TOPMOST,r.left,r.top,w,h,SWP_NOACTIVATE|SWP_SHOWWINDOW)!=0;
         if shown&&first{let _=DwmFlush();}
-        shown
+        i32::from(shown)
     }
 }
 enum Phase{
@@ -374,8 +408,8 @@ impl Transition{
                 match result{
                     Ok(Ok(frame))=>{
                         self.attempt.values["captureDurationMs"]=json!(started.elapsed().as_millis() as u64);
-                        let proxy=match self.attempt.proxy(&frame,self.req.area){Ok(p)=>p,Err(r)=>return self.fallback(r)};
-                        if let Err(reason)=self.attempt.present(&proxy,self.req.area,255){drop(proxy);return self.fallback(reason);}
+                        let proxy=match self.attempt.proxy(&frame,&self.req){Ok(p)=>p,Err(r)=>return self.fallback(r)};
+                        if let Err(reason)=self.attempt.present(&proxy,self.req.area,0.0,255){drop(proxy);return self.fallback(reason);}
                         if ShowWindowAsync(h,if super::taskbar_hidden(){SW_SHOWMINNOACTIVE}else{SW_MINIMIZE})==0{
                             drop(proxy);return self.fallback("state-transition-timeout");
                         }
@@ -418,7 +452,11 @@ impl Transition{
                     Action::Minimize=>(self.req.area,icon,(255.0*(1.0-((t-0.82)/0.18).clamp(0.0,1.0))) as u8),
                     Action::Restore=>(icon,self.req.area,(255.0*(0.25+0.75*(t*2.0).min(1.0))) as u8),
                 };
-                if let Err(reason)=self.attempt.present(&proxy,interpolate(a,b,k),opacity){drop(proxy);return self.fallback(reason);}
+                let progress=if self.req.effect==motion::WindowEffect::Genie{
+                    fluidwin_mesh::progress(t,action==Action::Restore)
+                }else{0.0};
+                let opacity=if self.req.effect==motion::WindowEffect::Genie{255}else{opacity};
+                if let Err(reason)=self.attempt.present(&proxy,interpolate(a,b,k),progress,opacity){drop(proxy);return self.fallback(reason);}
                 if t>=1.0{
                     if action==Action::Minimize{self.attempt.finish(None);return false;}
                     if ShowWindowAsync(h,SW_RESTORE)==0{drop(proxy);return self.fallback("state-transition-timeout");}
@@ -454,8 +492,9 @@ unsafe fn begin(owner:HWND,path:&str,id:WindowIdentity,action:Action)->bool{
                 let frame=stage_snapshot::recent_transition(id,revision)?;
                 attempt.values["cachedCapture"]=json!(true);
                 attempt.values["captureDurationMs"]=json!(started.elapsed().as_millis() as u64);
-                let proxy=attempt.proxy(&frame,req.area)?;
-                attempt.present(&proxy,icon_fit(req.area,req.icon),64)?;
+                let proxy=attempt.proxy(&frame,&req)?;
+                let (opacity,progress)=if req.effect==motion::WindowEffect::Genie{(255,1.0)}else{(64,0.0)};
+                attempt.present(&proxy,icon_fit(req.area,req.icon),progress,opacity)?;
                 attempt.animation=Some(Instant::now());
                 Phase::Animate{proxy,span:motion::Span::new(340)}
             }
@@ -580,6 +619,45 @@ pub(super) unsafe fn probe_owned_window(source:HWND,frame:&stage_snapshot::Frame
     assert!(after.0-before.0<12.0,"private bytes did not recover after 100 bounded window proxies");
 }
 
+#[cfg(all(test,target_env="msvc"))]
+pub(super) unsafe fn probe_genie_pixels(source:HWND,frame:&stage_snapshot::Frame){
+    use windows::Win32::System::Com::{CoInitializeEx,CoUninitialize,COINIT_APARTMENTTHREADED};
+    struct Apartment(bool);
+    impl Drop for Apartment{fn drop(&mut self){if self.0{unsafe{CoUninitialize();}}}}
+    let _com=Apartment(CoInitializeEx(None,COINIT_APARTMENTTHREADED).is_ok());
+    let area=visible_area(source).unwrap();
+    if !valid_pixels(frame,area){println!("FLUIDWIN_GENIE_SCREEN_PIXELS=NOT_VERIFIED invalid WGC frame");return;}
+    let icon=RECT{left:area.right-40,top:area.bottom+8,right:area.right,bottom:area.bottom+48};
+    let probe=Proxy::new_for(frame,area,icon,DockSide::Bottom,motion::WindowEffect::Genie)
+        .expect("initialize the upstream Genie pipeline using the production proxy");
+    assert_eq!(probe.paint(area,0.0,255),1);
+    ShowWindow(source,SW_HIDE);
+    let (w,h)=dims(area);
+    let pixel=||{
+        let _=DwmFlush();
+        let dc=GetDC(ptr::null_mut());
+        if dc.is_null(){return u32::MAX;}
+        let color=GetPixel(dc,area.left+w/10,area.top+h/2);
+        ReleaseDC(ptr::null_mut(),dc);
+        color
+    };
+    let full=pixel();
+    let mut status=probe.paint(area,0.68,255);
+    for _ in 0..8{
+        if status!=2{break;}
+        let _=DwmFlush();
+        status=probe.paint(area,0.68,255);
+    }
+    assert_eq!(status,1,"an intermediate Genie mesh was not submitted");
+    let bent=pixel();
+    let matched=full!=u32::MAX&&[full as u8,(full>>8) as u8,(full>>16) as u8].into_iter()
+        .zip(probe.marker).all(|(a,b)|a.abs_diff(b)<35);
+    let hwnd=probe.hwnd;drop(probe);assert_eq!(IsWindow(hwnd),0);
+    FACTORY.with(|f|{f.borrow_mut().take();});
+    println!("FLUIDWIN_GENIE_SCREEN_PIXELS={} proxy_released=true",
+        if matched&&bent!=u32::MAX&&bent!=full{"MATCH_AND_INTERMEDIATE_CHANGED"}else{"NOT_VERIFIED"});
+}
+
 #[cfg(test)]
 pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
     use super::{AppClick,Bar,ClickKey,Item,Motion,RailFade};
@@ -615,7 +693,7 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
         active:None,minimized:0,attention:0,metric_repaint:None}));
     CONTROL.set(bar);
     let last=||LAST.lock().unwrap().clone().unwrap();
-    let policy=motion::Settings{enabled:true,speed:70,respect_system:false,scale_windows:true};
+    let policy=motion::Settings{enabled:true,speed:70,respect_system:false,window_effect:motion::WindowEffect::Scale};
     motion::configure(motion::Settings{enabled:false,..policy});
     assert!(!minimize(bar,path,ids[0]));
     assert_eq!(last()["fallbackReason"],"motion-disabled");
@@ -729,7 +807,7 @@ mod tests{
             let half=pixels.len()/2;pixels[..half].fill(35);
             assert!(validate_pixels(&(pixels,tw,th),area).is_ok());
         }
-        let settings=motion::Settings{scale_windows:true,enabled:true,respect_system:false,speed:70};
+        let settings=motion::Settings{window_effect:motion::WindowEffect::Scale,enabled:true,respect_system:false,speed:70};
         let mut policy=Policy{motion:settings,client_animation:Some(false),native_minimize:Some(0)};
         assert_eq!(policy.gate(),Ok(()));
         policy.native_minimize=Some(1);assert_eq!(policy.gate(),Err("native-animation-overlap"));

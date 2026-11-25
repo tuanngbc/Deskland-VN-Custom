@@ -2,12 +2,21 @@
 use std::{time::Instant,sync::atomic::{AtomicU32,AtomicBool,Ordering}};
 use serde_json::{Value,json};
 
+#[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
+#[repr(u32)]
+pub(crate) enum WindowEffect { #[default] Windows, Scale, Genie }
+impl WindowEffect {
+    pub(crate) fn name(self)->&'static str{
+        match self{Self::Windows=>"windows",Self::Scale=>"scale",Self::Genie=>"genie"}
+    }
+}
+
 /// The main settings owner persists this once; both native UI threads read
 /// the same snapshot. Durations are captured by each new transition.
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub(crate) struct Settings { pub enabled:bool,pub speed:u32,pub respect_system:bool,pub scale_windows:bool }
+pub(crate) struct Settings { pub enabled:bool,pub speed:u32,pub respect_system:bool,pub window_effect:WindowEffect }
 impl Default for Settings{
-    fn default()->Self{Self{enabled:true,speed:70,respect_system:true,scale_windows:false}}
+    fn default()->Self{Self{enabled:true,speed:70,respect_system:true,window_effect:WindowEffect::Windows}}
 }
 fn normalize_speed(value:&Value)->u32{
     let Some(value)=value.as_f64().filter(|v|v.is_finite()&&*v>0.0)else{return 70;};
@@ -18,7 +27,8 @@ impl Settings {
         Self{enabled:value["animationsEnabled"].as_bool().unwrap_or(true),
             speed:normalize_speed(&value["animationSpeed"]),
             respect_system:value["respectSystemReducedMotion"].as_bool().unwrap_or(true),
-            scale_windows:value["windowEffect"].as_str()==Some("scale")}
+            window_effect:match value["windowEffect"].as_str(){
+                Some("scale")=>WindowEffect::Scale,Some("genie")=>WindowEffect::Genie,_=>WindowEffect::Windows}}
     }
     pub fn from_profile(root:&Value,legacy:&Value)->Self{
         if root["motion"].is_object(){return Self::from_json(&root["motion"]);}
@@ -29,10 +39,11 @@ impl Settings {
     }
     pub fn json(self)->Value{
         json!({"animationsEnabled":self.enabled,"animationSpeed":self.speed as f64/100.0,
-            "respectSystemReducedMotion":self.respect_system,"windowEffect":if self.scale_windows{"scale"}else{"windows"}})
+            "respectSystemReducedMotion":self.respect_system,"windowEffect":self.window_effect.name()})
     }
-    fn packed(self)->u32{self.speed|((self.enabled as u32)<<8)|((self.respect_system as u32)<<9)|((self.scale_windows as u32)<<10)}
-    fn unpack(v:u32)->Self{Self{speed:v&255,enabled:v&256!=0,respect_system:v&512!=0,scale_windows:v&1024!=0}}
+    fn packed(self)->u32{self.speed|((self.enabled as u32)<<8)|((self.respect_system as u32)<<9)|((self.window_effect as u32)<<10)}
+    fn unpack(v:u32)->Self{Self{speed:v&255,enabled:v&256!=0,respect_system:v&512!=0,window_effect:
+        match v>>10{1=>WindowEffect::Scale,2=>WindowEffect::Genie,_=>WindowEffect::Windows}}}
     fn allowed(self,system:bool)->bool{self.enabled&&(!self.respect_system||system)}
     fn duration(self,base:u32)->u32{((base as f64*100.0/self.speed as f64).round() as u32).max(1)}
 }
@@ -41,7 +52,9 @@ static SYSTEM:AtomicBool=AtomicBool::new(true);
 pub(crate) fn scale_experiment_available()->bool{cfg!(test)||crate::trial::active()}
 pub(crate) fn settings()->Settings{
     let mut s=Settings::unpack(ACTIVE.load(Ordering::Relaxed));
-    s.scale_windows &= scale_experiment_available();
+    if !scale_experiment_available() || (s.window_effect==WindowEffect::Genie && !cfg!(target_env="msvc")){
+        s.window_effect=WindowEffect::Windows;
+    }
     s
 }
 pub(crate) fn configure(value:Settings){
@@ -187,8 +200,8 @@ mod tests {
         assert_eq!(Settings::from_profile(&json!({}),&json!({"animationSpeed":100})),Settings::default());
         assert_eq!(Settings::from_profile(&json!({}),&json!({"animationSpeed":125})).speed,125);
         assert_eq!(Settings::default().speed,70);
-        assert!(!Settings::default().scale_windows);
-        let scale=Settings{scale_windows:true,..Settings::default()};
+        assert_eq!(Settings::default().window_effect,WindowEffect::Windows);
+        let scale=Settings{window_effect:WindowEffect::Scale,..Settings::default()};
         assert_eq!(Settings::from_json(&scale.json()),scale);
         assert_eq!(Settings::unpack(scale.packed()),scale);
         assert_eq!(Settings::from_profile(&json!({"motion":{"animationSpeed":0.75}}),&json!({})).speed,75);

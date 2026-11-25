@@ -98,8 +98,8 @@ function Assert-Candidate([string]$Dir,[string]$Commit,[string]$ExeHash) {
     }
     if ($Commit -notmatch '^[a-f0-9]{40}$' -or $ExeHash -notmatch '^[a-fA-F0-9]{64}$') { throw 'Invalid artifact identity.' }
     if ((Get-Content -LiteralPath (Join-Path $Dir 'BUILD-COMMIT.txt') -Raw).Trim() -cne $Commit -or
-        (Get-Content -LiteralPath (Join-Path $Dir 'VERSION.txt') -Raw).Trim() -cne '1.0.2' -or
-        (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion -cne '1.0.2' -or
+        (Get-Content -LiteralPath (Join-Path $Dir 'VERSION.txt') -Raw).Trim() -cne '1.0.3' -or
+        (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion -cne '1.0.3' -or
         (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash -ne $ExeHash) { throw 'Candidate version, commit, or checksum does not match.' }
     return $exe
 }
@@ -136,7 +136,7 @@ function Initialize-Profile([string]$Dir,[string]$Root) {
 
 if ($LibraryOnly) { return }
 Add-Type -AssemblyName System.Windows.Forms
-function Notify([string]$Message) { [void][Windows.Forms.MessageBox]::Show($Message,'TLauncher 1.0.2 TEST') }
+function Notify([string]$Message) { [void][Windows.Forms.MessageBox]::Show($Message,'TLauncher 1.0.3 TEST') }
 
 $ownerMutex=$null; $locked=$false; $restore=$false; $phase='validation'; $stateFile=$null; $logFile=$null; $failure=$null
 function Write-UatLog([string]$Message) {
