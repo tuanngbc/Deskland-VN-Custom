@@ -2,11 +2,10 @@
 //! frame. Scale and FluidWin Genie share one Dock-thread D3D device.
 use super::{fluidwin_mesh,motion,stage_snapshot,DockSide,WindowIdentity,STATE,CONTROL,queue_refresh};
 use crate::desktop::wide;
-use std::{cell::RefCell,collections::HashMap,mem,ptr,rc::Rc,sync::Mutex,time::{Duration,Instant}};
+use std::{cell::RefCell,collections::HashMap,mem,ptr,rc::Rc,sync::{Arc,Mutex},time::{Duration,Instant}};
 use serde_json::{json,Value};
-use windows::{core::Interface,Win32::{Foundation::{HWND as WinHwnd,HMODULE,POINT as WinPoint},
-    Graphics::{Direct3D::D3D_DRIVER_TYPE_HARDWARE,Direct3D11::*,DirectComposition::*,
-        Dxgi::{IDXGIDevice,IDXGISurface,Common::*}}}};
+use windows::{core::Interface,Win32::{Foundation::{HWND as WinHwnd,POINT as WinPoint},
+    Graphics::{Direct3D11::*,DirectComposition::*,Dxgi::{IDXGISurface,Common::*}}}};
 use windows_sys::Win32::{Foundation::*,Graphics::{Dwm::*,Gdi::*},
     System::LibraryLoader::GetModuleHandleW,UI::WindowsAndMessaging::*};
 
@@ -253,20 +252,25 @@ unsafe fn request(owner:HWND,path:&str,id:WindowIdentity,action:Action,policy:Po
 // One small uploaded composition texture, no physical-size CPU DIB and
 // no per-frame readback/StretchBlt. Reuse the device across a burst; release
 // it after the same idle period as the existing Stage capture worker.
-struct ProxyFactory{comp:IDCompositionDevice,ctx:ID3D11DeviceContext,mesh:Option<Rc<fluidwin_mesh::Pipeline>>}
+struct ProxyFactory{comp:IDCompositionDevice,gpu:Arc<crate::shell_gpu::ShellGpu>,mesh:Option<Rc<fluidwin_mesh::Pipeline>>}
 impl ProxyFactory{
     unsafe fn new()->windows::core::Result<Self>{
-        let mut device=None;let mut ctx=None;
-        D3D11CreateDevice(None,D3D_DRIVER_TYPE_HARDWARE,HMODULE::default(),D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            None,D3D11_SDK_VERSION,Some(&mut device),None,Some(&mut ctx))?;
-        let dxgi:IDXGIDevice=device.expect("D3D device").cast()?;
-        let comp:IDCompositionDevice=DCompositionCreateDevice(&dxgi)?;
-        Ok(Self{comp,ctx:ctx.expect("D3D context"),mesh:None})
+        let gpu=crate::shell_gpu::ShellGpu::acquire()?;
+        let comp=gpu.composition()?;
+        Ok(Self{comp,gpu,mesh:None})
+    }
+}
+impl Drop for ProxyFactory{
+    fn drop(&mut self){
+        if self.mesh.is_some(){
+            let batch=self.gpu.context();
+            unsafe{batch.ClearState();batch.Flush();}
+        }
     }
 }
 struct Proxy{
     hwnd:HWND,comp:IDCompositionDevice,target:IDCompositionTarget,visual:IDCompositionVisual,
-    render:Render,
+    render:Render,gpu:Arc<crate::shell_gpu::ShellGpu>,
     #[cfg(test)] marker:[u8;3],
 }
 enum Render{
@@ -290,11 +294,12 @@ impl Proxy{
     unsafe fn new_for(frame:&stage_snapshot::Frame,area:RECT,icon:RECT,side:DockSide,effect:motion::WindowEffect,dpi:u32)->Option<Self>{
         if !valid_pixels(frame,area){return None;}
         let (data,w,h)=frame;
-        let (comp,ctx,mesh)=FACTORY.with(|f|->Option<_>{
+        let (comp,gpu,mesh)=FACTORY.with(|f|->Option<_>{
             let mut f=f.borrow_mut();if f.is_none(){*f=ProxyFactory::new().ok();}
             let f=f.as_mut()?;
-            if effect.mesh()&&f.mesh.is_none(){f.mesh=fluidwin_mesh::Pipeline::new(&f.ctx);}
-            Some((f.comp.clone(),f.ctx.clone(),f.mesh.clone()))
+            if f.gpu.device.GetDeviceRemovedReason().is_err(){*f=ProxyFactory::new().ok()?;}
+            if effect.mesh()&&f.mesh.is_none(){f.mesh=fluidwin_mesh::Pipeline::new(&f.gpu.context());}
+            Some((f.comp.clone(),f.gpu.clone(),f.mesh.clone()))
         })?;
         let mesh=if effect.mesh(){
             Some(fluidwin_mesh::Layer::new(mesh?,frame,area,icon,side,effect==motion::WindowEffect::Drop,dpi)?)
@@ -324,7 +329,7 @@ impl Proxy{
                 let texture:ID3D11Texture2D=drawing.cast()?;
                 let box_=D3D11_BOX{left:offset.x as u32,top:offset.y as u32,front:0,
                     right:(offset.x+*w) as u32,bottom:(offset.y+*h) as u32,back:1};
-                ctx.UpdateSubresource(&texture,0,Some(&box_),data.as_ptr().cast(),*w as u32*4,0);
+                gpu.context().UpdateSubresource(&texture,0,Some(&box_),data.as_ptr().cast(),*w as u32*4,0);
                 Ok(())
             })();
             let end=surface.EndDraw();upload?;end?;
@@ -332,7 +337,7 @@ impl Proxy{
             Render::Scale{transform:scale,effect,_surface:surface,w:*w,h:*h}
             };
             target.SetRoot(&visual)?;comp.Commit()?;
-            Ok(Self{hwnd,comp,target,visual,render,
+            Ok(Self{hwnd,comp,target,visual,render,gpu,
                 #[cfg(test)] marker:{let i=((*h/2)* *w+*w/10) as usize*4;[data[i+2],data[i+1],data[i]]}})
         })();
         if result.is_err(){DestroyWindow(hwnd);}
@@ -355,7 +360,7 @@ impl Proxy{
                 if updated.is_err(){return 0;}
             }
             Render::Mesh(mesh)=>{
-                let status=mesh.paint(progress,opacity);
+                let status={let _batch=self.gpu.context();mesh.paint(progress,opacity)};
                 if status!=1{return if first{0}else{status};}
                 if !first{return 1;} // canvas stays fixed over the source and Dock
                 r=mesh.canvas;

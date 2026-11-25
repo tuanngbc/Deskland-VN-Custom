@@ -17,6 +17,10 @@ pub enum PreviewStep {
 #[derive(Default)]
 pub struct Previews { links:HashMap<usize,Link>, next:HashMap<usize,Link>, destination:usize }
 impl Previews {
+    pub(super) unsafe fn peek(&mut self,dst:HWND,source:HWND,slot:RECT)->bool{
+        self.update_targets(dst,std::iter::once((source,slot,slot,None)),None);
+        self.includes(source)
+    }
     pub fn clear(&mut self)->bool{
         let changed=!self.links.is_empty()||!self.next.is_empty();
         self.links.clear();self.next.clear();self.destination=0;

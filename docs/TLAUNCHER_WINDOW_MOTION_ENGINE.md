@@ -1,0 +1,9 @@
+# TLauncher 1.0.3 window motion
+
+The Dock calls the existing transition state machine when the user minimizes or restores a window. The app obtains the target from the transformed Dock slot on that output. It uses the existing Stage WGC worker/cache, and creates one click-through, nonactivating DirectComposition proxy. Scale uses the existing surface transform. Genie uses FluidWin's 160-row mesh and pixel shader; Drop uses FluidWin's two-part trajectory, themed chip and clipping at the Dock. The choice lives in the existing motion settings. The global speed and reduced-motion behavior still apply.
+
+The renderer does not change native policy or opacity on foreign windows. If Windows reports native minimize animation enabled or unreadable, it falls back to native behavior. The same applies when the source, capture policy, placement or graphics state cannot be verified. This limitation matters on normal Windows profiles. The [Microsoft DWM attribute documentation](https://learn.microsoft.com/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute) specifies the per-window transition attribute for writes, so copying FluidWin's approach of always restoring FALSE would not guarantee restoration of the previous value. The experiment does not advise turning off system animations.
+
+One-shot Stage frames are bounded and approved before use. A new GPU pass does not create a second WGC session. The experimental proxy still uploads the bounded capture, so the high-resolution and live GPU-to-GPU path remains open. Geometry uses physical pixels; owner checks on portrait, ultrawide and mixed DPI are required.
+
+The diagnostic distinguishes fallback reason, capture validity and duration, number of accepted frame submissions, reversals and final window state. Accepted submissions do not establish on-screen visibility. The hosted fixture checks a WGC source color on screen and probes a changed intermediate frame on a synthetic window.

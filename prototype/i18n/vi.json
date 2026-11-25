@@ -35,6 +35,8 @@
     "dockWallpaper": "Hình nền động",
     "dockEnabled": "Bật Dock",
     "dockStageEnabled": "Bật thanh Stage Manager",
+    "stagePeek": "Xem trước cửa sổ khi rê lên thẻ Stage",
+    "stagePeekDelay": "Độ trễ xem trước Stage (ms)",
     "dockAllWindows": "Ứng dụng từ mọi màn hình",
     "stageStyleDisplay": "Bố cục Stage theo màn hình",
     "stageInheritSide": "Dùng vị trí chung",

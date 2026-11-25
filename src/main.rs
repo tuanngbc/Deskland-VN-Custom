@@ -40,6 +40,7 @@ mod widget;
 mod system_monitor;
 mod presentation;
 mod gpu_present;
+mod shell_gpu;
 mod config_store;
 mod trial;
 mod startup;
@@ -3222,7 +3223,7 @@ fn main() {
                 "dock" => {
                     // Partial UI patch must preserve pins/unknown monitor settings.
                     let mut value=app.cfg.dock.json();
-                    for key in ["enabled","stageEnabled","allWindows","nativeShellButtons","startShortcut","winKeyStart","stageSide","dockDisplay","stageDisplay","appearance"] {
+                    for key in ["enabled","stageEnabled","stagePeek","stagePeekDelay","allWindows","nativeShellButtons","startShortcut","winKeyStart","stageSide","dockDisplay","stageDisplay","appearance"] {
                         if let Some(v)=m.get(key){value[key]=v.clone();}
                     }
                     app.cfg.dock=dock::Options::from_json(&value);app.configure_dock();web_changed=true;

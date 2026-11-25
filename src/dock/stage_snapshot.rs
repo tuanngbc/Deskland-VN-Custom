@@ -9,9 +9,9 @@ use windows::{
     Foundation::TypedEventHandler,
     Graphics::{Capture::{Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession},
         DirectX::{Direct3D11::IDirect3DDevice, DirectXPixelFormat}},
-    Win32::{Foundation::{HMODULE, HWND as OwnedWindow}, Graphics::{
-        Direct3D::D3D_DRIVER_TYPE_HARDWARE, Direct3D11::*,
-        Dxgi::{Common::DXGI_FORMAT_B8G8R8A8_UNORM, IDXGIDevice, IDXGIAdapter}},
+    Win32::{Foundation::HWND as OwnedWindow, Graphics::{
+        Direct3D11::*,
+        Dxgi::{Common::DXGI_FORMAT_B8G8R8A8_UNORM, IDXGIDevice}},
         System::WinRT::{
             Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess},
             Graphics::Capture::IGraphicsCaptureItemInterop,
@@ -41,40 +41,24 @@ impl Apartment {
 impl Drop for Apartment { fn drop(&mut self){unsafe{RoUninitialize();}} }
 
 struct CaptureDevice {
-    device:ID3D11Device, context:ID3D11DeviceContext, winrt:IDirect3DDevice,
-}
-impl Drop for CaptureDevice{
-    fn drop(&mut self){
-        unsafe{
-            // Release deferred D3D11 references before dropping the immediate
-            // context and its DXGI device (also on cancellation).
-            self.context.ClearState();
-            self.context.Flush();
-        }
-    }
+    winrt:IDirect3DDevice, gpu:Arc<crate::shell_gpu::ShellGpu>,
 }
 impl CaptureDevice {
     unsafe fn new()->Result<Self,String>{
         if !step("WGC support",GraphicsCaptureSession::IsSupported())?{
             return Err("WGC not supported on this session".into());
         }
-        let mut device=None;
-        let mut context=None;
-        step("D3D11 hardware device",D3D11CreateDevice(None::<&IDXGIAdapter>,D3D_DRIVER_TYPE_HARDWARE,
-            HMODULE::default(),D3D11_CREATE_DEVICE_BGRA_SUPPORT,None,D3D11_SDK_VERSION,
-            Some(&mut device),None,Some(&mut context)))?;
-        let device=device.ok_or("missing D3D11 device")?;
-        let context=context.ok_or("missing D3D11 context")?;
-        let dxgi=step("DXGI device",device.cast::<IDXGIDevice>())?;
+        let gpu=step("D3D11 shell device",crate::shell_gpu::ShellGpu::acquire())?;
+        let dxgi=step("DXGI device",gpu.device.cast::<IDXGIDevice>())?;
         let inspectable=step("WinRT D3D11 device",CreateDirect3D11DeviceFromDXGIDevice(&dxgi))?;
         let winrt=step("IDirect3DDevice",inspectable.cast::<IDirect3DDevice>())?;
-        Ok(Self{device,context,winrt})
+        Ok(Self{gpu,winrt})
     }
     unsafe fn frame(&self,hwnd:HWND,valid:impl Fn()->bool,limit:usize,wait:Duration,timing:Option<&CaptureTimingHandle>)->Result<Frame,String>{
         if !valid(){return Err("window identity, visibility or affinity denied".into());}
         use windows_sys::Win32::UI::WindowsAndMessaging::{GetAncestor,GA_ROOT};
         if GetAncestor(hwnd,GA_ROOT)!=hwnd{return Err("WGC requires a top-level HWND".into());}
-        let Self{device,context,winrt}=self;
+        let Self{gpu,winrt}=self;
         let init=Instant::now(); let interop=step("WGC item factory",factory::<GraphicsCaptureItem,IGraphicsCaptureItemInterop>())?;
         let item:GraphicsCaptureItem=step("CreateForWindow",interop.CreateForWindow(OwnedWindow(hwnd)))?;
         let size=step("WGC item size",item.Size())?;
@@ -122,16 +106,29 @@ impl CaptureDevice {
                         desc.Width=w;desc.Height=h;desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;
                         desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ.0 as _;desc.MiscFlags=0;
                         let readback=Instant::now(); let mut staging=None;
-                        step("WGC staging texture",device.CreateTexture2D(&desc,None,Some(&mut staging)))?;
+                        step("WGC staging texture",gpu.device.CreateTexture2D(&desc,None,Some(&mut staging)))?;
                         let staging=staging.ok_or("missing staging texture")?;
                         let region=D3D11_BOX{left:0,top:0,front:0,right:w,bottom:h,back:1};
-                        context.CopySubresourceRegion(&staging,0,0,0,0,&texture,0,Some(&region));
                         let mut mapped=D3D11_MAPPED_SUBRESOURCE::default();
-                        step("WGC readback",context.Map(&staging,0,D3D11_MAP_READ,0,Some(&mut mapped)))?;
+                        {
+                            let context=gpu.context();
+                            context.CopySubresourceRegion(&staging,0,0,0,0,&texture,0,Some(&region));
+                            context.Flush();
+                        }
+                        let deadline=Instant::now()+Duration::from_millis(70);
+                        loop{
+                            let result=gpu.context().Map(&staging,0,D3D11_MAP_READ,D3D11_MAP_FLAG_DO_NOT_WAIT.0 as u32,Some(&mut mapped));
+                            match result{
+                                Ok(())=>break,
+                                Err(e) if e.code()==windows::Win32::Graphics::Dxgi::DXGI_ERROR_WAS_STILL_DRAWING
+                                    && Instant::now()<deadline&&valid()=>std::thread::sleep(Duration::from_millis(3)),
+                                Err(e)=>return Err(format!("WGC readback: {e}")),
+                            }
+                        }
                         record(timing,|t|t.readback_ms=elapsed(readback)); let downsample=Instant::now(); let (dw,dh)=thumb_size(w as usize,h as usize,limit);
                         let ptr=mapped.pData as *const u8;
                         if ptr.is_null()||mapped.RowPitch<(w*4){
-                            context.Unmap(&staging,0);
+                            gpu.context().Unmap(&staging,0);
                             return Err("invalid staging mapping".into());
                         }
                         let stride=mapped.RowPitch as usize;
@@ -140,7 +137,7 @@ impl CaptureDevice {
                             // form a slice over the driver's row padding.
                             std::slice::from_raw_parts(ptr.add(y*stride),w as usize*4)
                         });
-                        context.Unmap(&staging,0);
+                        gpu.context().Unmap(&staging,0);
                         if !valid(){return Err("window changed during capture".into());}
                         record(timing,|t|t.downsample_ms=elapsed(downsample)); if !bytes.chunks_exact(4).any(|p|p[0]|p[1]|p[2]!=0){return Err("capture was blank".into());}
                         Ok((bytes,dw as i32,dh as i32))
@@ -414,7 +411,10 @@ impl Worker{
                 let result=(||{
                     if let Err(reason)=&apartment{return Err(reason.clone());}
                     if !valid(){return Err("capture cancelled".into());}
-                    if device.is_none(){let start=Instant::now();let result=CaptureDevice::new();record(req.timing.as_ref(),|t|t.device_ms=elapsed(start));device=Some(result?);}
+                    if device.as_ref().is_none_or(|d:&CaptureDevice|d.gpu.device.GetDeviceRemovedReason().is_err()){
+                        let start=Instant::now();let result=CaptureDevice::new();
+                        record(req.timing.as_ref(),|t|t.device_ms=elapsed(start));device=Some(result?);
+                    }
                     device.as_ref().unwrap().frame(req.source.hwnd as HWND,valid,req.limit,req.wait,req.timing.as_ref())
                 })();
                 if result.is_err()&&req.live.load(Ordering::Relaxed){device=None;}
@@ -665,6 +665,17 @@ pub(super) fn recent_transition(source:WindowIdentity,revision:u64)->Result<Fram
         let frame=entry.frame.clone().ok_or("restore-preview-missing")?;
         if entry.frame.as_mut().is_some_and(shrink_transition_frame){entry.revision^=1u64<<63;}
         Ok(frame)
+    })
+}
+pub(super) fn peek_frame(source:WindowIdentity)->Option<Frame>{
+    if !unsafe{retainable(source)}{return None;}
+    CURRENT.with(|cell|{
+        let mut state=cell.borrow_mut();
+        let entry=state.sources.get_mut(&source)?;
+        let now=Instant::now();
+        if entry.captured_at.is_none_or(|t|now.saturating_duration_since(t)>MAX_AGE){return None;}
+        entry.last_used=Some(now);
+        entry.frame.clone()
     })
 }
 pub(super) fn complete(){

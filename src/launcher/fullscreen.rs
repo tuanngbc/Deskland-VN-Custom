@@ -9,13 +9,13 @@ use super::{
 use std::{
     collections::{HashMap, HashSet},
     ptr,
-    sync::mpsc,
+    sync::{mpsc,Arc},
 };
 use windows_sys::Win32::Graphics::Dwm::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::Dialogs::*;
-use windows::{core::Interface,Win32::{Foundation::{HMODULE,HWND as WinHwnd,RECT as WinRect,POINT as WinPoint},Graphics::{
-    Direct3D::D3D_DRIVER_TYPE_HARDWARE,Direct3D11::*,DirectComposition::*,Dxgi::{IDXGIDevice,IDXGISurface,Common::*},
+use windows::{core::Interface,Win32::{Foundation::{HWND as WinHwnd,RECT as WinRect,POINT as WinPoint},Graphics::{
+    Direct3D11::*,DirectComposition::*,Dxgi::{IDXGISurface,Common::*},
 }}};
 
 const CLASS: &str = "TLauncherSpotlightLibrary";
@@ -225,7 +225,7 @@ impl Drop for NativeBackdrop{
 // it does not request app paints or resize either HWND on animation frames.
 struct Foreground {
     comp:IDCompositionDevice,
-    ctx:ID3D11DeviceContext,
+    gpu:Arc<crate::shell_gpu::ShellGpu>,
     target:IDCompositionTarget,
     visual:IDCompositionVisual,
     scale:IDCompositionScaleTransform,
@@ -234,16 +234,13 @@ struct Foreground {
 }
 use crate::dock::motion::{self,Tween as Transition};
 
-struct ForegroundFactory{comp:IDCompositionDevice,ctx:ID3D11DeviceContext}
+struct ForegroundFactory{comp:IDCompositionDevice,gpu:Arc<crate::shell_gpu::ShellGpu>}
 thread_local!{static FOREGROUND_FACTORY:RefCell<Option<ForegroundFactory>>=const{RefCell::new(None)};}
 impl ForegroundFactory{
     unsafe fn new()->windows::core::Result<Self>{
-        let mut dev=None;let mut ctx=None;
-        D3D11CreateDevice(None,D3D_DRIVER_TYPE_HARDWARE,HMODULE::default(),D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            None,D3D11_SDK_VERSION,Some(&mut dev),None,Some(&mut ctx))?;
-        let dxgi:IDXGIDevice=dev.expect("D3D device").cast()?;
-        let comp:IDCompositionDevice=DCompositionCreateDevice(&dxgi)?;
-        Ok(Self{comp,ctx:ctx.expect("D3D immediate context")})
+        let gpu=crate::shell_gpu::ShellGpu::acquire()?;
+        let comp=gpu.composition()?;
+        Ok(Self{comp,gpu})
     }
 }
 pub(super) fn reset_graphics_factories(){
@@ -252,11 +249,11 @@ pub(super) fn reset_graphics_factories(){
 }
 impl Foreground {
     unsafe fn new(hwnd:HWND)->windows::core::Result<Self>{
-        let (comp,ctx)=FOREGROUND_FACTORY.with(|slot|->windows::core::Result<_>{
+        let (comp,gpu)=FOREGROUND_FACTORY.with(|slot|->windows::core::Result<_>{
             let mut slot=slot.borrow_mut();
-            if slot.is_none(){*slot=Some(ForegroundFactory::new()?);}
+            if slot.as_ref().is_none_or(|f|f.gpu.device.GetDeviceRemovedReason().is_err()){*slot=Some(ForegroundFactory::new()?);}
             let factory=slot.as_ref().unwrap();
-            Ok((factory.comp.clone(),factory.ctx.clone()))
+            Ok((factory.comp.clone(),factory.gpu.clone()))
         })?;
         // The native EDIT remains interactive below this visual. Its GDI
         // output is supplied by draw_live_edit, so the child must not clip it.
@@ -266,7 +263,7 @@ impl Foreground {
         let effect=comp.CreateEffectGroup()?;
         target.SetRoot(&visual)?;
         comp.Commit()?;
-        Ok(Self{comp,ctx,target,visual,scale,effect,surface:None})
+        Ok(Self{comp,gpu,target,visual,scale,effect,surface:None})
     }
     unsafe fn upload(&mut self,frame:&Frame,area:RECT)->windows::core::Result<()>{
         let (w,h)=(frame.w,frame.h);
@@ -287,7 +284,7 @@ impl Foreground {
             let bounds=D3D11_BOX{left:offset.x as u32,top:offset.y as u32,front:0,
                 right:(offset.x+clip.right-clip.left) as u32,bottom:(offset.y+clip.bottom-clip.top) as u32,back:1};
             let source=frame.bits.add(((clip.top as usize*w as usize+clip.left as usize)*4) as usize);
-            self.ctx.UpdateSubresource(&subresource,0,Some(&bounds),source.cast(),w as u32*4,0);
+            self.gpu.context().UpdateSubresource(&subresource,0,Some(&bounds),source.cast(),w as u32*4,0);
             Ok(())
         })();
         let result=surface.EndDraw();
@@ -335,7 +332,7 @@ impl Drop for Foreground{
         let _=self.visual.SetEffect(None::<&IDCompositionEffect>);
         let _=self.target.SetRoot(None::<&IDCompositionVisual>);
         self.surface.take();
-        let _=self.comp.Commit();self.ctx.ClearState();self.ctx.Flush();
+        let _=self.comp.Commit();
     }}
 }
 

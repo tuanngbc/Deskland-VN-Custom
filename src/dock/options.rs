@@ -129,6 +129,8 @@ pub struct Options {
     pub enabled: bool,
     pub taskbar_default:bool,
     pub stage_enabled: bool,
+    pub stage_peek:bool,
+    pub stage_peek_delay:u32,
     pub pinned: Vec<String>,
     pub app_icons:crate::app_icons::Overrides,
     pub all_windows: bool,
@@ -226,7 +228,7 @@ impl Edit {
 }
 impl Default for Options {
     fn default() -> Self {
-        Self { enabled: false, taskbar_default:true, stage_enabled: false, pinned: Vec::new(), app_icons:Default::default(), all_windows: false, native_shell_buttons:false, start_shortcut:false, win_key_start:false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), stage_perspective:true,stage_card_height:0,stage_card_overrides:BTreeMap::new(),appearance: Appearance::default(),utility_profiles:BTreeMap::new(),window_policies:BTreeMap::new() }
+        Self { enabled: false, taskbar_default:true, stage_enabled: false, stage_peek:false, stage_peek_delay:350, pinned: Vec::new(), app_icons:Default::default(), all_windows: false, native_shell_buttons:false, start_shortcut:false, win_key_start:false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), stage_perspective:true,stage_card_height:0,stage_card_overrides:BTreeMap::new(),appearance: Appearance::default(),utility_profiles:BTreeMap::new(),window_policies:BTreeMap::new() }
     }
 }
 impl Options {
@@ -236,6 +238,8 @@ impl Options {
             enabled: v["enabled"].as_bool().unwrap_or(false),
             taskbar_default:v["taskbarDefault"].as_bool().unwrap_or(true),
             stage_enabled: v["stageEnabled"].as_bool().unwrap_or(false),
+            stage_peek:v["stagePeek"].as_bool().unwrap_or(false),
+            stage_peek_delay:v["stagePeekDelay"].as_u64().unwrap_or(350).clamp(150,1200) as u32,
             pinned: v["pinned"].as_array().map(|a| a.iter().filter_map(Value::as_str)
                 .filter(|s| !s.is_empty() && s.len() <= 32760 && !s.contains('\0'))
                 .filter(|s| seen.insert(s.to_lowercase())).take(32).map(str::to_owned).collect()).unwrap_or_default(),
@@ -307,6 +311,7 @@ impl Options {
     }
     pub fn json(&self) -> Value {
         json!({"version":2,"enabled":self.enabled,"taskbarDefault":self.taskbar_default,"stageEnabled":self.stage_enabled,
+            "stagePeek":self.stage_peek,"stagePeekDelay":self.stage_peek_delay,
             "pinned":self.pinned,"allWindows":self.all_windows,"nativeShellButtons":self.native_shell_buttons,"startShortcut":self.start_shortcut,"winKeyStart":self.win_key_start,"stageSide":self.stage_side,
             "appIcons":self.app_icons.iter().map(|(app,image)|json!({"app":app,"image":image})).collect::<Vec<_>>(),
             "stagePresentation":if self.stage_perspective{"perspective"}else{"dwm"},"stageCardHeight":self.stage_card_height,"stageCardOverrides":self.stage_card_overrides,

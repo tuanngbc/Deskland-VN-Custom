@@ -38,6 +38,7 @@ mod stage_projection;
 mod stage_snapshot;
 mod window_effect;
 mod fluidwin_mesh;
+mod stage_peek;
 pub(crate) fn motion_diagnostics()->serde_json::Value{window_effect::diagnostics()}
 mod stage_capture_lab;
 pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>{stage_capture_lab::inspect(path,true)}
@@ -1137,7 +1138,12 @@ unsafe fn refresh(state:&mut State, topology:bool) {
         }
         let hide=hide&&(unavailable||stage.collapsed);
         if hide!=stage.hidden{ShowWindow(stage.hwnd,if hide{SW_HIDE}else{SW_SHOWNOACTIVATE});stage.hidden=hide;changed=true;}
+        let peek_source=if hide||!state.prefs.stage_peek{None}else{
+            stage.hover.and_then(|i|stage.items.get(i)).and_then(|item|WindowIdentity::read_stage(item.hwnd))
+        };
+        stage_peek::validate(stage.hwnd,peek_source);
         if hide {
+            KillTimer(stage.hwnd,stage_peek::TIMER);
             KillTimer(stage.hwnd,STAGE_MOTION_TIMER);
             stage.finish_group_switch();
             stage.slide=None;stage.offset=0;
@@ -3037,6 +3043,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_NCDESTROY=>{
+            stage_peek::close(hwnd);
             cancel_deferred_click(hwnd);
             APP_CLICK.with(|p|{if p.borrow().as_ref().is_some_and(|c|c.owner==hwnd as usize){p.borrow_mut().take();}});
             close_status_tip(hwnd);
@@ -3046,6 +3053,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             DefWindowProcW(hwnd,msg,w,l)
         },
         WM_DOCK_MOUSELEAVE=>{
+            KillTimer(hwnd,stage_peek::TIMER);stage_peek::close(hwnd);
             KillTimer(hwnd,STATUS_TIP_TIMER);close_status_tip(hwnd);
             let stage=STATE.with(|s|{
                 let mut state=s.borrow_mut();
@@ -3086,6 +3094,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER if w==window_effect::TIMER&&hwnd==CONTROL.with(Cell::get)=>{
             window_effect::timer();0
         }
+        WM_TIMER if w==stage_peek::TIMER=>{stage_peek::show(hwnd);0},
         WM_TIMER if w==STAGE_MOTION_TIMER=>{
             let step=STATE.with(|s|{
                 let mut state=s.borrow_mut();
@@ -3274,6 +3283,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMECHANGE=>{refresh_dock_clock();0},
         WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_THEMECHANGED|WM_DPICHANGED=>{
             window_effect::reset();
+            stage_peek::close(ptr::null_mut());
             if msg==WM_SETTINGCHANGE{motion::refresh_system();}
             if msg==WM_DISPLAYCHANGE&&taskbar_active(){show_taskbar(taskbar_guard::Exit::ExplorerChanged,"Đã hiện lại thanh tác vụ khi thay đổi màn hình.");}
             DISPLAY_DIRTY.with(|d|d.set(true));queue_refresh();0
@@ -3294,7 +3304,14 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 KillTimer(hwnd,HIDE_TIMER);
                 if changed{
                     KillTimer(hwnd,STATUS_TIP_TIMER);close_status_tip(hwnd);
-                    if over_card{SetTimer(hwnd,STATUS_TIP_TIMER,650,None);}
+                    KillTimer(hwnd,stage_peek::TIMER);stage_peek::close(hwnd);
+                    if over_card{
+                        let prefs=STATE.with(|s|{
+                            let state=s.borrow();state.prefs.stage_peek.then_some(state.prefs.stage_peek_delay)
+                        });
+                        if let Some(delay)=prefs{SetTimer(hwnd,stage_peek::TIMER,delay,None);}
+                        else{SetTimer(hwnd,STATUS_TIP_TIMER,650,None);}
+                    }
                 }
                 if animate{SetTimer(hwnd,STAGE_MOTION_TIMER,16,None);}
                 let mut event=TRACKMOUSEEVENT{cbSize:mem::size_of::<TRACKMOUSEEVENT>() as u32,dwFlags:TME_LEAVE,hwndTrack:hwnd,dwHoverTime:0};
@@ -3356,6 +3373,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         }
         WM_LBUTTONDOWN|WM_LBUTTONDBLCLK=>{
+            KillTimer(hwnd,stage_peek::TIMER);stage_peek::close(ptr::null_mut());
             cancel_deferred_click(hwnd);
             KillTimer(hwnd,STATUS_TIP_TIMER);close_status_tip(hwnd);
             let (x,y)=(l as i16 as i32,(l>>16) as i16 as i32);
@@ -3568,6 +3586,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         }
         WM_RBUTTONUP=>{
+            KillTimer(hwnd,stage_peek::TIMER);stage_peek::close(ptr::null_mut());
             cancel_deferred_click(hwnd);
             if STATE.with(|s|s.borrow().stages.iter().any(|stage|stage.hwnd==hwnd)){
                 stage_menu(hwnd,l as i16 as i32,(l>>16) as i16 as i32);return 0;
@@ -3645,6 +3664,7 @@ unsafe fn drain_commands() {
         match command {
             Command::Configure(options)=>{
                 window_effect::reset();
+                stage_peek::close(ptr::null_mut());
                 let enable_default=STATE.with(|s|!s.borrow().prefs.enabled&&options.enabled&&options.taskbar_default);
                 let shortcut_changed=STATE.with(|s|s.borrow().prefs.start_shortcut!=options.start_shortcut);
                 if shortcut_changed&&taskbar_hidden(){sync_start_hotkey(CONTROL.with(Cell::get),options.start_shortcut);}
@@ -3681,7 +3701,7 @@ unsafe fn drain_commands() {
                 sync_win_key();
             },
             Command::Taskbar(hidden)=>set_taskbar_hidden(hidden),
-            Command::Stop=>{control_center::inline_config(CONTROL.with(Cell::get),None);EndMenu();PostQuitMessage(0);},
+            Command::Stop=>{stage_peek::close(ptr::null_mut());control_center::inline_config(CONTROL.with(Cell::get),None);EndMenu();PostQuitMessage(0);},
             Command::Focus=>focus_dock(),
             #[cfg(test)] Command::InspectSettings{reply}=>{
                 let all=windows(false);

@@ -192,6 +192,8 @@
     <label class="setting-row switch-row"><b data-i18n="dockWallpaper">Hình nền động</b><input type="checkbox" id="dockWallpaperEnabled" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <label class="setting-row switch-row"><b data-i18n="dockEnabled">Bật Dock</b><input type="checkbox" id="dockEnabled" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <label class="setting-row switch-row"><b data-i18n="dockStageEnabled">Bật thanh Stage Manager</b><input type="checkbox" id="dockStageEnabled" role="switch"><i class="switch" aria-hidden="true"></i></label>
+    <label class="setting-row switch-row"><b data-i18n="stagePeek">Xem trước cửa sổ khi rê lên thẻ Stage</b><input type="checkbox" id="stagePeek" role="switch"><i class="switch" aria-hidden="true"></i></label>
+    <label class="setting-row"><b data-i18n="stagePeekDelay">Độ trễ xem trước Stage (ms)</b><span><input type="range" id="stagePeekDelay" min="150" max="1200" step="50" value="350"><output id="stagePeekDelayValue">350</output></span></label>
     <p id="dockRuntimeStatus" class="monitor-detail" role="status" aria-live="polite"></p>
   </section>
   <section class="setting-card">
@@ -1308,6 +1310,10 @@ function syncDockSettings(m) {
   const winKeyMessages={waiting:'Đã lưu. Tính năng chỉ hoạt động khi bật chế độ chỉ Dock.',installed:'Đã cài bộ nhận phím. Anh có thể thử phím Win đơn.',failed:'Bộ nhận phím không hoạt động. Windows xử lý phím Win. Tắt rồi bật tùy chọn để thử lại.',maskFailed:'Windows từ chối chuyển tiếp tổ hợp Win. Phím Win đã trở về Windows.'};
   $('dockWinKeyStatus').textContent=winKeyMessages[m.dockWinKeyStatus]||'';
   $('dockStageEnabled').checked=!!dockOptions.stageEnabled;
+  $('stagePeek').checked=!!dockOptions.stagePeek;
+  $('stagePeekDelay').value=String(dockOptions.stagePeekDelay??350);
+  $('stagePeekDelay').disabled=!dockOptions.stagePeek;
+  $('stagePeekDelayValue').textContent=$('stagePeekDelay').value;
   $('dockAllWindows').checked=!!dockOptions.allWindows;
   $('dockStageSide').value=dockOptions.stageSide==='right'?'right':'left';
   $('dockRuntimeStatus').textContent=dockError||dockText(dockRunning?'dockRunning':dockOptions.enabled||dockOptions.stageEnabled?'dockStarting':'dockStopped');
@@ -1322,6 +1328,14 @@ for(const [id,key,type] of [['dockEnabled','enabled','checked'],['dockStageEnabl
       ['dockAllWindows','allWindows','checked'],['dockStageSide','stageSide','value']])$(id).addEventListener('change',()=>{
   const value=$(id)[type]; dockOptions[key]=value; syncDockTaskbar({}); renderDockPlacement();
   send({t:'dock',[key]:value});
+});
+$('stagePeek').addEventListener('change',()=>{
+  dockOptions.stagePeek=$('stagePeek').checked;$('stagePeekDelay').disabled=!dockOptions.stagePeek;
+  send({t:'dock',stagePeek:dockOptions.stagePeek});
+});
+$('stagePeekDelay').addEventListener('input',()=>{$('stagePeekDelayValue').textContent=$('stagePeekDelay').value;});
+$('stagePeekDelay').addEventListener('change',()=>{
+  dockOptions.stagePeekDelay=Number($('stagePeekDelay').value);send({t:'dock',stagePeekDelay:dockOptions.stagePeekDelay});
 });
 for(const key of ['dockDisplay','stageDisplay']){
   function apply(target){dockOptions[key]=target;renderDockPlacement();send({t:'dock',[key]:target});}

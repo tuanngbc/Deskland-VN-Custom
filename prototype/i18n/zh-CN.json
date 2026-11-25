@@ -15,6 +15,8 @@
     "dockAlphaHint": "调整程序坞玻璃效果的透明度。",
     "dockLookReset": "重置 Dock 外观",
     "stageStyleReset": "重置此显示器的布局",
+    "stagePeek": "悬停在 Stage 卡片上时预览窗口",
+    "stagePeekDelay": "Stage 预览延迟（毫秒）",
     "stageGroupPresentation": "窗口组卡片样式",
     "stageStacked": "叠放",
     "stageFlat": "平铺",

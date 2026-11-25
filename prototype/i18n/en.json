@@ -35,6 +35,8 @@
     "dockWallpaper": "Animated wallpaper",
     "dockEnabled": "Enable Dock",
     "dockStageEnabled": "Enable Stage Manager sidebar",
+    "stagePeek": "Preview windows when hovering Stage cards",
+    "stagePeekDelay": "Stage preview delay (ms)",
     "dockAllWindows": "Applications from all monitors",
     "stageStyleDisplay": "Stage layout by display",
     "stageInheritSide": "Use default side",
