@@ -12,6 +12,8 @@ extern "C" {
         bgra: *const u8, tw: u32, th: u32) -> *mut c_void;
     fn tlauncher_fluidwin_release_layer(layer: *mut c_void);
     fn tlauncher_fluidwin_content(layer: *mut c_void) -> *mut c_void;
+    #[cfg(test)]
+    fn tlauncher_fluidwin_source_mips(layer: *mut c_void) -> u32;
     fn tlauncher_fluidwin_draw(pipeline: *mut c_void, layer: *mut c_void,
         window: *const RECT, icon: *const RECT, canvas: *const RECT,
         side: i32, progress: f64, opacity: f32, drop: i32, dark: i32, scale: f64) -> i32;
@@ -47,6 +49,8 @@ pub(super) struct Layer {
     scale: f64,
 }
 impl Layer {
+    #[cfg(all(test,target_env="msvc"))]
+    pub(super) unsafe fn source_mips(&self)->u32{tlauncher_fluidwin_source_mips(self.raw.as_ptr())}
     pub(super) unsafe fn new(pipeline: Rc<Pipeline>, frame: &super::stage_snapshot::Frame,
         window: RECT, icon: RECT, side: DockSide, drop_effect: bool, dpi: u32) -> Option<Self> {
         #[cfg(target_env = "msvc")]

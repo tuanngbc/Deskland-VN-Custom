@@ -278,6 +278,21 @@ void tlauncher_fluidwin_release_layer(void* p) { delete static_cast<Layer*>(p); 
 // Borrowed COM pointer; DirectComposition AddRefs it when visual content is set.
 IDXGISwapChain1* tlauncher_fluidwin_content(void* p) { return static_cast<Layer*>(p)->chain.Get(); }
 
+UINT tlauncher_fluidwin_source_mips(void* p) {
+    ComPtr<ID3D11Resource> resource;
+    ComPtr<ID3D11Texture2D> texture;
+    static_cast<Layer*>(p)->texture->GetResource(&resource);
+    if (FAILED(resource.As(&texture))) return 0;
+    D3D11_TEXTURE2D_DESC desc{};
+    texture->GetDesc(&desc);
+    ComPtr<ID3D11Device> device;
+    texture->GetDevice(&device);
+    UINT support=0;
+    if (desc.MipLevels==1 && std::max(desc.Width,desc.Height)>1 &&
+        SUCCEEDED(device->CheckFormatSupport(desc.Format,&support)) && (support & D3D11_FORMAT_SUPPORT_MIP_AUTOGEN)) return 0;
+    return desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM ? desc.MipLevels : 0;
+}
+
 int tlauncher_fluidwin_draw(void* p, void* layer, const RECT* window, const RECT* icon,
                           const RECT* canvas, int side, double progress, float opacity,
                           int drop, int dark, double scale) {

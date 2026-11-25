@@ -694,6 +694,10 @@ pub(super) unsafe fn probe_mesh_pixels(source:HWND,frame:&stage_snapshot::Frame)
     for effect in [motion::WindowEffect::Genie,motion::WindowEffect::Drop]{
         let probe=Proxy::new_for(frame,area,icon,DockSide::Bottom,effect,96)
             .expect("initialize the upstream effect using the production proxy");
+        let Render::Mesh(mesh)=&probe.render else{panic!("wrong native renderer");};
+        let mips=mesh.source_mips();
+        assert!(mips>0,"motion source must keep premultiplied BGRA and use mipmaps when supported");
+        println!("FLUIDWIN_SOURCE_SAMPLING {} premultiplied_bgra=true mip_levels={mips}",effect.name());
         assert_eq!(probe.paint(area,0.0,255),1);
         ShowWindow(source,SW_HIDE);
         let full=pixel();
@@ -824,6 +828,7 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
     drop(drain);
     // Fault-inject a bounded delay in the existing worker, never the
     // eligibility gates. The real Dock action must finish natively once.
+    stage_snapshot::forget(source);
     stage_snapshot::FIXTURE_TRANSITION_DELAY_MS.store(850,std::sync::atomic::Ordering::Relaxed);
     assert!(super::finish_double_click(AppClick{owner:bar as usize,key:ClickKey::Dock(path.into()),
         window:Some(ids[0]),was_open:true,at:Instant::now()}).is_some());

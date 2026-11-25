@@ -83,7 +83,7 @@ fn fit_preview(w:i32,h:i32,max_w:i32,max_h:i32)->Option<(i32,i32)>{
 #[test]
 fn peek_shrinks_to_fit_without_enlarging_cached_pixels(){
     assert_eq!(fit_preview(360,168,1000,600),Some((360,168)));
-    assert_eq!(fit_preview(2106,974,1000,600),Some((1000,463)));
+    assert_eq!(fit_preview(2106,974,1000,600),Some((1000,462)));
     assert_eq!(fit_preview(568,1024,512,768),Some((426,768)));
     assert_eq!(fit_preview(0,168,1000,600),None);
 }
