@@ -17,3 +17,9 @@ Suggested checks:
 5. In Settings → Dock & Stage → Utilities, enable Clipboard history. Copy sample text and a small image. Open the history in Control Center, copy an entry back and delete it. Turn the setting off to clear the in-memory session.
 
 Known limits: native animation overlap can make Genie and Drop fall back. If it does, record the requested effect, actual effect and fallback reason instead of changing Windows settings. Jelly, Snap, globally animated window lifecycle and expanded Guardian are still in scope and not delivered in this milestone. The existing Ctrl+Alt+Shift+F12 recovery hotkey shows the Windows taskbar in the current session. Owner acceptance, resource measurements, demonstrations and public release are pending.
+
+## Motion and icon follow-up
+
+The first owner trial reported stutter and occasional colored streaks during transitions, soft Stage Peek images, and visible icon loading in Spotlight. The first trial logged median acceptance rates of approximately 37.5 Genie and 36.5 Drop submissions per second; these are not measured display frame rates. One wide window used a 360×166 capture for a 2106×974 transition. Spotlight wrote its icon assets to disk; the delay observed during that session does not establish that the cache was lost.
+
+Use the same window and Dock icon on both displays when comparing the follow-up. Check the colored streaks while the window is squeezed near the Dock, and check the restore handoff and reversal. Note `captureWidth`, `captureHeight`, `presentedFrames`, `transitionDurationMs` and `longestSubmitGapUs`. During Stage Peek, compare a live source with the same source minimized using the Dock. Finally, exit and reopen the TEST profile, then open both Spotlight modes and check first-page icons and a known search result. A successful warm-cache check will show disk or RAM hits without extracting that source again. Keep the same profile for that comparison.

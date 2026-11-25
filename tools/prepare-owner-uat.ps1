@@ -4,7 +4,8 @@ param(
     [Parameter(Mandatory)][long]$RunId,
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$Commit,
     [string]$ProductionExe = 'E:\TLauncher\TLauncher.exe',
-    [string]$UatRoot = (Join-Path $env:LOCALAPPDATA 'TLauncher-UAT')
+    [string]$UatRoot = (Join-Path $env:LOCALAPPDATA 'TLauncher-UAT'),
+    [switch]$StageOnly
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
@@ -101,11 +102,13 @@ $lock=[Threading.Mutex]::new($false,'Local\TLauncherOwnerUatSwitch')
 $locked=$false
 try {
     try { $locked=$lock.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked=$true }
-    if (!$locked) { throw 'An owner trial is active. This candidate and shortcut were not changed.' }
-    $session=(Get-Process -Id $PID).SessionId
-    $processes=@(Get-CimInstance Win32_Process -Filter "Name='TLauncher.exe'" | Where-Object SessionId -eq $session)
-    if (@($processes | Where-Object {!$_.ExecutablePath -or !([IO.Path]::GetFullPath($_.ExecutablePath).Equals($ProductionExe,[StringComparison]::OrdinalIgnoreCase))}).Count) {
-        throw 'A running launcher session is not the verified production executable. Candidate handoff was left unchanged.'
+    if (!$StageOnly) {
+        if (!$locked) { throw 'An owner trial is active. This candidate and shortcut were not changed.' }
+        $session=(Get-Process -Id $PID).SessionId
+        $processes=@(Get-CimInstance Win32_Process -Filter "Name='TLauncher.exe'" | Where-Object SessionId -eq $session)
+        if (@($processes | Where-Object {!$_.ExecutablePath -or !([IO.Path]::GetFullPath($_.ExecutablePath).Equals($ProductionExe,[StringComparison]::OrdinalIgnoreCase))}).Count) {
+            throw 'A running launcher session is not the verified production executable. Candidate handoff was left unchanged.'
+        }
     }
 
     $exists=Test-Path -LiteralPath $target
@@ -168,6 +171,12 @@ try {
             $previous.profile -ine $profile -or $previous.productionExe -ine $ProductionExe) { throw 'Existing candidate manifest differs.' }
     } else {
         $manifestData | ConvertTo-Json | Set-Content -LiteralPath $manifest -Encoding UTF8
+    }
+    if ($StageOnly) {
+        # The staged directory is immutable and keyed by commit. Do not touch
+        # the active trial's launcher, profile or Desktop shortcut.
+        [pscustomobject]@{ Candidate=$target; SourceCommit=$Commit; Workflow=$run.html_url; PackageSHA256=$want; Version=$version; ShortcutUpdated=$false }
+        return
     }
     $profileMarker=Join-Path $profile '.tuanpc-desk-trial'
     Assert-NoReparse $profileMarker
