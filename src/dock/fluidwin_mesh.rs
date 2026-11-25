@@ -14,8 +14,9 @@ extern "C" {
     fn tlauncher_fluidwin_content(layer: *mut c_void) -> *mut c_void;
     fn tlauncher_fluidwin_draw(pipeline: *mut c_void, layer: *mut c_void,
         window: *const RECT, icon: *const RECT, canvas: *const RECT,
-        side: i32, progress: f64, opacity: f32) -> i32;
-    fn tlauncher_fluidwin_progress(t: f64, restore: i32) -> f64;
+        side: i32, progress: f64, opacity: f32, drop: i32, dark: i32, scale: f64) -> i32;
+    fn tlauncher_fluidwin_progress(t: f64, restore: i32, drop: i32) -> f64;
+    fn tlauncher_fluidwin_invert(progress: f64, restore: i32, drop: i32) -> f64;
 }
 
 pub(super) struct Pipeline(NonNull<c_void>);
@@ -41,26 +42,41 @@ pub(super) struct Layer {
     window: RECT,
     icon: RECT,
     side: i32,
+    drop_effect: bool,
+    dark: bool,
+    scale: f64,
 }
 impl Layer {
     pub(super) unsafe fn new(pipeline: Rc<Pipeline>, frame: &super::stage_snapshot::Frame,
-        window: RECT, icon: RECT, side: DockSide) -> Option<Self> {
+        window: RECT, icon: RECT, side: DockSide, drop_effect: bool, dpi: u32) -> Option<Self> {
         #[cfg(target_env = "msvc")]
         {
             let side = match side { DockSide::Bottom => 0, DockSide::Left => 2, DockSide::Right => 3 };
             // The upstream mesh extends one pixel past the source when the
             // source overlaps the Dock. Include that strip in the canvas.
-            let canvas = RECT { left: window.left.min(icon.left).checked_sub(2)?,
+            let mut canvas = RECT { left: window.left.min(icon.left).checked_sub(2)?,
                 top: window.top.min(icon.top).checked_sub(2)?, right: window.right.max(icon.right).checked_add(2)?,
                 bottom: window.bottom.max(icon.bottom).checked_add(2)? };
+            let scale=(f64::from(dpi)/96.0).clamp(0.75,4.0);
+            if drop_effect{
+                let reach=5i32.checked_mul(icon.right.checked_sub(icon.left)?)?.checked_add(12)?;
+                match side {
+                    2=>canvas.right=canvas.right.max(icon.right.checked_add(reach)?),
+                    3=>canvas.left=canvas.left.min(icon.left.checked_sub(reach)?),
+                    _=>canvas.top=canvas.top.min(icon.top.checked_sub(reach)?),
+                }
+                let margin=(2.0*scale).ceil() as i32;
+                canvas.left=canvas.left.checked_sub(margin)?;canvas.top=canvas.top.checked_sub(margin)?;
+                canvas.right=canvas.right.checked_add(margin)?;canvas.bottom=canvas.bottom.checked_add(margin)?;
+            }
             let width = u32::try_from(canvas.right.checked_sub(canvas.left)?).ok()?;
             let height = u32::try_from(canvas.bottom.checked_sub(canvas.top)?).ok()?;
             let raw = NonNull::new(tlauncher_fluidwin_layer(pipeline.0.as_ptr(), width, height,
                 frame.0.as_ptr(), frame.1 as u32, frame.2 as u32))?;
-            Some(Self { raw, pipeline, canvas, window, icon, side })
+            Some(Self { raw, pipeline, canvas, window, icon, side, drop_effect, dark:super::material_dark(), scale })
         }
         #[cfg(not(target_env = "msvc"))]
-        { let _ = (pipeline, frame, window, icon, side); None }
+        { let _ = (pipeline, frame, window, icon, side, drop_effect, dpi); None }
     }
     pub(super) unsafe fn attach(&self, visual: &windows::Win32::Graphics::DirectComposition::IDCompositionVisual) -> windows::core::Result<()> {
         #[cfg(target_env = "msvc")]
@@ -75,7 +91,8 @@ impl Layer {
     pub(super) unsafe fn paint(&self, progress: f64, opacity: u8) -> i32 {
         #[cfg(target_env = "msvc")]
         { tlauncher_fluidwin_draw(self.pipeline.0.as_ptr(), self.raw.as_ptr(),
-            &self.window, &self.icon, &self.canvas, self.side, progress, f32::from(opacity) / 255.0) }
+            &self.window, &self.icon, &self.canvas, self.side, progress, f32::from(opacity) / 255.0,
+            i32::from(self.drop_effect),i32::from(self.dark),self.scale) }
         #[cfg(not(target_env = "msvc"))]
         { let _ = (progress, opacity); 0 }
     }
@@ -87,9 +104,30 @@ impl Drop for Layer {
     }
 }
 
-pub(super) fn progress(t: f32, restore: bool) -> f64 {
+pub(super) fn progress(t: f32, restore: bool, drop_effect: bool) -> f64 {
     #[cfg(target_env = "msvc")]
-    { unsafe { tlauncher_fluidwin_progress(f64::from(t), i32::from(restore)) } }
+    { unsafe { tlauncher_fluidwin_progress(f64::from(t), i32::from(restore), i32::from(drop_effect)) } }
     #[cfg(not(target_env = "msvc"))]
-    { let _ = (t, restore); 0.0 }
+    { let _ = (t, restore, drop_effect); 0.0 }
+}
+pub(super) fn invert(p: f64, restore: bool, drop_effect: bool) -> f64 {
+    #[cfg(target_env = "msvc")]
+    { unsafe { tlauncher_fluidwin_invert(p, i32::from(restore), i32::from(drop_effect)) } }
+    #[cfg(not(target_env = "msvc"))]
+    { let _ = (p, restore, drop_effect); 0.0 }
+}
+
+#[cfg(all(test,target_env="msvc"))]
+#[test]
+fn opposite_curve_begins_at_the_exact_presented_geometry() {
+    for drop_effect in [false,true] {
+        for restore in [false,true] {
+            for t in [0.0,0.15,0.28,0.61,0.89,1.0] {
+                let p=progress(t,restore,drop_effect);
+                let reverse=invert(p,!restore,drop_effect);
+                let resumed=progress(reverse as f32,!restore,drop_effect);
+                assert!((resumed-p).abs()<0.000002,"same geometry across reversal: {p} -> {resumed}");
+            }
+        }
+    }
 }

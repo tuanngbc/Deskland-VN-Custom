@@ -323,6 +323,7 @@
   "motionWindowWindows": "Windows default",
   "motionWindowScale": "Scale Effect (experimental)",
   "motionWindowGenie": "Genie (experimental)",
+  "motionWindowDrop": "Drop into Dock (experimental)",
   "motionVerySlow": "Very slow",
   "motionSlow": "Slow",
   "motionSmooth": "Smooth",

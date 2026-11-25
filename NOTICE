@@ -39,6 +39,7 @@ replace the original or third-party credits. The adapted clock skin,
 fonts, and artwork retain their own attribution and terms; see
 assets/widget/NOTICE.txt.
 
-FluidWin v1.3.1 — Copyright (c) 2026 Clooudy. The Genie geometry, shader and timing
-in third_party/fluidwin/motion_upstream.h come from FluidWin under MIT. See the
-original license in third_party/fluidwin/LICENSE (FLUIDWIN-LICENSE.txt in packages).
+FluidWin v1.3.1 — Copyright (c) 2026 Clooudy. Genie/Drop geometry, shader and timing
+in third_party/fluidwin/motion_upstream.h, Windows Search in index_upstream.h and
+the Spotlight calculator grammar come from FluidWin under MIT. See the original license in third_party/fluidwin/LICENSE
+(FLUIDWIN-LICENSE.txt in packages).

@@ -4,11 +4,12 @@ use serde_json::{Value,json};
 
 #[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
 #[repr(u32)]
-pub(crate) enum WindowEffect { #[default] Windows, Scale, Genie }
+pub(crate) enum WindowEffect { #[default] Windows, Scale, Genie, Drop }
 impl WindowEffect {
     pub(crate) fn name(self)->&'static str{
-        match self{Self::Windows=>"windows",Self::Scale=>"scale",Self::Genie=>"genie"}
+        match self{Self::Windows=>"windows",Self::Scale=>"scale",Self::Genie=>"genie",Self::Drop=>"drop"}
     }
+    pub(super) fn mesh(self)->bool{matches!(self,Self::Genie|Self::Drop)}
 }
 
 /// The main settings owner persists this once; both native UI threads read
@@ -28,7 +29,7 @@ impl Settings {
             speed:normalize_speed(&value["animationSpeed"]),
             respect_system:value["respectSystemReducedMotion"].as_bool().unwrap_or(true),
             window_effect:match value["windowEffect"].as_str(){
-                Some("scale")=>WindowEffect::Scale,Some("genie")=>WindowEffect::Genie,_=>WindowEffect::Windows}}
+                Some("scale")=>WindowEffect::Scale,Some("genie")=>WindowEffect::Genie,Some("drop")=>WindowEffect::Drop,_=>WindowEffect::Windows}}
     }
     pub fn from_profile(root:&Value,legacy:&Value)->Self{
         if root["motion"].is_object(){return Self::from_json(&root["motion"]);}
@@ -43,7 +44,7 @@ impl Settings {
     }
     fn packed(self)->u32{self.speed|((self.enabled as u32)<<8)|((self.respect_system as u32)<<9)|((self.window_effect as u32)<<10)}
     fn unpack(v:u32)->Self{Self{speed:v&255,enabled:v&256!=0,respect_system:v&512!=0,window_effect:
-        match v>>10{1=>WindowEffect::Scale,2=>WindowEffect::Genie,_=>WindowEffect::Windows}}}
+        match v>>10{1=>WindowEffect::Scale,2=>WindowEffect::Genie,3=>WindowEffect::Drop,_=>WindowEffect::Windows}}}
     fn allowed(self,system:bool)->bool{self.enabled&&(!self.respect_system||system)}
     fn duration(self,base:u32)->u32{((base as f64*100.0/self.speed as f64).round() as u32).max(1)}
 }
@@ -52,7 +53,7 @@ static SYSTEM:AtomicBool=AtomicBool::new(true);
 pub(crate) fn scale_experiment_available()->bool{cfg!(test)||crate::trial::active()}
 pub(crate) fn settings()->Settings{
     let mut s=Settings::unpack(ACTIVE.load(Ordering::Relaxed));
-    if !scale_experiment_available() || (s.window_effect==WindowEffect::Genie && !cfg!(target_env="msvc")){
+    if !scale_experiment_available() || (s.window_effect.mesh() && !cfg!(target_env="msvc")){
         s.window_effect=WindowEffect::Windows;
     }
     s
@@ -88,6 +89,12 @@ impl Span{
     pub fn new(base:u32)->Self{Self::fixed(duration(base))}
     pub fn hover()->Self{Self::fixed(hover_ms())}
     pub fn fixed(duration:u32)->Self{Self{start:Instant::now(),duration:duration.max(1)}}
+    pub(super) fn resume(base:u32,progress:f64)->Self{
+        let mut span=Self::new(base);
+        let elapsed=std::time::Duration::from_secs_f64(progress.clamp(0.0,1.0)*f64::from(span.duration)/1000.0);
+        if let Some(start)=span.start.checked_sub(elapsed){span.start=start;}
+        span
+    }
     pub fn progress(self)->f32{(self.start.elapsed().as_secs_f32()*1000.0/self.duration as f32).clamp(0.0,1.0)}
     #[cfg(test)]
     pub(crate) fn ms(self)->u32{self.duration}

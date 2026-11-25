@@ -359,7 +359,7 @@ impl Category {
         match self {
             Self::All => true,
             Self::Apps => app_entry(e),
-            Self::Files => matches!(e.kind, "File" | "Web shortcut"),
+            Self::Files => matches!(e.kind, "File" | "Web shortcut") || super::index::is_indexed(e),
             Self::System => e.kind == "System",
         }
     }
@@ -724,6 +724,9 @@ impl SearchWork {
         if !browsing || category == Category::System {
             source.extend(system_items());
         }
+        if !browsing && !hidden && folder==0 && matches!(category,Category::All|Category::Files){
+            source.extend(super::index::search(&query));
+        }
         let mut previews: HashMap<u64, Vec<PathBuf>> = HashMap::new();
         if browsing && folder == 0 && !hidden {
             for app in source.iter().filter(|app| app_entry(app)) {
@@ -760,7 +763,7 @@ impl SearchWork {
                 let rank = if browsing {
                     0
                 } else {
-                    catalog::search_rank(&e.name, &query)?
+                    catalog::search_rank(&e.name, &query).or_else(||super::index::is_indexed(&e).then_some(3))?
                 };
                 Some((rank, (TileKey::App(id), e)))
             })
@@ -782,7 +785,7 @@ impl SearchWork {
                 )
             }));
         }
-        let sorted = if browsing {
+        let mut sorted = if browsing {
             let mut items = found.into_iter().map(|(_, t)| t).collect::<Vec<_>>();
             lib.ordered(&mut items, favorites);
             items
@@ -790,6 +793,12 @@ impl SearchWork {
             found.sort_by_key(|(rank, (_, e))| (*rank, !app_entry(e)));
             found.into_iter().take(100).map(|(_, t)| t).collect()
         };
+        if !hidden && folder==0 && matches!(category,Category::All|Category::System) {
+            if let Some(result)=super::calculator::entry(&query){
+                sorted.insert(0,(TileKey::App("spotlight-calculation".into()),result));
+                sorted.truncate(100);
+            }
+        }
         let mut seen = HashSet::new();
         sorted
             .into_iter()
@@ -811,25 +820,38 @@ impl SearchWork {
 }
 
 type SearchReply = (u64, Vec<Tile>);
-fn search_async(gen: u64, job: SearchWork) -> Option<mpsc::Receiver<SearchReply>> {
-    type Task = (u64, SearchWork, mpsc::Sender<SearchReply>);
-    static QUEUE: std::sync::OnceLock<Option<mpsc::SyncSender<Task>>> = std::sync::OnceLock::new();
-    let queue = QUEUE
+enum SearchTask {
+    Full(u64, SearchWork, mpsc::Sender<SearchReply>),
+    Compact(String, mpsc::Sender<Vec<Entry>>),
+}
+fn search_queue() -> Option<&'static mpsc::SyncSender<SearchTask>> {
+    static QUEUE: std::sync::OnceLock<Option<mpsc::SyncSender<SearchTask>>> = std::sync::OnceLock::new();
+    QUEUE
         .get_or_init(|| {
-            let (tx, rx) = mpsc::sync_channel::<Task>(1);
+            let (tx, rx) = mpsc::sync_channel::<SearchTask>(1);
             std::thread::Builder::new()
                 .name("tlauncher-spotlight-search".into())
                 .spawn(move || {
-                    while let Ok((generation, job, reply)) = rx.recv() {
-                        let _ = reply.send((generation, job.rows()));
+                    while let Ok(task) = rx.recv() {
+                        match task {
+                            SearchTask::Full(generation,job,reply)=>{let _=reply.send((generation,job.rows()));}
+                            SearchTask::Compact(query,reply)=>{let _=reply.send(super::index::search(&query));}
+                        }
                     }
                 })
                 .ok()?;
             Some(tx)
         })
-        .as_ref()?;
+        .as_ref()
+}
+fn search_async(gen: u64, job: SearchWork) -> Option<mpsc::Receiver<SearchReply>> {
     let (tx, rx) = mpsc::channel();
-    queue.try_send((gen, job, tx)).ok()?;
+    search_queue()?.try_send(SearchTask::Full(gen,job,tx)).ok()?;
+    Some(rx)
+}
+pub(super) fn search_index_async(query: String) -> Option<mpsc::Receiver<Vec<Entry>>> {
+    let (tx, rx) = mpsc::channel();
+    search_queue()?.try_send(SearchTask::Compact(query,tx)).ok()?;
     Some(rx)
 }
 
@@ -931,7 +953,7 @@ fn controls(p:&Panel)->Vec<(Hit,RECT,&'static str)>{
     out
 }
 
-fn words<'a>(vi:&'a str,en:&'a str,zh:&'a str)->&'a str {
+pub(super) fn words<'a>(vi:&'a str,en:&'a str,zh:&'a str)->&'a str {
     LOCALE.with(|lang|match lang.get(){0=>vi,2=>zh,_=>en})
 }
 fn words_set<const N:usize>(vi:[&'static str;N],en:[&'static str;N],zh:[&'static str;N])->[&'static str;N]{
@@ -1292,20 +1314,21 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
             .enumerate()
             .filter_map(|(i, t)| {
                 let r = grid.tiles(i);
-                let key = request_icon(p, t.entry.path.clone(), grid.icon);
+                let key = if t.entry.kind==super::calculator::KIND{None}
+                    else{Some(request_icon(p,t.entry.path.clone(),grid.icon))};
                 let preview_keys: Vec<_> = t
                     .preview
                     .iter()
                     .map(|path| request_icon(p, path.clone(), grid.icon / 3))
                     .collect();
                 if !intersects(r,dirty) { return None; }
-                let icon = p.icons.get(&key).cloned().flatten();
+                let icon = key.as_ref().and_then(|k|p.icons.get(k)).cloned().flatten();
                 let preview=preview_keys.iter().map(|k|p.icons.get(k).cloned().flatten()).collect();
                 Some((i + start,(t, r, icon, preview, p.keyboard && p.selected == i + start)))
             })
             .collect::<Vec<(usize,PaintTile)>>();
         if p.pending.is_empty()&&p.page+1<count_pages(p){
-            let next=p.tiles.iter().skip(start+grid.capacity()).take(8).map(|t|t.entry.path.clone()).collect::<Vec<_>>();
+            let next=p.tiles.iter().skip(start+grid.capacity()).take(8).filter(|t|t.entry.kind!=super::calculator::KIND).map(|t|t.entry.path.clone()).collect::<Vec<_>>();
             for path in next{request_icon(p,path,grid.icon);}
         }
         let heading = LIBRARY.with(|l| {
@@ -1900,6 +1923,11 @@ fn safe_launch(entry: &Entry) -> bool {
 }
 
 unsafe fn open_entry(hwnd: HWND, entry: &Entry, elevated: bool) {
+    if entry.kind==super::calculator::KIND{
+        if super::calculator::copy(hwnd,entry){dismiss(true);}
+        else{show_error(hwnd,super::calculator::copy_error());}
+        return;
+    }
     if !safe_launch(entry) {
         show_error(hwnd, "Mục này không có đường dẫn mở hợp lệ.");
         return;
@@ -2245,6 +2273,12 @@ unsafe fn tile_menu(hwnd: HWND, i: usize, point: POINT) {
         return;
     };
     let entry = tile.entry;
+    if entry.kind==super::calculator::KIND{
+        if menu(hwnd,point,&[words("Sao chép kết quả","Copy result","复制结果")])==1{
+            open_entry(hwnd,&entry,false);
+        }
+        return;
+    }
     if !app_entry(&entry) {
         if menu(hwnd, point, &["Mở"]) == 1 {
             open_entry(hwnd, &entry, false);

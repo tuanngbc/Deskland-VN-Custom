@@ -244,6 +244,7 @@
   "motionWindowWindows": "Windows 默认",
   "motionWindowScale": "缩放效果（实验性）",
   "motionWindowGenie": "精灵效果（实验性）",
+  "motionWindowDrop": "落入程序坞（实验性）",
   "motionVerySlow": "极慢",
   "motionSlow": "慢",
   "motionSmooth": "流畅",

@@ -1765,8 +1765,8 @@ unsafe fn show_feedback(hwnd:HWND,item:&Item,kind:FeedbackKind){
     InvalidateRect(hwnd,ptr::null(),0);
 }
 unsafe fn activate(hwnd:HWND,item:&Item) {
-    window_effect::cancel();
     if item.path==internal_app::KEY{
+        window_effect::cancel();
         PostMessageW(OWNER.with(Cell::get),crate::WM_OPEN_SETTINGS,0,0);
         return;
     }
@@ -1777,9 +1777,10 @@ unsafe fn activate(hwnd:HWND,item:&Item) {
             }
             let restored=ShowWindowAsync(item.hwnd,SW_RESTORE)!=0;
             show_feedback(hwnd,item,if restored{FeedbackKind::Restore}else{FeedbackKind::Failed});
-        }
+        }else{window_effect::cancel();}
         SetForegroundWindow(item.hwnd);
     } else {
+        window_effect::cancel();
         let result=command_pin::open(&item.path);
         show_feedback(hwnd,item,if result>32{FeedbackKind::Launch}else{FeedbackKind::Failed});
     }

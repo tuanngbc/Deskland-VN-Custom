@@ -36,6 +36,8 @@ fn main() {
     if target.contains("windows") && target.contains("msvc") {
         println!("cargo:rerun-if-changed=third_party/fluidwin/motion_upstream.h");
         println!("cargo:rerun-if-changed=third_party/fluidwin/motion_renderer.cpp");
+        println!("cargo:rerun-if-changed=third_party/fluidwin/index_upstream.h");
+        println!("cargo:rerun-if-changed=third_party/fluidwin/index_bridge.cpp");
         cc::Build::new()
             .cpp(true)
             .flag("/std:c++17")
@@ -43,8 +45,12 @@ fn main() {
             .define("NOMINMAX", None)
             .define("WIN32_LEAN_AND_MEAN", None)
             .file("third_party/fluidwin/motion_renderer.cpp")
+            .file("third_party/fluidwin/index_bridge.cpp")
             .compile("tlauncher_fluidwin_motion");
         println!("cargo:rustc-link-lib=d3dcompiler");
+        println!("cargo:rustc-link-lib=uuid");
+        println!("cargo:rustc-link-lib=ole32");
+        println!("cargo:rustc-link-lib=shell32");
         let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
         let manifest_path = manifest_dir.join("app.manifest");
         // Both the shipping executable and native test harness need the

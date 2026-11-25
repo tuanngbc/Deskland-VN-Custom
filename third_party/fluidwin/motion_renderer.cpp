@@ -28,6 +28,32 @@ struct Pipeline {
     ComPtr<ID3D11Buffer> vb, cb;
     ComPtr<ID3D11SamplerState> sampler;
     ComPtr<ID3D11RasterizerState> raster;
+    ComPtr<ID3D11BlendState> blend;
+    ComPtr<ID3D11ShaderResourceView> chips[2][2];
+
+    bool tint(uint32_t bgra, ComPtr<ID3D11ShaderResourceView>& view) {
+        // A small constant texture keeps the upstream shader's rounded
+        // corner mask and subpixel coverage in the same code path.
+        constexpr UINT side = 32;
+        uint32_t pixels[side * side];
+        std::fill_n(pixels, side * side, bgra);
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = desc.Height = side;
+        desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_IMMUTABLE;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        const D3D11_SUBRESOURCE_DATA init{pixels, side * 4, 0};
+        ComPtr<ID3D11Texture2D> texture;
+        return SUCCEEDED(device->CreateTexture2D(&desc, &init, &texture)) &&
+               SUCCEEDED(device->CreateShaderResourceView(texture.Get(), nullptr, &view));
+    }
+
+    bool chip_theme(bool dark) {
+        const unsigned theme = dark ? 1 : 0;
+        return (chips[theme][0] || tint(dark ? 0xff2b2b33 : 0xfff5f5f7, chips[theme][0])) &&
+               (chips[theme][1] || tint(dark ? 0x6b6b6b6b : 0x42000000, chips[theme][1]));
+    }
 
     bool init(ID3D11DeviceContext* ctx) {
         context = ctx;
@@ -69,8 +95,16 @@ struct Pipeline {
         r.FillMode = D3D11_FILL_SOLID;
         r.CullMode = D3D11_CULL_NONE;
         r.DepthClipEnable = TRUE;
+        D3D11_BLEND_DESC b{};
+        auto& blendDesc = b.RenderTarget[0];
+        blendDesc.BlendEnable = TRUE;
+        blendDesc.SrcBlend = blendDesc.SrcBlendAlpha = D3D11_BLEND_ONE;
+        blendDesc.DestBlend = blendDesc.DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+        blendDesc.BlendOp = blendDesc.BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        blendDesc.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
         return SUCCEEDED(device->CreateSamplerState(&s, &sampler)) &&
-               SUCCEEDED(device->CreateRasterizerState(&r, &raster));
+               SUCCEEDED(device->CreateRasterizerState(&r, &raster)) &&
+               SUCCEEDED(device->CreateBlendState(&b, &blend));
     }
 };
 
@@ -110,22 +144,31 @@ struct Layer {
                SUCCEEDED(q.device->CreateShaderResourceView(picture.Get(), nullptr, &texture));
     }
 
-    int draw(Pipeline& q, const RECT& window, const RECT& icon, const RECT& canvas,
-             int side, double progress, float alpha) {
+    bool element(Pipeline& q, const RECT& canvas, const Vertice* vertices, UINT count,
+                 ID3D11ShaderResourceView* tex, UINT imageW, UINT imageH, float radiusX,
+                 float radiusY, float extentV, float opacity) {
         auto ctx = q.context.Get();
         D3D11_MAPPED_SUBRESOURCE map{};
-        if (FAILED(ctx->Map(q.vb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map))) return 0;
-        griglia(Elemento{window, icon, progress, side}, static_cast<Vertice*>(map.pData));
+        if (FAILED(ctx->Map(q.vb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map))) return false;
+        std::memcpy(map.pData, vertices, count * sizeof(Vertice));
         ctx->Unmap(q.vb.Get(), 0);
-        const float rx = std::min(8.f * tw / std::max(1L, window.right - window.left), float(tw) * 0.5f);
-        const float ry = std::min(8.f * th / std::max(1L, window.bottom - window.top), float(th) * 0.5f);
         const Constants constants{{float(canvas.left), float(canvas.top)}, {float(w), float(h)},
-            alpha, rx, {float(tw), float(th)}, 0, 0, ry, 0, {1, 1}, {0, 0}};
+            opacity, radiusX, {float(imageW), float(imageH)}, 0, 0, radiusY, 0, {1, extentV}, {0, 0}};
         ctx->UpdateSubresource(q.cb.Get(), 0, nullptr, &constants, 0, 0);
+        ctx->PSSetShaderResources(0, 1, &tex);
+        ctx->Draw(count, 0);
+        return true;
+    }
+
+    int draw(Pipeline& q, const RECT& window, const RECT& icon, const RECT& canvas,
+             int side, double progress, float alpha, bool drop, bool dark, double scale) {
+        if (drop && !q.chip_theme(dark)) return 0;
+        auto ctx = q.context.Get();
         const D3D11_VIEWPORT viewport{0, 0, float(w), float(h), 0, 1};
         const float zero[4]{};
         auto rtv = target.Get();
         ctx->OMSetRenderTargets(1, &rtv, nullptr);
+        ctx->OMSetBlendState(q.blend.Get(), nullptr, 0xffffffff);
         ctx->ClearRenderTargetView(rtv, zero);
         ctx->RSSetViewports(1, &viewport);
         ctx->RSSetState(q.raster.Get());
@@ -141,12 +184,48 @@ struct Layer {
         ctx->PSSetConstantBuffers(0, 1, &cb);
         auto s = q.sampler.Get();
         ctx->PSSetSamplers(0, 1, &s);
-        auto tex = texture.Get();
-        ctx->PSSetShaderResources(0, 1, &tex);
-        ctx->Draw(RIGHE * 2, 0);
-        tex = nullptr;
+        bool painted = true;
+        if (drop && progress > 0) {
+            const auto chip = elementoCaduta(window, icon, side, progress, scale);
+            const double radius = std::min(8.0 * scale, 0.22 * std::min(chip.r-chip.l,chip.b-chip.t));
+            const double border = 2.0 * scale;
+            const auto quad = [&](double pad, ID3D11ShaderResourceView* tex, UINT iw, UINT ih,
+                                  double opacity) {
+                const double l=chip.l-pad, t=chip.t-pad, r=chip.r+pad, b=chip.b+pad;
+                const double visible=chip.piccolo ? std::min(b,chip.taglio) : b;
+                if (opacity <= 0.002 || visible <= t) return true;
+                const float v=float((visible-t)/(b-t));
+                const double xs[]{l,r,l,r}, ys[]{t,t,visible,visible};
+                const float uvs[]{0,1,0,1}, vvs[]{0,0,v,v};
+                Vertice vertices[4];
+                for (int k=0;k<4;k++) {
+                    const auto point=dalCanonico(side,xs[k],ys[k]);
+                    float u=uvs[k], vv=vvs[k];
+                    if (v>=1.f) uvDalCanonico(side,u,vv,u,vv);
+                    vertices[k]={float(point.x),float(point.y),u,vv};
+                }
+                const bool rotate = side >= 2 && v >= 1.f;
+                return element(q,canvas,vertices,4,tex,iw,ih,
+                    float((radius+pad)*iw/std::max(1.0,rotate?b-t:r-l)),
+                    float((radius+pad)*ih/std::max(1.0,rotate?r-l:b-t)),v,float(opacity)*alpha);
+            };
+            const auto& colors=q.chips[dark ? 1 : 0];
+            if (!chip.piccolo || chip.t < chip.taglio) {
+                painted = quad(border,colors[1].Get(),32,32,1.0-chip.contenuto) &&
+                    quad(0,colors[0].Get(),32,32,chip.contenuto<0.999 ? 1.0 : 0.0) &&
+                    quad(0,texture.Get(),tw,th,chip.contenuto);
+            }
+        } else {
+            Vertice grid[RIGHE * 2];
+            griglia(Elemento{window, icon, progress, side}, grid);
+            const float rx = std::min(float(8.0 * scale) * tw / std::max(1L, window.right - window.left), float(tw) * 0.5f);
+            const float ry = std::min(float(8.0 * scale) * th / std::max(1L, window.bottom - window.top), float(th) * 0.5f);
+            painted = element(q,canvas,grid,RIGHE*2,texture.Get(),tw,th,rx,ry,1,alpha);
+        }
+        ID3D11ShaderResourceView* tex = nullptr;
         ctx->PSSetShaderResources(0, 1, &tex);
         ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        if (!painted) return 0;
         const HRESULT hr = chain->Present(1, DXGI_PRESENT_DO_NOT_WAIT);
         if (hr == DXGI_ERROR_WAS_STILL_DRAWING) return 2;
         return hr == S_OK ? 1 : 0;
@@ -175,10 +254,26 @@ void tlauncher_fluidwin_release_layer(void* p) { delete static_cast<Layer*>(p); 
 IDXGISwapChain1* tlauncher_fluidwin_content(void* p) { return static_cast<Layer*>(p)->chain.Get(); }
 
 int tlauncher_fluidwin_draw(void* p, void* layer, const RECT* window, const RECT* icon,
-                          const RECT* canvas, int side, double progress, float opacity) {
-    return static_cast<Layer*>(layer)->draw(*static_cast<Pipeline*>(p), *window, *icon, *canvas, side, progress, opacity);
+                          const RECT* canvas, int side, double progress, float opacity,
+                          int drop, int dark, double scale) {
+    return static_cast<Layer*>(layer)->draw(*static_cast<Pipeline*>(p), *window, *icon, *canvas, side,
+                                          progress, opacity, drop != 0, dark != 0, scale);
 }
-double tlauncher_fluidwin_progress(double t, int restore) {
+double tlauncher_fluidwin_progress(double t, int restore, int drop) {
+    if (drop) return restore ? cadutaApre(t) : cadutaChiude(t);
     return restore ? std::pow(1.0 - std::clamp(t, 0.0, 1.0), 3) : curvaGenio(t);
+}
+double tlauncher_fluidwin_invert(double p, int restore, int drop) {
+    if (drop) {
+        // FluidWin invertiTempo, used at direction changes.
+        double lo = 0, hi = 1;
+        for (int i = 0; i < 40; i++) {
+            const double m = (lo + hi) / 2;
+            if (((restore ? cadutaApre(m) : cadutaChiude(m)) < p) == !restore) lo = m;
+            else hi = m;
+        }
+        return (lo + hi) / 2;
+    }
+    return restore ? 1.0 - std::cbrt(std::clamp(p, 0.0, 1.0)) : inversaCurvaGenio(p);
 }
 }

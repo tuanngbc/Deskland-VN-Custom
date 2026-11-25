@@ -23,7 +23,7 @@ impl Action{fn name(self)->&'static str{match self{Self::Minimize=>"minimize",Se
 #[derive(Clone)]
 struct Request{
     source:WindowIdentity,area:RECT,normal:RECT,dpi:u32,monitor:usize,title:String,
-    action:Action,icon:RECT,side:DockSide,effect:motion::WindowEffect,
+    action:Action,icon:RECT,side:DockSide,effect:motion::WindowEffect,dock:usize,
 }
 struct Recent{request:Request,revision:u64,stored:Instant}
 thread_local!{
@@ -78,6 +78,7 @@ impl Attempt{
         values["captureWidth"]=Value::Null;values["captureHeight"]=Value::Null;
         values["captureDurationMs"]=Value::Null;values["captureValid"]=Value::Null;
         values["dockTarget"]=json!(false);values["proxyCreated"]=json!(false);values["proxyPresented"]=json!(false);
+        values["reversals"]=json!(0);
         Self{values,source,started:Instant::now(),animation:None,timing:None,frames:0,done:false}
     }
     fn area(&mut self,r:RECT){
@@ -92,14 +93,17 @@ impl Attempt{
     }
     unsafe fn proxy(&mut self,frame:&stage_snapshot::Frame,req:&Request)->Result<Proxy,Reason>{
         self.capture(frame,req.area)?;
-        let t=Instant::now();let proxy=Proxy::new_for(frame,req.area,req.icon,req.side,req.effect);
+        let t=Instant::now();let proxy=Proxy::new_for(frame,req.area,req.icon,req.side,req.effect,req.dpi);
         self.values["proxyPreparationMs"]=json!(t.elapsed().as_millis() as u64);
         self.values["proxyCreated"]=json!(proxy.is_some());proxy.ok_or("proxy-create-failed")
     }
     unsafe fn present(&mut self,p:&Proxy,r:RECT,progress:f64,opacity:u8)->Result<(),Reason>{
         match p.paint(r,progress,opacity){
             1=>{self.values["proxyPresented"]=json!(true);self.frames+=1;Ok(())}
-            2=>Ok(()), // compositor still busy; keep the last accepted frame
+            2=>{
+                self.values["compositorBusyFrames"]=json!(self.values["compositorBusyFrames"].as_u64().unwrap_or(0)+1);
+                Ok(()) // keep the last accepted frame
+            }
             _=>Err("proxy-present-failed"),
         }
     }
@@ -243,7 +247,7 @@ unsafe fn request(owner:HWND,path:&str,id:WindowIdentity,action:Action,policy:Po
     attempt.area(area);
     if !valid_area(area){return Err("window-area-limit");}
     let (icon,side)=target(owner,path)?;attempt.values["dockTarget"]=json!(true);
-    Ok(Request{source:id,area,normal:p.rcNormalPosition,dpi,monitor:monitor as usize,title:name,action,icon,side,effect:policy.motion.window_effect})
+    Ok(Request{source:id,area,normal:p.rcNormalPosition,dpi,monitor:monitor as usize,title:name,action,icon,side,effect:policy.motion.window_effect,dock:owner as usize})
 }
 
 // One small uploaded composition texture, no physical-size CPU DIB and
@@ -281,19 +285,19 @@ impl Drop for Proxy{fn drop(&mut self){unsafe{
 impl Proxy{
     #[cfg(test)]
     unsafe fn new(frame:&stage_snapshot::Frame,area:RECT)->Option<Self>{
-        Self::new_for(frame,area,area,DockSide::Bottom,motion::WindowEffect::Scale)
+        Self::new_for(frame,area,area,DockSide::Bottom,motion::WindowEffect::Scale,96)
     }
-    unsafe fn new_for(frame:&stage_snapshot::Frame,area:RECT,icon:RECT,side:DockSide,effect:motion::WindowEffect)->Option<Self>{
+    unsafe fn new_for(frame:&stage_snapshot::Frame,area:RECT,icon:RECT,side:DockSide,effect:motion::WindowEffect,dpi:u32)->Option<Self>{
         if !valid_pixels(frame,area){return None;}
         let (data,w,h)=frame;
         let (comp,ctx,mesh)=FACTORY.with(|f|->Option<_>{
             let mut f=f.borrow_mut();if f.is_none(){*f=ProxyFactory::new().ok();}
             let f=f.as_mut()?;
-            if effect==motion::WindowEffect::Genie&&f.mesh.is_none(){f.mesh=fluidwin_mesh::Pipeline::new(&f.ctx);}
+            if effect.mesh()&&f.mesh.is_none(){f.mesh=fluidwin_mesh::Pipeline::new(&f.ctx);}
             Some((f.comp.clone(),f.ctx.clone(),f.mesh.clone()))
         })?;
-        let mesh=if effect==motion::WindowEffect::Genie{
-            Some(fluidwin_mesh::Layer::new(mesh?,frame,area,icon,side)?)
+        let mesh=if effect.mesh(){
+            Some(fluidwin_mesh::Layer::new(mesh?,frame,area,icon,side,effect==motion::WindowEffect::Drop,dpi)?)
         }else{None};
         let class=wide("TLauncherScaleProxy");
         let instance=GetModuleHandleW(ptr::null());
@@ -370,7 +374,7 @@ enum Phase{
     Animate{proxy:Proxy,span:motion::Span},
     WaitingRestore{_proxy:Proxy,started:Instant},
 }
-struct Transition{req:Request,phase:Option<Phase>,attempt:Attempt}
+struct Transition{req:Request,phase:Option<Phase>,attempt:Attempt,last_progress:f64}
 impl Transition{
     unsafe fn fallback(&mut self,reason:Reason)->bool{
         self.phase.take();
@@ -441,7 +445,7 @@ impl Transition{
                         r.insert(self.req.source,Recent{request:self.req.clone(),revision,stored:Instant::now()});
                     });}
                     self.attempt.animation=Some(Instant::now());queue_refresh();
-                    Phase::Animate{proxy,span:motion::Span::new(300)}
+                    Phase::Animate{proxy,span:motion::Span::new(if self.req.effect.mesh(){500}else{300})}
                 }else if started.elapsed()>SETTLE{drop(proxy);return self.fallback("state-transition-timeout");}
                 else{Phase::WaitingMinimize{proxy,frame,started}}
             }
@@ -452,11 +456,13 @@ impl Transition{
                     Action::Minimize=>(self.req.area,icon,(255.0*(1.0-((t-0.82)/0.18).clamp(0.0,1.0))) as u8),
                     Action::Restore=>(icon,self.req.area,(255.0*(0.25+0.75*(t*2.0).min(1.0))) as u8),
                 };
-                let progress=if self.req.effect==motion::WindowEffect::Genie{
-                    fluidwin_mesh::progress(t,action==Action::Restore)
+                let progress=if self.req.effect.mesh(){
+                    fluidwin_mesh::progress(t,action==Action::Restore,self.req.effect==motion::WindowEffect::Drop)
                 }else{0.0};
-                let opacity=if self.req.effect==motion::WindowEffect::Genie{255}else{opacity};
+                let opacity=if self.req.effect.mesh(){255}else{opacity};
+                let submitted=self.attempt.frames;
                 if let Err(reason)=self.attempt.present(&proxy,interpolate(a,b,k),progress,opacity){drop(proxy);return self.fallback(reason);}
+                if self.attempt.frames!=submitted{self.last_progress=progress;}
                 if t>=1.0{
                     if action==Action::Minimize{self.attempt.finish(None);return false;}
                     if ShowWindowAsync(h,SW_RESTORE)==0{drop(proxy);return self.fallback("state-transition-timeout");}
@@ -473,6 +479,7 @@ impl Transition{
     }
 }
 unsafe fn begin(owner:HWND,path:&str,id:WindowIdentity,action:Action)->bool{
+    if reverse(owner,id,action){return true;}
     cancel();
     let policy=Policy::read();let mut attempt=Attempt::new(id,action,policy);
     let result=(||->Result<(Request,Phase),Reason>{
@@ -493,10 +500,11 @@ unsafe fn begin(owner:HWND,path:&str,id:WindowIdentity,action:Action)->bool{
                 attempt.values["cachedCapture"]=json!(true);
                 attempt.values["captureDurationMs"]=json!(started.elapsed().as_millis() as u64);
                 let proxy=attempt.proxy(&frame,&req)?;
-                let (opacity,progress)=if req.effect==motion::WindowEffect::Genie{(255,1.0)}else{(64,0.0)};
+                let (opacity,progress)=if req.effect.mesh(){(255,1.0)}else{(64,0.0)};
                 attempt.present(&proxy,icon_fit(req.area,req.icon),progress,opacity)?;
                 attempt.animation=Some(Instant::now());
-                Phase::Animate{proxy,span:motion::Span::new(340)}
+                let span=motion::Span::new(if req.effect.mesh(){450}else{340});
+                Phase::Animate{proxy,span}
             }
         };
         if SetTimer(controller,TIMER,16,None)==0{return Err("dock-not-ready");}
@@ -505,9 +513,30 @@ unsafe fn begin(owner:HWND,path:&str,id:WindowIdentity,action:Action)->bool{
         Ok((req,phase))
     })();
     match result{
-        Ok((req,phase))=>{ACTIVE.with(|a|{a.replace(Some(Transition{req,phase:Some(phase),attempt}));});true}
+        Ok((req,phase))=>{
+            let last_progress=if req.action==Action::Restore{1.0}else{0.0};
+            ACTIVE.with(|a|{a.replace(Some(Transition{req,phase:Some(phase),attempt,last_progress}));});true
+        }
         Err(reason)=>{attempt.finish(Some(reason));schedule_release();false}
     }
+}
+unsafe fn reverse(owner:HWND,id:WindowIdentity,action:Action)->bool{
+    ACTIVE.with(|a|{
+        let mut a=a.borrow_mut();
+        let Some(t)=a.as_mut().filter(|t|t.req.source==id&&t.req.dock==owner as usize&&t.req.effect.mesh())else{return false;};
+        if !id.matches(id.hwnd as HWND)||IsIconic(id.hwnd as HWND)==0{return false;}
+        let Some(Phase::Animate{span,..})=t.phase.as_mut()else{return false;};
+        let policy=Policy::read();
+        if policy.gate().is_err()||policy.motion.window_effect!=t.req.effect{return false;}
+        if t.req.action==action{return true;}
+        let restoring=action==Action::Restore;
+        let elapsed=fluidwin_mesh::invert(t.last_progress,restoring,t.req.effect==motion::WindowEffect::Drop);
+        *span=motion::Span::resume(if restoring{450}else{500},elapsed);
+        t.req.action=action;
+        t.attempt.values["action"]=json!(action.name());
+        t.attempt.values["reversals"]=json!(t.attempt.values["reversals"].as_u64().unwrap_or(0)+1);
+        true
+    })
 }
 pub(super) unsafe fn minimize(owner:HWND,path:&str,id:WindowIdentity)->bool{begin(owner,path,id,Action::Minimize)}
 pub(super) unsafe fn restore(owner:HWND,path:&str,id:WindowIdentity)->bool{begin(owner,path,id,Action::Restore)}
@@ -620,7 +649,7 @@ pub(super) unsafe fn probe_owned_window(source:HWND,frame:&stage_snapshot::Frame
 }
 
 #[cfg(all(test,target_env="msvc"))]
-pub(super) unsafe fn probe_genie_pixels(source:HWND,frame:&stage_snapshot::Frame){
+pub(super) unsafe fn probe_mesh_pixels(source:HWND,frame:&stage_snapshot::Frame){
     use windows::Win32::System::Com::{CoInitializeEx,CoUninitialize,COINIT_APARTMENTTHREADED};
     struct Apartment(bool);
     impl Drop for Apartment{fn drop(&mut self){if self.0{unsafe{CoUninitialize();}}}}
@@ -628,10 +657,6 @@ pub(super) unsafe fn probe_genie_pixels(source:HWND,frame:&stage_snapshot::Frame
     let area=visible_area(source).unwrap();
     if !valid_pixels(frame,area){println!("FLUIDWIN_GENIE_SCREEN_PIXELS=NOT_VERIFIED invalid WGC frame");return;}
     let icon=RECT{left:area.right-40,top:area.bottom+8,right:area.right,bottom:area.bottom+48};
-    let probe=Proxy::new_for(frame,area,icon,DockSide::Bottom,motion::WindowEffect::Genie)
-        .expect("initialize the upstream Genie pipeline using the production proxy");
-    assert_eq!(probe.paint(area,0.0,255),1);
-    ShowWindow(source,SW_HIDE);
     let (w,h)=dims(area);
     let pixel=||{
         let _=DwmFlush();
@@ -641,21 +666,27 @@ pub(super) unsafe fn probe_genie_pixels(source:HWND,frame:&stage_snapshot::Frame
         ReleaseDC(ptr::null_mut(),dc);
         color
     };
-    let full=pixel();
-    let mut status=probe.paint(area,0.68,255);
-    for _ in 0..8{
-        if status!=2{break;}
-        let _=DwmFlush();
-        status=probe.paint(area,0.68,255);
+    for effect in [motion::WindowEffect::Genie,motion::WindowEffect::Drop]{
+        let probe=Proxy::new_for(frame,area,icon,DockSide::Bottom,effect,96)
+            .expect("initialize the upstream effect using the production proxy");
+        assert_eq!(probe.paint(area,0.0,255),1);
+        ShowWindow(source,SW_HIDE);
+        let full=pixel();
+        let mut status=probe.paint(area,0.68,255);
+        for _ in 0..8{
+            if status!=2{break;}
+            let _=DwmFlush();
+            status=probe.paint(area,0.68,255);
+        }
+        assert_eq!(status,1,"an intermediate mesh was not submitted");
+        let bent=pixel();
+        let matched=full!=u32::MAX&&[full as u8,(full>>8) as u8,(full>>16) as u8].into_iter()
+            .zip(probe.marker).all(|(a,b)|a.abs_diff(b)<35);
+        let hwnd=probe.hwnd;drop(probe);assert_eq!(IsWindow(hwnd),0);
+        println!("FLUIDWIN_{}_SCREEN_PIXELS={} proxy_released=true",effect.name().to_uppercase(),
+            if matched&&bent!=u32::MAX&&bent!=full{"MATCH_AND_INTERMEDIATE_CHANGED"}else{"NOT_VERIFIED"});
     }
-    assert_eq!(status,1,"an intermediate Genie mesh was not submitted");
-    let bent=pixel();
-    let matched=full!=u32::MAX&&[full as u8,(full>>8) as u8,(full>>16) as u8].into_iter()
-        .zip(probe.marker).all(|(a,b)|a.abs_diff(b)<35);
-    let hwnd=probe.hwnd;drop(probe);assert_eq!(IsWindow(hwnd),0);
     FACTORY.with(|f|{f.borrow_mut().take();});
-    println!("FLUIDWIN_GENIE_SCREEN_PIXELS={} proxy_released=true",
-        if matched&&bent!=u32::MAX&&bent!=full{"MATCH_AND_INTERMEDIATE_CHANGED"}else{"NOT_VERIFIED"});
 }
 
 #[cfg(test)]

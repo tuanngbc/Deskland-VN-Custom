@@ -192,7 +192,7 @@ fn native_fluidwin_genie_presented_pixels(){
             Ok(frame)=>frame,
             Err(reason)=>{println!("FLUIDWIN_GENIE_SCREEN_PIXELS=NOT_VERIFIED {reason}");return;}
         };
-        super::window_effect::probe_genie_pixels(source.0,&frame);
+        super::window_effect::probe_mesh_pixels(source.0,&frame);
     }
 }
 

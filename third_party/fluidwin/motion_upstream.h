@@ -165,4 +165,30 @@ static double cadutaApre(double x) {     // ripristino: tempo lineare -> p (decr
     return x <= A ? 1.0 - 0.5 * caduta1(x / A) : 0.5 - 0.5 * caduta2((x - A) / (1 - A));
 }
 
+// Geometry of elementoRiduzione, factored out of FluidWin's window and
+// Dock state. q describes the same path in both directions.
+struct Caduta { double l, t, r, b, contenuto, taglio; bool piccolo; };
+static Caduta elementoCaduta(const RECT& window, const RECT& icon, int side, double p, double scale) {
+    const RECT da = rettCanonico(side, window), aa = rettCanonico(side, icon);
+    const double fw = std::max(1L, da.right - da.left), fh = std::max(1L, da.bottom - da.top);
+    const double fcx = (da.left + da.right) / 2.0, fcy = (da.top + da.bottom) / 2.0;
+    const double iw = aa.right - aa.left, ih = aa.bottom - aa.top;
+    const double icx = (aa.left + aa.right) / 2.0, icy = (aa.top + aa.bottom) / 2.0;
+    const double lato = std::min(std::max(0.5 * std::min(iw, ih), 30.0 * scale), 0.7 * std::min(iw, ih));
+    const double myy = aa.top - 4.0 * ih;
+    double cx, cy, w, h, contenuto;
+    const double q = std::clamp(p, 0.0, 1.0);
+    if (q <= 0.5) {
+        const double e = q * 2;
+        cx = fcx; cy = fcy + (myy - fcy) * e;
+        w = fw + (lato - fw) * e; h = fh + (lato - fh) * e;
+        contenuto = 1.0 - e;
+    } else {
+        const double e = q * 2 - 1;
+        cx = fcx + (icx - fcx) * e; cy = myy + (icy - myy) * e;
+        w = h = lato;
+        contenuto = 0;
+    }
+    return {cx-w/2, cy-h/2, cx+w/2, cy+h/2, contenuto, aa.top+ih*0.15, q>0.5};
+}
 }

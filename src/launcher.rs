@@ -16,6 +16,8 @@ pub(crate) mod start;
 mod catalog;
 mod fullscreen;
 pub(crate) mod library;
+mod calculator;
+mod index;
 
 /// Start and Spotlight share this UI thread. Carry the actual input method
 /// across the focus handoff, rather than reusing a layout left on our thread
@@ -136,6 +138,7 @@ struct State {
     icon_results: std::sync::mpsc::Receiver<IconResult>,
     pending_icons: usize,
     apps_rx:Option<std::sync::mpsc::Receiver<Vec<Entry>>>,
+    index_query: String, index_rows:Vec<Entry>, index_rx:Option<std::sync::mpsc::Receiver<Vec<Entry>>>, index_due:Option<std::time::Instant>,
     history: History, launching: bool, dock_start:bool, dock_anchor:Option<DockAnchor>,
     point: POINT, prior: HWND, icon_rev: u64,
 }
@@ -167,7 +170,7 @@ pub fn cached_application_name(path:&Path)->Option<String>{catalog::label(path)}
 pub fn shell_catalog_changed(){catalog::invalidate();}
 fn app_entry(e:&Entry)->bool{matches!(e.kind,"Application"|"Pinned")}
 fn sync_pin_entries(all:&mut Vec<Entry>){
-    all.retain(|entry|entry.kind!="Pinned");
+    all.retain(|entry|entry.kind!="Pinned"&&entry.kind!=calculator::KIND&&!index::is_indexed(entry));
     let mut identities=all.iter().map(|e|catalog::identity(&e.path)).collect::<std::collections::HashSet<_>>();
     DOCK_PINS.with(|prefs|for value in prefs.borrow().iter(){
         if value=="deskland:settings"{continue;}
@@ -269,7 +272,7 @@ fn filter(all: &[Entry], query: &str, history: &History) -> Vec<usize> {
         return history.paths.iter().filter_map(|path| indexed.get(&path.to_string_lossy().to_lowercase()).copied()).collect();
     }
     let mut found: Vec<(u8, usize)> = all.iter().enumerate().filter_map(|(i, e)| {
-        let rank = catalog::search_rank(&e.name,&q)?;
+        let rank = catalog::search_rank(&e.name,&q).or_else(||index::is_indexed(e).then_some(3))?;
         Some((rank, i))
     }).collect();
     found.sort_by_key(|&(rank, i)| (rank, all[i].kind != "Application"));
@@ -291,15 +294,40 @@ fn start_rows(all:&[Entry],history:&History)->Vec<usize>{
 }
 fn refresh() {refresh_results(false);}
 fn refresh_results(keep_selection:bool) {
-    let hwnd = STATE.with(|c| {
+    let pending = STATE.with(|c| {
         let mut guard = c.borrow_mut(); let s = guard.as_mut()?;
+        // The ephemeral calculation is always appended, so ordinary catalog
+        // indices remain stable while results are being recomputed.
+        while s.all.last().is_some_and(|e|e.kind==calculator::KIND||index::is_indexed(e)){s.all.pop();}
+        let query=s.query.trim().to_lowercase();
+        if s.index_query!=query{
+            s.index_query=query;
+            s.index_rows.clear();
+            s.index_rx=None;
+            s.index_due=(!s.dock_start&&index::eligible(&s.index_query)).then(||
+                std::time::Instant::now()+std::time::Duration::from_millis(150));
+        }
+        if !s.dock_start&&!s.index_rows.is_empty(){
+            let mut seen:std::collections::HashSet<_>=s.all.iter()
+                .map(|e|e.path.to_string_lossy().to_lowercase()).collect();
+            s.all.extend(s.index_rows.iter().filter(|e|seen.insert(e.path.to_string_lossy().to_lowercase())).cloned());
+        }
         let keep=keep_selection.then(||s.matches.get(s.selected).copied()).flatten();
         s.matches = if s.dock_start&&s.query.trim().is_empty(){start_rows(&s.all,&s.history)}
             else{filter(&s.all,&s.query,&s.history)};
+        if !s.dock_start{
+            if let Some(result)=calculator::entry(&s.query){
+                s.matches.insert(0,s.all.len());s.matches.truncate(100);s.all.push(result);
+            }
+        }
         s.selected=keep.and_then(|idx|s.matches.iter().position(|&i|i==idx)).unwrap_or(0);
-        s.first=s.first.min(s.selected).max((s.selected+1).saturating_sub(PAGE));if !keep_selection{s.error.clear();} Some(s.hwnd)
+        s.first=s.first.min(s.selected).max((s.selected+1).saturating_sub(PAGE));if !keep_selection{s.error.clear();}
+        Some((s.hwnd,s.index_due.is_some()||s.index_rx.is_some()))
     });
-    if let Some(hwnd) = hwnd { unsafe { InvalidateRect(hwnd, std::ptr::null(), 0); } }
+    if let Some((hwnd,index_pending)) = pending { unsafe {
+        if index_pending{SetTimer(hwnd,7,60,None);}
+        InvalidateRect(hwnd, std::ptr::null(), 0);
+    } }
 }
 
 fn remember_entry(path: &Path) {
@@ -312,9 +340,13 @@ fn dismiss(hwnd: HWND) {
     let searched = STATE.with(|c| {
         let g = c.borrow(); let s = g.as_ref()?;
         if s.launching || s.query.trim().is_empty() { return None; }
-        s.matches.get(s.selected).and_then(|&i| s.all.get(i)).map(|e| e.path.clone())
+        s.matches.get(s.selected).and_then(|&i| s.all.get(i)).filter(|e|e.kind!=calculator::KIND).map(|e| e.path.clone())
     });
     if let Some(path) = searched { remember_entry(&path); }
+    STATE.with(|c|if let Some(s)=c.borrow_mut().as_mut(){
+        s.index_due=None;s.index_rx=None;s.index_rows.clear();s.index_query.clear();
+        while s.all.last().is_some_and(|e|e.kind==calculator::KIND||index::is_indexed(e)){s.all.pop();}
+    });
     stop_compact_motion(hwnd);
     unsafe { KillTimer(hwnd,7); ShowWindow(hwnd, SW_HIDE); }
 }
@@ -412,6 +444,16 @@ fn launch_selected() {
         Some((s.hwnd, s.all.get(idx)?.clone()))
     });
     let Some((hwnd, entry)) = target else { return; };
+    if entry.kind==calculator::KIND{
+        unsafe{
+            if calculator::copy(hwnd,&entry){dismiss_compact_with_focus(hwnd);}
+            else{
+                STATE.with(|c|if let Some(s)=c.borrow_mut().as_mut(){s.error=calculator::copy_error().into();});
+                InvalidateRect(hwnd,std::ptr::null(),0);
+            }
+        }
+        return;
+    }
     STATE.with(|c| if let Some(s) = c.borrow_mut().as_mut() { s.launching = true; });
     stop_compact_motion(hwnd);
     unsafe {
@@ -420,7 +462,9 @@ fn launch_selected() {
         let result = execute(hwnd, &entry.path);
         STATE.with(|c| if let Some(s) = c.borrow_mut().as_mut() { s.launching = false; });
         if result <= 32 {
-            crate::log!("Launcher: không mở được {} (ShellExecute {})", entry.path.display(), result);
+            if !index::is_indexed(&entry){
+                crate::log!("Launcher: không mở được {} (ShellExecute {})", entry.path.display(), result);
+            }
             STATE.with(|c| { if let Some(s) = c.borrow_mut().as_mut() { s.error = format!("Could not open {} (Windows error {result})", entry.name); } });
             ShowWindow(hwnd, SW_SHOW); InvalidateRect(hwnd, std::ptr::null(), 0);
         } else {
@@ -805,10 +849,11 @@ unsafe fn paint(hwnd: HWND) {
         let mut icons = Vec::new();
         for (i,entry) in rows.iter().enumerate() {
             let y=px(TOP+i as i32*ROW);
-            if let Some(icon) = icon_for(hwnd,&entry.path,px(36)) { icons.push((icon,px(18),y+px(7))); }
-            else { label(dc,if entry.kind=="Application"{"▣"}else{"▤"},RECT{left:px(23),top:y,right:px(52),bottom:y+px(50)},search,secondary); }
+            if let Some(icon) = (entry.kind!=calculator::KIND).then(||icon_for(hwnd,&entry.path,px(36))).flatten() { icons.push((icon,px(18),y+px(7))); }
+            else { label(dc,match entry.kind{"Application"=>"▣",calculator::KIND=>"=" ,_=>"▤"},RECT{left:px(23),top:y,right:px(52),bottom:y+px(50)},search,secondary); }
             label(dc,&entry.name,RECT {left:px(66),top:y+px(3),right:w-px(77),bottom:y+px(27)},body,primary);
-            label(dc,&format!("{}{} · {}",if dock_start&&pinned(&entry.path){"Đã ghim · "}else{""},entry.kind,entry.detail),RECT {left:px(66),top:y+px(27),right:w-px(24),bottom:y+px(46)},small,secondary);
+            let detail=if entry.kind==calculator::KIND{calculator::hint().into()}else{format!("{}{} · {}",if dock_start&&pinned(&entry.path){"Đã ghim · "}else{""},entry.kind,entry.detail)};
+            label(dc,&detail,RECT {left:px(66),top:y+px(27),right:w-px(24),bottom:y+px(46)},small,secondary);
             if i==selected { label(dc,"↵",RECT {left:w-px(49),top:y+px(3),right:w-px(22),bottom:y+px(28)},body,secondary); }
         }
         if rows.is_empty(){label(dc,if query.trim().is_empty(){"Type to find apps and files. Recent items will appear here."}else{"No results"},RECT{left:px(28),top:px(105),right:w-px(24),bottom:px(147)},body,secondary);}
@@ -898,7 +943,18 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                         Err(std::sync::mpsc::TryRecvError::Empty)=>{}
                     }
                 }
-                (changed,s.pending_icons>0||s.apps_rx.is_some(),apps_changed)
+                if s.index_due.is_some_and(|deadline|std::time::Instant::now()>=deadline){
+                    s.index_rx=fullscreen::search_index_async(s.index_query.clone());
+                    if s.index_rx.is_some(){s.index_due=None;}
+                }
+                if let Some(rx)=&s.index_rx{
+                    match rx.try_recv(){
+                        Ok(rows)=>{s.index_rows=rows;s.index_rx=None;apps_changed=true;}
+                        Err(std::sync::mpsc::TryRecvError::Disconnected)=>s.index_rx=None,
+                        Err(std::sync::mpsc::TryRecvError::Empty)=>{}
+                    }
+                }
+                (changed,s.pending_icons>0||s.apps_rx.is_some()||s.index_rx.is_some()||s.index_due.is_some(),apps_changed)
             });
             if apps_changed{refresh_results(true);}
             if changed { InvalidateRect(hwnd,std::ptr::null(),0); }
@@ -1101,7 +1157,7 @@ fn toggle_at(at:Option<POINT>, query:Option<String>, prior:Option<HWND>) {
             fullscreen::merge_manual(&mut all);
             sync_pin_entries(&mut all);
             let (icon_requests,icon_results)=icon_worker();
-            STATE.with(|c| *c.borrow_mut() = Some(State { hwnd, all, matches: Vec::new(), query: String::new(), selected: 0, first: 0, scale: 1.0, width: 660, height: 444, glass: Vec::new(), backdrop: Vec::new(), error: String::new(), select_all: false, icons:std::collections::HashMap::new(),icon_requests,icon_results,pending_icons:0,apps_rx:None,history:load_history(),launching:false,dock_start:false,dock_anchor:None,point:POINT{x:0,y:0},prior:std::ptr::null_mut(),icon_rev:crate::app_icons::revision() }));
+            STATE.with(|c| *c.borrow_mut() = Some(State { hwnd, all, matches: Vec::new(), query: String::new(), selected: 0, first: 0, scale: 1.0, width: 660, height: 444, glass: Vec::new(), backdrop: Vec::new(), error: String::new(), select_all: false, icons:std::collections::HashMap::new(),icon_requests,icon_results,pending_icons:0,apps_rx:None,index_query:String::new(),index_rows:Vec::new(),index_rx:None,index_due:None,history:load_history(),launching:false,dock_start:false,dock_anchor:None,point:POINT{x:0,y:0},prior:std::ptr::null_mut(),icon_rev:crate::app_icons::revision() }));
         }
         let Some((hwnd, _, _, _)) = handles() else { return; };
         let mouse=at.unwrap_or_else(||{let mut p=POINT{x:0,y:0};GetCursorPos(&mut p);p});
