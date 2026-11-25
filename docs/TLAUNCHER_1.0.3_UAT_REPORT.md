@@ -6,6 +6,8 @@ Delivered intermediate build: `442861d7ac77beaf247c7df3123bc92cef17ef70`, [Actio
 
 Start from the Desktop shortcut **TLauncher 1.0.3 — TEST** once a verified candidate has been delivered. The shortcut's session requests a normal production exit, waits for it to release the desktop, and starts the candidate with a separate profile. Leave its launcher window open. Exit normally from the TLauncher menu; the launcher restores production if it was previously running. If needed, after TEST has completely exited, reopen the existing production shortcut. The candidate directory contains `uat-launch.log` if switching stops with an error. Run the candidate through the shortcut so it gets the isolated profile.
 
+If a packaged desktop tool redirects `%LOCALAPPDATA%` into its private cache, Explorer may not see a staged candidate. Prepare the same Actions artifact with `-UatRoot 'E:\TLauncher-UAT'` when the owner has selected that folder. Use the Desktop shortcut, or the `START-TEST-<short-sha>.cmd` entry point in that folder. It records errors that happen before the candidate's launch log and leaves the window open if the switch fails.
+
 Suggested checks:
 
 1. In Settings → Motion effects, choose Genie or Drop. Double-click a Dock icon for an open window to minimize. Click while minimizing or when minimized to test restore. Check the most recent requested/actual effect and fallback reason under the motion diagnostics. An unchanged Windows animation should be reported as such.

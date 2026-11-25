@@ -3,7 +3,8 @@
 param(
     [Parameter(Mandatory)][long]$RunId,
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$Commit,
-    [string]$ProductionExe = 'E:\TLauncher\TLauncher.exe'
+    [string]$ProductionExe = 'E:\TLauncher\TLauncher.exe',
+    [string]$UatRoot = (Join-Path $env:LOCALAPPDATA 'TLauncher-UAT')
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
@@ -11,8 +12,14 @@ $version='1.0.3'
 $repo='tuanngbc/TLauncher'
 $api="https://api.github.com/repos/$repo"
 $ProductionExe=[IO.Path]::GetFullPath($ProductionExe)
+$productionDir=[IO.Path]::GetDirectoryName($ProductionExe).TrimEnd('\')
 if ((Get-Item -LiteralPath $ProductionExe).VersionInfo.ProductVersion -cne '1.0.2') { throw 'Expected the verified v1.0.2 production installation.' }
-$root=[IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'TLauncher-UAT'))
+$root=[IO.Path]::GetFullPath($UatRoot).TrimEnd('\')
+if ([IO.Path]::GetFileName($root) -ine 'TLauncher-UAT' -or
+    $ProductionExe.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase) -or
+    $root.StartsWith($productionDir+'\',[StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The trial must use a dedicated TLauncher-UAT directory outside production.'
+}
 $desktop=[Environment]::GetFolderPath('DesktopDirectory')
 if (!$desktop -or !(Test-Path -LiteralPath $desktop -PathType Container)) { throw 'The Windows Desktop directory is unavailable.' }
 
@@ -86,8 +93,9 @@ $profile=Join-Path $root 'profiles\tuanpc-desk-trial-owner-1-0-3'
 $exe=Join-Path $target 'TLauncher.exe'
 $manifest=Join-Path $target 'verified-artifact.json'
 $launcher=Join-Path $target 'owner-uat.ps1'
+$entryPoint=Join-Path $root ('START-TEST-'+$Commit.Substring(0,12)+'.cmd')
 $linkPath=Join-Path $desktop ("TLauncher $version "+[char]0x2014+' TEST.lnk')
-foreach ($file in $target,$profile,$exe,$manifest,$launcher,$linkPath) { Assert-NoReparse $file }
+foreach ($file in $target,$profile,$exe,$manifest,$launcher,$entryPoint,$linkPath) { Assert-NoReparse $file }
 
 $lock=[Threading.Mutex]::new($false,'Local\TLauncherOwnerUatSwitch')
 $locked=$false
@@ -172,20 +180,55 @@ try {
         New-Item -ItemType Directory -Path $profile -Force | Out-Null
         [IO.File]::WriteAllText($profileMarker,$markerText,[Text.UTF8Encoding]::new($false))
     }
-    $command=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    # Keep failures visible even before PowerShell loads the packaged script.
+    # The verified package itself stays intact.
+    $bootstrap=@'
+@echo off
+setlocal EnableExtensions DisableDelayedExpansion
+title TLauncher 1.0.3 TEST
+set "trial=%~dp0__CANDIDATE__"
+set "report=%~dp0shortcut-__SHORT_SHA__-%RANDOM%-%RANDOM%.log"
+echo Opening TLauncher 1.0.3 TEST. Leave this window open until TEST exits.
+>"%report%" echo [%DATE% %TIME%] TLauncher 1.0.3 TEST shortcut entered.
+if not exist "%trial%\owner-uat.ps1" (
+    >>"%report%" echo Verified UAT script is missing.
+    goto failed
+)
+if not exist "%trial%\verified-artifact.json" (
+    >>"%report%" echo Verified UAT manifest is missing.
+    goto failed
+)
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -STA -ExecutionPolicy Bypass -File "%trial%\owner-uat.ps1" -UseVerifiedManifest >>"%report%" 2>&1
+if errorlevel 1 goto failed
+exit /b 0
+:failed
+echo.
+type "%report%"
+echo.
+echo Details saved to "%report%".
+pause
+exit /b 1
+'@
+    $bootstrap=$bootstrap.Replace('__CANDIDATE__',[IO.Path]::GetFileName($target)).Replace('__SHORT_SHA__',$Commit.Substring(0,12))
+    [IO.File]::WriteAllText($entryPoint,($bootstrap -replace '\r?\n',"`r`n")+"`r`n",[Text.Encoding]::ASCII)
+    $command=Join-Path $env:SystemRoot 'System32\cmd.exe'
+    if (!(Test-Path -LiteralPath $command -PathType Leaf)) { throw 'Windows Command Prompt is missing.' }
+    $arguments='/d /c .\'+[IO.Path]::GetFileName($entryPoint)
     $wsh=New-Object -ComObject WScript.Shell
     $shortcut=$wsh.CreateShortcut($linkPath)
     $shortcut.TargetPath=$command
-    $shortcut.Arguments='-NoProfile -STA -ExecutionPolicy Bypass -File "'+$launcher+'" -UseVerifiedManifest'
-    $shortcut.WorkingDirectory=$target
+    $shortcut.Arguments=$arguments
+    $shortcut.WorkingDirectory=$root
+    $shortcut.WindowStyle=1
     $shortcut.IconLocation=$exe+',0'
     $shortcut.Description="TLauncher $version owner trial. Exit the app to restore the previous launcher."
     $shortcut.Save()
     $readback=$wsh.CreateShortcut($linkPath)
-    if ($readback.TargetPath -ine $command -or $readback.Arguments -cne $shortcut.Arguments -or $readback.WorkingDirectory -ine $target) {
+    if ($readback.TargetPath -ine $command -or $readback.Arguments -cne $arguments -or $readback.WorkingDirectory -ine $root -or
+        !(Test-Path -LiteralPath $entryPoint -PathType Leaf)) {
         throw 'Desktop shortcut target could not be verified.'
     }
-    [pscustomobject]@{ DesktopShortcut=$linkPath; Candidate=$target; SourceCommit=$Commit; Workflow=$run.html_url; PackageSHA256=$want; Version=$version }
+    [pscustomobject]@{ DesktopShortcut=$linkPath; StartFile=$entryPoint; Candidate=$target; SourceCommit=$Commit; Workflow=$run.html_url; PackageSHA256=$want; Version=$version }
 } finally {
     if ($locked) { $lock.ReleaseMutex() }
     $lock.Dispose()
