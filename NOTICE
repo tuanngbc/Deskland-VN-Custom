@@ -41,5 +41,6 @@ assets/widget/NOTICE.txt.
 
 FluidWin v1.3.1 — Copyright (c) 2026 Clooudy. Genie/Drop geometry, shader and timing
 in third_party/fluidwin/motion_upstream.h, Windows Search in index_upstream.h and
-the Spotlight calculator grammar come from FluidWin under MIT. See the original license in third_party/fluidwin/LICENSE
+the Spotlight calculator grammar and clipboard history logic come from FluidWin
+under MIT. See the original license in third_party/fluidwin/LICENSE
 (FLUIDWIN-LICENSE.txt in packages).

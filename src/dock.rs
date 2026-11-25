@@ -39,6 +39,7 @@ mod stage_snapshot;
 mod window_effect;
 mod fluidwin_mesh;
 mod stage_peek;
+mod clipboard_history;
 pub(crate) fn motion_diagnostics()->serde_json::Value{window_effect::diagnostics()}
 mod stage_capture_lab;
 pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>{stage_capture_lab::inspect(path,true)}
@@ -1712,6 +1713,13 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::App{path,operation}=>perform_app_action(owner,&path,operation),
         Command::AddApp=>pin_from_file(owner),
         Command::BackgroundApps=>show_background_apps(owner),
+        Command::Clipboard=>show_clipboard_history(owner),
+        Command::ClipboardCopy(id)=>{
+            if clipboard_history::active()&&!clipboard_history::copy(owner,id){show_clipboard_history(owner);}
+        }
+        Command::ClipboardRemove(id)=>{
+            if clipboard_history::active(){clipboard_history::remove(id);show_clipboard_history(owner);}
+        }
         Command::WindowsTray=>{
             if taskbar_active(){
                 show_taskbar(taskbar_guard::Exit::Requested,"Đã hiện thanh tác vụ. Mở lại ^ → Ứng dụng chạy nền / Khay ứng dụng để dùng khay Windows.");
@@ -2400,6 +2408,20 @@ unsafe fn poll_taskbar(hwnd:HWND){
         }
     }
 }
+unsafe fn show_clipboard_history(owner:HWND){
+    if !clipboard_history::active(){return;}
+    if let Some(anchor)=shell_anchor(owner,shell_access::Target::Tray){
+        control_center::show_list(owner,anchor,clipboard_history::view());
+    }
+}
+unsafe fn refresh_clipboard_listener(){
+    let hwnd=CONTROL.with(Cell::get);
+    let (enabled,limit)=STATE.with(|s|{
+        let s=s.borrow();
+        (s.prefs.enabled&&!s.suspended&&s.prefs.clipboard_history,s.prefs.clipboard_history_limit)
+    });
+    clipboard_history::configure(hwnd,enabled,limit as usize);
+}
 unsafe fn open_dock_hub(owner:HWND,dock_mode:bool){
     let dock=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==owner&&!b.hidden)
         .and_then(|b|Some(b.layout.as_ref()?.hub_anchor(b.reveal.value))));
@@ -3019,6 +3041,8 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         stage_snapshot::READY if hwnd==CONTROL.get()=>{finish_stage_snapshot();0},
+        WM_CLIPBOARDUPDATE if hwnd==CONTROL.get()=>{clipboard_history::changed(hwnd);0},
+        clipboard_history::READY if hwnd==CONTROL.get()=>{clipboard_history::complete(hwnd);0},
         WM_CONFIG=>{drain_commands();0},
         WM_INTERNAL_APP if hwnd==CONTROL.with(Cell::get)=>{queue_refresh();0},
         WM_TICK=>{SetTimer(hwnd,2,60,None);0},
@@ -3683,7 +3707,7 @@ unsafe fn drain_commands() {
                 state.prefs=options;refresh(state,false);
                 if repaint||icons_changed{for b in &state.bars{InvalidateRect(b.hwnd,ptr::null(),0);}}
                 if icons_changed{for stage in &state.stages{InvalidateRect(stage.hwnd,ptr::null(),0);}}
-            });sync_win_key();
+            });sync_win_key();refresh_clipboard_listener();
                 if enable_default&&!cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active(){start_saved_taskbar_mode();}
             },
             Command::Suspend(on)=>{
@@ -3697,6 +3721,7 @@ unsafe fn drain_commands() {
                     }
                 }
                 update_state(|state|{if state.suspended!=on{state.suspended=on;refresh(state,!on);}});
+                refresh_clipboard_listener();
                 if !on&&TASKBAR_RESUME.replace(false){schedule_taskbar_retry();}
                 sync_win_key();
             },
@@ -3791,6 +3816,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         OWNER.with(|o|o.set(owner as HWND));
         COMMANDS.with(|c|{c.replace(Some(commands));});EVENTS.with(|e|{e.replace(Some(events));});
         update_state(|state|{state.prefs=options;refresh(state,false);});
+        refresh_clipboard_listener();
         publish_taskbar(false,TaskbarMode::Compatibility,taskbar_guard::current(),"Startup","");
         sync_win_key();
         let mut hooks=Vec::new();
@@ -3812,6 +3838,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
             if !utilities::route_panel_keyboard(&msg){TranslateMessage(&msg);DispatchMessageW(&msg);}
         }
         window_effect::reset();
+        clipboard_history::configure(control,false,0);
         if taskbar_active(){show_taskbar(taskbar_guard::Exit::Requested,"Đã hiện lại thanh tác vụ khi thoát Deskland.");}
         WIN_KEY.with(|s|drop(s.borrow_mut().take()));
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);

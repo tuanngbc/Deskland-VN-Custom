@@ -951,13 +951,13 @@ fn controls(p:&Panel)->Vec<(Hit,RECT,&'static str)>{
 }
 
 pub(super) fn words<'a>(vi:&'a str,en:&'a str,zh:&'a str)->&'a str {
-    LOCALE.with(|lang|match lang.get(){0=>vi,2=>zh,_=>en})
+    match LOCALE.load(std::sync::atomic::Ordering::Relaxed){0=>vi,2=>zh,_=>en}
 }
 fn words_set<const N:usize>(vi:[&'static str;N],en:[&'static str;N],zh:[&'static str;N])->[&'static str;N]{
-    LOCALE.with(|lang|match lang.get(){0=>vi,2=>zh,_=>en})
+    match LOCALE.load(std::sync::atomic::Ordering::Relaxed){0=>vi,2=>zh,_=>en}
 }
-thread_local!{static LOCALE:Cell<u8>=const{Cell::new(0)};}
-pub(super) fn locale(value:&str){LOCALE.set(match value{"vi"=>0,"zh-CN"=>2,_=>1});}
+static LOCALE:std::sync::atomic::AtomicU8=std::sync::atomic::AtomicU8::new(0);
+pub(super) fn locale(value:&str){LOCALE.store(match value{"vi"=>0,"zh-CN"=>2,_=>1},std::sync::atomic::Ordering::Relaxed);}
 
 fn hit_at(p: &Panel, point: POINT) -> Option<Hit> {
     let point=if let Some(t)=p.transition{

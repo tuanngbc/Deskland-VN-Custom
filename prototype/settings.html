@@ -192,8 +192,6 @@
     <label class="setting-row switch-row"><b data-i18n="dockWallpaper">Hình nền động</b><input type="checkbox" id="dockWallpaperEnabled" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <label class="setting-row switch-row"><b data-i18n="dockEnabled">Bật Dock</b><input type="checkbox" id="dockEnabled" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <label class="setting-row switch-row"><b data-i18n="dockStageEnabled">Bật thanh Stage Manager</b><input type="checkbox" id="dockStageEnabled" role="switch"><i class="switch" aria-hidden="true"></i></label>
-    <label class="setting-row switch-row"><b data-i18n="stagePeek">Xem trước cửa sổ khi rê lên thẻ Stage</b><input type="checkbox" id="stagePeek" role="switch"><i class="switch" aria-hidden="true"></i></label>
-    <label class="setting-row"><b data-i18n="stagePeekDelay">Độ trễ xem trước Stage (ms)</b><span><input type="range" id="stagePeekDelay" min="150" max="1200" step="50" value="350"><output id="stagePeekDelayValue">350</output></span></label>
     <p id="dockRuntimeStatus" class="monitor-detail" role="status" aria-live="polite"></p>
   </section>
   <section class="setting-card">
@@ -249,6 +247,10 @@
   </section>
   </div>
   <div id="dockGroup-stage" role="tabpanel" aria-labelledby="dockTab-stage" hidden>
+  <section class="setting-card">
+    <label class="setting-row switch-row"><b data-i18n="stagePeek">Xem trước cửa sổ khi rê lên thẻ Stage</b><input type="checkbox" id="stagePeek" role="switch"><i class="switch" aria-hidden="true"></i></label>
+    <label class="setting-row"><b data-i18n="stagePeekDelay">Độ trễ xem trước Stage (ms)</b><span><input type="range" id="stagePeekDelay" min="150" max="1200" step="50" value="350"><output id="stagePeekDelayValue">350</output></span></label>
+  </section>
   <section class="setting-card dock-placement">
     <h3>Stage Manager</h3><p class="dock-section-copy">Chọn cách các thẻ cửa sổ và nhóm xuất hiện trên từng màn hình.</p>
     <label class="setting-row"><b data-i18n="dockDisplayTarget">Màn hình hiển thị</b><select id="stageDisplayMode">
@@ -282,6 +284,10 @@
   </section>
   </div>
   <div id="dockGroup-utilities" role="tabpanel" aria-labelledby="dockTab-utilities" hidden>
+  <section class="setting-card">
+    <label class="setting-row switch-row"><span><b data-i18n="clipboardHistory">Lịch sử clipboard</b><small data-i18n="clipboardHistoryHint">Lưu tạm văn bản và ảnh trong bộ nhớ để dùng trong Trung tâm điều khiển.</small></span><input type="checkbox" id="clipboardHistory" role="switch"><i class="switch" aria-hidden="true"></i></label>
+    <label class="setting-row"><b data-i18n="clipboardHistoryLimit">Số mục clipboard tối đa</b><span><input type="range" id="clipboardHistoryLimit" min="5" max="40" step="1" value="20"><output id="clipboardHistoryLimitValue">20</output></span></label>
+  </section>
   <section class="setting-card dock-placement">
     <h3 data-i18n="utilityTitle">Tiện ích Dock</h3>
     <p class="dock-section-copy" data-i18n="dockGroupUtilitiesHint">Chọn tiện ích và chỉ số hiển thị trên từng màn hình.</p>
@@ -1314,6 +1320,10 @@ function syncDockSettings(m) {
   $('stagePeekDelay').value=String(dockOptions.stagePeekDelay??350);
   $('stagePeekDelay').disabled=!dockOptions.stagePeek;
   $('stagePeekDelayValue').textContent=$('stagePeekDelay').value;
+  $('clipboardHistory').checked=!!dockOptions.clipboardHistory;
+  $('clipboardHistoryLimit').value=String(dockOptions.clipboardHistoryLimit??20);
+  $('clipboardHistoryLimit').disabled=!dockOptions.clipboardHistory;
+  $('clipboardHistoryLimitValue').textContent=$('clipboardHistoryLimit').value;
   $('dockAllWindows').checked=!!dockOptions.allWindows;
   $('dockStageSide').value=dockOptions.stageSide==='right'?'right':'left';
   $('dockRuntimeStatus').textContent=dockError||dockText(dockRunning?'dockRunning':dockOptions.enabled||dockOptions.stageEnabled?'dockStarting':'dockStopped');
@@ -1336,6 +1346,14 @@ $('stagePeek').addEventListener('change',()=>{
 $('stagePeekDelay').addEventListener('input',()=>{$('stagePeekDelayValue').textContent=$('stagePeekDelay').value;});
 $('stagePeekDelay').addEventListener('change',()=>{
   dockOptions.stagePeekDelay=Number($('stagePeekDelay').value);send({t:'dock',stagePeekDelay:dockOptions.stagePeekDelay});
+});
+$('clipboardHistory').addEventListener('change',()=>{
+  dockOptions.clipboardHistory=$('clipboardHistory').checked;$('clipboardHistoryLimit').disabled=!dockOptions.clipboardHistory;
+  send({t:'dock',clipboardHistory:dockOptions.clipboardHistory});
+});
+$('clipboardHistoryLimit').addEventListener('input',()=>{$('clipboardHistoryLimitValue').textContent=$('clipboardHistoryLimit').value;});
+$('clipboardHistoryLimit').addEventListener('change',()=>{
+  dockOptions.clipboardHistoryLimit=Number($('clipboardHistoryLimit').value);send({t:'dock',clipboardHistoryLimit:dockOptions.clipboardHistoryLimit});
 });
 for(const key of ['dockDisplay','stageDisplay']){
   function apply(target){dockOptions[key]=target;renderDockPlacement();send({t:'dock',[key]:target});}

@@ -16,7 +16,7 @@ const METRIC_TIMER:usize=1;
 const ENTRANCE_TIMER:usize=2;
 const SINGLE_LINE:u32=DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS;
 #[derive(Clone)]
-pub(super) enum Command{AddApp,WindowsTray,BackgroundApps,Widget(UtilityWidget),Run(Action),Wifi(super::wifi::Change),App{path:String,operation:super::AppOperation},Window{hwnd:usize,pid:u32,tid:u32},StageMember(super::WindowIdentity)}
+pub(super) enum Command{AddApp,WindowsTray,BackgroundApps,Clipboard,ClipboardCopy(u64),ClipboardRemove(Option<u64>),Widget(UtilityWidget),Run(Action),Wifi(super::wifi::Change),App{path:String,operation:super::AppOperation},Window{hwnd:usize,pid:u32,tid:u32},StageMember(super::WindowIdentity)}
 #[derive(Clone)]
 pub(super) struct Card{pub icon:Option<UtilityWidget>,pub title:String,pub hint:String,pub action:Option<Command>}
 pub(super) struct View{pub title:String,pub hint:String,pub cards:Vec<Card>,pub metrics:Option<MetricOptions>}

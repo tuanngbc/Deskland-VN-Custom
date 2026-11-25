@@ -455,6 +455,11 @@ pub(super) fn hub_view(snapshot:&Snapshot,profile:&Profile,dock_mode:bool,live:b
     cards.insert(0,Card{title:"Ứng dụng chạy nền / Khay ứng dụng".into(),
         hint:"Cửa sổ đã thu nhỏ và khay thông báo Windows".into(),
         icon:Some(Widget::Windows),action:Some(Command::BackgroundApps)});
+    if super::clipboard_history::active(){
+        cards.insert(1,Card{title:crate::launcher::localized("Lịch sử clipboard","Clipboard history","剪贴板历史").into(),
+            hint:crate::launcher::localized("Văn bản và ảnh","Text and images","文字与图片").into(),
+            icon:None,action:Some(Command::Clipboard)});
+    }
     View{title:"Trung tâm điều khiển".into(),
         hint:"Tiện ích Dock · Chọn một mục để mở".into(),
         cards,metrics:None}

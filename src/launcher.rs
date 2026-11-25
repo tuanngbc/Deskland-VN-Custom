@@ -1036,6 +1036,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
 }
 
 pub(crate) fn spotlight_locale(value:&str){fullscreen::locale(value);}
+pub(crate) fn localized<'a>(vi:&'a str,en:&'a str,zh:&'a str)->&'a str{fullscreen::words(vi,en,zh)}
 
 pub fn configure_spotlight(options: library::Preferences) {
     fullscreen::configure(options);

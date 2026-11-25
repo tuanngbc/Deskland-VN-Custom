@@ -10,5 +10,6 @@ Suggested checks:
 2. Try on both displays, including a maximized app. Confirm focus, dimensions and taskbar return after cancellation/exit. Do not change Windows animation or other system policy as a prerequisite.
 3. In both Spotlight modes, enter `25% x (3,5+0,5)`, choose the result and paste it into a blank document. Search for an indexed file or folder you know. Switch modes with F6 and repeat with the same query.
 4. In Settings → Dock & Stage, enable Stage Peek. Hover a card, leave it, and click it. Check that hovering does not take focus. With a minimized source, the preview is available only if a permitted snapshot is cached.
+5. In Settings → Dock & Stage → Utilities, enable Clipboard history. Copy sample text and a small image. Open the history in Control Center, copy an entry back and delete it. Turn the setting off to clear the in-memory session.
 
 Known limits: native animation overlap can make Genie and Drop fall back; no full animated foreign-window lifecycle or expanded Guardian yet. Owner acceptance, resource measurements, demonstrations and public release are pending.
