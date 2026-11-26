@@ -18,6 +18,7 @@ mod fullscreen;
 pub(crate) mod library;
 mod calculator;
 mod index;
+mod settings_pages;
 mod app_menu;
 mod wave;
 
@@ -279,7 +280,7 @@ fn filter(all: &[Entry], query: &str, history: &History) -> Vec<usize> {
         return history.paths.iter().filter_map(|path| indexed.get(&path.to_string_lossy().to_lowercase()).copied()).collect();
     }
     let mut found: Vec<(u8, usize)> = all.iter().enumerate().filter_map(|(i, e)| {
-        let rank = catalog::search_rank(&e.name,&q).or_else(||index::is_indexed(e).then_some(3))?;
+        let rank = catalog::search_rank(&e.name,&q).or_else(||settings_pages::rank(e,&q)).or_else(||index::is_indexed(e).then_some(3))?;
         Some((rank, i))
     }).collect();
     found.sort_by_key(|&(rank, i)| (rank, all[i].kind != "Application"));
@@ -303,9 +304,10 @@ fn refresh() {refresh_results(false);}
 fn refresh_results(keep_selection:bool) {
     let pending = STATE.with(|c| {
         let mut guard = c.borrow_mut(); let s = guard.as_mut()?;
-        // The ephemeral calculation is always appended, so ordinary catalog
-        // indices remain stable while results are being recomputed.
-        while s.all.last().is_some_and(|e|e.kind==calculator::KIND||index::is_indexed(e)){s.all.pop();}
+        let keep=keep_selection.then(||s.matches.get(s.selected).and_then(|&i|s.all.get(i)).map(|e|catalog::identity(&e.path))).flatten();
+        // Rebuild only the ephemeral tail. Keep selection by canonical target
+        // when indexed files arrive ahead of an existing settings result.
+        while s.all.last().is_some_and(|e|e.kind==calculator::KIND||index::is_indexed(e)||settings_pages::is_entry(e)){s.all.pop();}
         let query=s.query.trim().to_lowercase();
         if s.index_query!=query{
             s.index_query=query;
@@ -319,7 +321,7 @@ fn refresh_results(keep_selection:bool) {
                 .map(|e|e.path.to_string_lossy().to_lowercase()).collect();
             s.all.extend(s.index_rows.iter().filter(|e|seen.insert(e.path.to_string_lossy().to_lowercase())).cloned());
         }
-        let keep=keep_selection.then(||s.matches.get(s.selected).copied()).flatten();
+        if !s.dock_start&&!s.query.trim().is_empty(){settings_pages::extend(&mut s.all);}
         s.matches = if s.dock_start&&s.query.trim().is_empty(){start_rows(&s.all,&s.history)}
             else{filter(&s.all,&s.query,&s.history)};
         if !s.dock_start{
@@ -327,7 +329,7 @@ fn refresh_results(keep_selection:bool) {
                 s.matches.insert(0,s.all.len());s.matches.truncate(100);s.all.push(result);
             }
         }
-        s.selected=keep.and_then(|idx|s.matches.iter().position(|&i|i==idx)).unwrap_or(0);
+        s.selected=keep.and_then(|key|s.matches.iter().position(|&i|catalog::identity(&s.all[i].path)==key)).unwrap_or(0);
         s.first=s.first.min(s.selected).max((s.selected+1).saturating_sub(PAGE));if !keep_selection{s.error.clear();}
         Some((s.hwnd,s.index_due.is_some()||s.index_rx.is_some()))
     });
@@ -338,6 +340,7 @@ fn refresh_results(keep_selection:bool) {
 }
 
 fn remember_entry(path: &Path) {
+    if settings_pages::allowed(path){return;}
     STATE.with(|c| { if let Some(s) = c.borrow_mut().as_mut() {
         if s.history.remember(path) { save_history(&s.history); }
     } });
@@ -353,7 +356,7 @@ fn dismiss(hwnd: HWND) {
     if let Some(path) = searched { remember_entry(&path); }
     STATE.with(|c|if let Some(s)=c.borrow_mut().as_mut(){
         s.index_due=None;s.index_rx=None;s.index_rows.clear();s.index_query.clear();
-        while s.all.last().is_some_and(|e|e.kind==calculator::KIND||index::is_indexed(e)){s.all.pop();}
+        while s.all.last().is_some_and(|e|e.kind==calculator::KIND||index::is_indexed(e)||settings_pages::is_entry(e)){s.all.pop();}
     });
     stop_compact_motion(hwnd);
     unsafe { KillTimer(hwnd,7); ShowWindow(hwnd, SW_HIDE); }
@@ -484,6 +487,7 @@ fn launch_selected() {
 
 #[cfg(not(test))]
 unsafe fn execute(hwnd: HWND, path: &Path) -> isize {
+    if path==Path::new(settings_pages::OWN){crate::PENDING_CMD.with(|c|c.set(crate::CMD_SETTINGS));return 33;}
     if let Some(value)=path.to_str().filter(|v|crate::dock::command_pin::decode(v).is_some()){
         return crate::dock::command_pin::open(value);
     }
@@ -896,10 +900,10 @@ unsafe fn paint(hwnd: HWND) {
         let mut icons = Vec::new();
         for (i,entry) in rows.iter().enumerate() {
             let y=px(TOP+i as i32*ROW);
-            if let Some(icon) = (entry.kind!=calculator::KIND).then(||icon_for(hwnd,&entry.path,px(36))).flatten() { icons.push((icon,px(18),y+px(7))); }
-            else { label(dc,match entry.kind{"Application"=>"▣",calculator::KIND=>"=" ,_=>"▤"},RECT{left:px(23),top:y,right:px(52),bottom:y+px(50)},search,secondary); }
+            if let Some(icon) = (entry.kind!=calculator::KIND&&!settings_pages::is_entry(entry)).then(||icon_for(hwnd,&entry.path,px(36))).flatten() { icons.push((icon,px(18),y+px(7))); }
+            else { label(dc,match entry.kind{"Application"=>"▣",calculator::KIND=>"=",settings_pages::KIND=>"⚙",_=>"▤"},RECT{left:px(23),top:y,right:px(52),bottom:y+px(50)},search,secondary); }
             label(dc,&entry.name,RECT {left:px(66),top:y+px(3),right:w-px(77),bottom:y+px(27)},body,primary);
-            let detail=if entry.kind==calculator::KIND{calculator::hint().into()}else{format!("{}{} · {}",if dock_start&&pinned(&entry.path){"Đã ghim · "}else{""},entry.kind,entry.detail)};
+            let detail=if entry.kind==calculator::KIND{calculator::hint().into()}else if settings_pages::is_entry(entry){entry.detail.clone()}else{format!("{}{} · {}",if dock_start&&pinned(&entry.path){"Đã ghim · "}else{""},entry.kind,entry.detail)};
             label(dc,&detail,RECT {left:px(66),top:y+px(27),right:w-px(24),bottom:y+px(46)},small,secondary);
             if i==selected { label(dc,"↵",RECT {left:w-px(49),top:y+px(3),right:w-px(22),bottom:y+px(28)},body,secondary); }
         }

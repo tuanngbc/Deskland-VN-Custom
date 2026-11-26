@@ -357,7 +357,7 @@ impl Category {
             Self::All => true,
             Self::Apps => app_entry(e),
             Self::Files => matches!(e.kind, "File" | "Web shortcut") || super::index::is_indexed(e),
-            Self::System => e.kind == "System",
+            Self::System => e.kind == "System"||super::settings_pages::is_entry(e),
         }
     }
 }
@@ -720,6 +720,7 @@ impl SearchWork {
         let browsing = query.is_empty();
         if !browsing || category == Category::System {
             source.extend(system_items());
+            super::settings_pages::extend(&mut source);
         }
         if !browsing && !hidden && folder==0 && matches!(category,Category::All|Category::Files){
             source.extend(super::index::search(&query));
@@ -760,7 +761,7 @@ impl SearchWork {
                 let rank = if browsing {
                     0
                 } else {
-                    catalog::search_rank(&e.name, &query).or_else(||super::index::is_indexed(&e).then_some(3))?
+                    catalog::search_rank(&e.name, &query).or_else(||super::settings_pages::rank(&e,&query)).or_else(||super::index::is_indexed(&e).then_some(3))?
                 };
                 Some((rank, (TileKey::App(id), e)))
             })
@@ -1311,7 +1312,7 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
             .enumerate()
             .filter_map(|(i, t)| {
                 let r = grid.tiles(i);
-                let key = if t.entry.kind==super::calculator::KIND{None}
+                let key = if t.entry.kind==super::calculator::KIND||super::settings_pages::is_entry(&t.entry){None}
                     else{Some(request_icon(p,t.entry.path.clone(),grid.icon))};
                 let preview_keys: Vec<_> = t
                     .preview
@@ -1325,7 +1326,7 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
             })
             .collect::<Vec<(usize,PaintTile)>>();
         if p.pending.is_empty()&&p.page+1<count_pages(p){
-            let next=p.tiles.iter().skip(start+grid.capacity()).take(8).filter(|t|t.entry.kind!=super::calculator::KIND).map(|t|t.entry.path.clone()).collect::<Vec<_>>();
+            let next=p.tiles.iter().skip(start+grid.capacity()).take(8).filter(|t|t.entry.kind!=super::calculator::KIND&&!super::settings_pages::is_entry(&t.entry)).map(|t|t.entry.path.clone()).collect::<Vec<_>>();
             for path in next{request_icon(p,path,grid.icon);}
         }
         let heading = LIBRARY.with(|l| {
@@ -1465,6 +1466,8 @@ unsafe fn render_full(hwnd: HWND, dc: HDC, dirty: RECT) {
                 );
                 let letter = if t.entry.kind == "Folder" {
                     "▦".into()
+                } else if super::settings_pages::is_entry(&t.entry){
+                    "⚙".into()
                 } else {
                     t.entry.name.chars().take(1).collect::<String>()
                 };
@@ -1898,6 +1901,7 @@ pub(super) fn compact_query() -> Option<(POINT, String, HWND)> {
 }
 
 fn safe_launch(entry: &Entry) -> bool {
+    if entry.kind==super::settings_pages::KIND{return super::settings_pages::allowed(&entry.path);}
     if entry.kind == "Folder" {
         return false;
     }
@@ -3221,6 +3225,17 @@ mod tests {
         assert!(Category::Files.accepts(&entry("Web shortcut")));
         assert!(Category::System.accepts(&entry("System")));
         assert!(!Category::System.accepts(&entry("Application")));
+    }
+    #[test]fn original_settings_pages_use_both_search_rank_and_existing_category_boundaries(){
+        let pages=super::settings_pages::entries();
+        let compact=super::filter(&pages,"do phan giai",&History::default());
+        assert!(compact.iter().any(|&i|pages[i].path==Path::new("ms-settings:display")));
+        let rows=|category,query:&str|SearchWork{source:Vec::new(),lib:Library::default(),query:query.into(),category,folder:0,hidden:false,favorites:false}.rows();
+        assert!(rows(Category::All,"microphone").iter().any(|t|t.entry.path==Path::new("ms-settings:sound")));
+        assert!(rows(Category::System,"").iter().any(|t|t.entry.path==Path::new(super::settings_pages::OWN)));
+        assert!(!rows(Category::Apps,"microphone").iter().any(|t|super::settings_pages::is_entry(&t.entry)));
+        assert!(!rows(Category::Files,"microphone").iter().any(|t|super::settings_pages::is_entry(&t.entry)));
+        for mut page in pages{assert!(safe_launch(&page));page.path="ms-settings:unknown".into();assert!(!safe_launch(&page));}
     }
 }
 

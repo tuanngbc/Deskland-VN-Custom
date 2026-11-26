@@ -326,6 +326,13 @@ jobs:
         run: |
           cargo test --release dock::corners::tests::native_owned_corner_masks_regions_and_foreign_refusal -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify original settings catalog in both Spotlight modes
+        if: ${{ !cancelled() }}
+        run: |
+          $env:TUANPC_SPOTLIGHT_EVIDENCE = Join-Path $env:RUNNER_TEMP 'spotlight-evidence'
+          New-Item -ItemType Directory -Force -Path $env:TUANPC_SPOTLIGHT_EVIDENCE | Out-Null
+          cargo test --release launcher::fullscreen::native_tests::native_original_settings_pages_reach_both_spotlight_modes_without_launching_windows -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Compare live capture source textures with actual screen perimeters
         if: ${{ !cancelled() }}

@@ -5,6 +5,38 @@ use std::time::{Duration, Instant};
 use windows_sys::Win32::System::StationsAndDesktops::*;
 use windows_sys::Win32::System::Threading::*;
 
+#[test]
+#[ignore="actual Compact/Fullscreen localized settings result and keyboard selection on private hosted desktop"]
+fn native_original_settings_pages_reach_both_spotlight_modes_without_launching_windows(){
+    assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(),Ok("true"));
+    unsafe{
+        let _desktop=Desktop::isolated();
+        struct Locale(String);impl Drop for Locale{fn drop(&mut self){super::super::spotlight_locale(&self.0);}}
+        let _locale=Locale(words("vi","en","zh-CN").into());
+        for language in ["vi","en","zh-CN"]{
+            super::super::spotlight_locale(language);
+            super::super::open_compact(Some(POINT{x:0,y:0}),Some("microphone".into()));pump();
+            let (compact,history)=STATE.with(|s|{let s=s.borrow();let s=s.as_ref().unwrap();
+                assert!(s.matches.iter().any(|&i|s.all[i].path==Path::new("ms-settings:sound")));
+                assert_eq!(s.all[s.matches[s.selected]].name,words("Âm thanh","Sound","声音"));(s.hwnd,s.history.json())
+            });
+            STATE.with(|s|s.borrow_mut().as_mut().unwrap().index_rows=vec![Entry{name:"Microphone recording".into(),path:r"C:\synthetic-not-opened\recording.txt".into(),kind:super::super::index::FILE,detail:String::new()}]);
+            super::super::refresh_results(true);
+            STATE.with(|s|{let s=s.borrow();let s=s.as_ref().unwrap();assert_eq!(s.all[s.matches[s.selected]].path,Path::new("ms-settings:sound"),"later indexed result must not change the selected settings target");});
+            SendMessageW(compact,WM_KEYDOWN,VK_RETURN as usize,0);
+            assert_eq!(IsWindowVisible(compact),0);
+            STATE.with(|s|assert_eq!(s.borrow().as_ref().unwrap().history.json(),history));
+            open(POINT{x:0,y:0},"microphone".into(),ptr::null_mut(),false);
+            let hwnd=window().unwrap();wait_for(||PANEL.with(|p|p.borrow().as_ref().is_some_and(|p|p.search_settled&&p.tiles.iter().any(|t|t.entry.path==Path::new("ms-settings:sound")))));
+            PANEL.with(|p|{let p=p.borrow();let p=p.as_ref().unwrap();assert_eq!(p.tiles[p.selected].entry.name,words("Âm thanh","Sound","声音"));});
+            screenshot(hwnd,&format!("spotlight-settings-{language}.png"));
+            SendMessageW(hwnd,WM_KEYDOWN,VK_RETURN as usize,0);assert_eq!(IsWindowVisible(hwnd),0);
+        }
+        super::super::close_spotlight();
+    }
+    println!("FLUIDWIN_SPOTLIGHT_SETTINGS original_pages=29 locales=vi,en,zh compact=PASS fullscreen=PASS keyboard_select=PASS indexed_arrival_selection=PRESERVED app_recent_history=PRESERVED uri_launch=NOT_INVOKED owner_settings_write=NOT_INVOKED");
+}
+
 // Run on the GitHub-hosted desktop only: the compositor cannot sample the
 // private non-input desktop used by the deterministic library fixture below.
 #[test]

@@ -5,6 +5,13 @@
   "note": "Section adaptations, not claims that these full headers were imported. Original CRLF worktree byte hashes and canonical Git blobs are recorded; existing notices and original license are preserved.",
   "sections": [
     {
+      "source": "ricerca.h::pagine settings catalog",
+      "source_git_blob": "cda18f93d518deeed9f2cd9025f7f035832cb822",
+      "source_worktree_sha256": "4a7cc60f3374958220aa735596339455733f74461cf1d131d1a78082e75d0c44",
+      "integration": ["../../src/launcher/settings_pages.rs", "../../src/launcher.rs", "../../src/launcher/fullscreen.rs"],
+      "adaptation": "All 29 original settings destinations and keywords; TLauncher own Settings replaces the FluidWin marker, control/taskmgr reuse existing canonical .exe identities. vi/en/zh labels and keywords, English/Italian original terms retained, Vietnamese accent folding. Existing Compact and Fullscreen search/result/keyboard owners and System category, exact target allowlist and ordinary Windows Shell launch. No new catalog, index, thread, poll timer, network or executable discovery. Ephemeral settings results preserve app/library pins and recents; canonical selection survives later indexed-file arrivals. Gear glyph uses existing text rendering without new per-URI icon work. Actual Windows page reachability/owner interaction remains separate from synthetic hosted tests."
+    },
+    {
       "source": "raggio.h::stile / fattore / preferenzaDwm / registra / riapplica",
       "source_git_blob": "037ac1eb57705a9fecf7dc7d1f5fa22a5e50f7a1",
       "source_worktree_sha256": "a289088cf7e88b65edcf9d8a1114f1923946fe1430cf2ebe4e72e97babd4aefa",
