@@ -3,8 +3,8 @@ use super::{STATE,control_center::{self,Card,Command,View}};
 use crate::{weather,desktop::wide};
 use std::{cell::RefCell,ptr};
 use windows_sys::Win32::{Foundation::*,Globalization::*,UI::WindowsAndMessaging::*};
-#[derive(Clone)]pub(super) enum Action{Open,Refresh(u64),Unit(u64,u8),City,Settings}
-struct Panel{owner:usize,popup:usize,ticket:usize,generation:u64,unit:u8,weather:weather::Snapshot}
+#[derive(Clone)]pub(super) enum Action{Open,Widgets,Refresh(u64),Unit(u64,u8),City,Settings}
+struct Panel{owner:usize,popup:usize,ticket:usize,generation:u64,unit:u8,weather:weather::Snapshot,combined:bool}
 thread_local!{static PANEL:RefCell<Option<Panel>>=const{RefCell::new(None)};}
 impl Drop for Panel{fn drop(&mut self){weather::unsubscribe(self.popup as HWND);}}
 fn text(vi:&str,en:&str,zh:&str)->String{crate::launcher::localized(vi,en,zh).into()}
@@ -56,10 +56,30 @@ impl Panel{
             else if self.weather.failed{text("Chưa tải được thời tiết mới. Dữ liệu cũ có thể đã thay đổi.","Could not refresh weather. Previous data may have changed.","无法刷新天气，先前数据可能已更改。")}
             else{"Open-Meteo".into()};
         let location=self.weather.location.as_ref().map(|l|l.name.as_str()).unwrap_or("");
+        if self.combined{
+            // The illustrated weather card pins its summary/five forecast
+            // actions. Keep News and its original source/action owner below.
+            cards.truncate(self.forecast().rows());
+            cards.push(Card{title:format!("{} · {unit}",text("Đơn vị thời tiết","Weather units","天气单位")),hint:text("Đổi đơn vị","Change units","切换单位"),icon:None,action:Some(Command::Weather(Action::Unit(self.generation,(self.unit+1)%3)))});
+            if self.weather.location.is_some(){cards.push(Card{title:text("Làm mới thời tiết","Refresh weather","刷新天气"),hint:String::new(),icon:None,action:(!self.weather.pending).then_some(Command::Weather(Action::Refresh(self.generation)))});}
+            let news=super::news::view_for(self.popup as HWND,self.ticket);
+            if let Some(news)=news{
+                cards.push(Card{title:text("Tin tức","News","新闻"),hint:news.hint,icon:None,action:None});
+                cards.extend(news.cards);
+            }
+            return View{title:text("Thời tiết và Tin tức","Weather and News","天气和新闻"),hint:status,cards,metrics:None};
+        }
         View{title:if location.is_empty(){title()}else{format!("{} · {location}",title())},hint:status,cards,metrics:None}
     }
 }
 pub(super) fn detach(popup:HWND){PANEL.with(|s|{let mut s=s.borrow_mut();if s.as_ref().is_some_and(|p|p.popup==popup as usize){s.take();}});}
+pub(super) fn combined_for(owner:HWND,popup:HWND,ticket:usize)->bool{
+    PANEL.with(|s|s.borrow().as_ref().is_some_and(|p|p.combined&&p.owner==owner as usize&&p.popup==popup as usize&&p.ticket==ticket))
+}
+pub(super) unsafe fn refresh_combined(owner:HWND,popup:HWND,ticket:usize){
+    let update=PANEL.with(|s|{let s=s.borrow();let p=s.as_ref().filter(|p|p.combined&&p.owner==owner as usize&&p.popup==popup as usize&&p.ticket==ticket)?;Some((p.view(),p.forecast()))});
+    if let Some((view,forecast))=update{if enabled(){control_center::update_forecast(owner,ticket,view,forecast);}}
+}
 pub(super) unsafe fn receive(popup:HWND,ticket:usize){
     if !enabled()||!PANEL.with(|s|s.borrow().as_ref().is_some_and(|p|p.popup==popup as usize&&p.ticket==ticket)){return;}
     let current=weather::snapshot();if current.location.is_some()&&current.reading.is_none()&&!current.failed&&!current.pending{weather::request(false);}
@@ -71,13 +91,16 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
     if !enabled()||IsWindow(owner)==0{return;}
     if matches!(action,Action::City){super::weather_city::open(owner);return;}
     if matches!(action,Action::Settings){super::emit(super::Event::Utility(super::HostAction::Settings));return;}
-    if matches!(action,Action::Open){
+    if matches!(action,Action::Open|Action::Widgets){
         super::utilities::close_panels();weather::request(false);
-        let mut panel=Panel{owner:owner as usize,popup:0,ticket:0,generation:1,unit:STATE.with(|s|s.borrow().prefs.weather_unit),weather:weather::snapshot()};
-        control_center::show_forecast(owner,super::dock_app_anchor(owner,None),panel.view(),panel.forecast());
+        let combined=matches!(action,Action::Widgets);
+        let mut panel=Panel{owner:owner as usize,popup:0,ticket:0,generation:1,unit:STATE.with(|s|s.borrow().prefs.weather_unit),weather:weather::snapshot(),combined};
+        if combined{control_center::show_widgets(owner,super::dock_app_anchor(owner,None),panel.view(),panel.forecast());}
+        else{control_center::show_forecast(owner,super::dock_app_anchor(owner,None),panel.view(),panel.forecast());}
         let (Some(window),Some(ticket))=(control_center::window(owner),control_center::ticket(owner))else{return;};
         weather::subscribe(window,ticket);
-        panel.popup=window as usize;panel.ticket=ticket;PANEL.with(|s|s.replace(Some(panel)));return;
+        panel.popup=window as usize;panel.ticket=ticket;PANEL.with(|s|s.replace(Some(panel)));
+        if combined{super::news::attach(owner,window,ticket);refresh_combined(owner,window,ticket);}return;
     }
     let mut changed_unit=None;
     let update=PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().filter(|p|p.owner==owner as usize&&p.popup==popup as usize)?;
@@ -93,6 +116,87 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
 pub(super) fn reset(){PANEL.with(|s|s.take());}
 #[cfg(test)]mod tests{
     use super::*;
+    #[test]
+    #[ignore="hosted combined Weather/News native pixels, independent actions and shared lifetime; no network/browser"]
+    fn native_combined_widgets_keep_forecast_news_actions_and_lifetime(){
+        use windows_sys::Win32::{System::LibraryLoader::GetModuleHandleW,Graphics::{Dwm::DwmFlush,Gdi::*},UI::Input::KeyboardAndMouse::*};
+        use std::time::{Instant,Duration};
+        use super::super::news;
+        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(),Ok("true"));
+        struct Locale(String);impl Drop for Locale{fn drop(&mut self){crate::launcher::spotlight_locale(&self.0);}}
+        let _locale=Locale(text("vi","en","zh-CN"));
+        unsafe{
+            STATE.with(|s|{let mut s=s.borrow_mut();s.prefs.enabled=true;s.prefs.appearance.theme=super::super::Theme::Light;s.prefs.weather_unit=1;s.prefs.news_source=2;});
+            let owner=CreateWindowExW(WS_EX_TOOLWINDOW,wide("STATIC").as_ptr(),wide("Combined widgets fixture").as_ptr(),WS_POPUP,
+                10,10,260,80,ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());assert!(!owner.is_null());
+            let pump=|done:&dyn Fn()->bool|{
+                let start=Instant::now();while !done(){
+                    let mut msg:MSG=std::mem::zeroed();for _ in 0..64{if PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)==0{break;}TranslateMessage(&msg);DispatchMessageW(&msg);}
+                    assert!(start.elapsed()<Duration::from_secs(5));std::thread::sleep(Duration::from_millis(10));
+                }
+            };
+            for locale in ["vi","en","zh-CN"]{
+                crate::launcher::spotlight_locale(locale);weather::fixture_reading();
+                STATE.with(|s|{let mut s=s.borrow_mut();s.prefs.weather_unit=1;s.prefs.news_source=2;});
+                let shared=weather::current().unwrap();perform(owner,ptr::null_mut(),Action::Widgets);
+                let popup=control_center::window(owner).unwrap();let ticket=control_center::ticket(owner).unwrap();
+                pump(&news::fixture_idle);let news_generation=news::fixture_article(popup,ticket);
+                assert!(combined_for(owner,popup,ticket));assert_eq!(weather::fixture_subscribers(),1);
+                let generation=PANEL.with(|s|{let s=s.borrow();let p=s.as_ref().unwrap();assert!(std::sync::Arc::ptr_eq(&shared,p.weather.reading.as_ref().unwrap()));p.generation});
+                // Each model keeps its own action generation. News source
+                // navigation must not replace or restart the weather owner.
+                news::perform(owner,popup,news::Action::Sources(news_generation.wrapping_sub(1)));
+                assert!(news::view_for(popup,ticket).unwrap().cards.iter().any(|c|matches!(c.action.as_ref(),Some(Command::News(news::Action::Article(..))))));
+                news::perform(owner,popup,news::Action::Sources(news_generation));
+                assert!(news::view_for(popup,ticket).unwrap().cards.iter().any(|c|matches!(c.action.as_ref(),Some(Command::News(news::Action::Source(..))))));
+                // Exercise actual native keyboard paging while the forecast
+                // remains pinned above a longer source list.
+                SendMessageW(popup,WM_KEYDOWN,VK_END as usize,0);SendMessageW(popup,WM_KEYDOWN,VK_RIGHT as usize,0);
+                assert_eq!(control_center::window(owner),Some(popup));assert_eq!(control_center::ticket(owner),Some(ticket));
+                assert_eq!(PANEL.with(|s|s.borrow().as_ref().unwrap().generation),generation);
+                news::perform(owner,popup,news::Action::Back(news_generation));
+                perform(owner,popup,Action::Unit(generation,2));
+                perform(owner,popup,Action::Unit(generation,1)); // old action is refused
+                assert_eq!(STATE.with(|s|s.borrow().prefs.weather_unit),2);
+                assert!(news::view_for(popup,ticket).unwrap().cards.iter().any(|c|c.hint=="14:35"));
+                // Find the article through real keyboard page changes, rather
+                // than assuming a runner resolution or fixed row index.
+                let mut article=control_center::fixture_news_rect(owner);
+                for _ in 0..12{if article.is_some(){break;}SendMessageW(popup,WM_KEYDOWN,VK_END as usize,0);SendMessageW(popup,WM_KEYDOWN,VK_RIGHT as usize,0);article=control_center::fixture_news_rect(owner);}
+                let article=article.expect("combined panel must expose the original News article on a reachable page");
+                let until=Instant::now()+Duration::from_millis(450);pump(&||Instant::now()>=until);
+                UpdateWindow(popup);DwmFlush();let mut bounds:RECT=std::mem::zeroed();GetWindowRect(popup,&mut bounds);
+                let (w,h)=(bounds.right-bounds.left,bounds.bottom-bounds.top);let mut layer=super::super::glass_probe::Layer::new(w,h).unwrap();
+                let screen=GetDC(ptr::null_mut());assert_ne!(BitBlt(layer.dc(),0,0,w,h,screen,bounds.left,bounds.top,SRCCOPY|CAPTUREBLT),0);ReleaseDC(ptr::null_mut(),screen);GdiFlush();
+                let rgba=layer.pixels().chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],255]).collect::<Vec<_>>();
+                if let Some(root)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){image::save_buffer(std::path::PathBuf::from(root).join(format!("widgets-synthetic-{locale}.png")),&rgba,w as u32,h as u32,image::ColorType::Rgba8).unwrap();}
+                let blue=rgba.chunks_exact(4).filter(|p|p[2].saturating_sub(p[0])>40&&p[1].saturating_sub(p[0])>20).count();
+                assert!(blue>4000,"same displayed HWND must retain actual illustrated weather: {locale} {blue}");
+                let px=|n|super::super::panel_chrome::scale(windows_sys::Win32::UI::HiDpi::GetDpiForWindow(popup),n);
+                assert!(article.top>=px(243)&&article.bottom<=h);
+                for (a,b) in [(7,22),(24,39)]{
+                    let ink=rgba.chunks_exact(4).enumerate().filter(|(i,p)|{let x=*i as i32%w;let y=*i as i32/w;x>=article.left+px(8)&&x<article.right-px(52)&&y>=article.top+px(a)&&y<article.top+px(b)&&p[..3].iter().all(|c|*c<100)}).count();
+                    assert!(ink>15,"same displayed HWND must contain News line {a}: {locale} {ink}");
+                }
+                #[cfg(target_env="msvc")]let access={let a=super::super::control_access::get(popup);assert!(!a.is_null());assert_eq!(super::super::control_access::probe(a,control_center::fixture_access_count(owner).unwrap(),0,0),0);a};
+                // Clearing a city must clear only its forecast, leaving the
+                // current news article/model and this exact HWND intact.
+                weather::configure(None);receive(popup,ticket);
+                assert!(PANEL.with(|s|s.borrow().as_ref().unwrap().weather.reading.is_none()));
+                assert!(news::view_for(popup,ticket).unwrap().cards.iter().any(|c|c.hint=="14:35"));
+                assert_eq!(control_center::window(owner),Some(popup));perform(owner,popup,Action::Refresh(generation));assert!(weather::current().is_none());
+                news::perform(owner,popup,news::Action::Source(news_generation,5));
+                news::perform(owner,popup,news::Action::Source(news_generation,2));assert_eq!(STATE.with(|s|s.borrow().prefs.news_source),5);
+                let closed_delivery=news::fixture_closed_delivery(popup,ticket);control_center::close_for(owner);
+                assert!(PANEL.with(|s|s.borrow().is_none()));assert_eq!(weather::fixture_subscribers(),0);
+                closed_delivery();receive(popup,ticket);assert_eq!(IsWindow(popup),0);
+                #[cfg(target_env="msvc")]{assert_eq!(super::super::control_access::probe(access,0,0,3),0);super::super::control_access::release(access);}
+                news::reset();
+            }
+            reset();news::reset();weather::configure(None);DestroyWindow(owner);
+        }
+        println!("FLUIDWIN_WIDGETS same_HWND_ticket=PASS shared_weather=PASS independent_generations=PASS native_keyboard_pages=PASS actual_weather_and_two_news_lines=PASS locales=vi,en,zh MSAA=PASS closed_delivery=REFUSED subscription=RELEASED network_browser=NOT_INVOKED inline_city_layout=INCOMPLETE");
+    }
     #[test]
     #[ignore="native forecast panel over shared synthetic weather, hosted Windows only"]
     fn native_shared_forecast_panel_keeps_city_generation_and_releases_subscription(){

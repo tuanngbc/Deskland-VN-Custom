@@ -400,6 +400,9 @@ pub(super) fn ticket(owner:HWND)->Option<usize>{
 }
 pub(super) fn window(owner:HWND)->Option<HWND>{PANE.with(|s|s.borrow().as_ref().filter(|p|p.owner==owner).map(|p|p.hwnd))}
 #[cfg(test)]pub(super) fn fixture_access_count(owner:HWND)->Option<u32>{PANE.with(|s|s.borrow().as_ref().filter(|p|p.owner==owner).map(|p|(p.cards().len()+if p.pages()>1{2}else{0}) as u32))}
+#[cfg(test)]pub(super) fn fixture_news_rect(owner:HWND)->Option<RECT>{PANE.with(|s|{let s=s.borrow();let p=s.as_ref().filter(|p|p.owner==owner)?;
+    p.cards().iter().enumerate().find_map(|(i,c)|matches!(c.action.as_ref(),Some(Command::News(super::news::Action::Article(..)))).then(||p.rect(i)))
+})}
 pub(super) unsafe fn update(owner:HWND,ticket:usize,view:View){
     let hwnd=PANE.with(|s|{
         let mut slot=s.borrow_mut();
@@ -447,6 +450,7 @@ pub(super) unsafe fn show_news(owner:HWND,anchor:chrome::Anchor,view:View){show_
 pub(super) unsafe fn show_hub(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,true,false,None,None,false);}
 pub(super) unsafe fn show_shelf(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,false,true,None,None,false);shelf_page();}
 pub(super) unsafe fn show_forecast(owner:HWND,anchor:chrome::Anchor,view:View,forecast:super::forecast_card::Card){show_inner(owner,anchor,view,true,false,false,Some(8),Some(forecast),false);}
+pub(super) unsafe fn show_widgets(owner:HWND,anchor:chrome::Anchor,view:View,forecast:super::forecast_card::Card){show_inner(owner,anchor,view,true,false,false,Some(12),Some(forecast),true);}
 unsafe fn shelf_page(){
     let request=PANE.with(|s|{let s=s.borrow();let p=s.as_ref().filter(|p|p.shelf)?;
         let rows=p.cards().into_iter().filter_map(|c|match c.action.as_ref(){

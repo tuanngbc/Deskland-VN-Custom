@@ -5,6 +5,13 @@
   "note": "Section adaptations, not claims that these full headers were imported. Original CRLF worktree byte hashes and canonical Git blobs are recorded; existing notices and original license are preserved.",
   "sections": [
     {
+      "source": "centro.h::Motore::disegnaWidget combined Weather and News surface",
+      "source_git_blob": "942c4ae64c59c5763801d541d70da4172f46a4a3",
+      "source_worktree_sha256": "da7eaf30d8b4911826b623b81ef41291c7a2e5b17368456364462f341c1c8d1d",
+      "integration": ["../../src/dock/weather_panel.rs","../../src/dock/news.rs","../../src/dock/control_center.rs","../../src/dock/utilities.rs"],
+      "adaptation": "One existing native Control Center HWND/ticket pins original illustrated forecast above original two-line News/source/status rows. Existing wallpaper weather subscriber/cache and bounded News worker/cache remain sole data owners; independent generation/action validation and source navigation, keyboard paging and native MSAA remain. Delivery releases its own model borrow before rebuilding the combined view; close detaches both owners and refuses late results. Standalone routes are retained. Original expanding inline city search and full Control Center fidelity remain incomplete; hosted actual combined pixel/action/lifetime fixtures pending. No second widget service/cache/request engine or persistent render loop."
+    },
+    {
       "source": "fluidwin.cpp::EVENT_OBJECT_LOCATIONCHANGE custom-app dragging / gUltimoPosto / gTrascinoApp",
       "source_git_blob": "17519dee3f8d60b3599b427cbb33a297dd9129cf",
       "source_worktree_sha256": "e635f67fcce5978aca9d2f79da57529f4c18ff79fd59dee707c961e3b32350ef",

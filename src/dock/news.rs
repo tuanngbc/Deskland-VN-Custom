@@ -109,13 +109,24 @@ impl Panel{
     }
 }
 pub(super) fn detach(popup:HWND){PANEL.with(|s|{let mut s=s.borrow_mut();if s.as_ref().is_some_and(|p|p.popup==popup as usize){s.take();}});}
+pub(super) fn view_for(popup:HWND,ticket:usize)->Option<View>{PANEL.with(|s|s.borrow().as_ref().filter(|p|p.popup==popup as usize&&p.ticket==ticket).map(|p|p.view()))}
+pub(super) unsafe fn attach(owner:HWND,popup:HWND,ticket:usize){
+    let source=STATE.with(|s|s.borrow().prefs.news_source);
+    let cached=CACHE.with(|c|c.borrow().as_ref().filter(|(s,at,_)|*s==source&&at.elapsed()<Duration::from_secs(600)).map(|(_,_,v)|v.clone()));
+    let mut panel=Panel{owner:owner as usize,popup:popup as usize,ticket,generation:1,source,sources:false,pending:false,view:cached.clone().unwrap_or_default(),work:Arc::default()};
+    if cached.is_none(){panel.submit();}PANEL.with(|s|s.replace(Some(panel)));
+}
+unsafe fn publish(owner:HWND,popup:HWND,ticket:usize,view:View){
+    if super::weather_panel::combined_for(owner,popup,ticket){super::weather_panel::refresh_combined(owner,popup,ticket);}
+    else{control_center::update(owner,ticket,view);}
+}
 pub(super) unsafe fn receive(popup:HWND,ticket:usize){
     let update=PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().filter(|p|p.popup==popup as usize&&p.ticket==ticket)?;
         let incoming=p.work.answer.lock().ok()?.take()?;p.pending=false;p.generation=p.generation.wrapping_add(1);
         if !incoming.failed{CACHE.with(|c|c.replace(Some((p.source,Instant::now(),incoming.clone()))));p.view=incoming;}else{p.view.failed=true;}
         Some((p.owner,p.ticket,p.view()))
     });
-    if let Some((owner,ticket,view))=update{if enabled(){control_center::update(owner as HWND,ticket,view);}}
+    if let Some((owner,ticket,view))=update{if enabled(){publish(owner as HWND,popup,ticket,view);}}
 }
 pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
     if !enabled()||IsWindow(owner)==0{return;}
@@ -123,10 +134,7 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
         super::utilities::close_panels();
         control_center::show_news(owner,super::dock_app_anchor(owner,None),View{title:title(),hint:String::new(),cards:Vec::new(),metrics:None});
         let (Some(window),Some(ticket))=(control_center::window(owner),control_center::ticket(owner))else{return;};
-        let source=STATE.with(|s|s.borrow().prefs.news_source);
-        let cached=CACHE.with(|c|c.borrow().as_ref().filter(|(s,at,_)|*s==source&&at.elapsed()<Duration::from_secs(600)).map(|(_,_,v)|v.clone()));
-        let mut panel=Panel{owner:owner as usize,popup:window as usize,ticket,generation:1,source,sources:false,pending:false,view:cached.clone().unwrap_or_default(),work:Arc::default()};
-        if cached.is_none(){panel.submit();}let view=panel.view();PANEL.with(|s|s.replace(Some(panel)));control_center::update(owner,ticket,view);return;
+        attach(owner,window,ticket);if let Some(view)=view_for(window,ticket){control_center::update(owner,ticket,view);}return;
     }
     let mut article=None;let mut changed_source=None;
     let update=PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().filter(|p|p.owner==owner as usize&&p.popup==popup as usize&&!p.pending)?;
@@ -144,7 +152,23 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
     });
     if let Some(source)=changed_source{STATE.with(|s|s.borrow_mut().prefs.news_source=source);super::emit(super::Event::Edit(super::Edit::NewsSource(source)));}
     if let Some(url)=article{if !cfg!(test){ShellExecuteW(owner,wide("open").as_ptr(),wide(&url).as_ptr(),ptr::null(),ptr::null(),SW_SHOWNORMAL);}}
-    if let Some((ticket,view))=update{control_center::first_page(owner,ticket);control_center::update(owner,ticket,view);}
+    if let Some((ticket,view))=update{control_center::first_page(owner,ticket);publish(owner,popup,ticket,view);}
+}
+#[cfg(test)]pub(super) fn fixture_idle()->bool{!WORKER.load(Ordering::Acquire)&&PANEL.with(|s|s.borrow().as_ref().is_none_or(|p|!p.pending))}
+#[cfg(test)]pub(super) unsafe fn fixture_article(popup:HWND,ticket:usize)->u64{
+    let generation=PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().unwrap();assert_eq!((p.popup,p.ticket),(popup as usize,ticket));assert!(!p.pending);
+        p.view=Snapshot{failed:false,items:vec![Item{title:text("Tin thử nghiệm: thời tiết hôm nay và dự báo những ngày tiếp theo trong tuần","Synthetic headline about today's weather and the forecast for the coming week","这是用于检验天气和新闻同一面板的两行标题示例内容"),url:"https://example.invalid/widgets".into(),time:"14:35".into()}]};p.generation
+    });
+    let owner=PANEL.with(|s|s.borrow().as_ref().unwrap().owner);publish(owner as HWND,popup,ticket,view_for(popup,ticket).unwrap());generation
+}
+#[cfg(test)]pub(super) fn fixture_closed_delivery(popup:HWND,ticket:usize)->impl FnOnce(){
+    let work=PANEL.with(|s|s.borrow().as_ref().unwrap().work.clone());
+    move||{
+        assert!(work.closed.load(Ordering::Acquire));
+        *work.answer.lock().unwrap()=Some(Snapshot::default());
+        unsafe{receive(popup,ticket);}
+        assert!(PANEL.with(|s|s.borrow().is_none()));
+    }
 }
 pub(super) fn reset(){PANEL.with(|s|s.take());CACHE.with(|s|s.take());}
 

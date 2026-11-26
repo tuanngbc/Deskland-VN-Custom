@@ -187,7 +187,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
           git rev-parse HEAD | Set-Content (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'early-news-source.txt')
           $newsFailed = $false
-          foreach ($fixture in 'dock::news_card::tests::native_news_rows_wrap_two_lines_preserve_glass_and_timestamp','dock::control_center::tests::native_news_failure_releases_canvas_and_preserves_accessible_list','dock::news::tests::native_news_panel_rejects_stale_actions_and_closed_results') {
+          foreach ($fixture in 'dock::news_card::tests::native_news_rows_wrap_two_lines_preserve_glass_and_timestamp','dock::control_center::tests::native_news_failure_releases_canvas_and_preserves_accessible_list','dock::news::tests::native_news_panel_rejects_stale_actions_and_closed_results','dock::weather_panel::tests::native_combined_widgets_keep_forecast_news_actions_and_lifetime') {
             cargo test --release $fixture -- --ignored --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'early-news.log') -Append
             if ($LASTEXITCODE -ne 0) { $newsFailed = $true }
           }
@@ -202,6 +202,7 @@ jobs:
             ${{ runner.temp }}/stage-fixture-evidence/early-news-source.txt
             ${{ runner.temp }}/stage-fixture-evidence/early-news.log
             ${{ runner.temp }}/stage-fixture-evidence/news-*.png
+            ${{ runner.temp }}/stage-fixture-evidence/widgets-*.png
           retention-days: 14
           if-no-files-found: warn
 
