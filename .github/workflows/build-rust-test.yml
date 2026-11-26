@@ -95,6 +95,8 @@ jobs:
           git rev-parse HEAD | Set-Content (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'early-source.txt')
           cargo test --release dock::volume_osd::tests::native_volume_osd_displays_confirmed_values_without_audio_or_input -- --ignored --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'early-osd.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::battery_notices::tests::native_power_subscriptions_release_without_power_policy_writes -- --ignored --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'early-osd.log') -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify original static snapshots and bounded hung-source ownership
         if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}

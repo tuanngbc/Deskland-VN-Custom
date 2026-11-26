@@ -13,6 +13,9 @@ public:
     double speed = 0.70;
     bool animate = true;
     std::wstring mutedLabel = L"Muted";
+    std::wstring noticeText;
+    int noticePercent = -1;
+    bool noticeCharging = false;
     std::function<void()> onHidden;
     HWND window() const { return v.fin; }
     bool inizializza() {
@@ -29,7 +32,7 @@ public:
             v.aggiornaTema();
             const RECT a = target ? *target : vetro::areaPrincipale();
             v.dpi = vetro::dpiMonitor(MonitorFromPoint({a.left, a.top}, MONITOR_DEFAULTTOPRIMARY));
-            const int w = (int)std::lround(300 * v.dpi), h = (int)std::lround(52 * v.dpi);
+            const int w = (int)std::lround((noticeText.empty() ? 300 : 372) * v.dpi), h = (int)std::lround(52 * v.dpi);
             x = (a.left + a.right - w) / 2; y = a.top + (int)std::lround(14 * v.dpi);
             v.posiziona(x, y - (int)std::lround(12 * v.dpi), w, h, HWND_TOPMOST, SWP_SHOWWINDOW);
             // (rifatto se la scala e' cambiata, per esempio il principale ora al 150%: R20261121-120306 su S18)
@@ -39,7 +42,7 @@ public:
             t0 = ora; stato = 1;
             vetro::battito(v.fin, 1);
         } else if (stato == 3) { stato = 1; t0 = ora - (ULONGLONG)(k * 180 / speed); }   // stava uscendo: torna
-        tFine = ora + 1400;
+        tFine = ora + (noticeText.empty() ? 1400 : 2500);
         if (!animate) { stato = 2; k = 1; livelloVis = livelloObj; v.alfa(1); SetWindowPos(v.fin, HWND_TOPMOST, x, y, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE); }
         vetro::battito(v.fin, 1);
         disegna();
@@ -92,6 +95,19 @@ private:
         if (!v.inizia()) return;
         const float d = v.dpi, W = (float)v.W, H = (float)v.H, cy = H / 2;
         const D2D1_COLOR_F ink = v.inchiostro();
+        if (!noticeText.empty()) {
+            if (fmt) fmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            // Original notch.h::batteriaSimbolo geometry, with the shared glass
+            // ink for a light theme. Independent utility; no Notch is created.
+            const float cx = 24 * d, w = 18 * d, h = 9 * d, x = cx - w / 2 - d, y = cy - h / 2;
+            auto outline = ink; outline.a *= .55f; v.pen->SetColor(outline);
+            v.rt->DrawRoundedRectangle({{x,y,x+w,y+h},2.5f*d,2.5f*d},v.pen,1.2f*d);
+            v.rt->FillRoundedRectangle({{x+w+d,cy-2*d,x+w+2.6f*d,cy+2*d},.8f*d,.8f*d},v.pen);
+            const float k = std::clamp(noticePercent < 0 ? .5f : noticePercent / 100.f, .08f, 1.f);
+            v.pen->SetColor(noticeCharging ? D2D1::ColorF(.2f,.84f,.29f,1) : noticePercent>=0&&noticePercent<=20 ? D2D1::ColorF(1,.27f,.23f,1) : ink);
+            v.rt->FillRoundedRectangle({{x+2*d,y+2*d,x+2*d+(w-4*d)*k,y+h-2*d},1.2f*d,1.2f*d},v.pen);
+            v.testo(noticeText,fmt,{48*d,0,W-16*d,H},ink);v.finisci();return;
+        }
         // altoparlante
         const float sx = 22 * d;
         v.pen->SetColor(ink);
