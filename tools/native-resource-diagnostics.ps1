@@ -43,7 +43,13 @@ while ($clock.Elapsed.TotalSeconds -lt $Seconds) {
         $changed = $false
         foreach ($entry in $table) {
             $id = [int]$entry.ProcessId; $parent = [int]$entry.ParentProcessId
-            if (!$owned.ContainsKey($id) -and $owned.ContainsKey($parent) -and $entry.CreationDate -ge $owned[$parent].CreationDate) {
+            # Apps opened by the Launcher are user workloads, not TLauncher
+            # helpers. Include only packaged executables and the upstream cursor
+            # archive helper, not Chrome/Explorer/etc launched from the Dock.
+            $helper=$entry.ExecutablePath -and (
+                $entry.ExecutablePath.StartsWith($candidateDir+'\',[StringComparison]::OrdinalIgnoreCase) -or
+                $entry.ExecutablePath -ieq (Join-Path $env:SystemRoot 'System32\tar.exe'))
+            if ($helper -and !$owned.ContainsKey($id) -and $owned.ContainsKey($parent) -and $entry.CreationDate -ge $owned[$parent].CreationDate) {
                 $owned[$id] = $entry; $changed = $true
             }
         }
@@ -80,6 +86,7 @@ while ($clock.Elapsed.TotalSeconds -lt $Seconds) {
             }
             [pscustomobject]@{
                 pid=$id; name=$proc.ProcessName; isMain=($id -eq $rootId)
+                isGuardian=($owned[$id].CommandLine -match '(?:^|\s)--guardiano(?:\s|$)')
                 workingSetBytes=$proc.WorkingSet64; privateBytes=$proc.PrivateMemorySize64
                 privateWorkingSetBytes=$(if($privateWs.ContainsKey($id)){$privateWs[$id]}else{$null})
                 cpuPercent=$cpuPercent; threads=$proc.Threads.Count; handles=$proc.HandleCount
@@ -128,7 +135,7 @@ $gpuStats = @($gpuRows | Group-Object adapter | ForEach-Object {
 })
 $report = [pscustomobject]@{
     scenario=$Scenario; commit=(Get-Content -LiteralPath (Join-Path $candidateDir 'BUILD-COMMIT.txt') -Raw).Trim()
-    scope='Exact TEST main, exact-executable/session/owner-PID detached Guardian, and observed descendants. Working-set sum can double-count shared pages; private working set avoids shared-page sum. DWM and sampler excluded. GPU is busiest combined physical engine per adapter, not summed across unlike engines/adapters. Null means unavailable. CI verifies the sampler with the native main and detached Guardian. Owner measurements remain opt-in.'
+    scope='Exact TEST main, detached Guardian matched to live owner PID/path/session, and observed packaged/cursor archive helpers. User apps launched from Dock, DWM and sampler excluded. Working-set sum can double-count shared pages. GPU is busiest combined physical engine per adapter, not summed across unlike engines/adapters. Null means unavailable. Owner measurements remain opt-in.'
     sampleCount=$rows.Count; workingSetMiB=(Stats $totals.workingSetMiB); privateBytesMiB=(Stats $totals.privateMiB)
     privateWorkingSetMiB=(Stats $totals.privateWorkingSetMiB); cpuPercent=(Stats $totals.cpuPercent); gpuPerAdapter=$gpuStats; gpuCombinedEngineSamples=$gpuRows; samples=$rows
 }

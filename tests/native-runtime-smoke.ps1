@@ -1,5 +1,6 @@
 param([Parameter(Mandatory)][string]$Exe,[Parameter(Mandatory)][string]$Evidence)
 $ErrorActionPreference='Stop'
+if($env:GITHUB_ACTIONS -ne 'true'){throw 'Runtime verification is allowed only on GitHub-hosted Actions.'}
 Add-Type @'
 using System; using System.Runtime.InteropServices;
 public static class NativeSmoke {
@@ -56,6 +57,8 @@ try {
     & (Join-Path (Split-Path -Parent $Exe) 'native-resource-diagnostics.ps1') -Scenario ci_smoke -Seconds 10
     if($LASTEXITCODE  -ne  0){throw 'Resource sampler failed'}
     Copy-Item (Join-Path (Split-Path -Parent $Exe) 'diagnostics/*.json') $Evidence
+    $sample=Get-Content (Get-ChildItem (Join-Path (Split-Path -Parent $Exe) 'diagnostics') -Filter '*.json'|Select-Object -First 1).FullName -Raw|ConvertFrom-Json
+    if($sample.sampleCount -lt 2 -or @($sample.samples|Where-Object {@($_.processes|Where-Object isGuardian).Count -eq 1}).Count -eq 0){throw 'Sampler did not account for the detached Guardian'}
     foreach($script in Get-ChildItem tools -Filter '*native*.ps1') {
         $tokens=$null;$errors=$null
         $null=[Management.Automation.Language.Parser]::ParseFile($script.FullName,[ref]$tokens,[ref]$errors)

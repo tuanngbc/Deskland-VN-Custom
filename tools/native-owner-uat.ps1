@@ -7,7 +7,7 @@ $requestedRestore=$RestoreOnly
 . (Join-Path $PSScriptRoot 'legacy-uat-library.ps1') -LibraryOnly
 $RestoreOnly=$requestedRestore
 $mutex=[Threading.Mutex]::new($false,'Local\TLauncherOwnerUatSwitch')
-$held=$false;$restore=$false;$failure=$null
+$held=$false;$restore=$false;$failure=$null;$resumeAutostart=$false
 $statePath=Join-Path $PSScriptRoot 'native-uat-state.json'
 function Native-MutexExists {
     try{$m=[Threading.Mutex]::OpenExisting('Local\TLauncher.Native.Istanza');$m.Dispose();return $true}
@@ -55,9 +55,11 @@ try {
         if($plan.WasRunning){return}
         $saved=Get-Content -LiteralPath $statePath -Raw|ConvertFrom-Json
         if(!$saved.wasRunning -or !(Same-Path $saved.production $production)){throw 'No production recovery state'}
+        $resumeAutostart=$saved.autostartRole
         $restore=$true
     }else{
-        @{wasRunning=$plan.WasRunning;production=$production;sourceCommit=$verified.sourceCommit;profile=$profile}|
+        $resumeAutostart=$plan.WasRunning -and $plan.Main.CommandLine -match '(?:^|\s)--autostart(?:\s|$)'
+        @{wasRunning=$plan.WasRunning;production=$production;sourceCommit=$verified.sourceCommit;profile=$profile;autostartRole=$resumeAutostart}|
             ConvertTo-Json|Set-Content -LiteralPath $statePath -Encoding UTF8
         if($plan.WasRunning){
             $now=Get-LaunchPlan @(Get-SessionProcesses) $production $candidate
@@ -94,7 +96,8 @@ finally{
             $remaining=@(Get-SessionProcesses)
             if(!$remaining.Count){
                 if(!(Wait-NativeVacant 45)){throw 'Recovery is still active; production was not restarted concurrently.'}
-                Start-Process -FilePath $production -WorkingDirectory (Split-Path -Parent $production) -WindowStyle Hidden
+                if($resumeAutostart){Start-Process -FilePath $production -ArgumentList '--autostart' -WorkingDirectory (Split-Path -Parent $production) -WindowStyle Hidden}
+                else{Start-Process -FilePath $production -WorkingDirectory (Split-Path -Parent $production) -WindowStyle Hidden}
             }else{
                 $plan=Get-LaunchPlan $remaining $production $candidate
                 if(!$plan.WasRunning){throw 'Wait for Guardian before reopening production.'}

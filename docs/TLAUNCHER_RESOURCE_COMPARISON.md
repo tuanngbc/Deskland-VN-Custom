@@ -11,6 +11,9 @@
 
 Targets remain 100–150 MB ordinary RAM, ~1% idle CPU, ~3% GPU; these are not results.
 Count main + detached Guardian + helpers. Compare equal cold/warm startup,
+Exclude user applications opened from the Dock from the TLauncher total; the
+sampler restricts descendant membership to packaged binaries and cursor archive
+helpers, alongside its separately identified Guardian.
 first Dock/input/Launcher/animation/Settings, fullscreen, both displays, idle and
 covered workloads. Do not trim memory, change visual quality or introduce delays.
 
