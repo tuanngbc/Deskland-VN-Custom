@@ -4,7 +4,9 @@ param([Parameter(Mandatory)][long]$RunId,[Parameter(Mandatory)][ValidatePattern(
  [string]$UatRoot='E:\TLauncher-UAT',[string]$ProductionExe='E:\TLauncher\TLauncher.exe')
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
+$requestedProduction=$ProductionExe
 . (Join-Path $PSScriptRoot 'legacy-uat-library.ps1') -LibraryOnly
+$ProductionExe=$requestedProduction
 $root=[IO.Path]::GetFullPath($UatRoot).TrimEnd('\')
 if([IO.Path]::GetFileName($root)  -ine  'TLauncher-UAT'  -or  !(Test-Path $ProductionExe)  -or 
  (Get-Item $ProductionExe).VersionInfo.ProductVersion  -cne  '1.0.2'){throw 'Invalid UAT root or production'}

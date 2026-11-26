@@ -72,7 +72,14 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Restore exact hosted native build
+        id: native-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: native-build
+          key: native-base-ucrt64-unicode-v1-${{ hashFiles('native/fluidwin/*.h','native/fluidwin/fluidwin.cpp','native/fluidwin/icona.rc','native/fluidwin/icona.ico','native/fluidwin/sfondi/*.jpg','tests/native-base-contract.cpp') }}
       - uses: msys2/setup-msys2@v2
+        if: steps.native-cache.outputs.cache-hit != 'true'
         with:
           msystem: UCRT64
           update: false
@@ -81,6 +88,8 @@ jobs:
         shell: pwsh
         run: ./tests/native-source-audit.ps1
       - name: Compile complete upstream-based application and lifecycle contract
+        id: native-compile
+        if: steps.native-cache.outputs.cache-hit != 'true'
         shell: msys2 {0}
         run: |
           set -euo pipefail
@@ -90,10 +99,16 @@ jobs:
           g++ -O2 -std=gnu++20 -Wall -municode -mwindows native/fluidwin/fluidwin.cpp native-build/icon.o -o native-build/TLauncher.exe $libs -static
           g++ -O2 -std=gnu++20 -Wall -DUNICODE -D_UNICODE tests/native-base-contract.cpp native-build/icon.o -o native-build/native-contract.exe $libs -static
           mkdir -p native-build/runtime-licenses
-          for license_dir in /ucrt64/share/licenses/gcc* /ucrt64/share/licenses/libwinpthread* /ucrt64/share/licenses/mingw-w64*; do
+          for license_dir in /ucrt64/share/licenses/gcc* /ucrt64/share/licenses/libgcc* /ucrt64/share/licenses/libstdc++* /ucrt64/share/licenses/cc-libs* /ucrt64/share/licenses/libwinpthread* /ucrt64/share/licenses/mingw-w64*; do
             if [ -d "$license_dir" ]; then cp -r "$license_dir" native-build/runtime-licenses/; fi
           done
           test -n "$(ls -A native-build/runtime-licenses)"
+      - name: Retain successful hosted compilation independently of runtime result
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
+        uses: actions/cache/save@v4
+        with:
+          path: native-build
+          key: native-base-ucrt64-unicode-v1-${{ hashFiles('native/fluidwin/*.h','native/fluidwin/fluidwin.cpp','native/fluidwin/icona.rc','native/fluidwin/icona.ico','native/fluidwin/sfondi/*.jpg','tests/native-base-contract.cpp') }}
       - name: Verify real profile, Notch resources, native startup and Guardian recovery
         shell: pwsh
         run: |

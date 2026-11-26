@@ -3,7 +3,9 @@
 param([switch]$RestoreOnly)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
+$requestedRestore=$RestoreOnly
 . (Join-Path $PSScriptRoot 'legacy-uat-library.ps1') -LibraryOnly
+$RestoreOnly=$requestedRestore
 $mutex=[Threading.Mutex]::new($false,'Local\TLauncherOwnerUatSwitch')
 $held=$false;$restore=$false;$failure=$null
 $statePath=Join-Path $PSScriptRoot 'native-uat-state.json'
