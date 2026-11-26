@@ -280,7 +280,7 @@ public:
         r = 0;
         switch (m) {
             case WM_CLOSE:chiudi();return true;
-            case WM_GETOBJECT:if(l==OBJID_CLIENT){if(!provider)provider=new(std::nothrow)tlauncher_snap_access::Accessible(access);if(provider)r=LresultFromObject(IID_IAccessible,wp,provider);return true;}break;
+            case WM_GETOBJECT:if(static_cast<LONG>(l)==OBJID_CLIENT){if(aperto&&!uscendo&&fin.fin){if(!provider)provider=new(std::nothrow)tlauncher_snap_access::Accessible(access);if(provider)r=LresultFromObject(IID_IAccessible,wp,provider);}return true;}break;
             case tlauncher_snap_access::SELECT:case tlauncher_snap_access::CHOOSE:{
                 if(l!=reinterpret_cast<LPARAM>(access.get())||!aperto||uscendo)return true;
                 int n=0;auto ds=disposizioni(n);int index=int(wp);if(index<0||index>=11)return true;sopraD=0;
@@ -367,11 +367,11 @@ private:
         updateAccess();
     }
     void updateAccess(){
-        tlauncher_snap_access::Snapshot value;value.window=fin.fin;value.title=panelTitle;value.action=actionLabel;value.labels=labels;
+        tlauncher_snap_access::Snapshot value;value.window=aperto&&!uscendo?fin.fin:nullptr;value.title=panelTitle;value.action=actionLabel;value.labels=labels;
         int n=0;auto ds=disposizioni(n);RECT window{};if(fin.fin)GetWindowRect(fin.fin,&window);
         int index=0;for(int d=0;d<n;d++)for(int c=0;c<ds[d].n;c++,index++){
             auto r=casella(d,c);value.regions.push_back({window.left+(LONG)std::floor(r.left),window.top+(LONG)std::floor(r.top),window.left+(LONG)std::ceil(r.right),window.top+(LONG)std::ceil(r.bottom)});
-            if(d==sopraD&&c==sopraC)value.selected=index;
+            if(value.window&&d==sopraD&&c==sopraC)value.selected=index;
         }
         std::lock_guard<std::mutex> guard(access->mutex);access->state=std::move(value);
     }
