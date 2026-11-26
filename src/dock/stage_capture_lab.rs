@@ -595,12 +595,22 @@ fn native_scale_production_owned_external_windows(){
 #[test]
 #[ignore="real hosted native-animation policy with detached Guardian and foreign motion handoff; restores runner policy afterwards"]
 fn native_guarded_motion_with_windows_animations_enabled(){
+    guarded_motion_fixture(false);
+}
+#[cfg(all(test,target_env="msvc"))]
+#[test]
+#[ignore="same detached Guardian in compatibility mode, native Windows animation enabled; no taskbar mutation"]
+fn native_guarded_motion_in_compatibility_mode(){
+    guarded_motion_fixture(true);
+}
+#[cfg(all(test,target_env="msvc"))]
+fn guarded_motion_fixture(compatibility:bool){
     if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
     use std::ffi::OsString;
-    struct Restore{animation:ANIMATIONINFO,env:Vec<(&'static str,Option<OsString>)>}
+    struct Restore{animation:ANIMATIONINFO,env:Vec<(&'static str,Option<OsString>)>,compatibility:bool}
     impl Drop for Restore{fn drop(&mut self){unsafe{
         super::window_effect::reset();
-        let child=super::TASKBAR_WATCH.with(|w|w.borrow_mut().take().and_then(|w|w.stop()));
+        let child=if self.compatibility{super::motion_guard::take_fixture()}else{super::TASKBAR_WATCH.with(|w|w.borrow_mut().take().and_then(|w|w.stop()))};
         if let Some(mut child)=child{
             let start=Instant::now();let mut msg:MSG=std::mem::zeroed();
             while child.try_wait().ok().flatten().is_none()&&start.elapsed()<Duration::from_secs(5){
@@ -615,7 +625,7 @@ fn native_guarded_motion_with_windows_animations_enabled(){
         let mut original:ANIMATIONINFO=std::mem::zeroed();original.cbSize=std::mem::size_of::<ANIMATIONINFO>() as u32;
         assert_ne!(SystemParametersInfoW(SPI_GETANIMATION,original.cbSize,(&mut original as *mut ANIMATIONINFO).cast(),0),0);
         let before=original.iMinAnimate;
-        let restore=Restore{animation:original,env:["TUANPC_GUARD_FIXTURE","TUANPC_GUARDED_MOTION_FIXTURE"].into_iter().map(|k|(k,std::env::var_os(k))).collect()};
+        let restore=Restore{animation:original,compatibility,env:["TUANPC_GUARD_FIXTURE","TUANPC_GUARDED_MOTION_FIXTURE"].into_iter().map(|k|(k,std::env::var_os(k))).collect()};
         let mut enabled=ANIMATIONINFO{cbSize:std::mem::size_of::<ANIMATIONINFO>() as u32,iMinAnimate:1};
         assert_ne!(SystemParametersInfoW(SPI_SETANIMATION,enabled.cbSize,(&mut enabled as *mut ANIMATIONINFO).cast(),0),0);
         let mut observed:ANIMATIONINFO=std::mem::zeroed();observed.cbSize=enabled.cbSize;
@@ -623,10 +633,12 @@ fn native_guarded_motion_with_windows_animations_enabled(){
         std::env::set_var("TUANPC_GUARD_FIXTURE","{}");std::env::set_var("TUANPC_GUARDED_MOTION_FIXTURE","1");
         let mut guard=super::taskbar_guard::Watch::start_motion_fixture().unwrap();let start=Instant::now();
         while !guard.poll().unwrap()||guard.motion_session().is_none(){assert!(start.elapsed()<Duration::from_secs(8));std::thread::sleep(Duration::from_millis(20));}
-        super::TASKBAR_WATCH.with(|w|w.replace(Some(guard)));
+        if compatibility{
+            super::motion_guard::install_fixture(guard);assert!(!super::taskbar_active());
+        }else{super::TASKBAR_WATCH.with(|w|w.replace(Some(guard)));}
         native_scale_production_owned_external_windows();
         drop(restore);
         assert_ne!(SystemParametersInfoW(SPI_GETANIMATION,observed.cbSize,(&mut observed as *mut ANIMATIONINFO).cast(),0),0);assert_eq!(observed.iMinAnimate,before);
     }
-    println!("FLUIDWIN_GUARDED_MOTION windows_native_animation=ENABLED scale_genie_drop=EXERCISED reversal=EXERCISED runner_policy=RESTORED owner_quality=NOT_VERIFIED");
+    println!("FLUIDWIN_GUARDED_MOTION mode={} windows_native_animation=ENABLED scale_genie_drop=EXERCISED reversal=EXERCISED runner_policy=RESTORED owner_quality=NOT_VERIFIED",if compatibility{"compatibility"}else{"taskbar"});
 }

@@ -15,7 +15,7 @@ impl Lease{
     pub(super) unsafe fn begin(hwnd:HWND)->Option<Self>{
         #[cfg(target_env="msvc")]
         {
-            let (pid,marker)=super::TASKBAR_WATCH.with(|w|w.borrow().as_ref().and_then(super::taskbar_guard::Watch::motion_session))?;
+            let (pid,marker)=super::motion_guard::session()?;
             let process=OpenProcess(0x0010_0000,0,pid);
             if process.is_null(){return None;}
             let lease=tlauncher_window_lease(hwnd,process,crate::desktop::wide(&marker).as_ptr());

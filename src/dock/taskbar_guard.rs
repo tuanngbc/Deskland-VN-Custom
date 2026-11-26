@@ -351,7 +351,8 @@ impl Watch {
         Self::start_with(all,hidden)
     }
     #[cfg(test)]
-    pub(super) unsafe fn start_motion_fixture()->Result<Self,String>{Self::start_with(Vec::new(),Vec::new())}
+    pub(super) unsafe fn start_motion_fixture()->Result<Self,String>{Self::start_motion()}
+    pub(super) unsafe fn start_motion()->Result<Self,String>{Self::start_with(Vec::new(),Vec::new())}
     unsafe fn start_with(all:Vec<Snapshot>,hidden:Vec<WindowId>)->Result<Self,String>{
         let pid=std::process::id();
         let birth=process_birth(GetCurrentProcess()).ok_or("Không xác minh được phiên tiến trình TLauncher.")?;

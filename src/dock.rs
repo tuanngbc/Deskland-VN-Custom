@@ -39,6 +39,7 @@ mod stage_snapshot;
 mod window_effect;
 mod shell_menu;
 mod window_lease;
+mod motion_guard;
 mod fluidwin_mesh;
 mod stage_peek;
 mod clipboard_history;
@@ -2329,6 +2330,7 @@ unsafe fn set_taskbar_hidden(hidden:bool){
     use taskbar_guard::Exit;
     cancel_taskbar_retry();
     if !hidden {show_taskbar(Exit::Requested,Exit::Requested.message());return;}
+    motion_guard::stop();
     if taskbar_active(){return;}
     if TASKBAR_RESTORE.with(|s|s.borrow().is_some())||!stopping_watch_done(){
         schedule_taskbar_retry();
@@ -2345,6 +2347,8 @@ unsafe fn start_saved_taskbar_mode(){
     }else{begin_taskbar_hide(actual);}
 }
 unsafe fn begin_taskbar_hide(current:taskbar_state::Observation){
+    motion_guard::stop();
+    if !stopping_watch_done(){schedule_taskbar_retry();return;}
     let fail=|code,msg|publish_taskbar(true,TaskbarMode::Error,current,code,msg);
     if shell_access::native_busy(){
         fail("NativePanelOpen","Đợi bảng Windows đóng rồi bật lại chế độ Dock.");return;
@@ -3083,6 +3087,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER if w==app_previews::TIMER&&hwnd==CONTROL.get()=>{app_previews::poll();0},
         WM_TIMER if w==comfort::TIMER&&hwnd==CONTROL.get()=>{comfort::poll();0},
         WM_TIMER if w==recycle_bin::TIMER&&hwnd==CONTROL.get()=>{recycle_bin::poll();0},
+        WM_TIMER if w==motion_guard::TIMER&&hwnd==CONTROL.get()=>{motion_guard::sync();0},
         WM_SHELL_FALLBACK if hwnd==CONTROL.with(Cell::get)=>{
             let owner=w as HWND;
             if !local_shell_buttons()&&!control_center::open_for(owner){
@@ -3342,7 +3347,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_TIMER if w==WORKSPACE_TIMER=>{update_state(|state|{state.workspaces.advance();});0},
-        WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}else{refresh_dock_clock();sync_win_key();request_dock_status();}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
+        WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}else{refresh_dock_clock();sync_win_key();request_dock_status();motion_guard::sync();}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
         WM_TIMECHANGE=>{refresh_dock_clock();0},
         WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_THEMECHANGED|WM_DPICHANGED=>{
             app_previews::close_for(ptr::null_mut());
@@ -3758,10 +3763,11 @@ unsafe fn drain_commands() {
                 state.prefs=options;refresh(state,false);
                 if repaint||icons_changed{for b in &state.bars{InvalidateRect(b.hwnd,ptr::null(),0);}}
                 if icons_changed{for stage in &state.stages{InvalidateRect(stage.hwnd,ptr::null(),0);}}
-            });sync_win_key();refresh_clipboard_listener();
+            });sync_win_key();refresh_clipboard_listener();motion_guard::sync();
                 if enable_default&&!cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active(){start_saved_taskbar_mode();}
             },
             Command::Suspend(on)=>{
+                if on{motion_guard::stop();}
                 if on{comfort::reset();}
                 if on{app_previews::close_for(ptr::null_mut());}
                 if on{window_effect::reset();shell_menu::close();}
@@ -3906,7 +3912,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
                 if !utilities::route_panel_keyboard(&msg){TranslateMessage(&msg);DispatchMessageW(&msg);}
             }
         }
-        window_effect::reset();
+        window_effect::reset();motion_guard::stop();
         clipboard_history::configure(control,false,0);
         if taskbar_active(){show_taskbar(taskbar_guard::Exit::Requested,"Đã hiện lại thanh tác vụ khi thoát Deskland.");}
         WIN_KEY.with(|s|drop(s.borrow_mut().take()));

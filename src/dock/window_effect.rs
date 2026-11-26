@@ -62,7 +62,7 @@ impl Policy{
         "availability":self.gate().err().unwrap_or("available")
     })}
 }
-fn guardian_ready()->bool{super::TASKBAR_WATCH.with(|w|w.borrow().as_ref().and_then(super::taskbar_guard::Watch::motion_session).is_some())}
+fn guardian_ready()->bool{super::motion_guard::session().is_some()}
 pub(super) fn diagnostics()->Value{
     let policy=unsafe{Policy::read()}.json();
     let last=if crate::trial::active(){LAST.lock().ok().and_then(|g|g.clone())}else{None};
@@ -699,6 +699,7 @@ pub(super) unsafe fn timer(){
 unsafe fn fixture_guard_pulse(){
     if std::env::var_os("TUANPC_GUARDED_MOTION_FIXTURE").is_some(){
         super::TASKBAR_WATCH.with(|w|if let Some(w)=w.borrow_mut().as_mut(){w.poll().expect("hosted motion Guardian stays healthy");});
+        super::motion_guard::pulse_fixture();
     }
 }
 pub(super) fn active()->bool{ACTIVE.with(|a|a.borrow().is_some())}
@@ -1041,7 +1042,7 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
         }
         if actual_policy.native_minimize!=Some(0)&&guardian_ready(){
             let id=ids[0];let before=GetWindowLongPtrW(source,GWL_EXSTYLE);
-            let (_,marker)=super::TASKBAR_WATCH.with(|w|w.borrow().as_ref().unwrap().motion_session().unwrap());
+            let (_,marker)=super::motion_guard::session().unwrap();
             let marker=wide(&marker);
             for failure in ["cancel","injected-device-removed","injected-monitor-change"]{
                 motion::configure(motion::Settings{window_effect:motion::WindowEffect::Genie,..policy});
