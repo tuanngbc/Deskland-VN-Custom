@@ -781,6 +781,16 @@ pub(super) fn peek_frame(source:WindowIdentity)->Option<Frame>{
         entry.frame.clone()
     })
 }
+pub(super) fn peek_gpu(source:WindowIdentity)->Option<GpuFrame>{
+    if !unsafe{retainable(source)}{return None;}
+    CURRENT.with(|cell|{
+        let mut state=cell.borrow_mut();let entry=state.sources.get_mut(&source)?;
+        if entry.captured_at.is_none_or(|t|t.elapsed()>MAX_AGE){return None;}
+        let frame=entry.gpu_frame.clone()?;
+        if unsafe{frame.gpu.device.GetDeviceRemovedReason().is_err()}{entry.gpu_frame=None;return None;}
+        entry.last_used=Some(Instant::now());Some(frame)
+    })
+}
 pub(super) fn complete()->bool{
     CURRENT.with(|cell|{
         let mut state=cell.borrow_mut();

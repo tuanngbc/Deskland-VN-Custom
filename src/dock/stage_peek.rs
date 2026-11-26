@@ -14,11 +14,12 @@ struct Peek {
     window: HWND,
     live: Previews,
     saved: Option<stage_snapshot::Frame>,
+    gpu:Option<super::window_effect::CachedPreview>,
 }
 impl Drop for Peek {
     fn drop(&mut self){
         self.live.clear();
-        unsafe{ DestroyWindow(self.window); }
+        if self.gpu.is_none(){unsafe{ DestroyWindow(self.window); }}
     }
 }
 
@@ -107,13 +108,14 @@ unsafe fn show_at(owner:HWND,source:WindowIdentity,display:RECT,right:bool){
     let hwnd=source.hwnd as HWND;
     if !eligible(source){return;}
     let is_min=IsIconic(hwnd)!=0;
+    let gpu=if is_min{stage_snapshot::peek_gpu(source)}else{None};
     let mut saved=if is_min{stage_snapshot::peek_frame(source)}else{None};
     let mut original:RECT=mem::zeroed();
     if !is_min && GetWindowRect(hwnd,&mut original)==0{return;}
     let geometry=|frame:Option<&stage_snapshot::Frame>|{
         frame.map(|(_,w,h)|(*w,*h)).unwrap_or((original.right-original.left,original.bottom-original.top))
     };
-    let (w,h)=geometry(saved.as_ref());
+    let (w,h)=gpu.as_ref().map_or_else(||geometry(saved.as_ref()),|frame|(frame.width,frame.height));
     if w<1||h<1{return;}
     let mut stage:RECT=mem::zeroed();
     if GetWindowRect(owner,&mut stage)==0{return;}
@@ -127,6 +129,19 @@ unsafe fn show_at(owner:HWND,source:WindowIdentity,display:RECT,right:bool){
     let Some((w,h))=fit_preview(w,h,max_w,max_h)else{return;};
     let xy=|w,h|(left+(right-left-w)/2,work.top+(work.bottom-work.top-h)/2);
     let (x,y)=xy(w,h);
+    if let Some(frame)=gpu{
+        let dpi=windows_sys::Win32::UI::HiDpi::GetDpiForWindow(owner);
+        if let Some(gpu)=super::window_effect::cached_preview(frame,RECT{left:x,top:y,right:x+w,bottom:y+h},dpi){
+            let peek=Peek{owner,source,window:gpu.window(),live:Previews::default(),saved:None,gpu:Some(gpu)};
+            OPEN.with(|slot|{slot.replace(Some(peek));});return;
+        }
+    }
+    // Fit a CPU fallback to its own dimensions after a failed GPU preview.
+    let (x,y,w,h)=if is_min{
+        let Some((_,sw,sh))=saved.as_ref()else{return;};
+        let Some((w,h))=fit_preview(*sw,*sh,max_w,max_h)else{return;};
+        let (x,y)=xy(w,h);(x,y,w,h)
+    }else{(x,y,w,h)};
     let class=wide("TLauncher.StagePeek");
     let inst=GetModuleHandleW(ptr::null());
     let wc=WNDCLASSW{style:CS_DROPSHADOW,lpfnWndProc:Some(proc),hInstance:inst,lpszClassName:class.as_ptr(),..mem::zeroed()};
@@ -145,11 +160,24 @@ unsafe fn show_at(owner:HWND,source:WindowIdentity,display:RECT,right:bool){
             }else{saved=None;}
         }
     }
-    let peek=Peek{owner,source,window,live,saved};
+    let peek=Peek{owner,source,window,live,saved,gpu:None};
     if !peek.live.includes(hwnd)&&peek.saved.is_none(){return;}
     OPEN.with(|slot|{slot.replace(Some(peek));});
     ShowWindow(window,SW_SHOWNOACTIVATE);
     InvalidateRect(window,ptr::null(),0);
+}
+
+#[cfg(test)]
+pub(super) unsafe fn probe_cached_external_window(source:WindowIdentity,display:RECT){
+    let owner=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,wide("STATIC").as_ptr(),ptr::null(),WS_POPUP,
+        display.left+4,display.top+100,70,200,ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null_mut());
+    assert!(!owner.is_null());ShowWindow(owner,SW_SHOWNOACTIVATE);
+    let foreground=GetForegroundWindow();
+    show_at(owner,source,display,false);
+    let window=OPEN.with(|s|s.borrow().as_ref().filter(|p|p.gpu.is_some()).map(|p|p.window)).expect("minimized Peek uses full-resolution cached GPU source");
+    assert_eq!(GetForegroundWindow(),foreground);assert_ne!(IsIconic(source.hwnd as HWND),0);
+    validate(owner,None);assert_eq!(IsWindow(window),0);DestroyWindow(owner);
+    println!("STAGE_PEEK_MINIMIZED_GPU=PASS no_activation=true no_new_capture=true released=true");
 }
 
 #[cfg(test)]

@@ -370,7 +370,10 @@ impl Proxy{
             };
             target.SetRoot(&visual)?;comp.Commit()?;
             Ok(Self{hwnd,comp,target,visual,render,gpu,
-                #[cfg(test)] marker:if data.is_empty(){[0,0,0]}else{let i=((*h/2)* *w+*w/10) as usize*4;[data[i+2],data[i+1],data[i]]}})
+                #[cfg(test)] marker:if data.is_empty(){
+                    let dc=GetDC(ptr::null_mut());let color=if dc.is_null(){0}else{GetPixel(dc,area.left+(area.right-area.left)/10,area.top+(area.bottom-area.top)/2)};
+                    if !dc.is_null(){ReleaseDC(ptr::null_mut(),dc);}[color as u8,(color>>8) as u8,(color>>16) as u8]
+                }else{let i=((*h/2)* *w+*w/10) as usize*4;[data[i+2],data[i+1],data[i]]}})
         })();
         if result.is_err(){DestroyWindow(hwnd);}
         result.ok()
@@ -406,6 +409,13 @@ impl Proxy{
         if shown&&first{let _=DwmFlush();}
         i32::from(shown)
     }
+}
+
+pub(super) struct CachedPreview(Proxy);
+impl CachedPreview{pub(super) fn window(&self)->HWND{self.0.hwnd}}
+pub(super) unsafe fn cached_preview(frame:stage_snapshot::GpuFrame,area:RECT,dpi:u32)->Option<CachedPreview>{
+    let proxy=Proxy::new_motion_for(&stage_snapshot::MotionFrame::Gpu(frame),area,area,DockSide::Bottom,motion::WindowEffect::Scale,dpi)?;
+    (proxy.paint(area,0.0,255)==1).then_some(CachedPreview(proxy))
 }
 enum Phase{
     Capture{job:stage_snapshot::TransitionCapture,started:Instant},
@@ -849,6 +859,9 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
                         if IsIconic(id.hwnd as HWND)!=0&&(0.18..0.65).contains(&span.progress()){
                             let _=proxy.comp.WaitForCommitCompletion();let _=DwmFlush();
                             let mut r:RECT=mem::zeroed();GetWindowRect(proxy.hwnd,&mut r);
+                            if matches!(&proxy.render,Render::Mesh(_))&&t.req.effect==motion::WindowEffect::Scale{
+                                r=interpolate(t.req.area,icon_fit(t.req.area,t.req.icon),motion::ease(span.progress()));
+                            }
                             let (w,h)=dims(r);
                             let dc=GetDC(ptr::null_mut());
                             if !dc.is_null(){
@@ -877,6 +890,7 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
         assert!(super::finish_double_click(AppClick{owner:bar as usize,key:ClickKey::Dock(path.into()),
             window:Some(id),was_open:true,at:Instant::now()}).is_some());
         drain(id);assert_ne!(IsIconic(id.hwnd as HWND),0);
+        super::stage_peek::probe_cached_external_window(id,display.bounds);
     }
     // Cross the old 15s expiration boundary and allow the idle factory to
     // release. Restore the older of two windows sharing one Dock app icon.
