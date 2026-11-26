@@ -10,7 +10,7 @@ const TIMER:usize=1;
     fn tlauncher_wave_free(raw:*mut c_void);
     fn tlauncher_wave_ready(raw:*mut c_void)->HANDLE;
     fn tlauncher_wave_draw(raw:*mut c_void,context:*mut c_void,time:f32,x:f32,y:f32,dpi:f32,fade:f32,photo:bool)->i32;
-    fn tlauncher_wave_present(raw:*mut c_void)->i32;
+    fn tlauncher_wave_present(raw:*mut c_void,settled:bool)->i32;
     fn tlauncher_wave_release_photo(raw:*mut c_void);
     fn tlauncher_fluidwin_capture_budget(device:*mut c_void)->u64;
     #[cfg(test)]fn tlauncher_wave_evidence(raw:*mut c_void)->bool;
@@ -29,7 +29,7 @@ impl Drop for Wave{fn drop(&mut self){unsafe{
 }}}
 unsafe extern "system" fn proc(h:HWND,m:u32,w:WPARAM,l:LPARAM)->LRESULT{match m{
     WM_NCHITTEST=>HTTRANSPARENT as isize,WM_MOUSEACTIVATE=>MA_NOACTIVATE as isize,
-    WM_ERASEBKGND=>1,WM_TIMER if w==TIMER=>{tick(h);0},
+    WM_ERASEBKGND=>1,WM_TIMER if w==TIMER=>{watchdog(h);0},
     WM_DISPLAYCHANGE|WM_DPICHANGED|WM_SETTINGCHANGE|WM_CLOSE=>{stop();0},
     _=>DefWindowProcW(h,m,w,l),
 }}
@@ -84,20 +84,23 @@ impl Wave{
             let context=self.gpu.context();
             if tlauncher_wave_draw(self.raw.as_ptr(),context.as_raw(),time,self.center.x as f32,self.center.y as f32,self.dpi,fade,self.photo)!=1{return false;}
             drop(context);
-            let result=tlauncher_wave_present(self.raw.as_ptr());
+            let result=tlauncher_wave_present(self.raw.as_ptr(),!self.photo&&self.closing.is_none());
             if result==1{self.last_present=Instant::now();true}else{result==2&&self.last_present.elapsed()<Duration::from_millis(250)}
         }
         #[cfg(not(target_env="msvc"))]{let _=(time,fade);false}
     }
-    unsafe fn step(&mut self)->bool{
+    unsafe fn valid(&self)->bool{
         if !ENABLED.get()||!crate::dock::popup_motion_allowed(){return false;}
         if self.closing.is_none()&&(IsWindow(self.owner)==0||IsWindowVisible(self.owner)==0||IsIconic(self.owner)!=0){return false;}
         let point=POINT{x:self.area.left+(self.area.right-self.area.left)/2,y:self.area.top+(self.area.bottom-self.area.top)/2};
         if self.closing.is_none()&&MonitorFromWindow(self.owner,MONITOR_DEFAULTTONULL)!=MonitorFromPoint(point,MONITOR_DEFAULTTONULL){return false;}
         if !bounds(point).is_some_and(|a|a.left==self.area.left&&a.top==self.area.top&&a.right==self.area.right&&a.bottom==self.area.bottom){return false;}
+        true
+    }
+    unsafe fn step(&mut self)->bool{
+        if !self.valid(){return false;}
         let fade=self.closing.map_or(1.0,|at|1.0-(at.elapsed().as_secs_f32()*self.speed/0.32).clamp(0.0,1.0));
         if fade<=0.0{return false;}
-        #[cfg(target_env="msvc")]if WaitForSingleObject(tlauncher_wave_ready(self.raw.as_ptr()),0)!=WAIT_OBJECT_0{return self.last_present.elapsed()<Duration::from_millis(250);}
         let time=self.started.elapsed().as_secs_f32()*self.speed;
         if self.photo&&time>=self.photo_until{#[cfg(target_env="msvc")]tlauncher_wave_release_photo(self.raw.as_ptr());self.photo=false;}
         if !self.draw_at(time,fade*fade*(3.0-2.0*fade)){return false;}
@@ -115,13 +118,26 @@ pub(super) fn open(owner:HWND,point:POINT,center:POINT){
         let Some(area)=bounds(point)else{return;};
         let Some(pixels)=photograph(area)else{return;};
         let Some(wave)=Wave::new(owner,area,center,&pixels)else{crate::log!("SPOTLIGHT_WAVE unavailable; search remains available");return;};
-        if SetTimer(wave.hwnd,TIMER,16,None)==0{return;}
+        // Rendering is woken by the queue handle in the existing application
+        // message wait. This timer only bounds device/visibility failure.
+        if SetTimer(wave.hwnd,TIMER,250,None)==0{return;}
         ACTIVE.with(|s|s.replace(Some(wave)));
     }
 }
 unsafe fn tick(hwnd:HWND){
     let Some(mut wave)=ACTIVE.with(|s|s.borrow_mut().take())else{return;};
     if wave.hwnd==hwnd&&wave.step(){ACTIVE.with(|s|s.replace(Some(wave)));}
+}
+pub(super) fn frame_clock()->HANDLE{
+    #[cfg(target_env="msvc")]return ACTIVE.with(|s|s.borrow().as_ref().map_or(ptr::null_mut(),|w|unsafe{tlauncher_wave_ready(w.raw.as_ptr())}));
+    #[cfg(not(target_env="msvc"))]ptr::null_mut()
+}
+pub(super) fn frame_wake(){
+    let hwnd=ACTIVE.with(|s|s.borrow().as_ref().map(|w|w.hwnd));if let Some(hwnd)=hwnd{unsafe{tick(hwnd);}}
+}
+unsafe fn watchdog(hwnd:HWND){
+    let old=ACTIVE.with(|s|s.borrow_mut().take());
+    if let Some(wave)=old{if wave.hwnd==hwnd&&wave.valid()&&wave.last_present.elapsed()<Duration::from_millis(500){ACTIVE.with(|s|s.replace(Some(wave)));}}
 }
 
 #[cfg(all(test,target_env="msvc"))]
@@ -192,6 +208,7 @@ fn native_wave_follows_both_spotlight_modes_and_stops_on_disable(){
             let before=GetForegroundWindow();let start=Instant::now();
             while !ACTIVE.with(|s|s.borrow().as_ref().is_some_and(|w|w.shown)){
                 let mut msg:MSG=std::mem::zeroed();for _ in 0..64{if PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)==0{break;}TranslateMessage(&msg);DispatchMessageW(&msg);}
+                let clock=frame_clock();if !clock.is_null()&&WaitForSingleObject(clock,0)==WAIT_OBJECT_0{frame_wake();}
                 assert!(start.elapsed()<Duration::from_secs(3));std::thread::sleep(Duration::from_millis(8));
             }
             assert_eq!(GetForegroundWindow(),before,"wave must not activate");

@@ -1101,6 +1101,9 @@ pub fn close_spotlight(){
         unsafe{if IsWindowVisible(hwnd)!=0{dismiss(hwnd);}}
     }
 }
+pub(crate) fn spotlight_frame_clock()->HANDLE{wave::frame_clock()}
+pub(crate) fn spotlight_frame_wake(){wave::frame_wake();}
+pub(crate) fn spotlight_frame_failed(){wave::stop();}
 fn compact_handoff()->Option<(POINT,String,HWND)> {
     let (hwnd,_,_,_)=handles()?;
     if unsafe{IsWindowVisible(hwnd)}==0{return None;}

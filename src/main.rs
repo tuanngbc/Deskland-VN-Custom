@@ -3707,7 +3707,11 @@ fn main() {
         // Rounding down left a sub-millisecond busy loop before every frame.
         let next_startup = wallpaper_retry.unwrap_or(f64::INFINITY).min(autostart_check_at.unwrap_or(f64::INFINITY)).min(spotlight_warm_at.unwrap_or(f64::INFINITY));
         let wait = (next_frame.min(next_icons).min(next_fg).min(next_startup) - app.now()).ceil().clamp(1.0,500.0) as u32;
-        unsafe { MsgWaitForMultipleObjects(0, std::ptr::null(), 0, wait, QS_ALLINPUT) };
+        let spotlight_clock=launcher::spotlight_frame_clock();
+        let count=u32::from(!spotlight_clock.is_null());
+        let wake=unsafe{MsgWaitForMultipleObjects(count,if count==0{std::ptr::null()}else{&spotlight_clock},0,wait,QS_ALLINPUT)};
+        if count==1&&wake==WAIT_OBJECT_0{launcher::spotlight_frame_wake();}
+        else if count==1&&wake==WAIT_FAILED{launcher::spotlight_frame_failed();}
     }
 
     if precise_timer {unsafe {timeEndPeriod(1);}}

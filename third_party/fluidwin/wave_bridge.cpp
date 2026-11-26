@@ -84,8 +84,13 @@ int tlauncher_wave_draw(void* raw,ID3D11DeviceContext* ctx,float time,float x,fl
     const onda::Costanti k{{float(wave.width),float(wave.height)},time,1,{x,y},fade,dpi,photo?1.0f:0.0f,{0,0,0}};
     return wave.draw(ctx,k)?1:0;
 }
-int tlauncher_wave_present(void* raw){
-    if(!raw)return 0;const HRESULT hr=static_cast<Wave*>(raw)->chain->Present(1,DXGI_PRESENT_DO_NOT_WAIT);
+int tlauncher_wave_present(void* raw,bool settled){
+    if(!raw)return 0;UINT interval=1;
+    if(settled){DWM_TIMING_INFO timing{};timing.cbSize=sizeof(timing);
+        if(SUCCEEDED(DwmGetCompositionTimingInfo(nullptr,&timing))&&timing.rateRefresh.uiDenominator)
+            interval=std::clamp(int(std::lround(double(timing.rateRefresh.uiNumerator)/timing.rateRefresh.uiDenominator/60.0)),1,4);
+    }
+    const HRESULT hr=static_cast<Wave*>(raw)->chain->Present(interval,DXGI_PRESENT_DO_NOT_WAIT);
     return hr==S_OK?1:hr==DXGI_ERROR_WAS_STILL_DRAWING?2:int(hr);
 }
 void tlauncher_wave_release_photo(void* raw){if(raw)static_cast<Wave*>(raw)->photograph.Reset();}
