@@ -59,6 +59,7 @@ pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>
 mod utilities;
 mod volume_osd;
 mod battery_notices;
+mod headphone_notices;
 mod audio_mixer;
 mod media;
 mod notifications;
@@ -3187,6 +3188,8 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_UTILITY_READY=>{show_utilities();0},
         volume_osd::CLOSED=>{volume_osd::close(w);0},
         WM_POWERBROADCAST if hwnd==CONTROL.get()=>{if w==0x8013{battery_notices::changed();}1},
+        headphone_notices::CHANGED if hwnd==CONTROL.get()=>{headphone_notices::changed(w);0},
+        headphone_notices::READY if hwnd==CONTROL.get()=>{headphone_notices::receive(w);0},
         WM_TIMER if w==jump_list::TIMER&&hwnd==CONTROL.get()=>{jump_list::poll();0},
         WM_TIMER if w==follow_display::TIMER&&hwnd==CONTROL.get()=>{follow_display::poll();0},
         WM_TIMER if w==folder_stack::TIMER&&hwnd==CONTROL.get()=>{folder_stack::poll();0},
@@ -3898,7 +3901,7 @@ unsafe fn drain_commands() {
                 state.prefs=options;refresh(state,false);
                 if repaint||icons_changed{for b in &state.bars{InvalidateRect(b.hwnd,ptr::null(),0);}}
                 if icons_changed{for stage in &state.stages{InvalidateRect(stage.hwnd,ptr::null(),0);}}
-            });sync_win_key();refresh_clipboard_listener();motion_guard::sync();battery_notices::sync();
+            });sync_win_key();refresh_clipboard_listener();motion_guard::sync();battery_notices::sync();headphone_notices::sync();
                 if enable_default&&!cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active(){start_saved_taskbar_mode();}
             },
             Command::Suspend(on)=>{
@@ -3927,6 +3930,7 @@ unsafe fn drain_commands() {
                 }
                 update_state(|state|{if state.suspended!=on{state.suspended=on;refresh(state,!on);}});
                 battery_notices::sync();
+                headphone_notices::sync();
                 refresh_clipboard_listener();
                 if !on&&TASKBAR_RESUME.replace(false){schedule_taskbar_retry();}
                 sync_win_key();
@@ -4030,6 +4034,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         COMMANDS.with(|c|{c.replace(Some(commands));});EVENTS.with(|e|{e.replace(Some(events));});
         update_state(|state|{state.prefs=options;refresh(state,false);});
         battery_notices::sync();
+        headphone_notices::sync();
         refresh_clipboard_listener();
         publish_taskbar(false,TaskbarMode::Compatibility,taskbar_guard::current(),"Startup","");
         sync_win_key();
@@ -4077,7 +4082,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
         update_state(|s|{s.appbars.clear();s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){destroy_stage(&mut b);}});
         SURFACES.with(|s|s.borrow_mut().clear());STAGE_SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
-        battery_notices::reset();volume_osd::close(0);capture_access::reset();shelf::reset();news::reset();weather_panel::reset();comfort::reset();utilities::close_panels();UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));
+        battery_notices::reset();headphone_notices::reset();volume_osd::close(0);capture_access::reset();shelf::reset();news::reset();weather_panel::reset();comfort::reset();utilities::close_panels();UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));
         if ATTENTION_MSG.with(|id|id.replace(0))!=0{DeregisterShellHookWindow(control);}
         ATTENTION.with(|queue|queue.borrow_mut().clear());
         internal_app::unlisten(control);

@@ -16,6 +16,7 @@ public:
     std::wstring noticeText;
     int noticePercent = -1;
     bool noticeCharging = false;
+    bool noticeHeadphones = false;
     std::function<void()> onHidden;
     HWND window() const { return v.fin; }
     bool inizializza() {
@@ -97,6 +98,20 @@ private:
         const D2D1_COLOR_F ink = v.inchiostro();
         if (!noticeText.empty()) {
             if (fmt) fmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            if (noticeHeadphones) {
+                // Original notch.h::cuffie, hosted independently of the Notch.
+                const float cx=24*d;v.pen->SetColor(ink);
+                ID2D1PathGeometry* g=nullptr;ID2D1GeometrySink* s=nullptr;
+                if (SUCCEEDED(v.f2d->CreatePathGeometry(&g)) && SUCCEEDED(g->Open(&s))) {
+                    s->BeginFigure({cx-7*d,cy+2*d},D2D1_FIGURE_BEGIN_HOLLOW);
+                    s->AddArc(D2D1::ArcSegment({cx+7*d,cy+2*d},{7*d,7*d},0,D2D1_SWEEP_DIRECTION_CLOCKWISE,D2D1_ARC_SIZE_SMALL));
+                    s->EndFigure(D2D1_FIGURE_END_OPEN);s->Close();s->Release();v.rt->DrawGeometry(g,v.pen,1.6f*d);
+                }
+                if(g)g->Release();
+                v.rt->FillRoundedRectangle({{cx-8.5f*d,cy+.5f*d,cx-4.5f*d,cy+7.5f*d},1.5f*d,1.5f*d},v.pen);
+                v.rt->FillRoundedRectangle({{cx+4.5f*d,cy+.5f*d,cx+8.5f*d,cy+7.5f*d},1.5f*d,1.5f*d},v.pen);
+                v.testo(noticeText,fmt,{48*d,0,W-16*d,H},ink);v.finisci();return;
+            }
             // Original notch.h::batteriaSimbolo geometry, with the shared glass
             // ink for a light theme. Independent utility; no Notch is created.
             const float cx = 24 * d, w = 18 * d, h = 9 * d, x = cx - w / 2 - d, y = cy - h / 2;

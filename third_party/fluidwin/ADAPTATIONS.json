@@ -5,6 +5,13 @@
   "note": "Section adaptations, not claims that these full headers were imported. Original CRLF worktree byte hashes and canonical Git blobs are recorded; existing notices and original license are preserved.",
   "sections": [
     {
+      "source": "sensori.h::uscite/cuffie; notch.h::cuffie independent utility glyph",
+      "source_git_blob": "3e330904e648a8098f3821b42ce7a5808317cbbc",
+      "source_worktree_sha256": "1b19e147a17c3e545dec6d2af7ecaf8fc6c5b9107a3af8999c0437b7a267aed4",
+      "integration": ["headphones_bridge.cpp", "../../src/dock/headphone_notices.rs", "../../src/dock/volume_osd.rs", "osd_bridge.cpp", "upstream/osd.h"],
+      "adaptation": "Original active-render endpoint identity, Bluetooth PnP container matching/BTH prefixes, friendly-name extraction and optional Windows battery property. Original Notch glyph from blob b44082a6634d16983c45d873d7d8db025c90627c (CRLF SHA-256 c519f89e6f7f5a99aeaee5c2da7f30ddca9e85b0cce5d8792354a38873d1597a) is hosted in existing independent OSD, never constructing Notch. MMDevice notification-only enumerator on existing Dock COM apartment replaces polling. Callbacks coalesce and post only, with no waits, enumeration, audio writes, callback unregister or UI rendering. One transient Windows-pool callback reads at most 64 endpoint identities and one read-only 5000-node PnP snapshot; no retained audio endpoint or dedicated thread. Unknown/read failures reset silent baseline; initial/resume reading never announces existing devices. Same-container new endpoints coalesce to one notice. Unique source tickets, cancelled shared state and one global admission permit prevent stale/overlapping workers. Disable/suspend/exit unregister; an unregister failure retains at most one disabled callback object and blocks replacement. Existing native glass/owner speed/reduced motion/monitor/fullscreen policy, vi/en/zh labels and no-focus/input are reused. Physical Bluetooth hotplug/property availability and owner rendering remain unverified. Core Audio lifetime follows https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nn-mmdeviceapi-immnotificationclient and unregister documentation."
+    },
+    {
       "source": "sensori.h::batteriaPC; notch.h::batteriaSimbolo / independent 2.5-second avviso",
       "source_git_blob": "3e330904e648a8098f3821b42ce7a5808317cbbc",
       "source_worktree_sha256": "1b19e147a17c3e545dec6d2af7ecaf8fc6c5b9107a3af8999c0437b7a267aed4",

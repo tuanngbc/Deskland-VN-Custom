@@ -49,6 +49,7 @@ fn main() {
         println!("cargo:rerun-if-changed=third_party/fluidwin/sensors_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/static_capture_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/osd_bridge.cpp");
+        println!("cargo:rerun-if-changed=third_party/fluidwin/headphones_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/app_menu_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/shelf_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/wave_bridge.cpp");
@@ -76,6 +77,7 @@ fn main() {
             .file("third_party/fluidwin/sensors_bridge.cpp")
             .file("third_party/fluidwin/static_capture_bridge.cpp")
             .file("third_party/fluidwin/osd_bridge.cpp")
+            .file("third_party/fluidwin/headphones_bridge.cpp")
             .file("third_party/fluidwin/app_menu_bridge.cpp")
             .file("third_party/fluidwin/shelf_bridge.cpp")
             .file("third_party/fluidwin/wave_bridge.cpp")
@@ -92,7 +94,7 @@ fn main() {
         println!("cargo:rustc-link-lib=winmm");
         println!("cargo:rustc-link-lib=windowscodecs");
         println!("cargo:rustc-link-lib=shcore");
-        for lib in ["d2d1","dwrite","dwmapi","oleaut32","runtimeobject","shlwapi","advapi32","version","dxva2","propsys"] {
+        for lib in ["d2d1","dwrite","dwmapi","oleaut32","runtimeobject","shlwapi","advapi32","version","dxva2","propsys","setupapi"] {
             println!("cargo:rustc-link-lib={lib}");
         }
         let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());

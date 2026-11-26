@@ -97,6 +97,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::battery_notices::tests::native_power_subscriptions_release_without_power_policy_writes -- --ignored --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'early-osd.log') -Append
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::headphone_notices::tests::native_endpoint_events_release_and_refuse_stale_notice_delivery -- --ignored --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'early-osd.log') -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify original static snapshots and bounded hung-source ownership
         if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}

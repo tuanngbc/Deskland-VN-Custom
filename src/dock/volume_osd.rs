@@ -8,6 +8,7 @@ thread_local!{static TICKET:Cell<usize>=const{Cell::new(0)};}
     fn tlauncher_volume_osd_show(controller:HWND,notice:u32,ticket:usize,target:*const RECT,percent:i32,muted:bool,speed:f64,animate:bool,muted_label:*const u16,name:*const u16)->HWND;
     fn tlauncher_volume_osd_close(ticket:usize);
     fn tlauncher_battery_osd_show(controller:HWND,notice:u32,ticket:usize,target:*const RECT,percent:i32,charging:bool,speed:f64,animate:bool,text:*const u16)->HWND;
+    fn tlauncher_headphones_osd_show(controller:HWND,notice:u32,ticket:usize,target:*const RECT,percent:i32,speed:f64,animate:bool,text:*const u16)->HWND;
 }
 pub(super) unsafe fn show(panel:HWND,audio:super::utilities::Audio){
     if IsWindow(panel)==0||!super::STATE.with(|s|s.try_borrow().is_ok_and(|s|s.prefs.enabled&&!s.suspended)){return;}
@@ -23,13 +24,22 @@ pub(super) unsafe fn close(ticket:usize){
     #[cfg(target_env="msvc")]tlauncher_volume_osd_close(ticket);
 }
 pub(super) unsafe fn battery(level:u8,charging:bool,text:&str){
+    utility_notice(Some(level),Some(charging),text);
+}
+pub(super) unsafe fn headphones(level:Option<u8>,text:&str){
+    utility_notice(level,None,text);
+}
+unsafe fn utility_notice(level:Option<u8>,charging:Option<bool>,text:&str){
     let owner=super::STATE.with(|s|s.try_borrow().ok().and_then(|s|{
         if !s.prefs.enabled||s.suspended{return None;}s.bars.iter().find(|b|!b.hidden).map(|b|b.hwnd)
     }));let Some(owner)=owner else{return;};
     let mut info:MONITORINFO=std::mem::zeroed();info.cbSize=std::mem::size_of::<MONITORINFO>() as u32;
     if GetMonitorInfoW(MonitorFromWindow(owner,MONITOR_DEFAULTTONULL),&mut info)==0||super::window_fullscreen(GetForegroundWindow(),info.rcMonitor){return;}
     super::shell_menu::configure_menu();let ticket=TICKET.with(|t|{let value=t.get().wrapping_add(1).max(1);t.set(value);value});
-    #[cfg(target_env="msvc")]tlauncher_battery_osd_show(super::CONTROL.get(),CLOSED,ticket,&info.rcWork,level as i32,charging,super::motion::settings().speed as f64/100.,super::popup_motion_allowed(),crate::desktop::wide(text).as_ptr());
+    #[cfg(target_env="msvc")]match charging{
+        Some(charging)=>{tlauncher_battery_osd_show(super::CONTROL.get(),CLOSED,ticket,&info.rcWork,level.unwrap_or(0) as i32,charging,super::motion::settings().speed as f64/100.,super::popup_motion_allowed(),crate::desktop::wide(text).as_ptr());},
+        None=>{tlauncher_headphones_osd_show(super::CONTROL.get(),CLOSED,ticket,&info.rcWork,level.map_or(-1,i32::from),super::motion::settings().speed as f64/100.,super::popup_motion_allowed(),crate::desktop::wide(text).as_ptr());},
+    }
 }
 
 #[cfg(all(test,target_env="msvc"))]
@@ -66,15 +76,16 @@ mod tests{
                 let ticket=100+cycle;let hwnd=tlauncher_volume_osd_show(owner,CLOSED,ticket,&info.rcWork,73,false,0.70,false,wide("Muted").as_ptr(),wide("Volume: 73%").as_ptr());assert!(!hwnd.is_null());
                 let deadline=Instant::now()+Duration::from_secs(4);while IsWindow(hwnd)!=0&&Instant::now()<deadline{pump();std::thread::sleep(Duration::from_millis(10));}assert_eq!(IsWindow(hwnd),0,"expiry must release native HWND, font and D2D surface");
             }
-            for (index,text) in ["Pin yếu · 10%","Low battery · 10%","电量低 · 10%"].into_iter().enumerate(){
-                let ticket=200+index;let hwnd=tlauncher_battery_osd_show(owner,CLOSED,ticket,&info.rcWork,10,false,0.70,false,wide(text).as_ptr());assert!(!hwnd.is_null());
+            for (index,(headphone,text)) in [(false,"Pin yếu · 10%"),(false,"Low battery · 10%"),(false,"电量低 · 10%"),(true,"Tai nghe mẫu · đã kết nối"),(true,"Synthetic headset · 73%"),(true,"示例耳机 · 已连接")].into_iter().enumerate(){
+                let ticket=200+index;let hwnd=if headphone{tlauncher_headphones_osd_show(owner,CLOSED,ticket,&info.rcWork,if index==4{73}else{-1},0.70,false,wide(text).as_ptr())}else{tlauncher_battery_osd_show(owner,CLOSED,ticket,&info.rcWork,10,false,0.70,false,wide(text).as_ptr())};assert!(!hwnd.is_null());
                 let settle=Instant::now();while settle.elapsed()<Duration::from_millis(200){pump();std::thread::sleep(Duration::from_millis(10));}
                 windows_sys::Win32::Graphics::Dwm::DwmFlush();let mut label=[0u16;160];let n=GetWindowTextW(hwnd,label.as_mut_ptr(),160);assert_eq!(String::from_utf16_lossy(&label[..n as usize]),text);assert_eq!(GetForegroundWindow(),focus);
                 let mut rect:RECT=std::mem::zeroed();assert_ne!(GetWindowRect(hwnd,&mut rect),0);
                 let (w,h)=(rect.right-rect.left,rect.bottom-rect.top);let mut layer=super::super::glass_probe::Layer::new(w,h).unwrap();let dc=GetDC(ptr::null_mut());assert_ne!(BitBlt(layer.dc(),0,0,w,h,dc,rect.left,rect.top,SRCCOPY|CAPTUREBLT),0);ReleaseDC(ptr::null_mut(),dc);
                 let mut rgba=layer.pixels().to_vec();for p in rgba.chunks_exact_mut(4){p.swap(0,2);p[3]=255;}
                 if let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
-                    image::save_buffer(std::path::PathBuf::from(dir).join(format!("volume-osd-battery-{index}.png")),&rgba,w as u32,h as u32,image::ColorType::Rgba8).unwrap();
+                    let name=if headphone{format!("volume-osd-headphones-{}.png",index-3)}else{format!("volume-osd-battery-{index}.png")};
+                    image::save_buffer(std::path::PathBuf::from(dir).join(name),&rgba,w as u32,h as u32,image::ColorType::Rgba8).unwrap();
                 }
                 // A correct HWND/title alone does not prove the content reached
                 // the display. The synthetic icon/text must differ from the
@@ -82,6 +93,8 @@ mod tests{
                 let base=&rgba[((h/2*w+w-4)*4) as usize..][..3];
                 let ink=rgba.chunks_exact(4).filter(|p|p[..3].iter().zip(base).any(|(a,b)|a.abs_diff(*b)>70)).count();
                 assert!(ink>80,"actual battery notice is blank for locale {index}: {ink}");
+                let glyph=rgba.chunks_exact(4).enumerate().filter(|(i,p)|{let x=*i as i32%w;let y=*i as i32/w;x>w*12/372&&x<w*38/372&&y>h/4&&y<h*3/4&&p[..3].iter().zip(base).any(|(a,b)|a.abs_diff(*b)>70)}).count();
+                assert!(glyph>12,"actual utility glyph is blank for notice {index}: {glyph}");
                 close(ticket-1);assert_ne!(IsWindow(hwnd),0);close(ticket);assert_eq!(IsWindow(hwnd),0);
             }
             assert_eq!(GetForegroundWindow(),focus);
