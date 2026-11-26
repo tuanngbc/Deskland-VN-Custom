@@ -76,12 +76,15 @@ enum BluetoothState { Unknown, Adapter(Vec<ClassicDevice>) }
 enum BatteryState { Unknown, Absent, Present{level:Option<u8>,ac:Option<bool>,charging:bool} }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub(super) struct Audio { level:u32, muted:bool }
-impl Audio{pub(super) fn osd_value(self)->(u32,bool){(self.level,self.muted)}}
+impl Audio{
+    pub(super) fn osd_value(self)->(u32,bool){(self.level,self.muted)}
+    #[cfg(test)]pub(super) fn fixture(level:u32,muted:bool)->Self{Self{level,muted}}
+}
 pub(super) struct Snapshot { pub status:Status, wlan:Option<wifi::View>, bluetooth:BluetoothState, battery:BatteryState, radios:Option<super::radios::View>, brightness:Option<super::brightness::View> }
 #[derive(Clone)]pub(super) enum Change{Network(wifi::Change),Radio(super::radios::Change),Brightness(super::brightness::Query)}
 
 #[derive(Clone,Copy)]
-enum JobKind { Read, ReadStatus, AudioRead, Volume(u32), Mute }
+enum JobKind { Read, ReadStatus, AudioRead, Volume(u32), Mute, Key(super::volume_keys::Key) }
 
 /// Fixture-only endpoint. Neither moving the fixture slider nor rapidly
 /// toggling its mute can write to a Windows audio device.
@@ -91,6 +94,7 @@ fn fixture_audio(value:&mut Audio, kind:JobKind)->Audio {
         JobKind::Read|JobKind::ReadStatus|JobKind::AudioRead=>{},
         JobKind::Volume(value_percent)=>value.level=value_percent.min(100),
         JobKind::Mute=>value.muted=!value.muted,
+        JobKind::Key(key)=>{let (level,muted)=key.adjust(value.level as f32/100.0,value.muted);value.level=(level*100.0).round() as u32;value.muted=muted;},
     }
     Audio {level:value.level,muted:value.muted}
 }
@@ -100,8 +104,9 @@ struct State {
     audio_result:Mutex<Option<(usize,Option<Audio>,bool)>>, closed:AtomicBool,
 }
 static WORK_ACTIVE:AtomicBool=AtomicBool::new(false);
-struct Permit;
+pub(super) struct Permit;
 impl Drop for Permit{fn drop(&mut self){WORK_ACTIVE.store(false,Ordering::Release);}}
+pub(super) fn try_permit()->Option<Permit>{WORK_ACTIVE.compare_exchange(false,true,Ordering::AcqRel,Ordering::Acquire).ok().map(|_|Permit)}
 struct Job { shared:Arc<State>, owner:usize, panel:usize, kind:JobKind, widget:Option<Widget>, change:Option<Change>, permit:Permit }
 pub(super) struct Provider { state:Arc<State> }
 impl Provider {
@@ -173,8 +178,19 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut std::ffi::c_vo
     }
 }
 unsafe fn audio(kind:JobKind)->Option<Audio>{
+    audio_action(kind,&mut false,&||true)
+}
+// A failed preflight can safely use Windows' native key path. Once a setter
+// has been entered, never replay the command: its outcome may be uncertain.
+pub(super) unsafe fn key_audio(key:super::volume_keys::Key,allowed:impl Fn()->bool)->(Option<Audio>,bool){
+    if cfg!(test)||crate::trial::active(){return (None,false);}
+    if !allowed(){return (None,false);}
+    let mut attempted=false;let result=audio_action(JobKind::Key(key),&mut attempted,&allowed);
+    (result,!attempted&&allowed())
+}
+unsafe fn audio_action(kind:JobKind,attempted:&mut bool,allowed:&dyn Fn()->bool)->Option<Audio>{
     if crate::trial::demo_active(){return DEMO_VOLUME.lock().ok().map(|mut value|fixture_audio(&mut value,kind));}
-    if audio_read_only() && matches!(kind,JobKind::Volume(_)|JobKind::Mute){return None;}
+    if audio_read_only() && matches!(kind,JobKind::Volume(_)|JobKind::Mute|JobKind::Key(_)){return None;}
     let com=CoInitializeEx(None,COINIT_MULTITHREADED);
     if com.is_err(){return None;}
     let value=(||->windows::core::Result<Audio>{
@@ -185,6 +201,18 @@ unsafe fn audio(kind:JobKind)->Option<Audio>{
         match kind {
             JobKind::Volume(percent)=>volume.SetMasterVolumeLevelScalar(percent.min(100) as f32/100.0,ptr::null())?,
             JobKind::Mute=>volume.SetMute(!muted,ptr::null())?,
+            JobKind::Key(key)=>{
+                use super::volume_keys::Key;
+                let level=volume.GetMasterVolumeLevelScalar()?;
+                // Original dock.h::cambiaVolume: round to 2%; Up unmutes,
+                // Down preserves mute, and Mute only toggles the mute state.
+                if !allowed(){return Err(windows::core::Error::from_hresult(windows::core::HRESULT(0x800704c7u32 as i32)));}
+                *attempted=true;
+                match key{
+                    Key::Mute=>volume.SetMute(!muted,ptr::null())?,
+                    Key::Up|Key::Down=>{volume.SetMasterVolumeLevelScalar(key.adjust(level,muted).0,ptr::null())?;if key==Key::Up{volume.SetMute(false,ptr::null())?;}},
+                }
+            },
             JobKind::Read|JobKind::ReadStatus|JobKind::AudioRead=>{}
         }
         let level=(volume.GetMasterVolumeLevelScalar()?.clamp(0.0,1.0)*100.0).round() as u32;

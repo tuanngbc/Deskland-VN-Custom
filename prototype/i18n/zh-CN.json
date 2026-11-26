@@ -1,6 +1,8 @@
 {
   "name": "简体中文",
   "ui": {
+    "volumeKeys": "使用音量键显示 FluidWin 音量提示",
+    "volumeKeysHint": "启用 Dock 时，使用音量加、减和静音键调节音量，并显示玻璃样式提示。",
     "ownCorners": "TLauncher 边角",
     "ownCornersHint": "应用于程序坞、菜单和 TLauncher 窗口。",
     "cornersRounded": "圆角",

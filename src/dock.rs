@@ -58,6 +58,7 @@ mod stage_capture_lab;
 pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>{stage_capture_lab::inspect(path,true)}
 mod utilities;
 mod volume_osd;
+mod volume_keys;
 mod battery_notices;
 mod headphone_notices;
 mod audio_mixer;
@@ -2236,7 +2237,9 @@ fn sync_win_key(){
     let on=requested&&taskbar_hidden();
     let overview=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.alt_tab_overview&&!s.suspended});
     let snap=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.snap_layouts&&!s.suspended});
-    let allowed=(on||context||overview||snap)&&!crate::trial::benchmark_active()&&!crate::trial::demo_active();
+    let volume=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.volume_keys&&!s.suspended})&&!crate::trial::active()&&!cfg!(test);
+    unsafe{if volume{SetTimer(CONTROL.get(),volume_keys::TIMER,250,None);}else{KillTimer(CONTROL.get(),volume_keys::TIMER);}}
+    let allowed=(on||context||overview||snap||volume)&&!crate::trial::benchmark_active()&&!crate::trial::demo_active();
     if !allowed{
         WIN_KEY.with(|s|drop(s.borrow_mut().take()));
         WIN_KEY_FAILED.set(false);
@@ -2248,13 +2251,13 @@ fn sync_win_key(){
         WIN_KEY_FAILED.set(true);
         win_key_status("failed");
     }
-    if WIN_KEY.with(|s|s.borrow().as_ref().is_some_and(|hook|hook.mode!=(on,context,overview,snap))){
+    if WIN_KEY.with(|s|s.borrow().as_ref().is_some_and(|hook|hook.mode!=(on,context,overview,snap)||hook.volume_enabled!=volume)){
         WIN_KEY.with(|s|drop(s.borrow_mut().take()));WIN_KEY_FAILED.set(false);
     }
     if WIN_KEY_FAILED.get()||WIN_KEY.with(|s|s.borrow().is_some()){return;}
     let generation=WIN_KEY_TOKEN.with(|n|{let next=n.get().wrapping_add(1).max(1);n.set(next);next});
-    match win_key::Hook::install_features(CONTROL.get(),generation,on,context,overview,snap){
-        Ok(hook)=>{WIN_KEY.with(|s|s.replace(Some(hook)));win_key_status(if on{"installed"}else if requested{"waiting"}else{"off"});}
+    match win_key::Hook::install_all_features(CONTROL.get(),generation,on,context,overview,snap,volume){
+        Ok(hook)=>{hook.volume.pulse();WIN_KEY.with(|s|s.replace(Some(hook)));win_key_status(if on{"installed"}else if requested{"waiting"}else{"off"});}
         Err(reason)=>{
             crate::log!("DOCK_WIN_KEY install failed: {reason}");
             WIN_KEY_FAILED.set(true);win_key_status("failed");
@@ -3189,6 +3192,8 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TICK=>{SetTimer(hwnd,2,60,None);0},
         WM_UTILITY_READY=>{show_utilities();0},
         volume_osd::CLOSED=>{volume_osd::close(w);0},
+        volume_keys::READY if hwnd==CONTROL.get()=>{volume_keys::receive(w);0},
+        WM_TIMER if w==volume_keys::TIMER&&hwnd==CONTROL.get()=>{WIN_KEY.with(|s|{if let Some(hook)=s.borrow().as_ref(){if hook.volume_enabled{hook.volume.pulse();}}});0},
         WM_POWERBROADCAST if hwnd==CONTROL.get()=>{if w==0x8013{battery_notices::changed();}1},
         headphone_notices::CHANGED if hwnd==CONTROL.get()=>{headphone_notices::changed(w);0},
         headphone_notices::READY if hwnd==CONTROL.get()=>{headphone_notices::receive(w);0},
@@ -4081,7 +4086,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         if taskbar_active(){show_taskbar(taskbar_guard::Exit::Requested,"Đã hiện lại thanh tác vụ khi thoát Deskland.");}
         WIN_KEY.with(|s|drop(s.borrow_mut().take()));
         shell_menu::shutdown();
-        for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
+        for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);KillTimer(control,volume_keys::TIMER);
         update_state(|s|{s.appbars.clear();s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){destroy_stage(&mut b);}});
         SURFACES.with(|s|s.borrow_mut().clear());STAGE_SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
         battery_notices::reset();headphone_notices::reset();volume_osd::close(0);capture_access::reset();shelf::reset();news::reset();weather_panel::reset();comfort::reset();utilities::close_panels();UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));

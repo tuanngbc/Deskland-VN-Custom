@@ -1,5 +1,5 @@
 //! Original standalone volume glass, only after confirmed master-volume UI
-//! actions. Native volume-key replacement remains a separate input route.
+//! actions, and after confirmed actions from the shared physical-key route.
 use windows_sys::Win32::{Foundation::*,Graphics::Gdi::*,UI::WindowsAndMessaging::*};
 use std::cell::Cell;
 pub(super) const CLOSED:u32=WM_APP+166;

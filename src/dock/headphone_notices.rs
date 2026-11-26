@@ -78,7 +78,8 @@ pub(super) unsafe fn sync(){
 }
 pub(super) unsafe fn changed(ticket:usize){
     #[cfg(target_env="msvc")]tlauncher_headphones_watch_ack(ticket);
-    WATCH.with(|s|{if let Some(w)=s.borrow_mut().as_mut().filter(|w|w.ticket==ticket){w.dirty=true;}});if enabled(){submit();}
+    let current=WATCH.with(|s|{if let Some(w)=s.borrow_mut().as_mut().filter(|w|w.ticket==ticket){w.dirty=true;true}else{false}});
+    if current{super::volume_keys::device_changed();}if enabled(){submit();}
 }
 pub(super) unsafe fn receive(ticket:usize){
     let notices=WATCH.with(|s|{let mut s=s.borrow_mut();let Some(w)=s.as_mut().filter(|w|w.ticket==ticket)else{return Vec::new();};

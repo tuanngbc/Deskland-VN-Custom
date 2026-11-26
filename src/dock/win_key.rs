@@ -87,6 +87,8 @@ thread_local! {
     static SNAP:Cell<bool>=const{Cell::new(false)};
     static SNAP_CHORD:Cell<SnapChord>=const{Cell::new(SnapChord{held:0,mask:false})};
     static SHELL_CLICK:Cell<Option<super::shell_menu::Click>>=const{Cell::new(None)};
+    static VOLUME:std::cell::RefCell<Option<Arc<super::volume_keys::Input>>>=const{std::cell::RefCell::new(None)};
+    static VOLUME_EDGES:std::cell::RefCell<super::volume_keys::Edges>=std::cell::RefCell::new(super::volume_keys::Edges::default());
 }
 
 struct Quit(usize);
@@ -106,7 +108,7 @@ unsafe fn menu_mask(){
     let mask=Stroke{vk:0xE8,scan:0,extended:false}.down();let mut release=mask;release.Anonymous.ki.dwFlags|=KEYEVENTF_KEYUP;
     let inputs=[mask,release];if SendInput(2,inputs.as_ptr(),size_of::<INPUT>() as i32)==1{SendInput(1,&release,size_of::<INPUT>() as i32);}
 }
-pub(super) struct Hook { quit:Arc<Quit>, thread:Option<JoinHandle<()>>, pub ticket:usize, pub mode:(bool,bool,bool,bool) }
+pub(super) struct Hook { quit:Arc<Quit>, thread:Option<JoinHandle<()>>, pub ticket:usize, pub mode:(bool,bool,bool,bool),pub volume_enabled:bool,pub volume:Arc<super::volume_keys::Input> }
 impl Hook {
     pub fn install(target:HWND,ticket:usize)->Result<Self,String>{
         Self::install_mode(target,ticket,true,false)
@@ -115,6 +117,10 @@ impl Hook {
         Self::install_features(target,ticket,win_tap,shell_menu,false,false)
     }
     pub fn install_features(target:HWND,ticket:usize,win_tap:bool,shell_menu:bool,overview:bool,snap:bool)->Result<Self,String>{
+        Self::install_all_features(target,ticket,win_tap,shell_menu,overview,snap,false)
+    }
+    pub fn install_all_features(target:HWND,ticket:usize,win_tap:bool,shell_menu:bool,overview:bool,snap:bool,volume_enabled:bool)->Result<Self,String>{
+        let volume=super::volume_keys::Input::new(target,ticket);let thread_volume=volume.clone();
         let target=target as usize;
         let handle=unsafe{CreateEventW(std::ptr::null(),1,0,std::ptr::null())};
         if handle.is_null(){return Err(format!("CreateEventW: {}",unsafe{GetLastError()}));}
@@ -135,6 +141,7 @@ impl Hook {
             OVERVIEW.set(overview);ALT_TAB.set(false);TAB_DOWN.set(false);
             SNAP.set(snap);SNAP_CHORD.set(SnapChord::default());
             REPLAY_FAILED.set(false);SHELL_CLICK.set(None);
+            if volume_enabled{VOLUME.with(|v|v.replace(Some(thread_volume.clone())));}
             if ready.send(Ok(())).is_ok(){
                 let quit=thread_quit.0 as HANDLE;
                 'messages:loop{
@@ -148,9 +155,10 @@ impl Hook {
             }
             if SNAP_CHORD.get().mask&&KEYS.get().blocked.iter().all(Option::is_none){menu_mask();}
             TARGET.set((0,0));UnhookWindowsHookEx(mouse);UnhookWindowsHookEx(keyboard);
+            thread_volume.close();VOLUME.with(|v|v.take());
         }).map_err(|e|e.to_string())?;
         match answer.recv(){
-            Ok(Ok(()))=>Ok(Self{quit,thread:Some(thread),ticket,mode:(win_tap,shell_menu,overview,snap)}),
+            Ok(Ok(()))=>Ok(Self{quit,thread:Some(thread),ticket,mode:(win_tap,shell_menu,overview,snap),volume_enabled,volume}),
             other=>{let _=thread.join();Err(other.ok().and_then(Result::err).unwrap_or_else(||"Luồng phím Win đã dừng.".into()))}
         }
     }
@@ -158,6 +166,7 @@ impl Hook {
 }
 impl Drop for Hook {
     fn drop(&mut self){
+        self.volume.close();
         unsafe{SetEvent(self.quit.0 as HANDLE);}
         if let Some(thread)=self.thread.take(){let _=thread.join();}
     }
@@ -168,6 +177,14 @@ unsafe extern "system" fn keyboard(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
         let e=&*(l as *const KBDLLHOOKSTRUCT);
         let injected=e.flags&LLKHF_INJECTED!=0;
         let (target,ticket)=TARGET.get();
+        if !injected{
+            if let Some(key)=super::volume_keys::Key::from_vk(e.vkCode as u16){
+                let down=matches!(w as u32,WM_KEYDOWN|WM_SYSKEYDOWN);
+                let compatible=e.flags&LLKHF_ALTDOWN==0&&KEYS.get().blocked.iter().all(Option::is_none)&&[VK_SHIFT,VK_CONTROL,VK_MENU,VK_LWIN,VK_RWIN].into_iter().all(|v|GetAsyncKeyState(i32::from(v))>=0);
+                let consumed=VOLUME_EDGES.with(|edges|edges.borrow_mut().edge(key,down,compatible,||VOLUME.with(|v|v.borrow().as_ref().is_some_and(|v|v.enqueue(key)))));
+                if consumed{return 1;}
+            }
+        }
         if !injected&&target!=0&&SNAP.get(){
             let down=matches!(w as u32,WM_KEYDOWN|WM_SYSKEYDOWN);let vk=e.vkCode as u16;
             let mut chord=SNAP_CHORD.get();
@@ -249,6 +266,13 @@ unsafe extern "system" fn keyboard(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
         }
     }
     CallNextHookEx(null_mut(),code,w,l)
+}
+
+#[cfg(test)]pub(super) unsafe fn fixture_volume_edge(input:Arc<super::volume_keys::Input>,vk:u16,down:bool,injected:bool)->bool{
+    VOLUME.with(|v|v.replace(Some(input)));
+    let event=KBDLLHOOKSTRUCT{vkCode:vk as u32,scanCode:0,flags:if injected{LLKHF_INJECTED}else{0},time:0,dwExtraInfo:0};
+    let result=keyboard(HC_ACTION as i32,if down{WM_KEYDOWN}else{WM_KEYUP} as usize,&event as *const _ as isize)==1;
+    VOLUME.with(|v|v.take());result
 }
 unsafe extern "system" fn mouse(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
     if code==HC_ACTION as i32&&l!=0&&MODE.get().1 {

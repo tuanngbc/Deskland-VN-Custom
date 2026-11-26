@@ -197,6 +197,8 @@
     <p class="monitor-detail" data-i18n="shellContextMenuHint">Dùng menu hệ thống kiểu FluidWin khi bật Dock. Giữ Shift khi nhấp chuột phải để dùng menu Windows.</p>
     <label class="setting-row switch-row"><b data-i18n="altTabOverview">Tổng quan cửa sổ bằng Alt+Tab</b><input type="checkbox" id="altTabOverview" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <p class="monitor-detail" data-i18n="altTabOverviewHint">Hiện cửa sổ đang mở trên màn hình hiện tại. Nhả Alt để chọn, Esc để hủy.</p>
+    <label class="setting-row switch-row"><b data-i18n="volumeKeys">Hiển thị âm lượng FluidWin bằng phím âm lượng</b><input type="checkbox" id="volumeKeys" role="switch"><i class="switch" aria-hidden="true"></i></label>
+    <p class="monitor-detail" data-i18n="volumeKeysHint">Khi Dock bật, dùng phím tăng, giảm và tắt tiếng để điều chỉnh âm lượng cùng bảng thông báo kính.</p>
     <label class="setting-row switch-row"><b data-i18n="snapLayouts">Bố cục FluidWin bằng phím Windows</b><input type="checkbox" id="snapLayouts" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <p class="monitor-detail" data-i18n="snapLayoutsHint">Win+Z mở bố cục; Win+Trái/Phải chia màn hình; Win+Lên phóng to, Win+Xuống khôi phục cửa sổ đang phóng to. Trong bảng: Tab hoặc mũi tên để chọn, Enter để áp dụng, Esc để hủy.</p>
     <label class="setting-row switch-row"><b data-i18n="alwaysOnTop">Phím tắt Luôn ở trên cùng</b><input type="checkbox" id="alwaysOnTop" role="switch"><i class="switch" aria-hidden="true"></i></label>
@@ -1333,6 +1335,7 @@ function syncDockSettings(m) {
   $('stagePeek').checked=!!dockOptions.stagePeek;
   $('shellContextMenu').checked=!!dockOptions.shellContextMenu;
   $('altTabOverview').checked=!!dockOptions.altTabOverview;
+  $('volumeKeys').checked=!!dockOptions.volumeKeys;
   $('jellyDrag').checked=!!dockOptions.jellyDrag;
   $('snapLayouts').checked=!!dockOptions.snapLayouts;
   $('alwaysOnTop').checked=!!dockOptions.alwaysOnTop;
@@ -1367,6 +1370,9 @@ $('shellContextMenu').addEventListener('change',()=>{
 });
 $('altTabOverview').addEventListener('change',()=>{
   dockOptions.altTabOverview=$('altTabOverview').checked;send({t:'dock',altTabOverview:dockOptions.altTabOverview});
+});
+$('volumeKeys').addEventListener('change',()=>{
+  dockOptions.volumeKeys=$('volumeKeys').checked;send({t:'dock',volumeKeys:dockOptions.volumeKeys});
 });
 $('jellyDrag').addEventListener('change',()=>{
   dockOptions.jellyDrag=$('jellyDrag').checked;send({t:'dock',jellyDrag:dockOptions.jellyDrag});

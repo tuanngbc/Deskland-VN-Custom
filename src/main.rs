@@ -3218,7 +3218,7 @@ fn main() {
                 "dock" => {
                     // Partial UI patch must preserve pins/unknown monitor settings.
                     let mut value=app.cfg.dock.json();
-                    for key in ["enabled","stageEnabled","stagePeek","stagePeekDelay","clipboardHistory","clipboardHistoryLimit","allWindows","nativeShellButtons","startShortcut","winKeyStart","shellContextMenu","altTabOverview","snapLayouts","alwaysOnTop","jellyDrag","stageSide","dockDisplay","stageDisplay","appearance"] {
+                    for key in ["enabled","stageEnabled","stagePeek","stagePeekDelay","clipboardHistory","clipboardHistoryLimit","allWindows","nativeShellButtons","startShortcut","winKeyStart","shellContextMenu","altTabOverview","volumeKeys","snapLayouts","alwaysOnTop","jellyDrag","stageSide","dockDisplay","stageDisplay","appearance"] {
                         if let Some(v)=m.get(key){value[key]=v.clone();}
                     }
                     app.cfg.dock=dock::Options::from_json(&value);app.configure_dock();web_changed=true;

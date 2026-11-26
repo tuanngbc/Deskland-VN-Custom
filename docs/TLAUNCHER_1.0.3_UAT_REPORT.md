@@ -1,5 +1,7 @@
 # Owner test — TLauncher 1.0.3
 
+Illustrated Weather milestone `8a41be3` / full run `45836234845` passed; exact internal package/version/checksums verified, and actual five-day vi/en/zh images inspected. Global volume-key routing is implemented with hosted verification pending. No new TEST candidate/profile/shortcut, owner run, production change or release was made. The cursor-copy prerequisite failed its first hosted experiment and remains under investigation; no global cursor changes are enabled. The two owner rejections and all master acceptance gates remain authoritative.
+
 Internal continuation `b9424e4` / full hosted run `45831194360` passed, including event-driven headphone notices and held-callback cancellation/admission. Exact source/package/PE 1.0.3 and checksums verified at `E:\TLauncher-UAT\evidence\internal-b9424e4`; all three actual synthetic headphone OSD locale images inspected and readable. No physical Bluetooth change, owner run, candidate profile/shortcut update, production change or release occurred. Rich Weather and remaining master modules are still in development; previous rejected candidates and owner quality FAIL remain authoritative.
 
 ## Superseding owner rejection — 2026-11-26

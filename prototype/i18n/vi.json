@@ -1,6 +1,8 @@
 {
   "name": "Tiếng Việt",
   "ui": {
+    "volumeKeys": "Hiển thị âm lượng FluidWin bằng phím âm lượng",
+    "volumeKeysHint": "Khi Dock bật, dùng phím tăng, giảm và tắt tiếng để điều chỉnh âm lượng cùng bảng thông báo kính.",
     "ownCorners": "Kiểu góc TLauncher",
     "ownCornersHint": "Áp dụng cho Dock, menu và cửa sổ TLauncher.",
     "cornersRounded": "Bo tròn",

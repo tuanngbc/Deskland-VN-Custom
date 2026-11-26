@@ -1,6 +1,8 @@
 {
   "name": "English",
   "ui": {
+    "volumeKeys": "FluidWin feedback for volume keys",
+    "volumeKeysHint": "While Dock is enabled, use volume up, down and mute keys with the glass volume indicator.",
     "ownCorners": "TLauncher corners",
     "ownCornersHint": "Applies to Dock, menus and TLauncher windows.",
     "cornersRounded": "Rounded",
