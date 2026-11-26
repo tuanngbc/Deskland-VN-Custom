@@ -58,6 +58,7 @@ pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>
 mod utilities;
 mod audio_mixer;
 mod media;
+mod notifications;
 mod overview;
 mod jump_list;
 mod folder_stack;
@@ -1748,6 +1749,7 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::Overview=>overview::show(owner,false,1),
         Command::SnapLayouts=>snap_layout::choose_window(owner),
         Command::Calendar=>calendar::show(owner,dock_app_anchor(owner,None)),
+        Command::Notifications(action)=>notifications::perform(owner,ptr::null_mut(),action),
         Command::Topmost(id)=>if let Some(id)=id{topmost::toggle(owner,id);}else{topmost::choose(owner);},
         Command::Shelf(action)=>shelf::perform(owner,ptr::null_mut(),action),
         Command::CaptureAccess(action)=>capture_access::perform(owner,action),

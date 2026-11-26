@@ -16,7 +16,7 @@ const METRIC_TIMER:usize=1;
 const ENTRANCE_TIMER:usize=2;
 const SINGLE_LINE:u32=DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS;
 #[derive(Clone)]
-pub(super) enum Command{AddApp,WindowsTray,BackgroundApps,AudioMixer,Media,Calendar,Overview,SnapLayouts,Topmost(Option<super::WindowIdentity>),SnapWindow(super::WindowIdentity),Shelf(super::shelf::Action),CaptureAccess(super::capture_access::Action),Desktop(bool),Comfort(super::comfort::Action),Recycle(super::recycle_bin::Action),Clipboard,ClipboardCopy(u64),ClipboardRemove(Option<u64>),Widget(UtilityWidget),Run(Action),Wifi(super::wifi::Change),Radio(super::radios::Request),Brightness(Option<super::brightness::Query>),DisplaySettings,App{path:String,operation:super::AppOperation},Window{hwnd:usize,pid:u32,tid:u32},StageMember(super::WindowIdentity)}
+pub(super) enum Command{AddApp,WindowsTray,BackgroundApps,AudioMixer,Media,Calendar,Notifications(super::notifications::Action),Overview,SnapLayouts,Topmost(Option<super::WindowIdentity>),SnapWindow(super::WindowIdentity),Shelf(super::shelf::Action),CaptureAccess(super::capture_access::Action),Desktop(bool),Comfort(super::comfort::Action),Recycle(super::recycle_bin::Action),Clipboard,ClipboardCopy(u64),ClipboardRemove(Option<u64>),Widget(UtilityWidget),Run(Action),Wifi(super::wifi::Change),Radio(super::radios::Request),Brightness(Option<super::brightness::Query>),DisplaySettings,App{path:String,operation:super::AppOperation},Window{hwnd:usize,pid:u32,tid:u32},StageMember(super::WindowIdentity)}
 #[derive(Clone)]
 pub(super) struct Card{pub icon:Option<UtilityWidget>,pub title:String,pub hint:String,pub action:Option<Command>}
 pub(super) struct View{pub title:String,pub hint:String,pub cards:Vec<Card>,pub metrics:Option<MetricOptions>}
@@ -312,6 +312,8 @@ pub(super) unsafe fn update(owner:HWND,ticket:usize,view:View){
         let mut slot=s.borrow_mut();
         let panel=slot.as_mut().filter(|p|p.owner==owner&&p.tag==ticket)?;
         panel.view=view;
+        panel.page=panel.page.min(panel.pages()-1);
+        panel.index=None;panel.pressed=None;panel.pressed_point=None;
         panel.dirty=true;
         Some(panel.hwnd)
     });
@@ -340,10 +342,12 @@ pub(super) unsafe fn follow_hub(owner:HWND,dock:crate::launcher::DockAnchor){
         chrome::PanelShadow::sync(&mut p.shadow,hwnd,owner,rect,dpi,anchor.side,anchor.dark);
     });
 }
-pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,false);}
-pub(super) unsafe fn show_list(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,true,false);}
-pub(super) unsafe fn show_hub(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,true);}
-unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bool){
+pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,false,None);}
+pub(super) unsafe fn show_list(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,true,false,None);}
+pub(super) unsafe fn show_list_capacity(owner:HWND,anchor:chrome::Anchor,view:View,capacity:usize){show_inner(owner,anchor,view,true,false,Some(capacity));}
+pub(super) unsafe fn show_hub(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,true,None);}
+pub(super) fn first_page(owner:HWND,ticket:usize){PANE.with(|s|if let Some(p)=s.borrow_mut().as_mut().filter(|p|p.owner==owner&&p.tag==ticket){p.page=0;});}
+unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bool,capacity:Option<usize>){
     super::utilities::close_panels();
     let dpi=windows_sys::Win32::UI::HiDpi::GetDpiForWindow(owner).clamp(72,288);
     let px=|n|chrome::scale(dpi,n);
@@ -356,7 +360,7 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bo
     let budget=(work.bottom-work.top-px(132)).max(row_height);
     let rows=(budget/(row_height+gap)).clamp(1,9) as usize;
     let per_page=cols*rows;
-    let expected=view.metrics.map_or(view.cards.len(),|m|m.mask.count_ones() as usize);
+    let expected=capacity.unwrap_or_else(||view.metrics.map_or(view.cards.len(),|m|m.mask.count_ones() as usize));
     let height=(px(84)+expected.clamp(1,per_page).div_ceil(cols) as i32*(row_height+gap)
         +if expected>per_page{px(30)}else{0}).min(work.bottom-work.top).max(1);
     let Some(layer)=Layer::new(width,height)else{return;};
@@ -417,6 +421,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_ERASEBKGND=>1,
         WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{if !super::shelf::modal()&&!super::capture_access::pending(){PostMessageW(hwnd,WM_CLOSE,0,0);}0},
         super::shelf::CHANGED=>{super::shelf::changed(hwnd);0},
+        super::notifications::READY=>{super::notifications::receive(hwnd,w);0},
         WM_DPICHANGED=>{DestroyWindow(hwnd);0},
         WM_CLOSE=>{
             let animated=PANE.with(|s|{
@@ -438,6 +443,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         },
         WM_NCDESTROY=>{
             super::shelf::detach(hwnd);
+            super::notifications::detach(hwnd);
             KillTimer(hwnd,METRIC_TIMER);
             KillTimer(hwnd,ENTRANCE_TIMER);
             let owner=PANE.with(|s|{
@@ -569,6 +575,9 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 if let Command::Shelf(action)=action{
                     if GetCapture()==hwnd{ReleaseCapture();}
                     super::shelf::perform(owner,hwnd,action);
+                }else if let Command::Notifications(action)=action{
+                    if GetCapture()==hwnd{ReleaseCapture();}
+                    super::notifications::perform(owner,hwnd,action);
                 }else{
                     DestroyWindow(hwnd);
                     super::perform_control(owner,action);
