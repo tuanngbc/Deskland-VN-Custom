@@ -18,6 +18,7 @@ mod fullscreen;
 pub(crate) mod library;
 mod calculator;
 mod index;
+mod app_menu;
 
 /// Start and Spotlight share this UI thread. Carry the actual input method
 /// across the focus handoff, rather than reusing a layout left on our thread
@@ -917,7 +918,6 @@ unsafe fn paint(hwnd: HWND) {
 unsafe fn result_menu(hwnd:HWND,mouse:Option<(i32,i32)>){
     let target=STATE.with(|c|{
         let mut g=c.borrow_mut();let s=g.as_mut()?;
-        if !s.dock_start{return None;}
         if let Some((_,y))=mouse{
             let logical=(y as f32/s.scale).floor() as i32-12;
             let row=logical.checked_sub(TOP).filter(|v|*v>=0)?/ROW;
@@ -934,6 +934,7 @@ unsafe fn result_menu(hwnd:HWND,mouse:Option<(i32,i32)>){
     let label=if matches!(&edit,crate::dock::Edit::Unpin(_)){"Bỏ ghim khỏi Dock"}else{"Ghim vào Dock"};
     AppendMenuW(menu,MF_STRING,1,wide("Mở ứng dụng").as_ptr());
     AppendMenuW(menu,MF_STRING,2,wide(label).as_ptr());
+    if app_menu::available(&entry){AppendMenuW(menu,MF_STRING,3,wide(localized("Lệnh ứng dụng Windows…","Windows app commands…","Windows 应用命令…")).as_ptr());}
     let (x,y)=mouse.unwrap_or(((80.0*scale) as i32,((TOP+(row as i32+1)*ROW+12) as f32*scale) as i32));
     let mut point=POINT{x,y};ClientToScreen(hwnd,&mut point);
     IN_ACTION_MENU.with(|flag|flag.set(true));
@@ -943,6 +944,7 @@ unsafe fn result_menu(hwnd:HWND,mouse:Option<(i32,i32)>){
     match cmd{
         1=>{PostMessageW(hwnd,OPEN_SELECTED,0,0);},
         2=>{PIN_EDIT.with(|pending|pending.replace(Some(edit)));},
+        3=>{IN_ACTION_MENU.with(|flag|flag.set(true));app_menu::show(hwnd,point,&entry);IN_ACTION_MENU.with(|flag|flag.set(false));},
         _=>{}
     }
 }

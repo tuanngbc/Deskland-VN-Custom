@@ -265,6 +265,12 @@ jobs:
           cargo test --release dock::brightness::tests::native_brightness_read_releases_physical_handles -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Verify Spotlight Shell menu without invoking uninstall
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test --release launcher::app_menu::tests::native_app_menu_enumerates_and_releases_without_uninstalling -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Package Rust native build
         run: |
           $short = '${{ github.sha }}'.Substring(0, 7)

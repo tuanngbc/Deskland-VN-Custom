@@ -2330,6 +2330,7 @@ unsafe fn tile_menu(hwnd: HWND, i: usize, point: POINT) {
     if manual {
         options.push((10, "Bỏ mục tự thêm (giữ tệp gốc)"));
     }
+    if super::app_menu::available(&entry){options.push((11,words("Lệnh ứng dụng Windows…","Windows app commands…","Windows 应用命令…")));}
     let labels = options.iter().map(|(_, l)| *l).collect::<Vec<_>>();
     let action = menu(hwnd, point, &labels)
         .checked_sub(1)
@@ -2375,6 +2376,7 @@ unsafe fn tile_menu(hwnd: HWND, i: usize, point: POINT) {
             l.remove_manual(&id);
             Ok(())
         }),
+        11=>{MODAL.set(true);super::app_menu::show(hwnd,point,&entry);MODAL.set(false);},
         _ => {}
     }
 }

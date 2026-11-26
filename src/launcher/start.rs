@@ -773,9 +773,12 @@ unsafe fn entry_menu(hwnd:HWND,tile:Tile,mut at:POINT){
     let edit=pin_change(&entry);
     let text=if matches!(&edit,Some(crate::dock::Edit::Unpin(_))){"Bỏ ghim khỏi Dock và Start"}else{"Ghim vào Dock và Start"};
     let location=entry.path.is_absolute()&&entry.path.file_name().is_some();
-    let actions=if location{vec!["Mở ứng dụng",text,"Mở vị trí tệp"]}else{vec!["Mở ứng dụng",text]};
+    let mut actions=if location{vec!["Mở ứng dụng",text,"Mở vị trí tệp"]}else{vec!["Mở ứng dụng",text]};
+    let shell=super::app_menu::available(&entry);let shell_command=actions.len() as u32+1;
+    if shell{actions.push(super::localized("Lệnh ứng dụng Windows…","Windows app commands…","Windows 应用命令…"));}
     ClientToScreen(hwnd,&mut at);
     match action_menu(hwnd,at,&actions,0){
+        id if shell&&id==shell_command=>super::app_menu::show(hwnd,at,&entry),
         1=>launch(hwnd,entry,true),
         2=>if let Some(edit)=edit{PIN_EDIT.with(|p|p.replace(Some(edit)));},
         3 if location=>{
