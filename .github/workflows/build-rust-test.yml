@@ -63,6 +63,17 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Restore hosted Rust dependency/build cache
+        id: rust-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-tlauncher-v1-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: windows-tlauncher-v1-${{ hashFiles('Cargo.lock') }}-
+
       - name: Build Rust native app
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
@@ -299,3 +310,13 @@ jobs:
             ${{ runner.temp }}/calendar-evidence/*.png
           if-no-files-found: error
           retention-days: 14
+
+      - name: Save hosted build cache for subsequent internal fixes
+        if: always() && !cancelled() && steps.rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-tlauncher-v1-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
