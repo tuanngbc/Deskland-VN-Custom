@@ -298,7 +298,7 @@ impl GuardProcess{
                 let output=child.wait_with_output()?;
                 if !output.status.success(){return Err(io::Error::other("Guardian bootstrap failed"));}
                 let text=String::from_utf8_lossy(&output.stdout);
-                let line=text.lines().find_map(|l|l.strip_prefix("TLAUNCHER_GUARDIAN ")).ok_or_else(||io::Error::other("Missing Guardian bootstrap response"))?;
+                let line=text.lines().find_map(|l|l.split_once("TLAUNCHER_GUARDIAN ").map(|(_,v)|v)).ok_or_else(||io::Error::other("Missing Guardian bootstrap response"))?;
                 let mut fields=line.split_whitespace();
                 let pid=fields.next().and_then(|v|v.parse::<u32>().ok()).ok_or_else(||io::Error::other("Missing Guardian identity"))?;
                 let birth=fields.next().and_then(|v|u64::from_str_radix(v,16).ok()).ok_or_else(||io::Error::other("Missing Guardian birth time"))?;

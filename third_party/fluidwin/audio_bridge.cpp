@@ -58,8 +58,8 @@ bool tlauncher_audio_change(void* raw,uint64_t generation,unsigned row,int opera
         auto& m=*static_cast<Model*>(raw);if(!generation||generation!=m.generation)return false;
         if(operation==2){return row<m.outputs.size()&&sistema::Sistema::impostaUscita(m.outputs[row].id);}
         if(row>=m.rows.size())return false;const auto r=m.rows[row];
-        if(operation==0){m.audio.volume(r.output,r.app,std::clamp(value,0,100)/100.0f);return true;}
-        if(operation==1){m.audio.muto(r.output,r.app);return true;}return false;
+        if(operation==0){return m.audio.volume(r.output,r.app,std::clamp(value,0,100)/100.0f);}
+        if(operation==1){return m.audio.muto(r.output,r.app);}return false;
     }catch(...){return false;}
 }
 

@@ -80,25 +80,29 @@ public:
     }
 
     // a = -1: l'uscita stessa
-    void volume(size_t u, int a, float v) {
-        if (u >= uscite.size()) return;
+    bool volume(size_t u, int a, float v) {
+        if (u >= uscite.size()) return false;
         v = std::clamp(v, 0.0f, 1.0f);
         Uscita& x = uscite[u];
-        if (a < 0) { if (x.vol) { x.vol->SetMasterVolumeLevelScalar(v, nullptr); if (x.muto && v > 0) { x.vol->SetMute(FALSE, nullptr); x.muto = false; } } x.volume = v; return; }
-        if (a >= (int)x.app.size()) return;
+        if (a < 0) { if (!x.vol || FAILED(x.vol->SetMasterVolumeLevelScalar(v, nullptr))) return false; if (x.muto && v > 0) { if (FAILED(x.vol->SetMute(FALSE, nullptr))) return false; x.muto = false; } x.volume = v; return true; }
+        if (a >= (int)x.app.size()) return false;
         App& p = x.app[a];
-        for (auto* s : p.vol) { s->SetMasterVolume(v, nullptr); if (p.muto && v > 0) s->SetMute(FALSE, nullptr); }
+        bool ok = !p.vol.empty();
+        for (auto* s : p.vol) { ok = SUCCEEDED(s->SetMasterVolume(v, nullptr)) && ok; if (p.muto && v > 0) ok = SUCCEEDED(s->SetMute(FALSE, nullptr)) && ok; }
         p.volume = v; if (v > 0) p.muto = false;
+        return ok;
     }
 
-    void muto(size_t u, int a) {
-        if (u >= uscite.size()) return;
+    bool muto(size_t u, int a) {
+        if (u >= uscite.size()) return false;
         Uscita& x = uscite[u];
-        if (a < 0) { x.muto = !x.muto; if (x.vol) x.vol->SetMute(x.muto, nullptr); return; }
-        if (a >= (int)x.app.size()) return;
+        if (a < 0) { x.muto = !x.muto; return x.vol && SUCCEEDED(x.vol->SetMute(x.muto, nullptr)); }
+        if (a >= (int)x.app.size()) return false;
         App& p = x.app[a];
         p.muto = !p.muto;
-        for (auto* s : p.vol) s->SetMute(p.muto, nullptr);
+        bool ok = !p.vol.empty();
+        for (auto* s : p.vol) ok = SUCCEEDED(s->SetMute(p.muto, nullptr)) && ok;
+        return ok;
     }
 
     size_t righe() const { size_t r = 0; for (auto& u : uscite) r += 1 + u.app.size(); return r; }

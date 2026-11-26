@@ -62,7 +62,7 @@
       "path": "mixer.h",
       "source_git_blob": "4ed30e0415efa40477136a385cc313c7e62b1ff4",
       "source_worktree_sha256": "d57b052df12df8c2e5f7fa8ff8e1026e01c8ebc0745c405dfaeaa9f9e142c733",
-      "local_changes": "Release device enumerator in destructor; disable copies of COM owners"
+      "local_changes": "Release device enumerator in destructor; disable copies of COM owners; propagate endpoint/session setter failures"
     },
     {
       "path": "sistema.h",
