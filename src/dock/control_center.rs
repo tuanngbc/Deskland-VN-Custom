@@ -503,6 +503,12 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if accepted{SetFocus(hwnd);shelf_page();InvalidateRect(hwnd,ptr::null(),0);announce(hwnd);}
             if let Some((owner,action))=action{dispatch(owner,hwnd,action);}0
         },
+        WM_MOVE=>{
+            let access=PANE.with(|s|{let Ok(s)=s.try_borrow()else{return false;};
+                let Some(p)=s.as_ref().filter(|p|p.hwnd==hwnd&&p.access.is_some())else{return false;};p.update_access();true});
+            if access{windows_sys::Win32::UI::Accessibility::NotifyWinEvent(0x800b,hwnd,-4,0);}
+            DefWindowProcW(hwnd,msg,w,l)
+        },
         WM_ERASEBKGND=>1,
         WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{
             let shelf=PANE.with(|s|s.borrow().as_ref().is_some_and(|p|p.hwnd==hwnd&&p.shelf));
@@ -753,6 +759,10 @@ unsafe fn announce(hwnd:HWND){
                 let accessible=super::super::control_access::get(popup);assert!(!accessible.is_null());
                 let expected=per_page as u32+5;
                 assert_eq!(super::super::control_access::probe(accessible,expected,0,0),0,"actual COM names, roles, bounds and hit tests");
+                let mut original_bounds:RECT=mem::zeroed();GetWindowRect(popup,&mut original_bounds);
+                SetWindowPos(popup,ptr::null_mut(),original_bounds.left+32,original_bounds.top+12,0,0,SWP_NOSIZE|SWP_NOACTIVATE|SWP_NOZORDER);
+                assert_eq!(super::super::control_access::probe(accessible,expected,0,0),0,"COM screen bounds must follow actual native movement");
+                SetWindowPos(popup,ptr::null_mut(),original_bounds.left,original_bounds.top,0,0,SWP_NOSIZE|SWP_NOACTIVATE|SWP_NOZORDER);
                 assert_eq!(super::super::control_access::probe(accessible,expected,1,4),0,"disabled drag-all must reject accessibility action");
                 assert_eq!(super::super::control_access::probe(accessible,expected,3,1),0);
                 let mut selected_message:MSG=mem::zeroed();while PeekMessageW(&mut selected_message,popup,super::super::control_access::SELECT,super::super::control_access::CHOOSE,PM_REMOVE)!=0{DispatchMessageW(&selected_message);}

@@ -47,9 +47,11 @@ int tlauncher_control_access_probe(void* raw,unsigned expected,int selected,int 
     if(mode==5){if(FAILED(access->get_accSelection(&value))||value.vt!=VT_I4||value.lVal!=selected+1)return 7;return 0;}
     VARIANT root{};root.vt=VT_I4;root.lVal=CHILDID_SELF;
     if(FAILED(access->get_accRole(root,&value))||value.vt!=VT_I4||value.lVal!=ROLE_SYSTEM_PANE)return 8;
+    long rx=0,ry=0,rw=0,rh=0;if(FAILED(access->accLocation(&rx,&ry,&rw,&rh,root)))return 13;
     for(long i=1;i<=count;i++){
         child.lVal=i;BSTR name=nullptr;if(FAILED(access->get_accName(child,&name))||!name||!SysStringLen(name)){SysFreeString(name);return 9;}SysFreeString(name);
         long x=0,y=0,w=0,h=0;if(FAILED(access->accLocation(&x,&y,&w,&h,child))||w<=0||h<=0)return 10;
+        if(x<rx||y<ry||x+w>rx+rw||y+h>ry+rh)return 14;
         if(FAILED(access->accHitTest(x+w/2,y+h/2,&value))||value.vt!=VT_I4||value.lVal!=i)return 11;
         if(FAILED(access->get_accRole(child,&value))||value.vt!=VT_I4||(value.lVal!=ROLE_SYSTEM_PUSHBUTTON&&value.lVal!=ROLE_SYSTEM_STATICTEXT))return 12;
     }
