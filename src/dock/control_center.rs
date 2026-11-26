@@ -253,7 +253,13 @@ impl Panel{
         chrome::text(g,RECT{left:px(18),top:px(41),right:w-px(14),bottom:px(59)},&self.view.hint,p.muted,SINGLE_LINE);
         let had_forecast=self.forecast.is_some();
         let forecast_drawn=self.forecast.as_mut().is_some_and(|f|f.draw(g,RECT{left:px(14),top:px(67),right:w-px(14),bottom:px(235)},self.dpi,self.index==Some(0)));
-        if had_forecast&&!forecast_drawn{self.forecast=None;}
+        if had_forecast&&!forecast_drawn{
+            self.forecast=None;
+            if !old.is_null(){SelectObject(g,old);}
+            // Repaint the real glass too: a failed EndDraw may have changed
+            // part of the DC before reporting failure. Never keep those pixels.
+            self.paint();return;
+        }
         let pinned=self.pinned();
         let cards=self.cards();
         let mut glyphs=Vec::with_capacity(cards.len());

@@ -79,7 +79,7 @@ extern "C" bool tlauncher_forecast_canvas_draw(void* raw,HDC target,const RECT* 
         ComPtr<ID2D1GradientStopCollection> stops;ComPtr<ID2D1LinearGradientBrush> gradient;
         const D2D1_GRADIENT_STOP gs[2]={{0,D2D1::ColorF(.24f,.52f,.92f,1)},{1,D2D1::ColorF(.42f,.70f,.98f,1)}};
         if(SUCCEEDED(c.dc->CreateGradientStopCollection(gs,2,&stops))&&SUCCEEDED(c.dc->CreateLinearGradientBrush({{0,0},{0,h}},stops.Get(),&gradient)))c.dc->FillRoundedRectangle({{0,0,w,h},14*d,14*d},gradient.Get());
-        else c.dc->Clear(D2D1::ColorF(.24f,.52f,.92f,1));
+        else {c.dc->EndDraw();return false;}
         if(forecast->focused){c.pen->SetColor(D2D1::ColorF(1,1,1,.18f));c.dc->FillRoundedRectangle({{8*d,7*d,w-8*d,34*d},8*d,8*d},c.pen.Get());}
         c.write(forecast->city,c.city.Get(),{16*d,10*d,w-34*d,32*d});
         c.pen->SetColor(D2D1::ColorF(1,1,1,.8f));c.dc->DrawLine({w-25*d,19*d},{w-21.5f*d,22.5f*d},c.pen.Get(),1.6f*d);c.dc->DrawLine({w-21.5f*d,22.5f*d},{w-18*d,19*d},c.pen.Get(),1.6f*d);
