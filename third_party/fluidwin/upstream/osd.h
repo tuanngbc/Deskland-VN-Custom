@@ -33,12 +33,14 @@ public:
             v.aggiornaTema();
             const RECT a = target ? *target : vetro::areaPrincipale();
             v.dpi = vetro::dpiMonitor(MonitorFromPoint({a.left, a.top}, MONITOR_DEFAULTTOPRIMARY));
-            const int w = (int)std::lround((noticeText.empty() ? 300 : 372) * v.dpi), h = (int)std::lround(52 * v.dpi);
-            x = (a.left + a.right - w) / 2; y = a.top + (int)std::lround(14 * v.dpi);
-            v.posiziona(x, y - (int)std::lround(12 * v.dpi), w, h, HWND_TOPMOST, SWP_SHOWWINDOW);
             // (rifatto se la scala e' cambiata, per esempio il principale ora al 150%: R20261121-120306 su S18)
             if (fmt && fDpi != v.dpi) { fmt->Release(); fmt = nullptr; }
             if (!fmt) { fmt = v.formato(13.5f * v.dpi, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_TRAILING); fDpi = v.dpi; }
+            const int available=std::max(1,a.right-a.left-(int)std::lround(28*v.dpi));
+            const int desired=(int)std::ceil(noticeText.empty()?300*v.dpi:std::max(372*v.dpi,v.larghezza(noticeText,fmt)+64*v.dpi));
+            const int w=std::min(available,desired),h=(int)std::lround(52*v.dpi);
+            x=(a.left+a.right-w)/2;y=a.top+(int)std::lround(14*v.dpi);
+            v.posiziona(x,y-(int)std::lround(12*v.dpi),w,h,HWND_TOPMOST,SWP_SHOWWINDOW);
             livelloVis = livello;
             t0 = ora; stato = 1;
             vetro::battito(v.fin, 1);

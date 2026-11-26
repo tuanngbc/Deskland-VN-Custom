@@ -93,7 +93,7 @@ mod tests{
                 let base=&rgba[((h/2*w+w-4)*4) as usize..][..3];
                 let ink=rgba.chunks_exact(4).filter(|p|p[..3].iter().zip(base).any(|(a,b)|a.abs_diff(*b)>70)).count();
                 assert!(ink>80,"actual battery notice is blank for locale {index}: {ink}");
-                let glyph=rgba.chunks_exact(4).enumerate().filter(|(i,p)|{let x=*i as i32%w;let y=*i as i32/w;x>w*12/372&&x<w*38/372&&y>h/4&&y<h*3/4&&p[..3].iter().zip(base).any(|(a,b)|a.abs_diff(*b)>70)}).count();
+                let glyph=rgba.chunks_exact(4).enumerate().filter(|(i,p)|{let x=*i as i32%w;let y=*i as i32/w;x>h*12/52&&x<h*38/52&&y>h/4&&y<h*3/4&&p[..3].iter().zip(base).any(|(a,b)|a.abs_diff(*b)>70)}).count();
                 assert!(glyph>12,"actual utility glyph is blank for notice {index}: {glyph}");
                 close(ticket-1);assert_ne!(IsWindow(hwnd),0);close(ticket);assert_eq!(IsWindow(hwnd),0);
             }

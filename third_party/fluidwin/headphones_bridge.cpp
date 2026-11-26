@@ -117,6 +117,7 @@ extern "C" bool tlauncher_headphones_fixture(HWND target,UINT message)noexcept{
     auto held=watch;held->AddRef();for(int i=0;i<50;++i)held->OnDeviceStateChanged(L"synthetic-only",DEVICE_STATE_ACTIVE);
     MSG msg{};unsigned first=0;while(PeekMessageW(&msg,target,message,message,PM_REMOVE))++first;
     tlauncher_headphones_watch_ack(901);held->OnDeviceAdded(L"synthetic-only");unsigned second=0;while(PeekMessageW(&msg,target,message,message,PM_REMOVE))++second;
-    const bool stopped=stop();held->OnDeviceRemoved(L"synthetic-only");const bool late=PeekMessageW(&msg,target,message,message,PM_REMOVE)!=0;held->Release();
+    const bool stopped=stop();while(PeekMessageW(&msg,target,message,message,PM_REMOVE)){}
+    held->OnDeviceRemoved(L"synthetic-only");const bool late=PeekMessageW(&msg,target,message,message,PM_REMOVE)!=0;held->Release();
     return first==1&&second==1&&stopped&&!late&&displayName(L"Headphones (Synthetic headset)")==L"Synthetic headset"&&bluetoothId(L"BTHLE\\synthetic")&&!bluetoothId(L"USB\\synthetic");
 }
