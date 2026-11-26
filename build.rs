@@ -45,6 +45,7 @@ fn main() {
         println!("cargo:rerun-if-changed=third_party/fluidwin/audio_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/stack_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/recycle_bridge.cpp");
+        println!("cargo:rerun-if-changed=third_party/fluidwin/media_bridge.cpp");
         cc::Build::new()
             .cpp(true)
             .debug(true)
@@ -61,12 +62,15 @@ fn main() {
             .file("third_party/fluidwin/audio_bridge.cpp")
             .file("third_party/fluidwin/stack_bridge.cpp")
             .file("third_party/fluidwin/recycle_bridge.cpp")
+            .file("third_party/fluidwin/media_bridge.cpp")
             .compile("tlauncher_fluidwin_motion");
         println!("cargo:rustc-link-lib=d3dcompiler");
         println!("cargo:rustc-link-lib=uuid");
         println!("cargo:rustc-link-lib=ole32");
         println!("cargo:rustc-link-lib=shell32");
         println!("cargo:rustc-link-lib=winmm");
+        println!("cargo:rustc-link-lib=windowscodecs");
+        println!("cargo:rustc-link-lib=shcore");
         for lib in ["d2d1","dwrite","dwmapi","oleaut32","runtimeobject","shlwapi","advapi32","version","dxva2","propsys"] {
             println!("cargo:rustc-link-lib={lib}");
         }

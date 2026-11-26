@@ -99,6 +99,12 @@
       "source_git_blob": "8ccd6830ffdc81871e0930c2b53c11cca5cdab17",
       "source_worktree_sha256": "5421c9d05376c7ac49e882d06917c8b033effd584db38c019fa4d573199d7c66",
       "local_changes": "Propagate SetThreadExecutionState failure; integrate only awake/countdown through existing Dock UI thread, preserve notification-silence functions for later notification owner"
+    },
+    {
+      "path": "musica.h",
+      "source_git_blob": "637f46fd8db84217ff130be393c82a3a6b2da6e4",
+      "source_worktree_sha256": "2c93a6c14e728b33b188bc001e38f0d30f4aa42eac2fa607b41abbcfde4d2963",
+      "local_changes": "On-demand one-shot reads/commands without original background thread; scoped manager cleanup, per-instance retry, identity and async boolean-result checks"
     }
   ]
 }

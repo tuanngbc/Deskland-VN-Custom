@@ -48,6 +48,7 @@ mod stage_capture_lab;
 pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>{stage_capture_lab::inspect(path,true)}
 mod utilities;
 mod audio_mixer;
+mod media;
 mod jump_list;
 mod folder_stack;
 mod app_previews;
@@ -1727,6 +1728,7 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::BackgroundApps=>show_background_apps(owner),
         Command::Clipboard=>show_clipboard_history(owner),
         Command::AudioMixer=>{let mut point=POINT{x:0,y:0};GetCursorPos(&mut point);audio_mixer::open(owner,point);},
+        Command::Media=>{let mut point=POINT{x:0,y:0};GetCursorPos(&mut point);media::open(owner,point);},
         Command::Comfort(action)=>comfort::perform(owner,action),
         Command::Recycle(action)=>recycle_bin::perform(owner,action),
         Command::ClipboardCopy(id)=>{
