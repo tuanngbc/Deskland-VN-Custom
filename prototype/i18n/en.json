@@ -1,6 +1,8 @@
 {
   "name": "English",
   "ui": {
+    "shellContextMenu": "Desktop and Explorer context menus",
+    "shellContextMenuHint": "Use FluidWin-style system menus while Dock is enabled. Hold Shift and right-click for the Windows menu.",
     "dockAutoHide": "Hide Dock when a window is maximized",
     "dockAppearanceTitle": "Dock appearance",
     "dockIconSize": "Icon size",

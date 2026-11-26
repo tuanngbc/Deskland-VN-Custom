@@ -12,6 +12,8 @@ The sole workflow now has a separate hosted Windows baseline job. It checks out 
 
 ## Architecture correction
 
+Baseline evidence: hosted job `fluidwin-baseline` in Actions run `45733231963`, source `a8764756e7210a9c8f3c7a38b1705157cb049dcd`. Original FluidWin application compiled; original renderer executed all 66 poses. The baseline archive digest is `8d4a87b79c855e79b3bcad0a78ce90b9585ee985f30c2c5d1ce3eb4a5a062e52`. It was retrieved and verified under the owner's UAT evidence directory, without executing its binaries locally. The independent TLauncher regression job is tracked separately. These tint fixtures do not establish capture quality, full upstream parity or owner acceptance.
+
 The existing adapter reuses mesh/shader/Drop curves but retains CPU Stage capture, timer scheduling and native-animation fallback. It is not the full upstream engine. Compare original scheduling (`Present(1,0)` and an active message loop), `viva::Cattura` GPU copies and the complete window-event/handoff/recovery paths before replacing them. Preserve owner speed 0.70x.
 
 Foreign mutation must have a recovery owner first. DWM transition suppression has no documented readable original state; do not assume FALSE is its original value. Layered style/alpha, identity, placement and focus require explicit recovery records and failure/termination coverage. A blocker on one mutation path does not stop independent menus, Dock or Control Center work.

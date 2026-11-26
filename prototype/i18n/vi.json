@@ -1,6 +1,8 @@
 {
   "name": "Tiếng Việt",
   "ui": {
+    "shellContextMenu": "Menu chuột phải Desktop và Explorer",
+    "shellContextMenuHint": "Dùng menu hệ thống kiểu FluidWin khi bật Dock. Giữ Shift khi nhấp chuột phải để dùng menu Windows.",
     "dockAutoHide": "Ẩn Dock khi cửa sổ phóng tối đa",
     "dockAppearanceTitle": "Kiểu hiển thị Dock",
     "dockIconSize": "Cỡ biểu tượng",

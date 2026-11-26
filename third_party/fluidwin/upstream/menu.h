@@ -1,0 +1,827 @@
+// Menu in stile FluidWin al posto di quelli di Windows (TrackPopupMenu): vetro acrilico, velo chiaro o scuro come i
+// pannelli, testo in Inter, voce sotto il mouse evidenziata in blu con angoli arrotondati, sottomenu, tastiera.
+// Si usa come TrackPopupMenu con TPM_RETURNCMD: mostra() resta in attesa e restituisce l'id scelto (0 = annullato).
+// Le voci possono arrivare da un HMENU qualsiasi, anche quello della shell (menu col tasto destro delle app).
+#pragma once
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <windowsx.h>
+#include <dwmapi.h>
+#include "raggio.h"
+#include "fabbriche.h"
+#include "testi.h"   // direzione del testo (arabo)
+#include <d2d1.h>
+#include <dwrite.h>
+#include <string>
+#include <vector>
+#include <functional>
+#include <algorithm>
+#include <climits>
+#include <cmath>
+#include <cstdint>
+
+namespace menu {
+
+// Mentre un menu (o la panoramica) e' aperto il ciclo principale di FluidWin e' fermo: le animazioni (genio,
+// gelatina, dock) le fa avanzare il ciclo del menu, con queste due funzioni di FluidWin. Il passo aspetta lui il vblank
+inline bool (*animazioniInCorso)() = nullptr;
+inline void (*passoAnimazioni)() = nullptr;
+
+// Menu aperti adesso (con i sottomenu) e richiesta di chiuderli tutti. Un clic destro che arriva mentre un menu e'
+// aperto (il gancio del mouse lo trattiene, quindi il menu non lo vede come clic fuori) passa dal ciclo del menu:
+// invece di aprire un secondo menu sopra il primo, FluidWin chiude quelli aperti e poi apre il nuovo (come Windows)
+inline int aperti = 0;
+inline bool chiudiTutti = false;
+inline void chiudi() { if (aperti > 0) chiudiTutti = true; }
+inline bool animazioni() { return animazioniInCorso && passoAnimazioni && animazioniInCorso(); }
+// registro di FluidWin (solo con --log): alla chiusura di ogni menu, quanto arrivavano in ritardo i movimenti del mouse
+inline void (*registro)(const char*) = nullptr;
+// Fascia del dock a riposo su quello schermo (dal bordo dello schermo al lato interno del dock, lunga quanto il bordo;
+// vuota se li' non c'e' o resta giu'): il dock non riserva spazio (la zona di lavoro arriva fino al bordo), e un menu
+// lungo aperto dal centro di controllo finiva in parte sotto il dock, con le ultime voci non cliccabili ("Ferma il
+// timer", "Spegni"). Col dock in alto o ai lati (impostazione "Posizione") la fascia e' su quel bordo
+inline RECT (*fasciaDock)(HMONITOR) = nullptr;
+// zona di lavoro senza la fascia del dock. Se dopo non resta posto (schermo basso, area di lavoro ridotta): meglio un
+// menu che copre il dock di uno alto un pixel (R20261120-145131-S3)
+inline RECT areaLibera(HMONITOR m, const RECT& lavoro) {
+    RECT a = lavoro;
+    if (!fasciaDock) return a;
+    const RECT f = fasciaDock(m);
+    if (IsRectEmpty(&f)) return a;
+    MONITORINFO mi{}; mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(m, &mi)) return a;
+    const RECT& s = mi.rcMonitor;
+    if (f.right - f.left >= f.bottom - f.top) {   // in basso o in alto
+        if (f.bottom >= s.bottom - 1) a.bottom = std::min(a.bottom, f.top); else a.top = std::max(a.top, f.bottom);
+        if (a.bottom - a.top < 160) { a.top = lavoro.top; a.bottom = lavoro.bottom; }
+    } else {                                       // a sinistra o a destra
+        if (f.left <= s.left + 1) a.left = std::max(a.left, f.right); else a.right = std::min(a.right, f.left);
+        if (a.right - a.left < 160) { a.left = lavoro.left; a.right = lavoro.right; }
+    }
+    return a;
+}
+
+struct Voce {
+    std::wstring testo;
+    UINT id = 0;
+    bool separatore = false, disattivata = false, titolo = false, spuntata = false;
+    HMENU sotto = nullptr;   // sottomenu (preso da un HMENU)
+    int pulsante = 0;        // != 0: pulsante con icona nella riga in cima (vedi Icona), come nel menu di Windows 11
+    bool extra = false;      // nascosta finche' non si passa sulla freccia in fondo (le "altre opzioni")
+    int simbolo = 0;         // icona piccola a sinistra del testo (Icona), 0 nessuna
+    // icona a colori a sinistra del testo (comandi delle app nel dock: jumplist.h): pixel BGRA premoltiplicati,
+    // latoPixel x latoPixel, di chi chiama mostra() (devono restare validi finche' il menu e' aperto); il menu ne fa una
+    // bitmap di Direct2D. Pixel e non HICON: arrivano gia' pronti dal thread che legge le jump list
+    const uint32_t* pixel = nullptr;
+    int latoPixel = 0;
+};
+enum Icona { I_NIENTE, I_TAGLIA, I_COPIA, I_INCOLLA, I_RINOMINA, I_CONDIVIDI, I_ELIMINA,
+             I_APRI, I_APRI_CON, I_ADMIN, I_PREFERITI, I_START, I_BARRA, I_PERCORSO, I_PROPRIETA, I_TERMINALE, I_COPILOT,
+             I_MODIFICA, I_ZIP, I_VISTA, I_ORDINA, I_GRUPPI, I_AGGIORNA, I_ANNULLA, I_NUOVO, I_SCHERMO, I_PERSONALIZZA,
+             I_INVIA, I_COLLEGAMENTO, I_STAMPA, I_CARTELLA, I_SCUDO };
+
+static Voce voce(const std::wstring& t, UINT id) { Voce v; v.testo = t; v.id = id; return v; }
+static Voce separatore() { Voce v; v.separatore = true; return v; }
+static Voce titolo(const std::wstring& t) { Voce v; v.testo = t; v.titolo = true; return v; }
+
+// Voci di un HMENU (anche della shell). Le voci senza testo (disegnate dall'app) si saltano, cosi' come i
+// separatori doppi o in fondo.
+static std::vector<Voce> daHmenu(HMENU m) {
+    std::vector<Voce> v;
+    const int n = GetMenuItemCount(m);
+    for (int i = 0; i < n; i++) {
+        wchar_t buf[256] = L"";
+        MENUITEMINFOW mi{}; mi.cbSize = sizeof(mi);
+        mi.fMask = MIIM_FTYPE | MIIM_ID | MIIM_STATE | MIIM_SUBMENU | MIIM_STRING;
+        mi.dwTypeData = buf; mi.cch = 255;
+        if (!GetMenuItemInfoW(m, i, TRUE, &mi)) continue;
+        Voce x;
+        if (mi.fType & MFT_SEPARATOR) {
+            if (v.empty() || v.back().separatore) continue;
+            x.separatore = true; v.push_back(x); continue;
+        }
+        if (!buf[0]) continue;
+        // "&Apri" -> "Apri"; il testo dopo il tab (scorciatoie) si toglie
+        std::wstring t;
+        for (const wchar_t* p = buf; *p && *p != L'\t'; p++) { if (*p == L'&' && p[1] != L'&') continue; t += *p; }
+        x.testo = t; x.id = mi.wID; x.sotto = mi.hSubMenu;
+        x.disattivata = (mi.fState & MFS_DISABLED) != 0;
+        x.spuntata = (mi.fState & MFS_CHECKED) != 0;
+        v.push_back(x);
+    }
+    while (!v.empty() && v.back().separatore) v.pop_back();
+    return v;
+}
+
+class Menu {
+public:
+    // Mostra il menu con l'angolo in alto a sinistra in pt (o sopra pt, se versoAlto); restituisce l'id scelto.
+    // prepara(sottomenu) viene chiamata prima di aprire un sottomenu preso da un HMENU (la shell li riempie li').
+    static UINT mostra(const std::vector<Voce>& voci, POINT pt, HWND proprietario, bool versoAlto = false,
+                       std::function<void(HMENU)> prepara = nullptr) {
+        Menu m(voci, proprietario, prepara);
+        return m.esegui(pt, versoAlto, nullptr);
+    }
+
+private:
+    std::vector<Voce> voci;
+    std::vector<D2D1_RECT_F> rett;
+    HWND fin = nullptr, proprietario = nullptr;
+    std::function<void(HMENU)> prepara;
+    ID2D1Factory* f2d = nullptr; ID2D1HwndRenderTarget* rt = nullptr; ID2D1SolidColorBrush* pen = nullptr;
+    IDWriteFactory* fdw = nullptr; IDWriteTextFormat *fmt = nullptr, *fmtTitolo = nullptr;
+    int sopra = -1, W = 0, H = 0;
+    float dpi = 1;
+    bool scuro = false, fine = false;
+    UINT scelta = 0;
+    BYTE alfa = 0;
+    Menu* padre = nullptr;
+    int aperto = -1;   // voce con il sottomenu aperto
+    // sottomenu: da quando il mouse sta sul menu padre sopra un'altra voce (0: no). Si chiude solo se ci resta un
+    // attimo: andando in diagonale verso una voce del sottomenu si passa per forza sopra le voci sotto quella aperta
+    ULONGLONG tAltrove = 0;
+    static constexpr ULONGLONG ATTESA_ALTROVE_MS = 300;
+    // Sottomenu: si aprono col mouse fermo sulla voce per un attimo (come Windows), non al solo passaggio. Prima si
+    // aprivano subito: scorrendo le voci se ne aprivano 6-7 (registro), e ognuno fermava il menu (la shell li riempie,
+    // "Apri con" cerca le app) e teneva la zona blu ferma sulla sua voce mentre il mouse era gia' altrove
+    ULONGLONG tSopra = 0;   // da quando il mouse e' sulla voce 'sopra' (per aprire il suo sottomenu)
+    static constexpr ULONGLONG ATTESA_SOTTO_MS = 200;
+    void cambiaSopra(int s) { if (s != sopra) { sopra = s; tSopra = GetTickCount64(); disegna(); } }
+    // sottomenu da aprire adesso: mouse fermo da ATTESA_SOTTO_MS sulla voce col sottomenu (true se l'ha aperto)
+    bool sottoDaAprire() {
+        if (fine || aperto >= 0 || sopra < 0 || sopra >= (int)voci.size() || !voci[sopra].sotto || !tSopra) return false;
+        if (GetTickCount64() - tSopra < ATTESA_SOTTO_MS) return false;
+        POINT c; GetCursorPos(&c); ScreenToClient(fin, &c);
+        RECT cr; GetClientRect(fin, &cr);
+        if (!PtInRect(&cr, c) || voceIn(c.x, c.y) != sopra) { tSopra = 0; return false; }   // (arrivata con la tastiera: niente)
+        tSopra = 0; apriSotto(sopra); return true;
+    }
+    bool inSotto = false;
+    // riga dei pulsanti in cima e freccia in fondo che allunga il menu con le voci "extra"
+    D2D1_RECT_F rettFreccia{};
+    bool conFreccia = false, espanso = false;
+    float hCompatto = 0, hPieno = 0;
+    int x0 = 0, y0 = 0;
+    ULONGLONG tEsp = 0; double kEsp = 0;
+    bool premutoPrima = true, escPrima = true;
+    bool conSimboli = false, versoAltoM = false;   // qualche voce ha l'icona (il testo si sposta); il menu si apre verso l'alto
+    // menu piu' alto dello schermo (tutte le "altre opzioni" della shell): la finestra si ferma all'altezza dello
+    // schermo e le voci scorrono (rotella, mouse fermo sulla fascia in alto o in basso, frecce della tastiera)
+    int hMax = 0;           // altezza massima della finestra
+    float scorri = 0;       // di quanto sono salite le voci
+    ULONGLONG tScorri = 0;  // ultimo passo dello scorrimento dai bordi
+    // diagnostica (registro): movimenti del mouse ricevuti e loro ritardo, ridisegni e loro durata
+    int nMosse = 0, nDisegni = 0; DWORD ritardoTot = 0, ritardoMax = 0; double tDisegni = 0;
+
+    Menu(const std::vector<Voce>& v, HWND p, std::function<void(HMENU)> pr) : voci(v), proprietario(p), prepara(pr) {}
+    ~Menu() {
+        for (ID2D1Bitmap* b : immagini) if (b) b->Release();
+        for (IUnknown* o : std::initializer_list<IUnknown*>{pen, rt, fmt, fmtTitolo}) if (o) o->Release();
+        if (fin) DestroyWindow(fin);
+    }
+
+    // Icone a colori (Voce::pixel) come bitmap di Direct2D, fatte la prima volta che servono con il render target di
+    // questo menu. Una che non si crea resta vuota: niente icona
+    std::vector<ID2D1Bitmap*> immagini;
+    std::vector<bool> immaginiProvate;
+    ID2D1Bitmap* immagine(size_t i) {
+        if (i >= voci.size() || !voci[i].pixel || voci[i].latoPixel <= 0 || voci[i].latoPixel > 256 || !rt) return nullptr;
+        if (immagini.size() != voci.size()) { immagini.assign(voci.size(), nullptr); immaginiProvate.assign(voci.size(), false); }
+        if (immaginiProvate[i]) return immagini[i];
+        immaginiProvate[i] = true;
+        const UINT32 l = (UINT32)voci[i].latoPixel;
+        rt->CreateBitmap(D2D1::SizeU(l, l), voci[i].pixel, l * 4,
+                         D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)), &immagini[i]);
+        return immagini[i];
+    }
+
+    // Fabbriche di Direct2D e DirectWrite: una sola per tutti i menu (crearle a ogni menu lasciava indietro un paio di
+    // handle ogni volta). Non si liberano mai: servono fino all'uscita
+    static ID2D1Factory* fabbrica2d() {
+        static ID2D1Factory* f = fabbriche::d2d();   // la stessa delle finestre di vetro (fabbriche.h)
+        return f;
+    }
+    static IDWriteFactory* fabbricaTesto() {
+        static IDWriteFactory* f = fabbriche::testo();
+        return f;
+    }
+
+    static bool temaScuro() {
+        DWORD v = 1, n = sizeof(v);
+        RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                     L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &v, &n);
+        return v == 0;
+    }
+
+    static const wchar_t* famiglia(IDWriteFactory* f) {
+        IDWriteFontCollection* c = nullptr; f->GetSystemFontCollection(&c, FALSE);
+        const wchar_t* scelta = L"Segoe UI Variable Text";
+        for (const wchar_t* n : {L"Inter Variable", L"Inter Variable Text", L"Inter"}) {
+            UINT32 i = 0; BOOL e = FALSE; if (c) c->FindFamilyName(n, &i, &e);
+            if (e) { scelta = n; break; }
+        }
+        if (c) c->Release();
+        return scelta;
+    }
+
+    float altezza(const Voce& v) const { return (v.separatore ? 9 : v.titolo ? 26 : 30) * dpi; }
+    static constexpr float LATO_PULSANTE = 38, ALTA_FRECCIA = 22;
+
+    void crea(POINT pt, bool versoAlto) {
+        static bool registrata = false;
+        if (!registrata) {
+            WNDCLASSW wc{}; wc.lpfnWndProc = proc; wc.hInstance = GetModuleHandleW(nullptr); wc.lpszClassName = L"FluidWin.Menu";
+            wc.hCursor = LoadCursor(nullptr, IDC_ARROW);   // l'ombra (arrotondata) la mette gia' Windows 11
+            RegisterClassW(&wc); registrata = true;
+        }
+        const HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        UINT dx = 96, dy = 96;
+        if (HMODULE sh = GetModuleHandleW(L"shcore.dll") ? GetModuleHandleW(L"shcore.dll") : LoadLibraryW(L"shcore.dll")) {
+            typedef HRESULT (WINAPI *Fn)(HMONITOR, int, UINT*, UINT*);
+            if (auto f = (Fn)GetProcAddress(sh, "GetDpiForMonitor")) if (SUCCEEDED(f(mon, 0, &dx, &dy))) dpi = dx / 96.0f;
+        }
+        scuro = temaScuro();
+        fdw = fabbricaTesto();
+        if (!fdw) return;
+        static const wchar_t* fam = famiglia(fdw);   // (il font scelto non cambia: si cerca una volta sola)
+        fdw->CreateTextFormat(fam, nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.5f * dpi, L"it-it", &fmt);
+        fdw->CreateTextFormat(fam, nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0f * dpi, L"it-it", &fmtTitolo);
+        // (audit FW-AUDIT-004) senza formati o, sotto, senza render target il menu non si apre: esegui() trova fin o rt
+        // nulli e torna 0, come un menu annullato. Prima si usavano subito, nulli
+        if (!fmt || !fmtTitolo) return;
+        for (IDWriteTextFormat* f : {fmt, fmtTitolo}) {
+            testi::allinea(f, DWRITE_TEXT_ALIGNMENT_LEADING);   // (in arabo da destra a sinistra, vedi testi.h)
+            f->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            f->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        }
+        // misure: larghezza della voce piu' lunga
+        float largo = 180 * dpi;   // (le altezze le fanno i rettangoli, sotto)
+        int pulsanti = 0;
+        for (const auto& v : voci) {
+            if (v.pulsante) { pulsanti++; continue; }
+            if (v.separatore) continue;
+            IDWriteTextLayout* l = nullptr;
+            if (SUCCEEDED(fdw->CreateTextLayout(v.testo.c_str(), (UINT32)v.testo.size(), v.titolo ? fmtTitolo : fmt, 2000, 100, &l))) {
+                DWRITE_TEXT_METRICS tm{}; l->GetMetrics(&tm); l->Release();
+                largo = std::max(largo, tm.widthIncludingTrailingWhitespace + 64 * dpi);
+            }
+        }
+        if (pulsanti) { largo = std::max(largo, (pulsanti * (LATO_PULSANTE + 4) + 12) * dpi); }
+        conFreccia = std::any_of(voci.begin(), voci.end(), [](const Voce& v) { return v.extra; });
+        conSimboli = std::any_of(voci.begin(), voci.end(), [](const Voce& v) { return v.simbolo != 0 || v.pixel; });
+        if (conSimboli) largo += 14 * dpi;
+        W = (int)std::ceil(std::min(largo, 420 * dpi));
+        // rettangoli: pulsanti in riga in cima, poi le voci, poi la freccia, poi le voci extra
+        {
+            float yy = 6 * dpi, xp = (W - (pulsanti * (LATO_PULSANTE + 4) - 4) * dpi) / 2;   // riga dei pulsanti centrata
+            rett.assign(voci.size(), D2D1_RECT_F{});
+            if (pulsanti) {
+                for (size_t i = 0; i < voci.size(); i++) if (voci[i].pulsante) { rett[i] = {xp, yy, xp + LATO_PULSANTE * dpi, yy + LATO_PULSANTE * dpi}; xp += (LATO_PULSANTE + 4) * dpi; }
+                yy += (LATO_PULSANTE + 6) * dpi;
+            }
+            for (size_t i = 0; i < voci.size(); i++) if (!voci[i].pulsante && !voci[i].extra) { const float a = altezza(voci[i]); rett[i] = {6 * dpi, yy, W - 6 * dpi, yy + a}; yy += a; }
+            if (conFreccia) { rettFreccia = {6 * dpi, yy, W - 6 * dpi, yy + ALTA_FRECCIA * dpi}; yy += ALTA_FRECCIA * dpi; }
+            hCompatto = yy + 6 * dpi;
+            for (size_t i = 0; i < voci.size(); i++) if (voci[i].extra) { const float a = altezza(voci[i]); rett[i] = {6 * dpi, yy, W - 6 * dpi, yy + a}; yy += a; }
+            hPieno = yy + 6 * dpi;
+        }
+        // dentro lo schermo
+        MONITORINFO mi{}; mi.cbSize = sizeof(mi); GetMonitorInfoW(mon, &mi);
+        const RECT al = areaLibera(mon, mi.rcWork);   // (fuori dalla fascia del dock, su qualsiasi lato)
+        hMax = (int)(al.bottom - al.top);
+        H = std::min((int)std::ceil(hCompatto), hMax);
+        int x = pt.x, y = versoAlto ? pt.y - H : pt.y;
+        if (x < al.left) x = al.left;   // (dock a sinistra: il menu aperto su un'icona sta alla sua destra)
+        if (x + W > al.right) x = std::max((int)al.left, (padre ? (int)padre->sinistraFin() - W : (int)al.right - W));
+        if (y + H > al.bottom) y = al.bottom - H;
+        if (y < al.top) y = al.top;
+        x0 = x; y0 = y;
+        fin = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED, L"FluidWin.Menu", L"", WS_POPUP,
+                              x, y, W, H, proprietario, nullptr, GetModuleHandleW(nullptr), this);
+        SetLayeredWindowAttributes(fin, 0, 0, LWA_ALPHA);
+        // vetro acrilico di Windows 11 sotto al disegno, angoli arrotondati, niente animazioni native
+        MARGINS mg{-1, -1, -1, -1}; DwmExtendFrameIntoClientArea(fin, &mg);
+        BOOL sc = scuro; DwmSetWindowAttribute(fin, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &sc, sizeof(sc));
+        int tipo = 3; DwmSetWindowAttribute(fin, 38 /* DWMWA_SYSTEMBACKDROP_TYPE */, &tipo, sizeof(tipo));
+        int angoli = raggio::preferenzaDwm(); DwmSetWindowAttribute(fin, DWMWA_WINDOW_CORNER_PREFERENCE, &angoli, sizeof(angoli));   // (impostazione "Angoli")
+        BOOL niente = TRUE; DwmSetWindowAttribute(fin, DWMWA_TRANSITIONS_FORCEDISABLED, &niente, sizeof(niente));
+        f2d = fabbrica2d();
+        if (!f2d || !fdw) return;
+        f2d->CreateHwndRenderTarget(D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_DEFAULT,
+                                        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96),
+                                    D2D1::HwndRenderTargetProperties(fin, D2D1::SizeU(W, H)), &rt);
+        if (rt) rt->CreateSolidColorBrush(D2D1::ColorF(0, 0, 0, 1), &pen);
+        if (!rt || !pen) {
+            if (rt) rt->Release();
+            rt = nullptr;
+            DestroyWindow(fin); fin = nullptr;   // (non ancora mostrata)
+            return;
+        }
+        rt->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);   // sul vetro il ClearType farebbe aloni colorati
+    }
+
+    // allunga il menu (freccia in fondo): la finestra cresce verso il basso, o sale se sotto non c'e' posto
+    void passoEspansione() {
+        kEsp = std::min(1.0, (GetTickCount64() - tEsp) / 170.0);
+        const double e = 1 - std::pow(1 - kEsp, 3);
+        const int h = std::min((int)std::ceil(hCompatto + (hPieno - hCompatto) * e), hMax);
+        MONITORINFO mi{}; mi.cbSize = sizeof(mi); GetMonitorInfoW(MonitorFromWindow(fin, MONITOR_DEFAULTTONEAREST), &mi);
+        const RECT al = areaLibera(MonitorFromWindow(fin, MONITOR_DEFAULTTONEAREST), mi.rcWork);
+        const int y = std::max((int)al.top, std::min(y0, (int)al.bottom - h));
+        if (alfa < 255) posa(1);   // (se l'apertura non era finita, la si chiude qui)
+        SetWindowPos(fin, HWND_TOPMOST, x0, y, W, h, SWP_NOACTIVATE);
+        H = h;
+        scorri = std::min(scorri, maxScorri());
+        if (rt) rt->Resize(D2D1::SizeU(W, H));
+        disegna();
+    }
+
+    float sinistraFin() const { RECT r; GetWindowRect(fin, &r); return (float)r.left; }
+
+    bool selezionabile(int i) const { return i >= 0 && i < (int)voci.size() && !voci[i].separatore && !voci[i].titolo && !voci[i].disattivata && (!voci[i].extra || espanso); }
+
+    // x, y: coordinate della finestra (le voci sono spostate di 'scorri'); niente voci sotto le fasce di scorrimento
+    int voceIn(int x, int y) const {
+        if (fasciaSu() && y < FASCIA * dpi) return -1;
+        if (fasciaGiu() && y >= H - FASCIA * dpi) return -1;
+        const float yc = y + scorri;
+        for (int i = 0; i < (int)rett.size(); i++)
+            if (x >= rett[i].left && x < rett[i].right && yc >= rett[i].top && yc < rett[i].bottom) return selezionabile(i) ? i : -1;
+        return -1;
+    }
+
+    // ---- scorrimento (menu piu' alto dello schermo) ----
+    static constexpr float FASCIA = 18;   // fasce in alto e in basso con la freccia, quando c'e' altro da vedere
+    float maxScorri() const { return std::max(0.0f, (espanso ? hPieno : hCompatto) - (float)H); }
+    bool fasciaSu() const { return scorri > 0.5f; }
+    bool fasciaGiu() const { return scorri < maxScorri() - 0.5f; }
+    // porta lo scorrimento a y; la voce sotto il mouse cambia con le voci
+    // dalMouse: la voce sotto il mouse diventa quella scelta. Scorrendo con la tastiera no: la scelta resta quella delle
+    // frecce (prima saltava alla voce sotto il mouse fermo, e Invio eseguiva un altro comando, R20261121-002818-S14)
+    void scorriA(float y, bool dalMouse = true) {
+        const float n = std::clamp(y, 0.0f, maxScorri());
+        if (std::fabs(n - scorri) < 0.01f) return;
+        scorri = n;
+        if (dalMouse) {
+            POINT c; GetCursorPos(&c); ScreenToClient(fin, &c);
+            RECT cr; GetClientRect(fin, &cr);
+            sopra = PtInRect(&cr, c) ? voceIn(c.x, c.y) : sopra;
+        }
+        disegna();
+    }
+    // la voce i tutta dentro la finestra (spostandosi con la tastiera)
+    void mostraVoce(int i) {
+        if (i < 0 || i >= (int)rett.size() || maxScorri() <= 0) return;
+        const float m = FASCIA * dpi;
+        if (rett[i].top - scorri < m) scorriA(rett[i].top - m, false);
+        else if (rett[i].bottom - scorri > H - m) scorriA(rett[i].bottom - H + m, false);
+    }
+    // mouse fermo su una delle due fasce: scorre da solo (la rotella puo' finire a un'altra finestra se FluidWin non e'
+    // in primo piano). true se sta scorrendo
+    bool scorriDaiBordi() {
+        if (maxScorri() <= 0) { tScorri = 0; return false; }
+        POINT c; GetCursorPos(&c); ScreenToClient(fin, &c);
+        float verso = 0;
+        if (c.x >= 0 && c.x < W) {
+            if (fasciaSu() && c.y >= 0 && c.y < FASCIA * dpi) verso = -1;
+            else if (fasciaGiu() && c.y < H && c.y >= H - FASCIA * dpi) verso = 1;
+        }
+        const ULONGLONG t = GetTickCount64();
+        if (!verso) { tScorri = 0; return false; }
+        if (tScorri) scorriA(scorri + verso * 0.9f * dpi * (float)std::min<ULONGLONG>(t - tScorri, 50));   // ~900 px/s
+        tScorri = t;
+        return true;
+    }
+
+    void disegna() {
+        if (!rt) return;
+        LARGE_INTEGER q0, qf; QueryPerformanceCounter(&q0); QueryPerformanceFrequency(&qf);
+        struct Misura { Menu* m; LARGE_INTEGER a, f; ~Misura() { LARGE_INTEGER b; QueryPerformanceCounter(&b); m->nDisegni++; m->tDisegni += (double)(b.QuadPart - a.QuadPart) * 1000 / f.QuadPart; } } misura{this, q0, qf};
+        rt->BeginDraw();
+        rt->Clear(D2D1::ColorF(0, 0, 0, 0));
+        // velo sopra il vetro, come i pannelli del dock
+        pen->SetColor(scuro ? D2D1::ColorF(0.12f, 0.12f, 0.14f, 0.45f) : D2D1::ColorF(1, 1, 1, 0.55f));
+        rt->FillRectangle({0, 0, (float)W, (float)H}, pen);
+        const D2D1_COLOR_F ink = scuro ? D2D1::ColorF(1, 1, 1, 0.92f) : D2D1::ColorF(0.08f, 0.08f, 0.1f, 0.9f);
+        if (conFreccia) {   // freccia: giu' da chiusa, su da aperta (gira mentre il menu si allunga)
+            const D2D1_RECT_F r = {rettFreccia.left, rettFreccia.top - scorri, rettFreccia.right, rettFreccia.bottom - scorri};
+            const float cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+            pen->SetColor(scuro ? D2D1::ColorF(1, 1, 1, 0.10f) : D2D1::ColorF(0, 0, 0, 0.08f));
+            rt->DrawLine({r.left + 8 * dpi, r.top + 1}, {r.right - 8 * dpi, r.top + 1}, pen, 1.0f);
+            rt->SetTransform(D2D1::Matrix3x2F::Rotation((float)(180 * (1 - std::pow(1 - kEsp, 3))), {cx, cy}));
+            pen->SetColor({ink.r, ink.g, ink.b, ink.a * 0.7f});
+            rt->DrawLine({cx - 5 * dpi, cy - 2 * dpi}, {cx, cy + 3 * dpi}, pen, 1.6f * dpi);
+            rt->DrawLine({cx, cy + 3 * dpi}, {cx + 5 * dpi, cy - 2 * dpi}, pen, 1.6f * dpi);
+            rt->SetTransform(D2D1::Matrix3x2F::Identity());
+        }
+        for (int i = 0; i < (int)voci.size(); i++) {
+            const Voce& v = voci[i];
+            const D2D1_RECT_F r = {rett[i].left, rett[i].top - scorri, rett[i].right, rett[i].bottom - scorri};   // spostata dallo scorrimento
+            if (r.top > H || r.bottom < 0) continue;
+            if (v.pulsante) {   // pulsante con icona (riga in cima)
+                const bool ev = i == sopra;
+                if (ev) { pen->SetColor(D2D1::ColorF(0.04f, 0.52f, 1.0f, 1)); rt->FillRoundedRectangle({r, 8 * dpi, 8 * dpi}, pen); }
+                D2D1_COLOR_F c = ev ? D2D1::ColorF(1, 1, 1, 1) : ink;
+                if (v.disattivata) c.a *= 0.4f;
+                pen->SetColor(c);
+                icona(v.pulsante, (r.left + r.right) / 2, (r.top + r.bottom) / 2);
+                continue;
+            }
+            if (v.separatore) {
+                pen->SetColor(scuro ? D2D1::ColorF(1, 1, 1, 0.12f) : D2D1::ColorF(0, 0, 0, 0.10f));
+                const float cy = (r.top + r.bottom) / 2;
+                rt->DrawLine({r.left + 8 * dpi, cy}, {r.right - 8 * dpi, cy}, pen, 1.0f);
+                continue;
+            }
+            // (la voce del sottomenu aperto resta blu, tranne quando il mouse e' su un'altra voce di questo menu)
+            const bool evid = i == sopra || (i == aperto && (sopra < 0 || sopra == aperto));
+            if (evid) {
+                pen->SetColor(D2D1::ColorF(0.04f, 0.52f, 1.0f, 1));
+                // concentrica con l'angolo del vetro (6 px piu' dentro), al massimo a pillola
+                const float re = std::min(std::max(6.0f, raggio::vetro() - 6.0f) * dpi, (r.bottom - r.top) / 2);
+                rt->FillRoundedRectangle({r, re, re}, pen);
+            }
+            D2D1_COLOR_F c = evid ? D2D1::ColorF(1, 1, 1, 1) : ink;
+            if (v.disattivata && !v.titolo) c.a *= 0.4f;
+            if (v.titolo) c.a *= 0.55f;
+            pen->SetColor(c);
+            const D2D1_RECT_F rtxt = {r.left + (conSimboli ? 36 : 24) * dpi, r.top, r.right - 24 * dpi, r.bottom};
+            if (v.simbolo && !v.titolo) {   // icona piccola a sinistra, un po' piu' leggera del testo
+                D2D1_COLOR_F ci = c; if (!evid) ci.a *= 0.8f;
+                pen->SetColor(ci);
+                icona(v.simbolo, r.left + 18 * dpi, (r.top + r.bottom) / 2, 0.82f);
+                pen->SetColor(c);
+            } else if (v.pixel && !v.titolo) {   // icona a colori, 16 punti, al posto del simbolo
+                if (ID2D1Bitmap* b = immagine((size_t)i)) {
+                    const float cx = r.left + 18 * dpi, cy = (r.top + r.bottom) / 2, m = 8 * dpi;
+                    rt->DrawBitmap(b, {cx - m, cy - m, cx + m, cy + m}, v.disattivata ? 0.4f : 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+                }
+            }
+            rt->DrawText(v.testo.c_str(), (UINT32)v.testo.size(), v.titolo ? fmtTitolo : fmt, v.titolo ? D2D1_RECT_F{r.left + 10 * dpi, r.top, r.right, r.bottom} : rtxt,
+                         pen, D2D1_DRAW_TEXT_OPTIONS_CLIP);
+            if (v.spuntata) {   // segno di spunta a sinistra
+                const float cx = r.left + 12 * dpi, cy = (r.top + r.bottom) / 2;
+                rt->DrawLine({cx - 4 * dpi, cy}, {cx - 1 * dpi, cy + 3 * dpi}, pen, 1.6f * dpi);
+                rt->DrawLine({cx - 1 * dpi, cy + 3 * dpi}, {cx + 4 * dpi, cy - 3 * dpi}, pen, 1.6f * dpi);
+            }
+            if (v.sotto) {   // freccia del sottomenu
+                const float cx = r.right - 12 * dpi, cy = (r.top + r.bottom) / 2;
+                rt->DrawLine({cx - 2 * dpi, cy - 4 * dpi}, {cx + 2 * dpi, cy}, pen, 1.5f * dpi);
+                rt->DrawLine({cx + 2 * dpi, cy}, {cx - 2 * dpi, cy + 4 * dpi}, pen, 1.5f * dpi);
+            }
+        }
+        // fasce di scorrimento: coprono le voci che passano sotto, con una freccia verso il resto del menu
+        for (int lato = 0; lato < 2; lato++) {
+            if (lato == 0 ? !fasciaSu() : !fasciaGiu()) continue;
+            const float a = FASCIA * dpi, y = lato == 0 ? 0 : H - a, cx = W / 2.0f, cy = y + a / 2;
+            pen->SetColor(scuro ? D2D1::ColorF(0.13f, 0.13f, 0.15f, 0.96f) : D2D1::ColorF(0.97f, 0.97f, 0.98f, 0.96f));
+            rt->FillRectangle({0, y, (float)W, y + a}, pen);
+            pen->SetColor({ink.r, ink.g, ink.b, ink.a * 0.6f});
+            const float s = lato == 0 ? -1.0f : 1.0f;   // punta in su o in giu'
+            rt->DrawLine({cx - 5 * dpi, cy - 2 * s * dpi}, {cx, cy + 3 * s * dpi}, pen, 1.6f * dpi);
+            rt->DrawLine({cx, cy + 3 * s * dpi}, {cx + 5 * dpi, cy - 2 * s * dpi}, pen, 1.6f * dpi);
+        }
+        // superficie persa (GPU, driver): il menu si chiude senza scelta, con i suoi sottomenu; alla prossima apertura
+        // le risorse si rifanno. Prima restava aperto e cliccabile, vuoto o fermo all'ultimo disegno (S16)
+        if (rt->EndDraw() == (HRESULT)D2DERR_RECREATE_TARGET) { fine = true; scelta = 0; for (Menu* p = padre; p; p = p->padre) p->fine = true; }
+        ValidateRect(fin, nullptr);
+    }
+
+    // icone della riga in cima, disegnate a linee
+    void icona(int q, float cx, float cy, float scala = 1) {
+        const float d = dpi * scala, s = 1.5f * dpi;
+        auto l = [&](float x1, float y1, float x2, float y2) { rt->DrawLine({cx + x1 * d, cy + y1 * d}, {cx + x2 * d, cy + y2 * d}, pen, s); };
+        auto rr = [&](float x1, float y1, float x2, float y2, float r) { rt->DrawRoundedRectangle({{cx + x1 * d, cy + y1 * d, cx + x2 * d, cy + y2 * d}, r * d, r * d}, pen, s); };
+        auto cerchio = [&](float x, float y, float r) { rt->DrawEllipse({{cx + x * d, cy + y * d}, r * d, r * d}, pen, s); };
+        auto pieno = [&](float x, float y, float r) { rt->FillEllipse({{cx + x * d, cy + y * d}, r * d, r * d}, pen); };
+        // arco da a0 ad a1 (gradi, 0 = destra, in senso orario)
+        auto arco = [&](float r, float a0, float a1) {
+            ID2D1PathGeometry* g = nullptr; ID2D1GeometrySink* k = nullptr;
+            if (FAILED(f2d->CreatePathGeometry(&g)) || FAILED(g->Open(&k))) { if (g) g->Release(); return; }
+            const float p0 = a0 * 3.14159265f / 180, p1 = a1 * 3.14159265f / 180;
+            k->BeginFigure({cx + r * d * std::cos(p0), cy + r * d * std::sin(p0)}, D2D1_FIGURE_BEGIN_HOLLOW);
+            k->AddArc(D2D1::ArcSegment({cx + r * d * std::cos(p1), cy + r * d * std::sin(p1)}, {r * d, r * d}, 0, D2D1_SWEEP_DIRECTION_CLOCKWISE,
+                                       (a1 - a0) > 180 ? D2D1_ARC_SIZE_LARGE : D2D1_ARC_SIZE_SMALL));
+            k->EndFigure(D2D1_FIGURE_END_OPEN); k->Close(); k->Release();
+            rt->DrawGeometry(g, pen, s); g->Release();
+        };
+        auto spezzata = [&](std::initializer_list<D2D1_POINT_2F> p, bool chiusa) {
+            ID2D1PathGeometry* g = nullptr; ID2D1GeometrySink* k = nullptr;
+            if (FAILED(f2d->CreatePathGeometry(&g)) || FAILED(g->Open(&k))) { if (g) g->Release(); return; }
+            bool primo = true;
+            for (auto x : p) { const D2D1_POINT_2F q2 = {cx + x.x * d, cy + x.y * d}; if (primo) { k->BeginFigure(q2, D2D1_FIGURE_BEGIN_HOLLOW); primo = false; } else k->AddLine(q2); }
+            k->EndFigure(chiusa ? D2D1_FIGURE_END_CLOSED : D2D1_FIGURE_END_OPEN); k->Close(); k->Release();
+            rt->DrawGeometry(g, pen, s); g->Release();
+        };
+        switch (q) {
+            case I_TAGLIA:   // forbici
+                rt->DrawEllipse({{cx - 4 * d, cy + 5 * d}, 2.6f * d, 2.6f * d}, pen, s);
+                rt->DrawEllipse({{cx + 4 * d, cy + 5 * d}, 2.6f * d, 2.6f * d}, pen, s);
+                l(-2.5f, 3, 5, -8); l(2.5f, 3, -5, -8); break;
+            case I_COPIA:    // due fogli
+                rt->DrawRoundedRectangle({{cx - 3 * d, cy - 5 * d, cx + 6 * d, cy + 6 * d}, 2 * d, 2 * d}, pen, s);
+                l(-6, 3, -6, -6); l(-6, -6, 2, -6); break;
+            case I_INCOLLA:  // cartellina
+                rt->DrawRoundedRectangle({{cx - 6 * d, cy - 5 * d, cx + 6 * d, cy + 7 * d}, 2 * d, 2 * d}, pen, s);
+                rt->FillRoundedRectangle({{cx - 3 * d, cy - 7.5f * d, cx + 3 * d, cy - 3.5f * d}, 1.2f * d, 1.2f * d}, pen); break;
+            case I_RINOMINA: // casella con il cursore
+                rt->DrawRoundedRectangle({{cx - 7 * d, cy - 3.5f * d, cx + 5 * d, cy + 3.5f * d}, 1.5f * d, 1.5f * d}, pen, s);
+                l(2, -6.5f, 2, 6.5f); l(0, -6.5f, 4, -6.5f); l(0, 6.5f, 4, 6.5f); break;
+            case I_CONDIVIDI: // freccia che esce dalla scatola
+                l(0, 2, 0, -7); l(-3.5f, -3.5f, 0, -7); l(3.5f, -3.5f, 0, -7);
+                l(-6, -1, -6, 7); l(-6, 7, 6, 7); l(6, 7, 6, -1); break;
+            case I_ELIMINA:  // cestino
+                l(-6, -4.5f, 6, -4.5f); l(-2, -6.5f, 2, -6.5f);
+                l(-4.5f, -4.5f, -3.5f, 7); l(-3.5f, 7, 3.5f, 7); l(3.5f, 7, 4.5f, -4.5f); break;
+            case I_APRI:          // finestra con la freccia che esce
+                spezzata({{1, -6}, {-6, -6}, {-6, 6}, {6, 6}, {6, -1}}, false); l(0, 0, 7, -7); l(2, -7, 7, -7); l(7, -7, 7, -2); break;
+            case I_APRI_CON:      // finestra di un'app
+                rr(-7, -6, 7, 6, 1.5f); l(-7, -2.5f, 7, -2.5f); pieno(-5, -4.2f, 0.7f); pieno(-3, -4.2f, 0.7f); break;
+            case I_ADMIN: case I_SCUDO:   // scudo (con la spunta per Defender)
+                spezzata({{0, -7.5f}, {6, -5}, {6, 0}, {0, 7.5f}, {-6, 0}, {-6, -5}}, true);
+                if (q == I_SCUDO) { l(-2.5f, 0, -0.5f, 2.5f); l(-0.5f, 2.5f, 3, -2.5f); } break;
+            case I_PREFERITI: {   // stella
+                std::vector<D2D1_POINT_2F> p;
+                for (int i = 0; i < 10; i++) { const float a = (-90 + i * 36) * 3.14159265f / 180, r = (i % 2) ? 3.2f : 7.2f; p.push_back({r * std::cos(a), r * std::sin(a) + 0.6f}); }
+                spezzata({p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9]}, true); break;
+            }
+            case I_START:         // quattro quadrati pieni (il logo di Start)
+                for (float x : {-6.5f, 0.8f}) for (float y : {-6.5f, 0.8f})
+                    rt->FillRoundedRectangle({{cx + x * d, cy + y * d, cx + (x + 5.7f) * d, cy + (y + 5.7f) * d}, 1.2f * d, 1.2f * d}, pen);
+                break;
+            case I_BARRA:         // puntina
+                cerchio(1.5f, -3, 3.5f); l(-0.8f, -0.6f, -6.5f, 6.5f); l(-2, -6, 5, 1); break;
+            case I_PERCORSO:      // catena (percorso)
+                rt->SetTransform(D2D1::Matrix3x2F::Rotation(-40, {cx, cy}));
+                rr(-7, -2.5f, 0.5f, 2.5f, 2.5f); rr(-0.5f, -2.5f, 7, 2.5f, 2.5f);
+                rt->SetTransform(D2D1::Matrix3x2F::Identity()); break;
+            case I_PROPRIETA:     // "i" nel cerchio
+                cerchio(0, 0, 7); l(0, -0.5f, 0, 4); pieno(0, -3.3f, 1); break;
+            case I_TERMINALE:     // >_
+                rr(-7, -6, 7, 6, 1.5f); l(-4, -2.5f, -1.5f, 0); l(-1.5f, 0, -4, 2.5f); l(0.5f, 3, 4, 3); break;
+            case I_COPILOT:       // scintilla a quattro punte
+                spezzata({{0, -7}, {1.6f, -1.6f}, {7, 0}, {1.6f, 1.6f}, {0, 7}, {-1.6f, 1.6f}, {-7, 0}, {-1.6f, -1.6f}}, true); break;
+            case I_MODIFICA:      // matita
+                spezzata({{-6, 6}, {-5.4f, 2.8f}, {3.6f, -6.2f}, {6.2f, -3.6f}, {-2.8f, 5.4f}}, true); l(1.6f, -4.2f, 4.2f, -1.6f); break;
+            case I_ZIP:           // scatola con la cerniera
+                rr(-6, -7, 6, 7, 1.5f); for (int i = 0; i < 4; i++) l(-1, -5.5f + i * 2.4f, 1, -5.5f + i * 2.4f); rr(-1.6f, 2.5f, 1.6f, 5.5f, 0.6f); break;
+            case I_VISTA:         // griglia
+                rr(-6.5f, -6.5f, -1, -1, 1); rr(1, -6.5f, 6.5f, -1, 1); rr(-6.5f, 1, -1, 6.5f, 1); rr(1, 1, 6.5f, 6.5f, 1); break;
+            case I_ORDINA:        // frecce su e giu'
+                l(-3, 6, -3, -6); l(-6, -3, -3, -6); l(-3, -6, 0, -3); l(3, -6, 3, 6); l(0, 3, 3, 6); l(3, 6, 6, 3); break;
+            case I_GRUPPI:        // righe raggruppate
+                pieno(-5.5f, -5, 1); l(-3, -5, 6, -5); pieno(-5.5f, 0, 1); l(-3, 0, 6, 0); pieno(-5.5f, 5, 1); l(-3, 5, 6, 5); break;
+            case I_AGGIORNA:      // freccia circolare
+                arco(6, -60, 230); l(6 * std::cos(-1.047f), 6 * std::sin(-1.047f), 6 * std::cos(-1.047f) + 0.5f, -8.5f); l(6 * std::cos(-1.047f), 6 * std::sin(-1.047f), 6.5f, -3); break;
+            case I_ANNULLA:       // freccia che torna indietro
+                arco(5, 180, 360); l(5, 0, 5, 4); l(-5, 0, -7.5f, -2.5f); l(-5, 0, -2.5f, -2.5f); break;
+            case I_NUOVO:         // piu'
+                cerchio(0, 0, 7); l(-3.5f, 0, 3.5f, 0); l(0, -3.5f, 0, 3.5f); break;
+            case I_SCHERMO:       // monitor
+                rr(-7.5f, -6, 7.5f, 3.5f, 1.5f); l(0, 3.5f, 0, 6.5f); l(-3.5f, 6.5f, 3.5f, 6.5f); break;
+            case I_PERSONALIZZA:  // tavolozza
+                arco(7, 20, 320); l(7 * std::cos(0.35f), 7 * std::sin(0.35f), 2.5f, 2.5f); pieno(-3, -2.5f, 1.1f); pieno(1, -4, 1.1f); pieno(-3.5f, 2, 1.1f); break;
+            case I_INVIA:         // aeroplanino di carta
+                spezzata({{-7, -1}, {7, -6}, {2, 7}, {-0.5f, 1.5f}}, true); l(-0.5f, 1.5f, 7, -6); break;
+            case I_COLLEGAMENTO:  // freccia curva del collegamento
+                rr(-7, -1, 1, 7, 1.5f); arco(4.5f, 180, 270); l(-0.5f, -4.5f, 6, -4.5f); l(3.5f, -7, 6, -4.5f); l(6, -4.5f, 3.5f, -2); break;
+            case I_STAMPA:        // stampante
+                rr(-7, -2.5f, 7, 4, 1.5f); spezzata({{-4, -2.5f}, {-4, -7}, {4, -7}, {4, -2.5f}}, false); rr(-4, 1.5f, 4, 7, 0.8f); break;
+            case I_CARTELLA:      // cartella
+                spezzata({{-7, -5.5f}, {-2.5f, -5.5f}, {-1, -3.5f}, {7, -3.5f}, {7, 6}, {-7, 6}}, true); break;
+        }
+    }
+
+    void scegli(int i) {
+        if (!selezionabile(i)) return;
+        if (voci[i].sotto) { apriSotto(i); return; }
+        scelta = voci[i].id; fine = true;
+    }
+
+    // sottomenu a destra della voce: ha un suo ciclo; se restituisce un id, il menu intero si chiude
+    void apriSotto(int i) {
+        HMENU hs = voci[i].sotto;
+        if (prepara) prepara(hs);
+        auto sv = daHmenu(hs);
+        if (sv.empty()) return;
+        aperto = i; disegna();
+        Menu s(sv, fin, prepara);
+        s.padre = this;
+        RECT r; GetWindowRect(fin, &r);
+        inSotto = true;   // il sottomenu prende il mouse: per questo menu non e' un motivo per chiudersi
+        const UINT id = s.esegui({r.right - (LONG)(4 * dpi), r.top + (LONG)(rett[i].top - scorri) - (LONG)(6 * dpi)}, false, this);
+        inSotto = false;
+        aperto = -1;
+        if (id) { scelta = id; fine = true; return; }
+        if (chiudiTutti) { fine = true; scelta = 0; return; }   // (chiusi tutti: niente altro sottomenu)
+        SetCapture(fin);
+        // chiuso perche' il mouse e' rimasto su un'altra voce: si evidenzia quella (e se ha un sottomenu si apre)
+        POINT c; GetCursorPos(&c); ScreenToClient(fin, &c);
+        RECT cr; GetClientRect(fin, &cr);
+        const int qui = PtInRect(&cr, c) ? voceIn(c.x, c.y) : -1;
+        if (qui >= 0 && qui != i && !fine) { sopra = qui; tSopra = GetTickCount64(); disegna(); return; }   // (il suo sottomenu: col mouse fermo)
+        disegna();
+    }
+
+    // posizione durante le animazioni: k 0..1 (1 = al suo posto), alfa insieme
+    void posa(double k) {
+        const double e = 1 - std::pow(1 - std::clamp(k, 0.0, 1.0), 3);
+        const int off = (int)std::lround((1 - e) * 8 * dpi) * (versoAltoM ? 1 : -1);
+        SetWindowPos(fin, HWND_TOPMOST, x0, y0 + off, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE);
+        alfa = (BYTE)std::lround(255 * std::clamp(k, 0.0, 1.0));
+        SetLayeredWindowAttributes(fin, 0, alfa, LWA_ALPHA);
+    }
+
+    // chiusura: dissolvenza e scivolata indietro (110 ms), poi via
+    void chiudiAnimato() {
+        RECT r; GetWindowRect(fin, &r); y0 = r.top; x0 = r.left;
+        const ULONGLONG t = GetTickCount64();
+        const double da = alfa / 255.0;
+        for (;;) {
+            const double k = std::min(1.0, (GetTickCount64() - t) / 110.0);
+            posa(da * (1 - k));
+            if (k >= 1) break;
+            if (animazioni()) passoAnimazioni(); else Sleep(8);
+        }
+        ShowWindow(fin, SW_HIDE);
+    }
+
+    UINT esegui(POINT pt, bool versoAlto, Menu* p) {
+        padre = p;
+        versoAltoM = versoAlto;
+        crea(pt, versoAlto);
+        if (!fin || !rt) return 0;   // (grafica non disponibile: niente menu, come se fosse stato annullato)
+        struct Conta { Conta() { aperti++; } ~Conta() { if (--aperti == 0) chiudiTutti = false; } } conta;
+        ShowWindow(fin, SW_SHOWNOACTIVATE);
+        disegna();
+        SetCapture(fin);
+        const ULONGLONG t0 = GetTickCount64();
+        premutoPrima = (GetAsyncKeyState(VK_LBUTTON) | GetAsyncKeyState(VK_RBUTTON) | GetAsyncKeyState(VK_MBUTTON)) & 0x8000;
+        escPrima = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+        MSG msg;
+        while (!fine) {
+            // FluidWin puo' non essere in primo piano (menu del tasto destro sopra Esplora file): la cattura del mouse
+            // allora non porta i clic fuori dal menu, ne' l'Esc. Si guardano i tasti direttamente
+            fuoriOEsc();
+            if (padre && tAltrove) controllaPadre();
+            if (chiudiTutti) { fine = true; scelta = 0; }   // chiusi tutti da fuori (vedi menu::chiudi)
+            if (fine) break;
+            if (sottoDaAprire()) continue;   // mouse fermo su una voce col sottomenu
+            if (espanso && kEsp < 1) { passoEspansione(); if (MsgWaitForMultipleObjects(0, nullptr, FALSE, 8, QS_ALLINPUT) == WAIT_TIMEOUT) continue; }
+            // apertura: dissolvenza e scivolata (150 ms)
+            if (alfa < 255) {
+                posa((GetTickCount64() - t0) / 150.0);
+                if (!animazioni() && MsgWaitForMultipleObjects(0, nullptr, FALSE, 8, QS_ALLINPUT) == WAIT_TIMEOUT) continue;
+            }
+            // animazioni di FluidWin in corso: prima i messaggi in coda, poi un fotogramma (che aspetta il vblank)
+            // mouse sulla fascia in alto o in basso: le voci scorrono (un passo ogni 8 ms circa)
+            if (scorriDaiBordi() && !animazioni() && MsgWaitForMultipleObjects(0, nullptr, FALSE, 8, QS_ALLINPUT) == WAIT_TIMEOUT) continue;
+            if (animazioni() && !PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE)) { passoAnimazioni(); continue; }
+            if (!PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) { MsgWaitForMultipleObjects(0, nullptr, FALSE, 25, QS_ALLINPUT); continue; }
+            if (msg.message == WM_QUIT) { PostQuitMessage((int)msg.wParam); break; }
+            if (gestisci(msg)) continue;
+            TranslateMessage(&msg); DispatchMessageW(&msg);
+        }
+        ReleaseCapture();
+        chiudiAnimato();
+        if (registro && nMosse) {
+            char b[160]; snprintf(b, 160, "menu: %d movimenti del mouse, ritardo medio %lu ms, massimo %lu ms; %d ridisegni, %.1f ms in media",
+                                  nMosse, ritardoTot / nMosse, ritardoMax, nDisegni, nDisegni ? tDisegni / nDisegni : 0.0);
+            registro(b);
+        }
+        return scelta;
+    }
+
+    // sottomenu: il mouse e' sul menu padre sopra un'altra voce da ATTESA_ALTROVE_MS? allora si chiude (anche se il
+    // mouse si e' fermato: lo chiama anche il ciclo)
+    void controllaPadre() {
+        POINT c; GetCursorPos(&c);
+        RECT cr; GetWindowRect(fin, &cr);
+        bool altrove = false;
+        if (!PtInRect(&cr, c)) {
+            POINT s = c; ScreenToClient(padre->fin, &s);
+            RECT pr; GetClientRect(padre->fin, &pr);
+            altrove = PtInRect(&pr, s) && padre->voceIn(s.x, s.y) != padre->aperto;
+        }
+        if (!altrove) { tAltrove = 0; return; }
+        const ULONGLONG t = GetTickCount64();
+        if (!tAltrove) tAltrove = t;
+        else if (t - tAltrove >= ATTESA_ALTROVE_MS) { fine = true; scelta = 0; }
+    }
+
+    // clic (di qualsiasi tasto) fuori da questo menu e dai suoi padri, o Esc: si chiude tutto
+    void fuoriOEsc() {
+        const bool premuto = ((GetAsyncKeyState(VK_LBUTTON) | GetAsyncKeyState(VK_RBUTTON) | GetAsyncKeyState(VK_MBUTTON)) & 0x8000) != 0;
+        const bool esc = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+        if (esc && !escPrima) { fine = true; scelta = 0; }
+        if (premuto && !premutoPrima) {
+            POINT c; GetCursorPos(&c);
+            HWND h = GetAncestor(WindowFromPoint(c), GA_ROOT);
+            bool nostro = h == fin;
+            for (Menu* p = padre; p && !nostro; p = p->padre) nostro = h == p->fin;
+            if (!nostro) { fine = true; scelta = 0; for (Menu* p = padre; p; p = p->padre) p->fine = true; }
+        }
+        premutoPrima = premuto; escPrima = esc;
+    }
+
+    // messaggi di mouse e tastiera del menu (anche quelli del sottomenu passano di qui finche' e' aperto)
+    bool gestisci(const MSG& msg) {
+        switch (msg.message) {
+            case WM_MOUSEMOVE: case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_RBUTTONDOWN: case WM_RBUTTONUP: {
+                POINT p{GET_X_LPARAM(msg.lParam), GET_Y_LPARAM(msg.lParam)};
+                if (msg.hwnd != fin) MapWindowPoints(msg.hwnd, fin, &p, 1);
+                RECT cr; GetClientRect(fin, &cr);
+                const bool dentro = PtInRect(&cr, p);
+                if (msg.message == WM_MOUSEMOVE) {
+                    {   // ritardo del movimento: da quando Windows l'ha generato (msg.time) a adesso
+                        const DWORD r = GetTickCount() - msg.time;
+                        if (r < 10000) { nMosse++; ritardoTot += r; ritardoMax = std::max(ritardoMax, r); }
+                    }
+                    if (padre) controllaPadre();   // mouse tornato sul menu padre, su un'altra voce: il sottomenu si chiude
+                    if (fine) return true;
+                    // sulla freccia in fondo, senza cliccare: il menu si allunga con le altre voci
+                    if (dentro && conFreccia && !espanso && p.y + scorri >= rettFreccia.top - 2 && p.y + scorri < rettFreccia.bottom + 4) { espanso = true; tEsp = GetTickCount64(); }
+                    // Mouse su un menu padre mentre questo sottomenu e' aperto (i suoi messaggi passano da questo ciclo): la
+                    // sua zona blu segue subito il mouse; il sottomenu si chiude dopo ATTESA_ALTROVE_MS (controllaPadre).
+                    // Prima il padre restava fermo sulla voce del sottomenu finche' questo non si chiudeva
+                    if (!dentro) {
+                        for (Menu* q = padre; q; q = q->padre) {
+                            if (msg.hwnd != q->fin) continue;
+                            POINT s = p; MapWindowPoints(fin, q->fin, &s, 1);
+                            RECT qr; GetClientRect(q->fin, &qr);
+                            q->cambiaSopra(PtInRect(&qr, s) ? q->voceIn(s.x, s.y) : -1);
+                            break;
+                        }
+                    } else for (Menu* q = padre; q; q = q->padre) if (q->sopra != q->aperto) q->cambiaSopra(q->aperto);   // tornato qui
+                    cambiaSopra(dentro ? voceIn(p.x, p.y) : -1);   // (il sottomenu si apre col mouse fermo: vedi sottoDaAprire)
+                    return true;
+                }
+                if (!dentro) {   // clic fuori: si chiude tutto (il clic non passa sotto, come i menu di Windows)
+                    if (msg.message == WM_LBUTTONDOWN || msg.message == WM_RBUTTONDOWN) {
+                        fine = true; scelta = 0;
+                        // sul menu padre si chiude solo questo sottomenu
+                        if (padre) { POINT s = p; MapWindowPoints(fin, padre->fin, &s, 1); RECT pr; GetClientRect(padre->fin, &pr); if (!PtInRect(&pr, s)) padre->fine = true; }
+                    }
+                    return true;
+                }
+                if (msg.message == WM_LBUTTONUP || msg.message == WM_RBUTTONUP) scegli(voceIn(p.x, p.y));
+                return true;
+            }
+            case WM_KEYDOWN: case WM_SYSKEYDOWN: {
+                const WPARAM k = msg.wParam;
+                if (k == VK_ESCAPE || (k == VK_LEFT && padre)) { fine = true; scelta = 0; return true; }
+                if (k == VK_DOWN && conFreccia && !espanso && sopra >= 0 && !voci[sopra].extra) {   // in fondo alle voci: si allunga
+                    bool ultima = true;
+                    for (int n = sopra + 1; n < (int)voci.size(); n++) if (selezionabile(n) && !voci[n].pulsante) { ultima = false; break; }
+                    if (ultima) { espanso = true; tEsp = GetTickCount64(); }
+                }
+                if (k == VK_DOWN || k == VK_UP) {
+                    int s = sopra;
+                    for (int n = 0; n < (int)voci.size(); n++) {
+                        s = (s + (k == VK_DOWN ? 1 : -1) + (int)voci.size()) % (int)voci.size();
+                        if (selezionabile(s)) break;
+                    }
+                    sopra = s; mostraVoce(s); disegna(); return true;
+                }
+                if (k == VK_RETURN || k == VK_SPACE || (k == VK_RIGHT && sopra >= 0 && voci[sopra].sotto)) { scegli(sopra); return true; }
+                return true;
+            }
+            // rotella: arriva alla finestra col fuoco (quella di FluidWin dietro al menu) o a quella sotto il mouse
+            case WM_MOUSEWHEEL:
+                if (maxScorri() > 0) scorriA(scorri - GET_WHEEL_DELTA_WPARAM(msg.wParam) / 120.0f * 90 * dpi);
+                return true;
+            case WM_CHAR: case WM_SYSCHAR: case WM_KEYUP: case WM_SYSKEYUP: return true;
+            case WM_CAPTURECHANGED: break;
+            case WM_ACTIVATEAPP: if (!msg.wParam) { fine = true; scelta = 0; } break;
+        }
+        return false;
+    }
+
+    static LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
+        if (m == WM_NCCREATE) SetWindowLongPtrW(h, GWLP_USERDATA, (LONG_PTR)((CREATESTRUCTW*)l)->lpCreateParams);
+        Menu* me = (Menu*)GetWindowLongPtrW(h, GWLP_USERDATA);
+        switch (m) {
+            case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+            case WM_PAINT: if (me) me->disegna(); else ValidateRect(h, nullptr); return 0;
+            case WM_ERASEBKGND: return 1;
+            case WM_NCCALCSIZE: if (w) return 0; break;
+            case WM_CANCELMODE: if (me) { me->fine = true; me->scelta = 0; } return 0;
+            case WM_CLOSE: if (me) { me->fine = true; me->scelta = 0; } return 0;   // (la finestra la distrugge il menu)
+            // il mouse non e' piu' nostro (Alt+Tab, un'altra finestra in primo piano): il menu si chiude
+            case WM_CAPTURECHANGED: if (me && !me->inSotto && !me->fine && (HWND)l != h) { me->fine = true; me->scelta = 0; } return 0;
+        }
+        return DefWindowProcW(h, m, w, l);
+    }
+};
+
+static UINT mostra(const std::vector<Voce>& voci, POINT pt, HWND proprietario, bool versoAlto = false,
+                   std::function<void(HMENU)> prepara = nullptr) {
+    return Menu::mostra(voci, pt, proprietario, versoAlto, prepara);
+}
+
+} // namespace menu

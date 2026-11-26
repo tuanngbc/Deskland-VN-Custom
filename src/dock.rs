@@ -37,6 +37,7 @@ mod stage_rail;
 mod stage_projection;
 mod stage_snapshot;
 mod window_effect;
+mod shell_menu;
 mod fluidwin_mesh;
 mod stage_peek;
 mod clipboard_history;
@@ -2133,12 +2134,14 @@ fn win_key_status(status:&'static str){
     }
 }
 fn sync_win_key(){
-    let on=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.win_key_start&&!s.suspended});
-    let allowed=on&&taskbar_hidden()&&!crate::trial::benchmark_active()&&!crate::trial::demo_active();
+    let (requested,context)=STATE.with(|s|{let s=s.borrow();
+        (s.prefs.enabled&&s.prefs.win_key_start&&!s.suspended,s.prefs.enabled&&s.prefs.shell_context_menu&&!s.suspended)});
+    let on=requested&&taskbar_hidden();
+    let allowed=(on||context)&&!crate::trial::benchmark_active()&&!crate::trial::demo_active();
     if !allowed{
         WIN_KEY.with(|s|drop(s.borrow_mut().take()));
         WIN_KEY_FAILED.set(false);
-        win_key_status(if on{"waiting"}else{"off"});
+        win_key_status(if requested{"waiting"}else{"off"});
         return;
     }
     if WIN_KEY.with(|s|s.borrow().as_ref().is_some_and(win_key::Hook::finished)){
@@ -2146,9 +2149,12 @@ fn sync_win_key(){
         WIN_KEY_FAILED.set(true);
         win_key_status("failed");
     }
+    if WIN_KEY.with(|s|s.borrow().as_ref().is_some_and(|hook|hook.mode!=(on,context))){
+        WIN_KEY.with(|s|drop(s.borrow_mut().take()));WIN_KEY_FAILED.set(false);
+    }
     if WIN_KEY_FAILED.get()||WIN_KEY.with(|s|s.borrow().is_some()){return;}
     let generation=WIN_KEY_TOKEN.with(|n|{let next=n.get().wrapping_add(1).max(1);n.set(next);next});
-    match win_key::Hook::install(CONTROL.get(),generation){
+    match win_key::Hook::install_mode(CONTROL.get(),generation,on,context){
         Ok(hook)=>{WIN_KEY.with(|s|s.replace(Some(hook)));win_key_status("installed");}
         Err(reason)=>{
             crate::log!("DOCK_WIN_KEY install failed: {reason}");
@@ -3040,6 +3046,12 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         stage_snapshot::READY if hwnd==CONTROL.get()=>{window_effect::capture_ready();finish_stage_snapshot();0},
+        shell_menu::NOTICE if hwnd==CONTROL.get()=>{
+            let enabled=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.shell_context_menu&&!s.suspended});
+            let current=WIN_KEY.with(|s|s.borrow().as_ref().is_some_and(|hook|hook.ticket==w));
+            let owner=STATE.with(|s|s.borrow().bars.iter().find(|b|!b.hidden).map_or(hwnd,|b|b.hwnd));
+            shell_menu::receive(owner,w,enabled&&current);0
+        },
         WM_CLIPBOARDUPDATE if hwnd==CONTROL.get()=>{clipboard_history::changed(hwnd);0},
         clipboard_history::READY if hwnd==CONTROL.get()=>{clipboard_history::complete(hwnd);0},
         WM_CONFIG=>{drain_commands();0},
@@ -3686,6 +3698,7 @@ unsafe fn drain_commands() {
     for command in commands {
         match command {
             Command::Configure(options)=>{
+                if !options.shell_context_menu{shell_menu::close();}
                 window_effect::reset();
                 stage_peek::close(ptr::null_mut());
                 let enable_default=STATE.with(|s|!s.borrow().prefs.enabled&&options.enabled&&options.taskbar_default);
@@ -3710,7 +3723,7 @@ unsafe fn drain_commands() {
                 if enable_default&&!cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active(){start_saved_taskbar_mode();}
             },
             Command::Suspend(on)=>{
-                if on{window_effect::reset();}
+                if on{window_effect::reset();shell_menu::close();}
                 if on&&(taskbar_active()||taskbar_retry_pending()){
                     cancel_taskbar_retry();
                     TASKBAR_RESUME.set(true);
@@ -3725,7 +3738,7 @@ unsafe fn drain_commands() {
                 sync_win_key();
             },
             Command::Taskbar(hidden)=>set_taskbar_hidden(hidden),
-            Command::Stop=>{stage_peek::close(ptr::null_mut());control_center::inline_config(CONTROL.with(Cell::get),None);EndMenu();PostQuitMessage(0);},
+            Command::Stop=>{shell_menu::close();stage_peek::close(ptr::null_mut());control_center::inline_config(CONTROL.with(Cell::get),None);EndMenu();PostQuitMessage(0);},
             Command::Focus=>focus_dock(),
             #[cfg(test)] Command::InspectSettings{reply}=>{
                 let all=windows(false);
@@ -3840,6 +3853,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         clipboard_history::configure(control,false,0);
         if taskbar_active(){show_taskbar(taskbar_guard::Exit::Requested,"Đã hiện lại thanh tác vụ khi thoát Deskland.");}
         WIN_KEY.with(|s|drop(s.borrow_mut().take()));
+        shell_menu::shutdown();
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
         update_state(|s|{s.appbars.clear();s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){destroy_stage(&mut b);}});
         SURFACES.with(|s|s.borrow_mut().clear());STAGE_SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());

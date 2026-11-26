@@ -80,14 +80,19 @@ thread_local! {
     static KEYS:Cell<Keys>=Cell::new(Keys::default());
     static TARGET:Cell<(usize,usize)>=const{Cell::new((0,0))};
     static REPLAY_FAILED:Cell<bool>=const{Cell::new(false)};
+    static MODE:Cell<(bool,bool)>=const{Cell::new((false,false))};
+    static SHELL_CLICK:Cell<Option<super::shell_menu::Click>>=const{Cell::new(None)};
 }
 
 struct Quit(usize);
 impl Drop for Quit{fn drop(&mut self){unsafe{CloseHandle(self.0 as HANDLE);}}}
 
-pub(super) struct Hook { quit:Arc<Quit>, thread:Option<JoinHandle<()>>, pub ticket:usize }
+pub(super) struct Hook { quit:Arc<Quit>, thread:Option<JoinHandle<()>>, pub ticket:usize, pub mode:(bool,bool) }
 impl Hook {
     pub fn install(target:HWND,ticket:usize)->Result<Self,String>{
+        Self::install_mode(target,ticket,true,false)
+    }
+    pub fn install_mode(target:HWND,ticket:usize,win_tap:bool,shell_menu:bool)->Result<Self,String>{
         let target=target as usize;
         let handle=unsafe{CreateEventW(std::ptr::null(),1,0,std::ptr::null())};
         if handle.is_null(){return Err(format!("CreateEventW: {}",unsafe{GetLastError()}));}
@@ -104,7 +109,8 @@ impl Hook {
                 let error=GetLastError();UnhookWindowsHookEx(keyboard);
                 let _=ready.send(Err(format!("WH_MOUSE_LL: {error}")));return;
             }
-            KEYS.set(Keys::default());TARGET.set((target,ticket));
+            KEYS.set(Keys::default());TARGET.set((target,ticket));MODE.set((win_tap,shell_menu));
+            REPLAY_FAILED.set(false);SHELL_CLICK.set(None);
             if ready.send(Ok(())).is_ok(){
                 let quit=thread_quit.0 as HANDLE;
                 'messages:loop{
@@ -119,7 +125,7 @@ impl Hook {
             TARGET.set((0,0));UnhookWindowsHookEx(mouse);UnhookWindowsHookEx(keyboard);
         }).map_err(|e|e.to_string())?;
         match answer.recv(){
-            Ok(Ok(()))=>Ok(Self{quit,thread:Some(thread),ticket}),
+            Ok(Ok(()))=>Ok(Self{quit,thread:Some(thread),ticket,mode:(win_tap,shell_menu)}),
             other=>{let _=thread.join();Err(other.ok().and_then(Result::err).unwrap_or_else(||"Luồng phím Win đã dừng.".into()))}
         }
     }
@@ -137,7 +143,7 @@ unsafe extern "system" fn keyboard(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
         let e=&*(l as *const KBDLLHOOKSTRUCT);
         let injected=e.flags&LLKHF_INJECTED!=0;
         let (target,ticket)=TARGET.get();
-        if target!=0&&!REPLAY_FAILED.get(){
+        if target!=0&&MODE.get().0&&!REPLAY_FAILED.get(){
             let mut keys=KEYS.get();
             let win=matches!(e.vkCode as u16,VK_LWIN|VK_RWIN);
             // Ordinary typing, including injected IME events, should not
@@ -181,6 +187,24 @@ unsafe extern "system" fn keyboard(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
     CallNextHookEx(null_mut(),code,w,l)
 }
 unsafe extern "system" fn mouse(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
+    if code==HC_ACTION as i32&&l!=0&&MODE.get().1 {
+        let event=&*(l as *const MSLLHOOKSTRUCT);
+        if event.flags&LLMHF_INJECTED==0 {
+            match w as u32 {
+                WM_RBUTTONDOWN=>SHELL_CLICK.set(super::shell_menu::Click::begin(event.pt)),
+                WM_RBUTTONUP=>{
+                    if let Some(click)=SHELL_CLICK.take(){
+                        let (target,ticket)=TARGET.get();
+                        // Down already selected the actual Shell item. Only consume
+                        // up after a bounded request is successfully queued.
+                        if target!=0&&click.queue(event.pt,target as HWND,ticket){return 1;}
+                    }
+                }
+                WM_LBUTTONDOWN|WM_MBUTTONDOWN|WM_XBUTTONDOWN=>SHELL_CLICK.set(None),
+                _=>{}
+            }
+        }
+    }
     if code==HC_ACTION as i32&&l!=0&&matches!(w as u32,
         WM_LBUTTONDOWN|WM_RBUTTONDOWN|WM_MBUTTONDOWN|WM_XBUTTONDOWN|WM_MOUSEWHEEL|WM_MOUSEHWHEEL){
         if (*(l as *const MSLLHOOKSTRUCT)).flags&LLMHF_INJECTED==0{

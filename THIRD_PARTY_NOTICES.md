@@ -25,3 +25,8 @@ calculator grammar from `ricerca.h`, and Windows Search integration from
 [FluidWin v1.3.1, commit 2f773a8](https://github.com/clooudfn/FluidWin/tree/2f773a8733b84c7dbee88fff6628d14e9ac802b9).
 See [the original license](third_party/fluidwin/LICENSE). No FluidWin executables,
 wallpapers, cursors, logos, or showcase media are bundled.
+
+Desktop/Explorer context menus directly reuse `destro.h`, `menu.h`, `condividi.h`,
+`fabbriche.h`, `raggio.h`, `testi.h` and `traduzioni.h` from the same reference.
+Unmodified source hashes are recorded in `third_party/fluidwin/upstream/IMPORT.json`;
+TLauncher integration lives in `shell_menu_bridge.cpp` and `src/dock/shell_menu.rs`.

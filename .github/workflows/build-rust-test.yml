@@ -154,6 +154,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::win_key::tests::native_hook_thread_installs_and_unhooks_without_synthetic_keys -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::shell_menu::native_imported_menu_selects_nested_shell_command -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::command_pin::tests::native_shell_launch_passes_arguments_and_working_directory -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::utilities::tests::native_on_demand_provider_completes_without_an_assumed_device -- --ignored --exact --nocapture --test-threads=1

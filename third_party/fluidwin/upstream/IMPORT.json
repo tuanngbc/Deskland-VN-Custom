@@ -1,0 +1,35 @@
+{
+  "repository": "https://github.com/clooudfn/FluidWin",
+  "commit": "2f773a8733b84c7dbee88fff6628d14e9ac802b9",
+  "license": "MIT",
+  "files": [
+    {
+      "path": "destro.h",
+      "sha256": "6925576d52b55863d6eff5cd74ed7651ca55519c6b078a293d0f9745b7a7250e"
+    },
+    {
+      "path": "menu.h",
+      "sha256": "3149d2aeec61586c37c6075ecbd532657d7a4b21127f23caf79ae24784d3bda1"
+    },
+    {
+      "path": "condividi.h",
+      "sha256": "b03493049a8112948c3f91818698d464c3463996e634b043dc654c4e6c26d972"
+    },
+    {
+      "path": "fabbriche.h",
+      "sha256": "3edfdb8eec66b45795f1ed51a60629437b895e1ca51472b1dd8b29646e5419a9"
+    },
+    {
+      "path": "raggio.h",
+      "sha256": "a289088cf7e88b65edcf9d8a1114f1923946fe1430cf2ebe4e72e97babd4aefa"
+    },
+    {
+      "path": "testi.h",
+      "sha256": "d98f422ab6b82528a28b46e7d347bf5a91ebeb4e9813746a7293d3b26bd58364"
+    },
+    {
+      "path": "traduzioni.h",
+      "sha256": "0efc1c13cc0565c00a1f02d591e4d8ed142fd2fb063ecb47fd5d49468745081f"
+    }
+  ]
+}

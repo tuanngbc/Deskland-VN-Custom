@@ -1,6 +1,8 @@
 {
   "name": "简体中文",
   "ui": {
+    "shellContextMenu": "桌面与资源管理器右键菜单",
+    "shellContextMenuHint": "启用 Dock 时使用 FluidWin 风格的系统菜单。按住 Shift 并右键单击可使用 Windows 菜单。",
     "dockAutoHide": "窗口最大化时隐藏 Dock",
     "dockAppearanceTitle": "Dock 外观",
     "dockIconSize": "图标大小",
