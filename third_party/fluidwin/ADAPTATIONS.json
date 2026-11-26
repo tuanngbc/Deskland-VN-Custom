@@ -5,6 +5,13 @@
   "note": "Section adaptations, not claims that these full headers were imported. Original CRLF worktree byte hashes and canonical Git blobs are recorded; existing notices and original license are preserved.",
   "sections": [
     {
+      "source": "centro.h::Motore::disegnaWidget weather card and simboloMeteo",
+      "source_git_blob": "942c4ae64c59c5763801d541d70da4172f46a4a3",
+      "source_worktree_sha256": "da7eaf30d8b4911826b623b81ef41291c7a2e5b17368456364462f341c1c8d1d",
+      "integration": ["forecast_bridge.cpp", "../../src/dock/forecast_card.rs", "../../src/dock/weather_panel.rs", "../../src/dock/control_center.rs"],
+      "adaptation": "Original two-stop blue gradient, 168-pixel weather-card structure, current temperature, WMO sun/cloud/fog/rain/snow/lightning geometry and five forecast columns. Same scoped native Control Center HWND/input/keyboard/MSAA owner and source data shared with wallpaper; no extra feed/cache/network/window/thread/D3D device. Original factories serve a software DC render target retained only while this view is open. Draw into the existing 2x panel bitmap with DPI/GDI mapping respected; copy actual existing glass pixels into the scoped target to preserve rounded corners. Format/bitmap/target lifetimes are scoped; failure falls back to existing accessible text layout, and small work areas keep the list. Current/city and individual forecast accessibility bounds reflect their real locations; refresh/units/city/settings actions keep generation validation. Existing complete forecast remains available after the five illustrated days. City picker stays the existing native picker, not the original expanding inline search. New native pixel/glyph/corner tests at 96/144/192 DPI and real vi/en/zh panel images are pending hosted CI."
+    },
+    {
       "source": "notifiche.h::Lettore::prepara read-only failure diagnosis",
       "integration": ["upstream/notifiche.h", "notifications_bridge.cpp", "../../src/dock/notifications.rs"],
       "adaptation": "Retain the actual failing activation-factory, exact-interface, get_Current and GetAccessStatus HRESULT/operation/access status through cleanup. Distinguish a successful Denied/Unspecified result from API failure and actual APPMODEL_ERROR_NO_PACKAGE. No RequestAccessAsync call, capability/identity bypass, permission prompt or content logging. Hosted history fixture exports only numeric diagnosis; production UI localizes the relevant access reason. This diagnoses the existing reader and does not implement banners/badges or establish the owner's access status. Official listener requirements: https://learn.microsoft.com/en-us/windows/apps/develop/notifications/app-notifications/notification-listener ."

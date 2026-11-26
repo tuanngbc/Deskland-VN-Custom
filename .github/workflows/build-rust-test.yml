@@ -373,6 +373,8 @@ jobs:
         run: |
           $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
           New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
+          cargo test --release dock::forecast_card::tests::native_original_weather_card_keeps_background_and_renders_all_glyphs -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::weather_panel::tests::native_shared_forecast_panel_keeps_city_generation_and_releases_subscription -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::weather_city::tests::native_city_picker_clears_stale_rows_routes_keyboard_and_cancels_delivery -- --ignored --exact --nocapture --test-threads=1

@@ -98,6 +98,7 @@ struct Panel {
     glass:super::glass::Glass,fonts:[HFONT;4], view:View, metrics:Option<Metrics>, index:Option<usize>, pressed:Option<usize>, pressed_point:Option<POINT>, page:usize,
     cols:usize,per_page:usize, row_height:i32,list:bool,shelf:bool,rasters:surface::IconRasters,entrance:Option<super::motion::Tween>,shadow:Option<chrome::PanelShadow>,hub:bool,
     access:Option<super::control_access::Provider>,access_token:usize,
+    forecast:Option<super::forecast_card::Card>,
 }
 impl Drop for Panel {
     fn drop(&mut self){unsafe{for &f in &self.fonts{if !f.is_null(){DeleteObject(f);}}}}
@@ -178,28 +179,36 @@ impl Panel{
     }
     fn rect(&self,i:usize)->RECT{
         let pad=chrome::scale(self.dpi,14);
+        if let Some(forecast)=self.forecast.as_ref().filter(|f|i<f.rows()){
+            let _=forecast;let top=chrome::scale(self.dpi,67);
+            if i==0{return RECT{left:pad,top,right:self.layer.size.0-pad,bottom:top+chrome::scale(self.dpi,100)};}
+            let width=(self.layer.size.0-2*pad-chrome::scale(self.dpi,16))/5;
+            let left=pad+chrome::scale(self.dpi,8)+(i-1) as i32*width;
+            return RECT{left,top:top+chrome::scale(self.dpi,104),right:left+width,bottom:top+chrome::scale(self.dpi,164)};
+        }
         if self.shelf&&i<3{
             let gap=chrome::scale(self.dpi,6);
             let width=(self.layer.size.0-2*pad-2*gap)/3;
             let left=pad+i as i32*(width+gap);let top=chrome::scale(self.dpi,67);
             return RECT{left,top,right:left+width,bottom:top+chrome::scale(self.dpi,30)};
         }
-        let i=if self.shelf{i-3}else{i};
+        let i=i-self.pinned();
         let gap=chrome::scale(self.dpi,if self.list{3}else{8});
-        let top=chrome::scale(self.dpi,if self.shelf{105}else{67})+(i/self.cols) as i32*(self.row_height+gap);
+        let top=chrome::scale(self.dpi,if self.forecast.is_some(){243}else if self.shelf{105}else{67})+(i/self.cols) as i32*(self.row_height+gap);
         let w=((self.layer.size.0-2*pad-gap*(self.cols as i32-1))/self.cols as i32).max(1);
         let left=pad+(i%self.cols) as i32*(w+gap);
         RECT{left,top,right:left+w,bottom:top+self.row_height}
     }
+    fn pinned(&self)->usize{if self.shelf{3}else{self.forecast.as_ref().map_or(0,|f|f.rows())}}
     fn cards(&self)->Vec<&Card>{
-        let start=(self.page*self.per_page+if self.shelf{3}else{0}).min(self.view.cards.len());
+        let pinned=self.pinned();let start=(self.page*self.per_page+pinned).min(self.view.cards.len());
         let end=(start+self.per_page).min(self.view.cards.len());
-        let mut cards=Vec::with_capacity(end-start+if self.shelf{3}else{0});
-        if self.shelf{cards.extend(self.view.cards.iter().take(3));}
+        let mut cards=Vec::with_capacity(end-start+pinned);
+        cards.extend(self.view.cards.iter().take(pinned));
         cards.extend(self.view.cards[start..end].iter());cards
     }
     fn card(&self,i:usize)->Option<&Card>{
-        let index=if self.shelf&&i<3{i}else{self.page*self.per_page+i};
+        let index=if i<self.pinned(){i}else{self.page*self.per_page+i};
         self.view.cards.get(index)
     }
     fn hit(&self,x:i32,y:i32)->Option<usize>{
@@ -208,7 +217,7 @@ impl Panel{
             (c.action.is_some()&&x>=r.left&&x<r.right&&y>=r.top&&y<r.bottom).then_some(i)
         })
     }
-    fn pages(&self)->usize{self.view.cards.len().saturating_sub(if self.shelf{3}else{0}).div_ceil(self.per_page).max(1)}
+    fn pages(&self)->usize{self.view.cards.len().saturating_sub(self.pinned()).div_ceil(self.per_page).max(1)}
     fn page_delta(&mut self,delta:isize){
         self.page=self.page.saturating_add_signed(delta).min(self.pages()-1);
         self.access_token=serial();
@@ -242,10 +251,13 @@ impl Panel{
         chrome::text(g,RECT{left:px(18),top:px(13),right:w-px(18),bottom:px(41)},&self.view.title,p.ink,SINGLE_LINE);
         SelectObject(g,self.fonts[2]);
         chrome::text(g,RECT{left:px(18),top:px(41),right:w-px(14),bottom:px(59)},&self.view.hint,p.muted,SINGLE_LINE);
+        let pinned=self.pinned();
+        let forecast_drawn=self.forecast.as_mut().is_some_and(|f|f.draw(g,RECT{left:px(14),top:px(67),right:w-px(14),bottom:px(235)},self.dpi,self.index==Some(0)));
         let cards=self.cards();
         let mut glyphs=Vec::with_capacity(cards.len());
         let mut thumbnails=Vec::new();
         for (i,c) in cards.iter().enumerate(){
+            if forecast_drawn&&i<pinned{continue;}
             let r=self.rect(i);
             let focused=self.index==Some(i);
             let is_metric=self.metrics.is_some();
@@ -374,6 +386,10 @@ pub(super) unsafe fn update(owner:HWND,ticket:usize,view:View){
     });
     if let Some(hwnd)=hwnd{InvalidateRect(hwnd,ptr::null(),0);announce(hwnd);}
 }
+pub(super) unsafe fn update_forecast(owner:HWND,ticket:usize,view:View,forecast:super::forecast_card::Card){
+    PANE.with(|s|{if let Some(p)=s.borrow_mut().as_mut().filter(|p|p.owner==owner&&p.tag==ticket&&p.forecast.is_some()){p.forecast=Some(forecast);}});
+    update(owner,ticket,view);
+}
 pub(super) fn open_for(owner:HWND)->bool{
     PANE.with(|s|s.borrow().as_ref().is_some_and(|p|p.owner==owner))
 }
@@ -397,11 +413,12 @@ pub(super) unsafe fn follow_hub(owner:HWND,dock:crate::launcher::DockAnchor){
         chrome::PanelShadow::sync(&mut p.shadow,hwnd,owner,rect,dpi,anchor.side,anchor.dark);
     });
 }
-pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,false,false,None);}
-pub(super) unsafe fn show_list(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,true,false,false,None);}
-pub(super) unsafe fn show_list_capacity(owner:HWND,anchor:chrome::Anchor,view:View,capacity:usize){show_inner(owner,anchor,view,true,false,false,Some(capacity));}
-pub(super) unsafe fn show_hub(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,true,false,None);}
-pub(super) unsafe fn show_shelf(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,false,true,None);shelf_page();}
+pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,false,false,None,None);}
+pub(super) unsafe fn show_list(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,true,false,false,None,None);}
+pub(super) unsafe fn show_list_capacity(owner:HWND,anchor:chrome::Anchor,view:View,capacity:usize){show_inner(owner,anchor,view,true,false,false,Some(capacity),None);}
+pub(super) unsafe fn show_hub(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,true,false,None,None);}
+pub(super) unsafe fn show_shelf(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,false,true,None,None);shelf_page();}
+pub(super) unsafe fn show_forecast(owner:HWND,anchor:chrome::Anchor,view:View,forecast:super::forecast_card::Card){show_inner(owner,anchor,view,true,false,false,Some(8),Some(forecast));}
 unsafe fn shelf_page(){
     let request=PANE.with(|s|{let s=s.borrow();let p=s.as_ref().filter(|p|p.shelf)?;
         let rows=p.cards().into_iter().filter_map(|c|match c.action.as_ref(){
@@ -410,21 +427,22 @@ unsafe fn shelf_page(){
     if let Some((hwnd,tag,rows,dpi))=request{super::shelf_previews::request(hwnd,tag,rows,dpi);}
 }
 pub(super) fn first_page(owner:HWND,ticket:usize){PANE.with(|s|if let Some(p)=s.borrow_mut().as_mut().filter(|p|p.owner==owner&&p.tag==ticket){p.page=0;});}
-unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bool,shelf:bool,capacity:Option<usize>){
+unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bool,shelf:bool,capacity:Option<usize>,forecast:Option<super::forecast_card::Card>){
     super::utilities::close_panels();
     let dpi=windows_sys::Win32::UI::HiDpi::GetDpiForWindow(owner).clamp(72,288);
     let px=|n|chrome::scale(dpi,n);
     let Some(work)=(if hub{anchor.panel_work(dpi)}else{anchor.work()})else{return;};
+    let forecast=forecast.filter(|_|work.bottom-work.top>=px(420));let has_forecast=forecast.is_some();
     let double=!list&&view.metrics.map_or(view.cards.len()>3,|o|o.compact);
     let cols=if shelf{if work.right-work.left>=px(520){6}else if work.right-work.left>=px(320){3}else{2}}else if double&&work.right-work.left>=px(365){2}else{1};
     let width=px(if shelf{548}else if list{350}else if cols==2{432}else{328}).min(work.right-work.left);
     let row_height=px(if shelf{74}else if list{40}else if view.metrics.is_some(){57}else{52});
     let gap=px(if list{3}else{8});
-    let budget=(work.bottom-work.top-px(if shelf{170}else{132})).max(row_height);
+    let budget=(work.bottom-work.top-px(if has_forecast{308}else if shelf{170}else{132})).max(row_height);
     let rows=(budget/(row_height+gap)).clamp(1,if shelf{6/cols as i32}else{9}) as usize;
     let per_page=cols*rows;
     let expected=capacity.unwrap_or_else(||view.metrics.map_or(view.cards.len().saturating_sub(if shelf{3}else{0}),|m|m.mask.count_ones() as usize));
-    let height=(px(if shelf{122}else{84})+expected.clamp(1,per_page).div_ceil(cols) as i32*(row_height+gap)
+    let height=(px(if has_forecast{260}else if shelf{122}else{84})+expected.clamp(1,per_page).div_ceil(cols) as i32*(row_height+gap)
         +if expected>per_page{px(30)}else{0}).min(work.bottom-work.top).max(1);
     let Some(layer)=Layer::new(width,height)else{return;};
     let ink=Layer::new(width*2,height*2).inspect(|ink|{
@@ -446,7 +464,7 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bo
     let metrics=view.metrics.map(Metrics::new);
     let start=std::time::Instant::now();
     let animated=super::motion::native_allowed();
-    let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,glass,fonts,view,metrics,index:None,pressed:None,pressed_point:None,page:0,cols,per_page,row_height,list,shelf,rasters:surface::IconRasters::default(),entrance:None,shadow:None,hub,access:None,access_token:serial()};
+    let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,glass,fonts,view,metrics,index:None,pressed:None,pressed_point:None,page:0,cols,per_page,row_height,list,shelf,rasters:surface::IconRasters::default(),entrance:None,shadow:None,hub,access:None,access_token:serial(),forecast};
     // A hidden HWND can't be relied on to dispatch WM_PAINT. Submit the
     // completed bitmap directly, then show the window with content.
     p.paint();

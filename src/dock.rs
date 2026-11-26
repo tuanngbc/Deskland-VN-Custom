@@ -65,6 +65,7 @@ mod media;
 mod notifications;
 mod news;
 mod weather_panel;
+mod forecast_card;
 mod weather_city;
 pub(crate) mod corners;
 mod overview;

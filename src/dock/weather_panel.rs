@@ -28,13 +28,21 @@ fn day_label(date:&str,index:usize)->String{
     if count>1{format!("{} · {}",String::from_utf16_lossy(&value[..count as usize-1]),date)}else{date.into()}
 }
 impl Panel{
+    fn forecast(&self)->super::forecast_card::Card{
+        let f=fahrenheit(self.unit);let unit=if f{"°F"}else{"°C"};
+        let city=self.weather.location.as_ref().map(|l|l.name.clone()).unwrap_or_else(||text("Chọn thành phố","Choose a city","选择城市"));
+        let Some(reading)=self.weather.reading.as_ref()else{return super::forecast_card::Card::new(city,String::new(),if self.weather.failed{text("Chưa tải được thời tiết","Weather unavailable","暂时无法获取天气")}else{text("Đang tải thời tiết…","Loading weather…","正在加载天气…")},None,Vec::new());};
+        let detail=format!("{} · {} {}% · {:.0} {}",condition(reading.code),text("ẩm","humidity","湿度"),reading.humidity,if f{reading.wind/1.609344}else{reading.wind},if f{"mph"}else{"km/h"});
+        let days=reading.days.iter().take(5).enumerate().map(|(i,day)|super::forecast_card::Day{code:day.code,label:day_label(&day.date,i).split(" · ").next().unwrap_or("").into(),temperature:format!("{:.0}°  {:.0}°",degrees(day.high,f),degrees(day.low,f))}).collect();
+        super::forecast_card::Card::new(city,format!("{:.0}{unit}",degrees(reading.temperature,f)),detail,Some(reading.code),days)
+    }
     fn view(&self)->View{
         let f=fahrenheit(self.unit);let unit=if f{"°F"}else{"°C"};let mut cards=Vec::new();
         if let Some(reading)=self.weather.reading.as_ref(){
             cards.push(Card{title:format!("{:.0}{unit} · {}",degrees(reading.temperature,f),condition(reading.code)),
-                hint:format!("{} {:.0} {} · {} {:.0}%",text("Gió","Wind","风速"),if f{reading.wind/1.609344}else{reading.wind},if f{"mph"}else{"km/h"},text("Độ ẩm","Humidity","湿度"),reading.humidity),icon:None,action:None});
+                hint:format!("{} {:.0} {} · {} {:.0}%",text("Gió","Wind","风速"),if f{reading.wind/1.609344}else{reading.wind},if f{"mph"}else{"km/h"},text("Độ ẩm","Humidity","湿度"),reading.humidity),icon:None,action:Some(Command::Weather(Action::City))});
             for (index,day) in reading.days.iter().enumerate(){cards.push(Card{title:format!("{} · {:.0}–{:.0}{unit}",day_label(&day.date,index),degrees(day.low,f),degrees(day.high,f)),hint:condition(day.code),icon:None,action:None});}
-        }
+        }else{cards.push(Card{title:text("Chọn thành phố để xem thời tiết","Choose a city to view weather","选择城市以查看天气"),hint:if self.weather.pending{text("Đang tải…","Loading…","正在加载…")}else{String::new()},icon:None,action:Some(Command::Weather(Action::City))});}
         if self.weather.location.is_some(){
             cards.push(Card{title:text("Làm mới","Refresh","刷新"),hint:String::new(),icon:None,action:(!self.weather.pending).then_some(Command::Weather(Action::Refresh(self.generation)))});
             for (choice,label) in [(0,text("Theo đơn vị Windows","Windows units","跟随 Windows 单位")),(1,"Celsius · °C".into()),(2,"Fahrenheit · °F".into())]{
@@ -56,8 +64,8 @@ pub(super) unsafe fn receive(popup:HWND,ticket:usize){
     if !enabled()||!PANEL.with(|s|s.borrow().as_ref().is_some_and(|p|p.popup==popup as usize&&p.ticket==ticket)){return;}
     let current=weather::snapshot();if current.location.is_some()&&current.reading.is_none()&&!current.failed&&!current.pending{weather::request(false);}
     let update=PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().filter(|p|p.popup==popup as usize&&p.ticket==ticket)?;
-        p.weather=weather::snapshot();p.generation=p.generation.wrapping_add(1);Some((p.owner,p.ticket,p.view()))
-    });if let Some((owner,ticket,view))=update{if enabled(){control_center::update(owner as HWND,ticket,view);}}
+        p.weather=weather::snapshot();p.generation=p.generation.wrapping_add(1);Some((p.owner,p.ticket,p.view(),p.forecast()))
+    });if let Some((owner,ticket,view,forecast))=update{if enabled(){control_center::update_forecast(owner as HWND,ticket,view,forecast);}}
 }
 pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
     if !enabled()||IsWindow(owner)==0{return;}
@@ -65,11 +73,11 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
     if matches!(action,Action::Settings){super::emit(super::Event::Utility(super::HostAction::Settings));return;}
     if matches!(action,Action::Open){
         super::utilities::close_panels();weather::request(false);
-        control_center::show_list_capacity(owner,super::dock_app_anchor(owner,None),View{title:title(),hint:String::new(),cards:Vec::new(),metrics:None},12);
+        let mut panel=Panel{owner:owner as usize,popup:0,ticket:0,generation:1,unit:STATE.with(|s|s.borrow().prefs.weather_unit),weather:weather::snapshot()};
+        control_center::show_forecast(owner,super::dock_app_anchor(owner,None),panel.view(),panel.forecast());
         let (Some(window),Some(ticket))=(control_center::window(owner),control_center::ticket(owner))else{return;};
         weather::subscribe(window,ticket);
-        let panel=Panel{owner:owner as usize,popup:window as usize,ticket,generation:1,unit:STATE.with(|s|s.borrow().prefs.weather_unit),weather:weather::snapshot()};
-        let view=panel.view();PANEL.with(|s|s.replace(Some(panel)));control_center::update(owner,ticket,view);return;
+        panel.popup=window as usize;panel.ticket=ticket;PANEL.with(|s|s.replace(Some(panel)));return;
     }
     let mut changed_unit=None;
     let update=PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().filter(|p|p.owner==owner as usize&&p.popup==popup as usize)?;
@@ -77,10 +85,10 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
             Action::Refresh(g) if g==p.generation&&!p.weather.pending&&p.weather.generation==weather::snapshot().generation=>{weather::request(true);p.weather=weather::snapshot();},
             Action::Unit(g,unit) if g==p.generation&&unit<=2=>{p.unit=unit;changed_unit=Some(unit);},_=>return None,
         }
-        p.generation=p.generation.wrapping_add(1);Some((p.ticket,p.view()))
+        p.generation=p.generation.wrapping_add(1);Some((p.ticket,p.view(),p.forecast()))
     });
     if let Some(unit)=changed_unit{STATE.with(|s|s.borrow_mut().prefs.weather_unit=unit);super::emit(super::Event::Edit(super::Edit::WeatherUnit(unit)));}
-    if let Some((ticket,view))=update{control_center::update(owner,ticket,view);}
+    if let Some((ticket,view,forecast))=update{control_center::update_forecast(owner,ticket,view,forecast);}
 }
 pub(super) fn reset(){PANEL.with(|s|s.take());}
 #[cfg(test)]mod tests{
@@ -113,6 +121,8 @@ pub(super) fn reset(){PANEL.with(|s|s.take());}
                 UpdateWindow(popup);DwmFlush();let mut bounds:RECT=std::mem::zeroed();GetWindowRect(popup,&mut bounds);
                 let (w,h)=(bounds.right-bounds.left,bounds.bottom-bounds.top);let mut layer=super::super::glass_probe::Layer::new(w,h).unwrap();
                 let dc=GetDC(ptr::null_mut());assert_ne!(BitBlt(layer.dc(),0,0,w,h,dc,bounds.left,bounds.top,SRCCOPY|CAPTUREBLT),0);ReleaseDC(ptr::null_mut(),dc);GdiFlush();
+                let blue=layer.pixels().chunks_exact(4).filter(|p|p[0].saturating_sub(p[2])>40&&p[1].saturating_sub(p[2])>20).count();
+                assert!(blue>4000,"actual native weather card must reach the display for {locale}: {blue}");
                 if let Some(root)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
                     let rgba=layer.pixels().chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],255]).collect::<Vec<_>>();
                     image::save_buffer(std::path::PathBuf::from(root).join(format!("weather-synthetic-{locale}.png")),&rgba,w as u32,h as u32,image::ColorType::Rgba8).unwrap();
