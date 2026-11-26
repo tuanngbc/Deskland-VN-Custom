@@ -40,6 +40,7 @@ mod window_effect;
 mod window_motion;
 mod window_geometry;
 mod snap_layout;
+mod radios;
 mod show_desktop;
 mod jelly;
 mod shell_menu;
@@ -1546,7 +1547,7 @@ unsafe fn paint(hwnd:HWND){
 unsafe fn request_utilities(hwnd:HWND,widget:Option<UtilityWidget>){
     request_utilities_with_change(hwnd,widget,None);
 }
-unsafe fn request_utilities_with_change(hwnd:HWND,widget:Option<UtilityWidget>,change:Option<wifi::Change>){
+unsafe fn request_utilities_with_change(hwnd:HWND,widget:Option<UtilityWidget>,change:Option<utilities::Change>){
     let dock_mode=taskbar_hidden();
     if dock_mode&&widget==Some(UtilityWidget::Windows){
         let anchor=dock_app_anchor(hwnd,None);
@@ -1612,12 +1613,12 @@ unsafe fn request_utilities_with_change(hwnd:HWND,widget:Option<UtilityWidget>,c
     }
 }
 struct UtilityRequest{
-    owner:usize,point:POINT,widget:UtilityWidget,dock_mode:bool,ticket:usize,change:Option<wifi::Change>,started:Instant,
+    owner:usize,point:POINT,widget:UtilityWidget,dock_mode:bool,ticket:usize,change:Option<utilities::Change>,started:Instant,
 }
 fn submit_utility(request:&UtilityRequest)->bool{
     if UTILITY_ANCHOR.with(|a|a.get().is_some())||UTILITY_HUB.with(|a|a.get().is_some()){return false;}
     let submitted=UTILITIES.with(|u|u.borrow_mut().get_or_insert_with(utilities::Provider::new)
-        .read(CONTROL.with(Cell::get),request.widget==UtilityWidget::Network,request.change.clone()));
+        .read(CONTROL.with(Cell::get),Some(request.widget),request.change.clone()));
     if submitted{UTILITY_ANCHOR.with(|a|a.set(Some((request.owner,request.point,request.widget,request.dock_mode,request.ticket))));}
     submitted
 }
@@ -1759,7 +1760,9 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
                 shell_access::activate(shell_access::Target::Tray,false,anchor,owner,CONTROL.with(Cell::get));
             }
         },
-        Command::Wifi(change)=>request_utilities_with_change(owner,Some(UtilityWidget::Network),Some(change)),
+        Command::Wifi(change)=>request_utilities_with_change(owner,Some(UtilityWidget::Network),Some(utilities::Change::Network(change))),
+        Command::Radio(request)=>{let widget=if request.kind==radios::Kind::Wifi{UtilityWidget::Network}else{UtilityWidget::Bluetooth};
+            let change=radios::request(request);request_utilities_with_change(owner,Some(widget),Some(utilities::Change::Radio(change)));},
         Command::Run(utilities::Action::Host(action))=>emit(Event::Utility(action)),
         Command::Run(utilities::Action::Desktop)=>show_desktop::perform(owner,false),
         Command::Run(action)=>if !taskbar_hidden()||utilities::local_action(action){utilities::delegated(action)},
@@ -2484,7 +2487,7 @@ unsafe fn open_dock_hub(owner:HWND,dock_mode:bool){
         utilities::show_hub(owner,anchor,&profile,dock_mode);
         if let Some(ticket)=control_center::ticket(owner).filter(|_|profile.details&&UTILITY_HUB.with(|a|a.get().is_none())){
             let submitted=UTILITIES.with(|u|u.borrow_mut().get_or_insert_with(utilities::Provider::new)
-                .read(CONTROL.with(Cell::get),false,None));
+                .read(CONTROL.with(Cell::get),None,None));
             if submitted{UTILITY_HUB.with(|h|h.set(Some((owner as usize,ticket,dock_mode))));}
         }
     }
@@ -3400,7 +3403,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             app_previews::close_for(ptr::null_mut());
             window_effect::reset();
             stage_peek::close(ptr::null_mut());
-            if msg==WM_SETTINGCHANGE{motion::refresh_system();}
+            if msg==WM_SETTINGCHANGE{motion::refresh_system();radios::invalidate_access();}
             if msg==WM_DISPLAYCHANGE&&taskbar_active(){show_taskbar(taskbar_guard::Exit::ExplorerChanged,"Đã hiện lại thanh tác vụ khi thay đổi màn hình.");}
             DISPLAY_DIRTY.with(|d|d.set(true));queue_refresh();0
         },

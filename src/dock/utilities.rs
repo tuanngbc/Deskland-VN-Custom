@@ -76,7 +76,8 @@ enum BluetoothState { Unknown, Adapter(Vec<ClassicDevice>) }
 enum BatteryState { Unknown, Absent, Present{level:Option<u8>,ac:Option<bool>,charging:bool} }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub(super) struct Audio { level:u32, muted:bool }
-pub(super) struct Snapshot { pub status:Status, wlan:Option<wifi::View>, bluetooth:BluetoothState, battery:BatteryState }
+pub(super) struct Snapshot { pub status:Status, wlan:Option<wifi::View>, bluetooth:BluetoothState, battery:BatteryState, radios:Option<super::radios::View> }
+#[derive(Clone)]pub(super) enum Change{Network(wifi::Change),Radio(super::radios::Change)}
 
 #[derive(Clone,Copy)]
 enum JobKind { Read, ReadStatus, AudioRead, Volume(u32), Mute }
@@ -100,17 +101,17 @@ struct State {
 static WORK_ACTIVE:AtomicBool=AtomicBool::new(false);
 struct Permit;
 impl Drop for Permit{fn drop(&mut self){WORK_ACTIVE.store(false,Ordering::Release);}}
-struct Job { shared:Arc<State>, owner:usize, panel:usize, kind:JobKind, network:bool, change:Option<wifi::Change>, permit:Permit }
+struct Job { shared:Arc<State>, owner:usize, panel:usize, kind:JobKind, widget:Option<Widget>, change:Option<Change>, permit:Permit }
 pub(super) struct Provider { state:Arc<State> }
 impl Provider {
     pub fn new()->Self{Self{state:Arc::default()}}
-    fn submit(&self,owner:HWND,panel:HWND,kind:JobKind,network:bool,change:Option<wifi::Change>)->bool {
+    fn submit(&self,owner:HWND,panel:HWND,kind:JobKind,widget:Option<Widget>,change:Option<Change>)->bool {
         if owner.is_null()||self.state.pending.swap(true,Ordering::AcqRel){return false;}
         if WORK_ACTIVE.swap(true,Ordering::AcqRel){
             self.state.pending.store(false,Ordering::Release);
             return false;
         }
-        let raw=Box::into_raw(Box::new(Job{shared:self.state.clone(),owner:owner as usize,panel:panel as usize,kind,network,change,permit:Permit}));
+        let raw=Box::into_raw(Box::new(Job{shared:self.state.clone(),owner:owner as usize,panel:panel as usize,kind,widget,change,permit:Permit}));
         if unsafe{TrySubmitThreadpoolCallback(Some(worker),raw.cast(),ptr::null())}==0 {
             unsafe{drop(Box::from_raw(raw));}
             self.state.pending.store(false,Ordering::Release);
@@ -118,15 +119,15 @@ impl Provider {
         }
         true
     }
-    pub fn read(&self,owner:HWND,network:bool,change:Option<wifi::Change>)->bool{
+    pub fn read(&self,owner:HWND,widget:Option<Widget>,change:Option<Change>)->bool{
         // An unread answer belongs to the previous panel; do not let a new
         // request replace it before the Dock processes WM_UTILITY_READY.
         if self.state.result.lock().map_or(true,|slot|slot.is_some()){return false;}
-        self.submit(owner,ptr::null_mut(),JobKind::Read,network,change)
+        self.submit(owner,ptr::null_mut(),JobKind::Read,widget,change)
     }
     pub fn read_status(&self,owner:HWND)->bool{
         if self.state.status_result.lock().map_or(true,|slot|slot.is_some()){return false;}
-        self.submit(owner,ptr::null_mut(),JobKind::ReadStatus,false,None)
+        self.submit(owner,ptr::null_mut(),JobKind::ReadStatus,None,None)
     }
     pub fn take_status(&self)->Option<Status>{self.state.status_result.lock().ok()?.take()}
     pub fn take(&self)->Option<Snapshot>{self.state.result.lock().ok()?.take()}
@@ -134,7 +135,7 @@ impl Provider {
     pub fn apply(&self,owner:HWND,panel:HWND,action:Option<Action>)->bool{
         let kind=match action{None=>JobKind::AudioRead,Some(Action::SetVolume(p))=>JobKind::Volume(p),
             Some(Action::Mute)=>JobKind::Mute,_=>return false};
-        self.submit(owner,panel,kind,false,None)
+        self.submit(owner,panel,kind,None,None)
     }
 }
 impl Drop for Provider {fn drop(&mut self){self.state.closed.store(true,Ordering::Release);}}
@@ -145,14 +146,17 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut std::ffi::c_vo
         // Controls target the current default endpoint, not an old ID.
         let audio=audio(job.kind);
         if matches!(job.kind,JobKind::Read){
-            let mut bluetooth=bluetooth();
+            let mut bluetooth=if matches!(job.widget,None|Some(Widget::Bluetooth)){bluetooth()}else{BluetoothState::Unknown};
             if crate::trial::demo_active() {
                 if let BluetoothState::Adapter(devices)=&mut bluetooth {
                     for (i,device) in devices.iter_mut().enumerate(){device.name=format!("Fixture device {}",i+1);}
                 }
             }
-            let wlan=job.network.then(||wifi::read(job.change));
-            let snapshot=Snapshot{status:Status::read(audio),wlan,bluetooth,battery:battery()};
+            let (network_change,radio_change)=match job.change{Some(Change::Network(change))=>(Some(change),None),Some(Change::Radio(change))=>(None,Some(change)),None=>(None,None)};
+            let radio_kind=match job.widget{Some(Widget::Network)=>Some(super::radios::Kind::Wifi),Some(Widget::Bluetooth)=>Some(super::radios::Kind::Bluetooth),_=>None};
+            let radios=radio_kind.map(|kind|super::radios::read(kind,radio_change));
+            let wlan=(job.widget==Some(Widget::Network)).then(||wifi::read(network_change));
+            let snapshot=Snapshot{status:Status::read(audio),wlan,bluetooth,battery:battery(),radios};
             if let Ok(mut result)=state.result.lock(){*result=Some(snapshot);}
         }else if matches!(job.kind,JobKind::ReadStatus){
             if let Ok(mut result)=state.status_result.lock(){*result=Some(Status::read(audio));}
@@ -440,7 +444,7 @@ pub(super) fn local_action(action:Action)->bool{
 pub(super) unsafe fn show_hub(owner:HWND,anchor:chrome::Anchor,profile:&Profile,dock_mode:bool){
     // The overview is interactive immediately. Device-specific views request
     // their readings on demand; this click never waits on WLan / COM.
-    let initial=Snapshot{status:STATUS.with(|s|s.borrow().clone()),wlan:None,bluetooth:BluetoothState::Unknown,battery:battery()};
+    let initial=Snapshot{status:STATUS.with(|s|s.borrow().clone()),wlan:None,bluetooth:BluetoothState::Unknown,battery:battery(),radios:None};
     control_center::show_hub(owner,anchor,hub_view(&initial,profile,dock_mode,false));
 }
 pub(super) fn hub_view(snapshot:&Snapshot,profile:&Profile,dock_mode:bool,live:bool)->View{
@@ -526,6 +530,21 @@ pub(super) unsafe fn show_view(owner:HWND,point:POINT,snapshot:&Snapshot,profile
                 cards.push(make(n.name.clone(),format!("{}% · {state}",n.signal),Some(Widget::Network),action));
             }
             cards.insert(0,make("Làm mới danh sách".into(),String::new(),Some(Widget::Network),Some(Command::Widget(Widget::Network))));
+        }
+        if let Some(radios)=snapshot.radios.as_ref(){
+            let localized=crate::launcher::localized;
+            for radio in &radios.rows{
+                let name=if radio.name.trim().is_empty(){if widget==Widget::Network{"Wi-Fi".into()}else{"Bluetooth".into()}}else{radio.name.clone()};
+                let state=if radio.disabled{localized("Bị phần cứng hoặc chính sách vô hiệu hóa","Disabled by hardware or policy","已被硬件或策略禁用")}
+                    else if radio.on{localized("Đang bật · Tắt","On · Turn off","已开启 · 关闭")}else{localized("Đang tắt · Bật","Off · Turn on","已关闭 · 开启")};
+                let state=if crate::trial::active(){format!("{} · {}",if radio.on{localized("Đang bật","On","已开启")}else{localized("Đang tắt","Off","已关闭")},localized("Bản TEST chỉ đọc","Read-only test build","只读测试版本"))}else{state.into()};
+                cards.insert(0,make(name,state,Some(widget),radio.request.clone().map(Command::Radio)));
+            }
+            if let Some(outcome)=radios.outcome{label=match outcome{
+                Ok(())=>localized("Đã xác nhận trạng thái mới","New state confirmed","已确认新状态").into(),Err(error)=>super::radios::error_text(error),
+            };}else if let Some(error)=radios.error{label=super::radios::error_text(error);}
+            else if radios.rows.is_empty(){label=localized("Không có radio tương thích","No compatible radio","没有兼容的无线设备").into();}
+            if widget==Widget::Bluetooth{cards.push(make(localized("Làm mới","Refresh","刷新").into(),String::new(),Some(widget),Some(Command::Widget(widget))));}
         }
         let delegated=match widget{
             Widget::Network=>Some(Action::Network),Widget::Bluetooth=>Some(Action::Bluetooth),
@@ -879,8 +898,8 @@ mod tests {
                 ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),ptr::null());
             assert!(!hwnd.is_null());
             let provider=Provider::new();
-            assert!(provider.read(hwnd,true,None));
-            let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);
+            assert!(provider.read(hwnd,Some(Widget::Network),None));
+            let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
             let snapshot=loop{
                 if let Some(s)=provider.take(){break Some(s);}
                 if std::time::Instant::now()>=deadline{break None;}
