@@ -42,6 +42,7 @@ mod window_geometry;
 mod snap_layout;
 mod radios;
 mod brightness;
+mod capture_access;
 mod show_desktop;
 mod jelly;
 mod shell_menu;
@@ -50,7 +51,7 @@ mod motion_guard;
 mod fluidwin_mesh;
 mod stage_peek;
 mod clipboard_history;
-pub(crate) fn motion_diagnostics()->serde_json::Value{let mut value=window_effect::diagnostics();value["geometry"]=window_geometry::diagnostics();value}
+pub(crate) fn motion_diagnostics()->serde_json::Value{let mut value=window_effect::diagnostics();value["geometry"]=window_geometry::diagnostics();value["captureAccess"]=capture_access::diagnostics();value}
 mod stage_capture_lab;
 pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>{stage_capture_lab::inspect(path,true)}
 mod utilities;
@@ -1745,6 +1746,7 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::Overview=>overview::show(owner,false,1),
         Command::SnapLayouts=>snap_layout::choose_window(owner),
         Command::Shelf(action)=>shelf::perform(owner,ptr::null_mut(),action),
+        Command::CaptureAccess(action)=>capture_access::perform(owner,action),
         Command::SnapWindow(id)=>{snap_layout::open(owner,id);},
         Command::Desktop(restore)=>show_desktop::perform(owner,restore),
         Command::Comfort(action)=>comfort::perform(owner,action),
@@ -3145,6 +3147,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER if w==window_motion::TIMER&&hwnd==CONTROL.get()=>{window_motion::tick();0},
         WM_TIMER if w==window_geometry::TIMER&&hwnd==CONTROL.get()=>{window_geometry::tick();0},
         WM_TIMER if w==snap_layout::TIMER&&hwnd==CONTROL.get()=>{snap_layout::poll();0},
+        WM_TIMER if w==capture_access::TIMER&&hwnd==CONTROL.get()=>{capture_access::poll();0},
         WM_TIMER if w==show_desktop::TIMER&&hwnd==CONTROL.get()=>{show_desktop::tick();0},
         WM_SHELL_FALLBACK if hwnd==CONTROL.with(Cell::get)=>{
             let owner=w as HWND;
@@ -3416,7 +3419,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             app_previews::close_for(ptr::null_mut());
             window_effect::reset();
             stage_peek::close(ptr::null_mut());
-            if msg==WM_SETTINGCHANGE{motion::refresh_system();radios::invalidate_access();}
+            if msg==WM_SETTINGCHANGE{motion::refresh_system();radios::invalidate_access();capture_access::invalidate();}
             if msg==WM_DISPLAYCHANGE&&taskbar_active(){show_taskbar(taskbar_guard::Exit::ExplorerChanged,"Đã hiện lại thanh tác vụ khi thay đổi màn hình.");}
             DISPLAY_DIRTY.with(|d|d.set(true));queue_refresh();0
         },
@@ -3808,6 +3811,7 @@ unsafe fn drain_commands() {
     for command in commands {
         match command {
             Command::Configure(options)=>{
+                if !options.enabled{capture_access::reset();}
                 if !options.enabled{shelf::reset();}
                 snap_layout::close_for(ptr::null_mut());
                 window_geometry::cancel();
@@ -3840,6 +3844,7 @@ unsafe fn drain_commands() {
                 if enable_default&&!cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active(){start_saved_taskbar_mode();}
             },
             Command::Suspend(on)=>{
+                if on{capture_access::reset();}
                 if on{shelf::reset();}
                 if on{snap_layout::close_for(ptr::null_mut());}
                 if on{window_geometry::cancel();}
@@ -4000,7 +4005,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
         update_state(|s|{s.appbars.clear();s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){destroy_stage(&mut b);}});
         SURFACES.with(|s|s.borrow_mut().clear());STAGE_SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
-        shelf::reset();comfort::reset();utilities::close_panels();UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));
+        capture_access::reset();shelf::reset();comfort::reset();utilities::close_panels();UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));
         if ATTENTION_MSG.with(|id|id.replace(0))!=0{DeregisterShellHookWindow(control);}
         ATTENTION.with(|queue|queue.borrow_mut().clear());
         internal_app::unlisten(control);

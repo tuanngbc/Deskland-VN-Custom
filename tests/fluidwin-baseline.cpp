@@ -81,9 +81,11 @@ static void diagnose_capture(HWND source,std::ofstream& report){
 static int original_live_capture(genio::Motore& engine,const std::filesystem::path& dir,std::ofstream& report){
     const auto instance=GetModuleHandleW(nullptr);WNDCLASSW type{};type.hInstance=instance;type.lpfnWndProc=source_proc;type.lpszClassName=L"FluidWin.Baseline.OwnedCapture";
     if(!RegisterClassW(&type))return 20;
-    HWND source=CreateWindowExW(WS_EX_TOOLWINDOW,type.lpszClassName,L"Synthetic upstream WGC fixture",WS_POPUP,80,80,480,320,nullptr,nullptr,instance,nullptr);
+    HWND source=CreateWindowExW(0,type.lpszClassName,L"Synthetic upstream WGC fixture",WS_POPUP,80,80,480,320,nullptr,nullptr,instance,nullptr);
     if(!source)return 21;struct Window{HWND value;~Window(){DestroyWindow(value);}}window{source};
     SetWindowLongPtrW(source,GWLP_USERDATA,RGB(255,255,255));ShowWindow(source,SW_SHOWNOACTIVATE);UpdateWindow(source);pump();
+    report<<"capture_source_valid="<<IsWindow(source)<<" visible="<<IsWindowVisible(source)<<" root="<<(GetAncestor(source,GA_ROOT)==source)
+          <<" style=0x"<<std::hex<<GetWindowLongPtrW(source,GWL_STYLE)<<" exstyle=0x"<<GetWindowLongPtrW(source,GWL_EXSTYLE)<<std::dec<<"\n";
     const RECT area{80,80,560,400},expanded{64,64,576,416},icon{340,600,388,648};
     std::vector<UINT> before,during;
     if(!screenshot(dir/"wgc-source-before.bmp",expanded,&before))return 22;

@@ -484,6 +484,8 @@ pub(super) fn hub_view(snapshot:&Snapshot,profile:&Profile,dock_mode:bool,live:b
         hint:crate::launcher::localized("Chọn cửa sổ và bố cục chia màn hình","Choose a window and a screen layout","选择窗口和屏幕布局").into(),icon:None,action:Some(Command::SnapLayouts)});
     cards.push(Card{title:crate::launcher::localized("Kệ tệp","File Shelf","文件暂存架").into(),
         hint:crate::launcher::localized("Giữ tham chiếu để kéo tệp giữa các ứng dụng","Hold references to drag files between apps","暂存引用以在应用间拖放文件").into(),icon:None,action:Some(Command::Shelf(super::shelf::Action::Open))});
+    cards.push(Card{title:crate::launcher::localized("Viền chụp cửa sổ","Window capture border","窗口捕获边框").into(),
+        hint:crate::launcher::localized("Quyền ẩn viền do Windows quản lý","Borderless permission is managed by Windows","无边框权限由 Windows 管理").into(),icon:None,action:Some(Command::CaptureAccess(super::capture_access::Action::Open))});
     if !cards.iter().any(|c|matches!(c.action,Some(Command::Widget(Widget::Desktop)))){
         cards.push(Card{title:crate::launcher::localized("Hiện Desktop","Show desktop","显示桌面").into(),hint:String::new(),icon:Some(Widget::Desktop),action:Some(Command::Desktop(false))});
     }

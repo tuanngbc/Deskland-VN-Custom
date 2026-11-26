@@ -16,7 +16,7 @@ const METRIC_TIMER:usize=1;
 const ENTRANCE_TIMER:usize=2;
 const SINGLE_LINE:u32=DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS;
 #[derive(Clone)]
-pub(super) enum Command{AddApp,WindowsTray,BackgroundApps,AudioMixer,Media,Overview,SnapLayouts,SnapWindow(super::WindowIdentity),Shelf(super::shelf::Action),Desktop(bool),Comfort(super::comfort::Action),Recycle(super::recycle_bin::Action),Clipboard,ClipboardCopy(u64),ClipboardRemove(Option<u64>),Widget(UtilityWidget),Run(Action),Wifi(super::wifi::Change),Radio(super::radios::Request),Brightness(Option<super::brightness::Query>),DisplaySettings,App{path:String,operation:super::AppOperation},Window{hwnd:usize,pid:u32,tid:u32},StageMember(super::WindowIdentity)}
+pub(super) enum Command{AddApp,WindowsTray,BackgroundApps,AudioMixer,Media,Overview,SnapLayouts,SnapWindow(super::WindowIdentity),Shelf(super::shelf::Action),CaptureAccess(super::capture_access::Action),Desktop(bool),Comfort(super::comfort::Action),Recycle(super::recycle_bin::Action),Clipboard,ClipboardCopy(u64),ClipboardRemove(Option<u64>),Widget(UtilityWidget),Run(Action),Wifi(super::wifi::Change),Radio(super::radios::Request),Brightness(Option<super::brightness::Query>),DisplaySettings,App{path:String,operation:super::AppOperation},Window{hwnd:usize,pid:u32,tid:u32},StageMember(super::WindowIdentity)}
 #[derive(Clone)]
 pub(super) struct Card{pub icon:Option<UtilityWidget>,pub title:String,pub hint:String,pub action:Option<Command>}
 pub(super) struct View{pub title:String,pub hint:String,pub cards:Vec<Card>,pub metrics:Option<MetricOptions>}
@@ -415,7 +415,7 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bo
 unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     match msg{
         WM_ERASEBKGND=>1,
-        WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{if !super::shelf::modal(){PostMessageW(hwnd,WM_CLOSE,0,0);}0},
+        WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{if !super::shelf::modal()&&!super::capture_access::pending(){PostMessageW(hwnd,WM_CLOSE,0,0);}0},
         super::shelf::CHANGED=>{super::shelf::changed(hwnd);0},
         WM_DPICHANGED=>{DestroyWindow(hwnd);0},
         WM_CLOSE=>{
