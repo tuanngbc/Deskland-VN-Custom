@@ -145,20 +145,30 @@ impl Panel{
     }
 }
 pub(super) fn detach(popup:HWND){
-    PANEL.with(|s|{let mut s=s.borrow_mut();if s.as_ref().is_some_and(|p|p.popup==popup as usize){s.take();}});
+    let old=PANEL.with(|s|{let mut s=s.borrow_mut();if s.as_ref().is_some_and(|p|p.popup==popup as usize){s.take()}else{None}});
+    drop(old); // Async cancellation runs after releasing the panel borrow.
 }
 pub(super) fn consent_pending(popup:HWND)->bool{
     super::notification_access::starting(popup as usize)||PANEL.with(|s|s.try_borrow().is_ok_and(|s|s.as_ref().is_some_and(|p|p.popup==popup as usize&&p.consent.is_some())))
 }
 pub(super) unsafe fn poll_consent(){
-    let update=PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut()?;let result=p.consent.as_mut()?.poll()?;
-        p.consent.take();p.pending=false;p.generation=p.generation.wrapping_add(1);p.view.items.clear();p.selected=None;
+    let operation=PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut()?;
+        Some((p.owner,p.popup,p.ticket,p.generation,p.consent.take()?))
+    });
+    let Some((owner,popup,ticket,generation,mut consent))=operation else{KillTimer(super::CONTROL.get(),super::notification_access::TIMER);return;};
+    // Status/GetResults can enter COM. Keep neither PANEL nor a panel reference
+    // across those calls; the consent's popup marker protects activation.
+    let result=consent.poll();let mut returning=Some(consent);
+    let update=PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().filter(|p|p.owner==owner&&p.popup==popup&&p.ticket==ticket&&p.generation==generation&&p.pending&&p.consent.is_none())?;
+        let Some(result)=result else{p.consent=returning.take();return None;};
+        p.pending=false;p.generation=p.generation.wrapping_add(1);p.view.items.clear();p.selected=None;
         p.view.status=0;p.view.diagnostic=Some(match result{Ok(access)=>AccessDiagnostic{operation:8,result:0,access},Err(result)=>AccessDiagnostic{operation:8,result,access:-1}});
         if result==Ok(1)&&enabled(){p.submit(None);}
         Some((p.owner,p.ticket,p.view()))
     });
-    if let Some((owner,ticket,view))=update{KillTimer(super::CONTROL.get(),super::notification_access::TIMER);if enabled(){control_center::update(owner as HWND,ticket,view);}}
-    else if !PANEL.with(|s|s.borrow().as_ref().is_some_and(|p|p.consent.is_some())){KillTimer(super::CONTROL.get(),super::notification_access::TIMER);}
+    drop(returning); // Closed/replaced operations are canceled outside PANEL.
+    if !PANEL.with(|s|s.borrow().as_ref().is_some_and(|p|p.consent.is_some())){KillTimer(super::CONTROL.get(),super::notification_access::TIMER);}
+    if let Some((owner,ticket,view))=update{if enabled(){control_center::update(owner as HWND,ticket,view);}}
 }
 pub(super) unsafe fn receive(popup:HWND,ticket:usize){
     let update=PANEL.with(|s|{
@@ -282,6 +292,8 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
                 super::super::notification_access::during_request(popup as usize,||{
                     assert!(consent_pending(popup));SendMessageW(popup,WM_ACTIVATE,WA_INACTIVE as usize,0);
                     let mut close:MSG=std::mem::zeroed();assert_eq!(PeekMessageW(&mut close,popup,WM_CLOSE,WM_CLOSE,PM_REMOVE),0,"Windows consent activation cannot close its originating panel");
+                    super::super::notification_access::during_request(7,||assert!(super::super::notification_access::starting(7)));
+                    assert!(consent_pending(popup),"nested native call must restore its outer popup marker");
                 });assert!(!consent_pending(popup));
                 super::super::capture_access::during_request(||{
                     assert!(super::super::capture_access::pending());SendMessageW(popup,WM_ACTIVATE,WA_INACTIVE as usize,0);
