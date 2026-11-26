@@ -66,6 +66,7 @@ mod notifications;
 mod news;
 mod weather_panel;
 mod forecast_card;
+#[cfg(test)]mod cursor_recovery_lab;
 mod weather_city;
 pub(crate) mod corners;
 mod overview;

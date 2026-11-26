@@ -152,6 +152,12 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+      - name: Verify private animated cursor backups without system cursor writes
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
+        run: |
+          cargo test --release dock::cursor_recovery_lab::native_animated_cursor_copy_keeps_frames_hotspot_and_private_lifetime -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Build Rust native app
         if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
