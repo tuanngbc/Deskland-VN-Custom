@@ -52,7 +52,8 @@ HRESULT data_object(const std::vector<std::wstring>& paths,IDataObject** out){
     if(!out)return E_POINTER;*out=nullptr;if(paths.empty()||paths.size()>LIMIT)return E_INVALIDARG;
     struct Ids{std::vector<PIDLIST_ABSOLUTE> values;~Ids(){for(auto id:values)CoTaskMemFree(id);}}ids;
     for(const auto& path:paths){PIDLIST_ABSOLUTE id=nullptr;auto hr=SHParseDisplayName(path.c_str(),nullptr,&id,0,nullptr);if(FAILED(hr)||!id)return FAILED(hr)?hr:E_FAIL;ids.values.push_back(id);}
-    ComPtr<IShellItemArray> array;auto hr=SHCreateShellItemArrayFromIDLists(UINT(ids.values.size()),reinterpret_cast<PCIDLIST_ABSOLUTE_ARRAY>(ids.values.data()),&array);
+    std::vector<PCIDLIST_ABSOLUTE> view;for(auto id:ids.values)view.push_back(id);
+    ComPtr<IShellItemArray> array;auto hr=SHCreateShellItemArrayFromIDLists(UINT(view.size()),view.data(),&array);
     return FAILED(hr)?hr:array->BindToHandler(nullptr,BHID_DataObject,IID_PPV_ARGS(out));
 }
 void finish(Model& model,const std::vector<unsigned long long>& ids,HRESULT result,DWORD effect){
