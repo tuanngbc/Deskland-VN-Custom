@@ -164,6 +164,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_capture_lab::native_fluidwin_gpu_capture_full_resolution -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::stage_capture_lab::native_gpu_color_perimeters_across_first_reverse_and_cancel_poses -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release shell_gpu::native_shell_graphics_shares_the_device_across_ui_and_capture_threads -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_capture_lab::native_scale_production_owned_external_windows -- --ignored --exact --nocapture --test-threads=1

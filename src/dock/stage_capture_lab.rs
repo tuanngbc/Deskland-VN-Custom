@@ -22,6 +22,17 @@ unsafe extern "system" fn fixture_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARA
     let mut ps: PAINTSTRUCT = std::mem::zeroed();
     let dc = BeginPaint(hwnd,&mut ps);
     let mut client:RECT=std::mem::zeroed();GetClientRect(hwnd,&mut client);
+    #[cfg(test)]
+    {
+        let solid=GetPropW(hwnd,wide("TLauncher.Fixture.Solid").as_ptr()) as usize;
+        if solid!=0{
+            let brush=CreateSolidBrush((solid-1) as u32);FillRect(dc,&client,brush);DeleteObject(brush);
+            if !GetPropW(hwnd,wide("TLauncher.Fixture.HighContrast").as_ptr()).is_null(){
+                for x in (0..client.right).step_by(4){FillRect(dc,&RECT{left:x,top:0,right:(x+2).min(client.right),bottom:client.bottom},GetStockObject(BLACK_BRUSH) as HBRUSH);}
+            }
+            EndPaint(hwnd,&ps);return 0;
+        }
+    }
     let background=CreateSolidBrush(0x00ede6d1);FillRect(dc,&client,background);DeleteObject(background);
     for (left,top,right,bottom,color) in [
         (0,0,WIDTH,HEIGHT,0x00ede6d1),
@@ -252,6 +263,83 @@ fn native_fluidwin_gpu_capture_full_resolution(){
         }
         println!("FLUIDWIN_GPU_CAPTURE source={}x{} cpu_readback_in_runtime=false rendered_perimeter=CHECKED owner_artifact_acceptance=FAIL",frame.width,frame.height);
     }
+}
+
+#[cfg(all(test,target_env="msvc"))]
+fn pump_gpu_fixture(fixture:&Fixture)->Result<super::stage_snapshot::GpuFrame,String>{
+    let handle=fixture.0 as usize;
+    std::thread::scope(|scope|{
+        let (tx,rx)=mpsc::sync_channel(1);
+        scope.spawn(move||unsafe{let _=tx.send(super::stage_snapshot::gpu_frame(handle as HWND,||allowed(handle as HWND)));});
+        unsafe{
+            let mut msg:MSG=std::mem::zeroed();
+            loop{
+                while PeekMessageW(&mut msg,null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}
+                match rx.recv_timeout(Duration::from_millis(10)){
+                    Ok(Ok(super::stage_snapshot::MotionFrame::Gpu(frame)))=>return Ok(frame),
+                    Ok(Ok(_))=>return Err("unexpected CPU fixture capture".into()),Ok(Err(e))=>return Err(e),
+                    Err(mpsc::RecvTimeoutError::Timeout)=>{},Err(_)=>return Err("fixture worker disconnected".into()),
+                }
+            }
+        }
+    })
+}
+
+#[cfg(all(test,target_env="msvc"))]
+#[test]
+#[ignore="actual WGC colors and complete rendered output across all motion poses on hosted Windows"]
+fn native_gpu_color_perimeters_across_first_reverse_and_cancel_poses(){
+    if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+    unsafe{
+        let source=window(true).unwrap();
+        SetWindowLongPtrW(source.0,GWL_STYLE,(WS_POPUP|WS_VISIBLE) as isize);
+        SetWindowPos(source.0,null_mut(),32,32,640,420,SWP_NOACTIVATE|SWP_NOZORDER|SWP_FRAMECHANGED);
+        let poses=[0.0,0.05,0.25,0.5,0.85,0.97,1.0,0.85,0.5,0.0];
+        for (name,color,axis,contrast) in [("white",0x00ffffff,None,false),("black",0,None,false),
+            ("red",0x000000ff,Some(2),false),("green",0x0000ff00,Some(1),false),("blue",0x00ff0000,Some(0),false),
+            ("high-contrast-rounded",0x00ffffff,None,true)]{
+            SetPropW(source.0,wide("TLauncher.Fixture.Solid").as_ptr(),(color as usize+1) as HANDLE);
+            if contrast{
+                SetPropW(source.0,wide("TLauncher.Fixture.HighContrast").as_ptr(),1usize as HANDLE);
+                let region=CreateRoundRectRgn(0,0,640,420,24,24);assert!(!region.is_null());assert_ne!(SetWindowRgn(source.0,region,1),0);
+            }
+            InvalidateRect(source.0,std::ptr::null(),0);UpdateWindow(source.0);DwmFlush();
+            let frame=pump_gpu_fixture(&source).expect("actual synthetic WGC color capture");
+            let mut area:RECT=std::mem::zeroed();
+            assert!(windows_sys::Win32::Graphics::Dwm::DwmGetWindowAttribute(source.0,windows_sys::Win32::Graphics::Dwm::DWMWA_EXTENDED_FRAME_BOUNDS as u32,
+                (&mut area as *mut RECT).cast(),std::mem::size_of::<RECT>() as u32)>=0);
+            let icon=RECT{left:330,top:650,right:378,bottom:698};
+            let pipeline=super::fluidwin_mesh::Pipeline::new(&frame.gpu.context()).unwrap();
+            for effect in [super::motion::WindowEffect::Genie,super::motion::WindowEffect::Drop,super::motion::WindowEffect::Scale]{
+                let layer={let _batch=frame.gpu.context();super::fluidwin_mesh::Layer::from_gpu(pipeline.clone(),&frame,area,icon,super::DockSide::Bottom,effect,96).unwrap()};
+                assert!({let _batch=frame.gpu.context();layer.enable_evidence()});
+                for (index,progress) in poses.into_iter().enumerate(){
+                    let start=Instant::now();
+                    loop{
+                        let status={let _batch=frame.gpu.context();layer.paint(progress,255)};
+                        if status==1{break;}assert!(status==2&&start.elapsed()<Duration::from_secs(1));std::thread::sleep(Duration::from_millis(8));
+                    }
+                    let (pixels,w,h)={let _batch=frame.gpu.context();layer.rendered_pixels().unwrap()};
+                    if progress<0.85{assert!(pixels.chunks_exact(4).filter(|p|p[3]>16).count()>256,"blank {name} {} pose {index}",effect.name());}
+                    for pixel in pixels.chunks_exact(4){
+                        assert!(pixel[..3].iter().all(|&c|c<=pixel[3]),"premultiplied alpha across entire canvas");
+                        let lo=*pixel[..3].iter().min().unwrap();let hi=*pixel[..3].iter().max().unwrap();
+                        let neutral=hi.saturating_sub(lo)<=12; // upstream neutral Drop chip/shadow
+                        let source_color=axis.is_some_and(|axis|{
+                            let (a,b)=match axis{0=>(1,2),1=>(0,2),_=>(0,1)};
+                            pixel[a].abs_diff(pixel[b])<=3&&pixel[axis]>=pixel[a].min(pixel[b])
+                        });
+                        assert!(neutral||source_color,"unexpected chroma {name} {} pose {index}: {pixel:?}",effect.name());
+                    }
+                    if let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
+                        let rgba=pixels.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],p[3]]).collect::<Vec<_>>();
+                        image::save_buffer(std::path::PathBuf::from(dir).join(format!("motion-colors-{name}-{}-{index}.png",effect.name())),&rgba,w,h,image::ColorType::Rgba8).unwrap();
+                    }
+                }
+            }
+        }
+    }
+    println!("FLUIDWIN_COLOR_PERIMETERS actual_wgc=YES full_canvas=CHECKED white_black_rgb_high_contrast_rounded=EXERCISED source_transparency=NOT_COVERED owner_border_acceptance=FAIL");
 }
 
 // Explicit proof of the DWM thumbnail API on owned synthetic windows only.
