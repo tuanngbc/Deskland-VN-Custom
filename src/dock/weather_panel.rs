@@ -128,7 +128,7 @@ pub(super) fn reset(){PANEL.with(|s|s.take());}
             }
             reset();weather::configure(None);DestroyWindow(owner);
         }
-        println!("FLUIDWIN_WEATHER shared_wallpaper_reading=PASS locales=vi,en,zh unit_conversion=PASS stale_city=REFUSED closed_subscription=RELEASED actual_network=NOT_INVOKED native_city_search=SETTINGS_ROUTE_ONLY");
+        println!("FLUIDWIN_WEATHER shared_wallpaper_reading=PASS locales=vi,en,zh unit_conversion=PASS stale_city=REFUSED closed_subscription=RELEASED actual_network=NOT_INVOKED native_city_search=SEPARATE_NATIVE_FIXTURE");
     }
     #[test]fn original_wmo_groups_and_unit_conversion_preserve_forecast_values(){
         assert_eq!(degrees(0.0,true),32.0);assert_eq!(degrees(100.0,true),212.0);assert_eq!(degrees(-15.0,false),-15.0);

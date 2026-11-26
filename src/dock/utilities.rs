@@ -635,7 +635,7 @@ pub(super) unsafe fn paint_shell(hwnd:HWND,dark:bool,title:&str,hint:&str){
     let mut r:RECT=mem::zeroed();GetClientRect(hwnd,&mut r);
     let p=Palette::new(dark);
     super::fill(dc,r,chrome::color(p.panel));
-    chrome::box_fill(dc,r,px(32),p.panel,Some(p.edge));
+    chrome::box_fill(dc,r,super::corners::radius(px(32) as f32).round() as i32,p.panel,Some(p.edge));
     let title_font=chrome::choose_font(dpi,19,650);
     let description=chrome::choose_font(dpi,12,450);
     let orig=SelectObject(dc,title_font);

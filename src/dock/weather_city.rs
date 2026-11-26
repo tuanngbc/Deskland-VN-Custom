@@ -104,7 +104,10 @@ pub(super) unsafe fn open(owner:HWND){
     let (x,y)=chrome::placement(work,anchor,width,height,px(8));
     let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST|WS_EX_LAYERED,class.as_ptr(),wide(&title()).as_ptr(),WS_POPUP|WS_CLIPCHILDREN,
         x,y,width,height,owner,ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());if hwnd.is_null(){return;}
-    chrome::frame(hwnd,width,height,dpi,anchor);let font=chrome::choose_font(dpi,14,400);
+    chrome::frame(hwnd,width,height,dpi,anchor);
+    // Native edit/list controls need a solid backing; uniform window alpha
+    // otherwise lets unrelated text behind the picker bleed into their rows.
+    SetLayeredWindowAttributes(hwnd,0,255,LWA_ALPHA);let font=chrome::choose_font(dpi,14,400);
     let control=|class:&str,label:&str,id:i32,style:u32,x,y,w,h|{
         let child=CreateWindowExW(0,wide(class).as_ptr(),wide(label).as_ptr(),WS_CHILD|WS_VISIBLE|style,px(x),px(y),px(w),px(h),hwnd,id as usize as HMENU,GetModuleHandleW(ptr::null()),ptr::null());
         if !child.is_null(){SendMessageW(child,WM_SETFONT,font as usize,0);}child
@@ -155,7 +158,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 (APPLY,_) if enabled()=>chosen=p.selection(),_=>{},
             }0},
             WM_PAINT=>{utilities::paint_shell(hwnd,p.dark,&title(),"Open-Meteo");0},WM_ERASEBKGND=>1,
-            WM_CTLCOLORSTATIC|WM_CTLCOLORBTN=>chrome::child_color(w as HDC,p.dark),
+            WM_CTLCOLORSTATIC|WM_CTLCOLORBTN|WM_CTLCOLOREDIT|WM_CTLCOLORLISTBOX=>chrome::child_color(w as HDC,p.dark),
             WM_DRAWITEM if l!=0=>{utilities::paint_button(&*(l as *const DRAWITEMSTRUCT),p.dark);1},
             _=>DefWindowProcW(hwnd,msg,w,l),
         }
@@ -201,6 +204,8 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             for locale in ["vi","en","zh-CN"]{
                 crate::launcher::spotlight_locale(locale);open(owner);
                 let hwnd=PANEL.with(|s|s.borrow().as_ref().unwrap().hwnd);assert!(open_for(owner));
+                let (mut color,mut alpha,mut flags)=(0,0,0);assert_ne!(GetLayeredWindowAttributes(hwnd,&mut color,&mut alpha,&mut flags),0);
+                assert_eq!((alpha,flags),(255,LWA_ALPHA),"native text controls retain opaque readable backing");
                 assert_eq!(SendMessageW(GetDlgItem(hwnd,QUERY),EM_GETLIMITTEXT,0,0),60);
                 SetWindowTextW(GetDlgItem(hwnd,QUERY),wide("Synthetic city").as_ptr());KillTimer(hwnd,DEBOUNCE);
                 let (generation,ticket,delivery)=PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().unwrap();

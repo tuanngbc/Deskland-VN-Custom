@@ -39,7 +39,7 @@ pub(crate) fn geocode(query:&str,language:&str)->Result<Vec<Value>,()>{
     let mut bytes=Vec::new();response.take(128*1024+1).read_to_end(&mut bytes).map_err(|_|())?;
     if bytes.len()>128*1024{return Err(());}
     let root=serde_json::from_slice::<Value>(&bytes).map_err(|_|())?;
-    if root["error"].as_bool()==Some(true){return Err(());}
+    if !root.is_object()||root["error"].as_bool()==Some(true){return Err(());}
     Ok(geocode_rows(&root))
 }
 #[derive(Clone,Debug)]pub(crate) struct Day{pub date:String,pub code:i32,pub high:f64,pub low:f64}
