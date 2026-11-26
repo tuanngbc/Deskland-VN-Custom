@@ -14,7 +14,8 @@
 #pragma comment(lib,"oleaut32.lib")
 namespace tlauncher_snap_access {
 constexpr UINT SELECT=WM_APP+145,CHOOSE=WM_APP+146;
-struct Snapshot{HWND window=nullptr;std::wstring title,action;std::vector<std::wstring> labels;std::vector<RECT> regions;int selected=-1;};
+struct Snapshot{HWND window=nullptr;std::wstring title,action;std::vector<std::wstring> labels;std::vector<RECT> regions;int selected=-1;
+    long role=ROLE_SYSTEM_PANE,childRole=ROLE_SYSTEM_PUSHBUTTON;std::vector<long> roles,states;std::vector<std::wstring> actions;bool menuFocus=false;};
 struct Model{std::mutex mutex;Snapshot state;Snapshot read(){std::lock_guard<std::mutex> guard(mutex);return state;}};
 class Accessible final:public IAccessible{
     std::atomic<ULONG> refs{1};std::shared_ptr<Model> model;
@@ -25,6 +26,7 @@ class Accessible final:public IAccessible{
         hr=library->GetTypeInfoOfGuid(IID_IAccessible,out);library->Release();return hr;}
     HRESULT post(VARIANT value,UINT message){auto s=model->read();int index=child(value,s);if(index<=0)return E_INVALIDARG;
         if(!s.window||!IsWindowVisible(s.window))return CO_E_OBJNOTCONNECTED;
+        if(size_t(index)<=s.states.size()&&(s.states[index-1]&(STATE_SYSTEM_UNAVAILABLE|STATE_SYSTEM_INVISIBLE)))return E_ACCESSDENIED;
         return PostMessageW(s.window,message,index-1,reinterpret_cast<LPARAM>(model.get()))?S_OK:E_FAIL;}
 public:
     explicit Accessible(std::shared_ptr<Model> value):model(std::move(value)){}
@@ -45,18 +47,21 @@ public:
     HRESULT STDMETHODCALLTYPE get_accValue(VARIANT,BSTR* out)override{if(!out)return E_POINTER;*out=nullptr;return S_FALSE;}
     HRESULT STDMETHODCALLTYPE get_accDescription(VARIANT value,BSTR* out)override{return get_accName(value,out);}
     HRESULT STDMETHODCALLTYPE get_accRole(VARIANT value,VARIANT* out)override{if(!out)return E_POINTER;VariantInit(out);auto s=model->read();int i=child(value,s);if(i<0)return E_INVALIDARG;
-        out->vt=VT_I4;out->lVal=i?ROLE_SYSTEM_PUSHBUTTON:ROLE_SYSTEM_PANE;return S_OK;}
+        out->vt=VT_I4;out->lVal=i?(size_t(i)<=s.roles.size()?s.roles[i-1]:s.childRole):s.role;return S_OK;}
     HRESULT STDMETHODCALLTYPE get_accState(VARIANT value,VARIANT* out)override{if(!out)return E_POINTER;VariantInit(out);auto s=model->read();int i=child(value,s);if(i<0)return E_INVALIDARG;
         out->vt=VT_I4;out->lVal=i?(STATE_SYSTEM_FOCUSABLE|STATE_SYSTEM_SELECTABLE):0;
+        if(i&&size_t(i)<=s.states.size())out->lVal|=s.states[i-1];
         if(!s.window||!IsWindowVisible(s.window))out->lVal|=STATE_SYSTEM_INVISIBLE|STATE_SYSTEM_UNAVAILABLE;
-        if(i&&s.selected==i-1){out->lVal|=STATE_SYSTEM_SELECTED;if(GetForegroundWindow()==s.window)out->lVal|=STATE_SYSTEM_FOCUSED;}return S_OK;}
+        if(i&&s.selected==i-1){out->lVal|=STATE_SYSTEM_SELECTED;if(s.menuFocus||GetForegroundWindow()==s.window)out->lVal|=STATE_SYSTEM_FOCUSED;}return S_OK;}
     HRESULT STDMETHODCALLTYPE get_accHelp(VARIANT,BSTR* out)override{if(!out)return E_POINTER;*out=nullptr;return S_FALSE;}
     HRESULT STDMETHODCALLTYPE get_accHelpTopic(BSTR* file,VARIANT,long* topic)override{if(!file||!topic)return E_POINTER;*file=nullptr;*topic=-1;return S_FALSE;}
     HRESULT STDMETHODCALLTYPE get_accKeyboardShortcut(VARIANT,BSTR* out)override{if(!out)return E_POINTER;*out=nullptr;return S_FALSE;}
     HRESULT STDMETHODCALLTYPE get_accFocus(VARIANT* out)override{if(!out)return E_POINTER;VariantInit(out);auto s=model->read();
-        if(!s.window||GetForegroundWindow()!=s.window||s.selected<0)return S_OK;out->vt=VT_I4;out->lVal=s.selected+1;return S_OK;}
+        if(!s.window||(!s.menuFocus&&GetForegroundWindow()!=s.window)||s.selected<0)return S_OK;out->vt=VT_I4;out->lVal=s.selected+1;return S_OK;}
     HRESULT STDMETHODCALLTYPE get_accSelection(VARIANT* out)override{if(!out)return E_POINTER;VariantInit(out);auto s=model->read();if(s.selected>=0&&s.window){out->vt=VT_I4;out->lVal=s.selected+1;}return S_OK;}
-    HRESULT STDMETHODCALLTYPE get_accDefaultAction(VARIANT value,BSTR* out)override{if(!out)return E_POINTER;*out=nullptr;auto s=model->read();return child(value,s)>0?string(s.action,out):S_FALSE;}
+    HRESULT STDMETHODCALLTYPE get_accDefaultAction(VARIANT value,BSTR* out)override{if(!out)return E_POINTER;*out=nullptr;auto s=model->read();int i=child(value,s);
+        if(i<=0||size_t(i)<=s.states.size()&&(s.states[i-1]&(STATE_SYSTEM_UNAVAILABLE|STATE_SYSTEM_INVISIBLE)))return S_FALSE;
+        return string(size_t(i)<=s.actions.size()?s.actions[i-1]:s.action,out);}
     HRESULT STDMETHODCALLTYPE accSelect(long flags,VARIANT value)override{return flags&(SELFLAG_TAKEFOCUS|SELFLAG_TAKESELECTION)?post(value,SELECT):E_INVALIDARG;}
     HRESULT STDMETHODCALLTYPE accLocation(long* x,long* y,long* w,long* h,VARIANT value)override{if(!x||!y||!w||!h)return E_POINTER;*x=*y=*w=*h=0;auto s=model->read();int i=child(value,s);if(i<0)return E_INVALIDARG;
         if(!s.window)return CO_E_OBJNOTCONNECTED;RECT r{};if(i){if(size_t(i)>s.regions.size())return E_INVALIDARG;r=s.regions[i-1];}else if(!GetWindowRect(s.window,&r))return E_FAIL;

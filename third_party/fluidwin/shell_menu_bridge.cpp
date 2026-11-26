@@ -155,6 +155,31 @@ int tlauncher_fluidwin_shell_menu(HWND owner,int x,int y) {
 void tlauncher_fluidwin_shell_menu_close() { menu::chiudi(); }
 void tlauncher_fluidwin_shell_menu_shutdown() { menu::chiudi(); condividi::ferma(0); }
 
+void* tlauncher_fluidwin_menu_accessible(HWND hwnd) noexcept {
+    IAccessible* result=nullptr;
+    return SUCCEEDED(AccessibleObjectFromWindow(hwnd,OBJID_CLIENT,IID_IAccessible,reinterpret_cast<void**>(&result)))?result:nullptr;
+}
+int tlauncher_fluidwin_menu_access_probe(void* raw,bool disconnected) noexcept {
+    auto* accessible=static_cast<IAccessible*>(raw);if(!accessible)return 1;
+    long count=-1;VARIANT root{};root.vt=VT_I4;root.lVal=CHILDID_SELF;
+    VARIANT disabled=root;disabled.lVal=1;VARIANT submenu=root;submenu.lVal=2;
+    if(FAILED(accessible->get_accChildCount(&count)))return 2;
+    if(disconnected)return count==0&&accessible->accDoDefaultAction(submenu)==CO_E_OBJNOTCONNECTED?0:3;
+    if(count!=2)return 4;
+    VARIANT role{},state{};
+    if(FAILED(accessible->get_accRole(root,&role))||role.vt!=VT_I4||role.lVal!=ROLE_SYSTEM_MENUPOPUP)return 5;
+    if(FAILED(accessible->get_accRole(submenu,&role))||role.vt!=VT_I4||role.lVal!=ROLE_SYSTEM_MENUITEM)return 6;
+    if(FAILED(accessible->get_accState(disabled,&state))||state.vt!=VT_I4||!(state.lVal&STATE_SYSTEM_UNAVAILABLE))return 7;
+    if(accessible->accDoDefaultAction(disabled)!=E_ACCESSDENIED)return 8;
+    if(FAILED(accessible->get_accState(submenu,&state))||state.vt!=VT_I4||!(state.lVal&STATE_SYSTEM_HASPOPUP))return 9;
+    BSTR name=nullptr;if(FAILED(accessible->get_accName(submenu,&name))||!name||!SysStringLen(name)){SysFreeString(name);return 10;}SysFreeString(name);
+    long x=0,y=0,w=0,h=0;if(FAILED(accessible->accLocation(&x,&y,&w,&h,submenu))||w<=0||h<=0)return 11;
+    VARIANT hit{};if(FAILED(accessible->accHitTest(x+w/2,y+h/2,&hit))||hit.vt!=VT_I4||hit.lVal!=2)return 12;
+    if(FAILED(accessible->accSelect(SELFLAG_TAKEFOCUS|SELFLAG_TAKESELECTION,submenu)))return 13;
+    return 0;
+}
+void tlauncher_fluidwin_menu_access_free(void* raw) noexcept {if(raw)static_cast<IAccessible*>(raw)->Release();}
+
 // Native fixture for the actual imported menu, not a JSON/settings-only test.
 unsigned tlauncher_fluidwin_shell_menu_fixture(HWND owner,int language) {
     try {

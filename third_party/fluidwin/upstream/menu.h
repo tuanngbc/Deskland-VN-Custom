@@ -15,6 +15,7 @@
 #include "raggio.h"
 #include "fabbriche.h"
 #include "testi.h"   // direzione del testo (arabo)
+#include "../snap_accessibility.h"
 #include <d2d1.h>
 #include <dwrite.h>
 #include <string>
@@ -152,6 +153,31 @@ public:
     }
 
 private:
+    std::shared_ptr<tlauncher_snap_access::Model> access=std::make_shared<tlauncher_snap_access::Model>();
+    tlauncher_snap_access::Accessible* provider=nullptr;
+    int announced=-1;
+    void accessSnapshot(){
+        tlauncher_snap_access::Snapshot state;state.window=fin;state.selected=sopra;
+        state.role=ROLE_SYSTEM_MENUPOPUP;state.childRole=ROLE_SYSTEM_MENUITEM;state.menuFocus=!inSotto&&!fine;
+        state.title=uiLocale==L"vi-VN"?L"Menu ngữ cảnh":uiLocale==L"zh-CN"?L"上下文菜单":L"Context menu";
+        state.action=uiLocale==L"vi-VN"?L"Chọn":uiLocale==L"zh-CN"?L"选择":L"Choose";
+        RECT window{};if(fin)GetWindowRect(fin,&window);
+        for(size_t i=0;i<voci.size();i++){
+            const auto& row=voci[i];state.labels.push_back(row.testo);
+            state.roles.push_back(row.separatore?ROLE_SYSTEM_SEPARATOR:row.titolo?ROLE_SYSTEM_STATICTEXT:ROLE_SYSTEM_MENUITEM);
+            long flags=0;if(row.disattivata||row.titolo||row.separatore)flags|=STATE_SYSTEM_UNAVAILABLE;
+            if(row.spuntata)flags|=STATE_SYSTEM_CHECKED;if(row.sotto)flags|=STATE_SYSTEM_HASPOPUP;
+            RECT region{};if(i<rett.size()){
+                const auto r=rett[i];RECT actual{window.left+LONG(std::floor(r.left)),window.top+LONG(std::floor(r.top-scorri)),
+                    window.left+LONG(std::ceil(r.right)),window.top+LONG(std::ceil(r.bottom-scorri))};
+                if((row.extra&&!espanso)||!IntersectRect(&region,&window,&actual)){region={};flags|=STATE_SYSTEM_INVISIBLE|STATE_SYSTEM_OFFSCREEN;}
+            }else flags|=STATE_SYSTEM_INVISIBLE|STATE_SYSTEM_OFFSCREEN;
+            state.regions.push_back(region);state.states.push_back(flags);
+            state.actions.push_back(row.sotto?(uiLocale==L"vi-VN"?L"Mở menu con":uiLocale==L"zh-CN"?L"打开子菜单":L"Open submenu"):state.action);
+        }
+        {std::lock_guard<std::mutex> guard(access->mutex);access->state=std::move(state);}
+        if(fin&&announced!=sopra){announced=sopra;if(sopra>=0)NotifyWinEvent(EVENT_OBJECT_FOCUS,fin,OBJID_CLIENT,sopra+1);}
+    }
     std::vector<Voce> voci;
     std::vector<D2D1_RECT_F> rett;
     HWND fin = nullptr, proprietario = nullptr;
@@ -203,6 +229,8 @@ private:
 
     Menu(const std::vector<Voce>& v, HWND p, std::function<void(HMENU)> pr) : voci(v), proprietario(p), prepara(pr) {}
     ~Menu() {
+        {std::lock_guard<std::mutex> guard(access->mutex);access->state.window=nullptr;access->state.menuFocus=false;access->state.selected=-1;}
+        if(provider)provider->Release();
         for (ID2D1Bitmap* b : immagini) if (b) b->Release();
         for (IUnknown* o : std::initializer_list<IUnknown*>{pen, rt, fmt, fmtTitolo}) if (o) o->Release();
         if (fin) DestroyWindow(fin);
@@ -422,6 +450,7 @@ private:
     }
 
     void disegna() {
+        accessSnapshot();
         if (!rt) return;
         LARGE_INTEGER q0, qf; QueryPerformanceCounter(&q0); QueryPerformanceFrequency(&qf);
         struct Misura { Menu* m; LARGE_INTEGER a, f; ~Misura() { LARGE_INTEGER b; QueryPerformanceCounter(&b); m->nDisegni++; m->tDisegni += (double)(b.QuadPart - a.QuadPart) * 1000 / f.QuadPart; } } misura{this, q0, qf};
@@ -838,6 +867,12 @@ private:
         if (m == WM_NCCREATE) SetWindowLongPtrW(h, GWLP_USERDATA, (LONG_PTR)((CREATESTRUCTW*)l)->lpCreateParams);
         Menu* me = (Menu*)GetWindowLongPtrW(h, GWLP_USERDATA);
         switch (m) {
+            case WM_GETOBJECT:if(me&&static_cast<LONG>(l)==OBJID_CLIENT){me->accessSnapshot();if(!me->provider)me->provider=new(std::nothrow)tlauncher_snap_access::Accessible(me->access);
+                return me->provider?LresultFromObject(IID_IAccessible,w,me->provider):0;}break;
+            case tlauncher_snap_access::SELECT:case tlauncher_snap_access::CHOOSE:
+                if(me&&l==reinterpret_cast<LPARAM>(me->access.get())&&!me->fine&&!me->inSotto&&me->selezionabile(int(w))){
+                    me->sopra=int(w);me->mostraVoce(int(w));me->disegna();if(m==tlauncher_snap_access::CHOOSE)me->scegli(int(w));
+                }return 0;
             case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
             case WM_PAINT: if (me) me->disegna(); else ValidateRect(h, nullptr); return 0;
             case WM_ERASEBKGND: return 1;

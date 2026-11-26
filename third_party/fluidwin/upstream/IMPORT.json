@@ -32,7 +32,7 @@
       "path": "menu.h",
       "source_git_blob": "a12409ee6996c890a554d8466a4d34f9da43d2f1",
       "source_worktree_sha256": "3149d2aeec61586c37c6075ecbd532657d7a4b21127f23caf79ae24784d3bda1",
-      "local_changes": "Scoped Shell message route and native owner-draw/submenu fallback; same Dock-thread vi/en/zh DirectWrite locale and global motion-speed/reduced-motion policy; QPC timing for original entrance/close/expansion curves"
+      "local_changes": "Scoped Shell message route and native owner-draw/submenu fallback; same Dock-thread vi/en/zh DirectWrite locale and global motion-speed/reduced-motion policy; QPC timing for original entrance/close/expansion curves; scoped MSAA popup/menu-item/disabled/checked/submenu state, screen bounds, select/action and disconnected lifetime using the existing accessibility snapshot provider"
     },
     {
       "path": "condividi.h",

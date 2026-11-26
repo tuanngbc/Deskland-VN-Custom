@@ -13,6 +13,9 @@ extern "C" {
     fn tlauncher_fluidwin_shell_menu_shutdown();
     #[cfg(test)] fn tlauncher_fluidwin_shell_menu_fixture(owner:HWND,language:i32)->u32;
     #[cfg(test)] fn tlauncher_fluidwin_owner_draw_fixture(owner:HWND)->u32;
+    #[cfg(test)]fn tlauncher_fluidwin_menu_accessible(hwnd:HWND)->*mut std::ffi::c_void;
+    #[cfg(test)]fn tlauncher_fluidwin_menu_access_probe(raw:*mut std::ffi::c_void,disconnected:bool)->i32;
+    #[cfg(test)]fn tlauncher_fluidwin_menu_access_free(raw:*mut std::ffi::c_void);
 }
 pub(super) fn configure_menu(){
     #[cfg(target_env="msvc")]unsafe{
@@ -107,7 +110,13 @@ fn native_imported_menu_selects_nested_shell_command(){
         tlauncher_fluidwin_menu_policy(language,0.7,language==2);
         let helper=std::thread::spawn(move||{
             // Send only to this fixture thread's message queue, never global input.
+            CoInitializeEx(None,COINIT_APARTMENTTHREADED).ok().unwrap();
+            struct Com;impl Drop for Com{fn drop(&mut self){unsafe{CoUninitialize();}}}let _com=Com;
             std::thread::sleep(std::time::Duration::from_millis(300));
+            let hwnd=FindWindowW(crate::desktop::wide("FluidWin.Menu").as_ptr(),std::ptr::null());
+            assert_eq!(GetWindowThreadProcessId(hwnd,std::ptr::null_mut()),tid);
+            let accessible=tlauncher_fluidwin_menu_accessible(hwnd);assert!(!accessible.is_null());
+            assert_eq!(tlauncher_fluidwin_menu_access_probe(accessible,false),0);
             if let Some(root)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
                 use windows_sys::Win32::Graphics::{Dwm::DwmFlush,Gdi::*};
                 let hwnd=FindWindowW(crate::desktop::wide("FluidWin.Menu").as_ptr(),std::ptr::null());
@@ -118,7 +127,7 @@ fn native_imported_menu_selects_nested_shell_command(){
                 let rgba=layer.pixels().chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],255]).collect::<Vec<_>>();
                 image::save_buffer(std::path::PathBuf::from(root).join(format!("fluidwin-shell-menu-{language}.png")),&rgba,w as u32,h as u32,image::ColorType::Rgba8).unwrap();
             }
-            for key in [VK_DOWN,VK_RIGHT,VK_DOWN,VK_RETURN]{
+            for key in [VK_RIGHT,VK_DOWN,VK_RETURN]{
                 std::thread::sleep(std::time::Duration::from_millis(220));
                 unsafe{PostThreadMessageW(tid,WM_KEYDOWN,key as usize,0);}
             }
@@ -126,6 +135,8 @@ fn native_imported_menu_selects_nested_shell_command(){
             unsafe{if !FindWindowW(crate::desktop::wide("FluidWin.Menu").as_ptr(),std::ptr::null()).is_null(){
                 PostThreadMessageW(tid,WM_KEYDOWN,VK_ESCAPE as usize,0);PostThreadMessageW(tid,WM_KEYDOWN,VK_ESCAPE as usize,0);
             }}
+            assert_eq!(tlauncher_fluidwin_menu_access_probe(accessible,true),0,"retained provider must disconnect after menu destruction");
+            tlauncher_fluidwin_menu_access_free(accessible);
         });
         let selected=tlauncher_fluidwin_shell_menu_fixture(owner,language);
         helper.join().unwrap();
@@ -134,6 +145,6 @@ fn native_imported_menu_selects_nested_shell_command(){
         let native_messages=tlauncher_fluidwin_owner_draw_fixture(owner);
         DestroyWindow(owner);shutdown();CoUninitialize();
         assert_eq!(native_messages,3,"native extension fallback must route measurement and drawing messages");
-        println!("FLUIDWIN_SHELL_MENU nested_keyboard=PASS locales=vi,en,zh owner_speed=0.70 reduced_motion=PASS owner_shell_commands=NOT_VERIFIED");
+        println!("FLUIDWIN_SHELL_MENU nested_keyboard=PASS locales=vi,en,zh owner_speed=0.70 reduced_motion=PASS msaa_names_roles_bounds=PASS disabled_action=REFUSED accessible_select=PASS disconnected_provider=PASS owner_shell_commands=NOT_VERIFIED");
     }
 }
