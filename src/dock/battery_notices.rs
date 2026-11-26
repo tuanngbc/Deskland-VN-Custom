@@ -6,6 +6,7 @@ use windows_sys::Win32::{Foundation::*,System::Power::{GetSystemPowerStatus,SYST
     #[link_name="RegisterPowerSettingNotification"]fn subscribe(hwnd:HWND,guid:*const windows_sys::core::GUID,flags:u32)->HANDLE;
     #[link_name="UnregisterPowerSettingNotification"]fn unsubscribe(handle:HANDLE)->i32;
 }
+// Documented Windows power event IDs: https://learn.microsoft.com/en-us/windows/win32/power/power-setting-guids
 const AC:windows_sys::core::GUID=windows_sys::core::GUID::from_u128(0x5d3e9a59_e9d5_4b00_a6bd_ff34ff516548);
 const LEVEL:windows_sys::core::GUID=windows_sys::core::GUID::from_u128(0xa7ad8041_b45a_4cae_87a3_eecbb468a9e1);
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]struct Reading{level:u8,ac:bool}
@@ -47,6 +48,7 @@ pub(super) unsafe fn sync(){
     watch.tracker.observe(reading());WATCH.with(|w|w.replace(Some(watch)));
 }
 pub(super) unsafe fn changed(){
+    if WATCH.with(|w|w.borrow().is_none()){return;}
     let reading=reading();let notices=WATCH.with(|w|w.borrow_mut().as_mut().map(|w|w.tracker.observe(reading)).unwrap_or_default());
     if let Some(reading)=reading{for notice in notices{super::volume_osd::battery(reading.level,reading.ac,&text(notice,reading.level));}}
 }
@@ -69,9 +71,10 @@ pub(super) fn reset(){WATCH.with(|w|w.borrow_mut().take());}
         if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
         unsafe{
             use windows_sys::Win32::UI::WindowsAndMessaging::*;let hwnd=CreateWindowExW(0,crate::desktop::wide("STATIC").as_ptr(),crate::desktop::wide("Battery event fixture").as_ptr(),0,0,0,1,1,HWND_MESSAGE,std::ptr::null_mut(),std::ptr::null_mut(),std::ptr::null());assert!(!hwnd.is_null());
-            let before=super::super::CONTROL.replace(hwnd);super::super::STATE.with(|s|{let mut s=s.borrow_mut();s.prefs.enabled=true;s.suspended=false;});
+            let before=super::super::CONTROL.replace(hwnd);let old=super::super::STATE.with(|s|{let mut s=s.borrow_mut();let old=(s.prefs.enabled,s.suspended);s.prefs.enabled=true;s.suspended=false;old});
+            struct Cleanup{hwnd:HWND,control:HWND,old:(bool,bool)}impl Drop for Cleanup{fn drop(&mut self){unsafe{reset();super::super::CONTROL.set(self.control);super::super::STATE.with(|s|{let mut s=s.borrow_mut();s.prefs.enabled=self.old.0;s.suspended=self.old.1;});DestroyWindow(self.hwnd);}}}let _cleanup=Cleanup{hwnd,control:before,old};
             for _ in 0..6{sync();assert!(WATCH.with(|w|w.borrow().is_some()));changed();reset();assert!(WATCH.with(|w|w.borrow().is_none()));}
-            super::super::STATE.with(|s|s.borrow_mut().suspended=true);sync();assert!(WATCH.with(|w|w.borrow().is_none()));super::super::CONTROL.set(before);DestroyWindow(hwnd);
+            super::super::STATE.with(|s|s.borrow_mut().suspended=true);sync();assert!(WATCH.with(|w|w.borrow().is_none()));
             println!("FLUIDWIN_BATTERY notices=ORIGINAL_THRESHOLDS native_subscriptions=RELEASED source=READ_ONLY physical_power_change=NOT_INVOKED background_poll=NONE");
         }
     }
