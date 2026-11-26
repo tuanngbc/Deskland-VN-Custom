@@ -272,6 +272,7 @@ impl Exit{
 
 pub(super) struct Watch {
     child:Option<Child>, stop:Handle, ready:Handle, armed:Handle, pulse:Handle, hidden:Vec<WindowId>, started:Instant,
+    token:u128,
 }
 impl Watch {
     pub(super) fn restore_count(&self)->usize{self.hidden.len()}
@@ -295,7 +296,15 @@ impl Watch {
             .env_remove("TUANPC_DESK_TASKBAR_TRIAL_TRACE");
         if let Some(profile)=crate::trial::data_dir(){command.env("TUANPC_DESK_TASKBAR_TRIAL_TRACE",profile);}
         let child=command.spawn().map_err(|e|e.to_string())?;
-        Ok(Self{child:Some(child),stop,ready,armed,pulse,hidden,started:Instant::now()})
+        Ok(Self{child:Some(child),stop,ready,armed,pulse,hidden,started:Instant::now(),token})
+    }
+    pub(super) fn motion_session(&self)->Option<(u32,String)>{
+        if !self.ready.fired()||!self.armed.fired()||self.stop.fired(){return None;}
+        let pid=self.child.as_ref()?.id();
+        let process=unsafe{Handle::from_raw(OpenProcess(SYNC,0,pid)).ok()?};
+        if process.fired(){return None;}
+        let marker=name(std::process::id(),self.token,"Motion");
+        Some((pid,String::from_utf16_lossy(&marker[..marker.len()-1])))
     }
     pub(super) fn poll(&mut self)->Result<bool,Exit>{
         match self.child.as_mut().ok_or(Exit::LinkLost)?.try_wait(){
@@ -357,7 +366,8 @@ pub(crate) fn watchdog(args:&[String])->bool{
             event("Armed",SIGNAL),event("Pulse",SYNC))else{return true;};
         let started=Instant::now();
         let proof=trace_path();
-        let reason=watch(parent,stop,ready,armed,pulse,&expected,proof.as_deref(),started);
+        let marker=name(pid,token,"Motion");let marker=String::from_utf16_lossy(&marker[..marker.len()-1]);
+        let reason=watch(parent,stop,ready,armed,pulse,&expected,proof.as_deref(),started,&marker);
         if proof.is_some(){let current=snapshot();trace(proof.as_deref(),&format!("exit:{reason:?}"),started,current.as_deref());}
         std::process::exit(reason as i32);
     }
@@ -380,7 +390,7 @@ impl InventoryGap{
     }
 }
 
-unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle,expected:&[Snapshot],proof:Option<&std::path::Path>,started:Instant)->Exit{
+unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle,expected:&[Snapshot],proof:Option<&std::path::Path>,started:Instant,motion_marker:&str)->Exit{
     let Some(starting)=snapshot()else{return Exit::ExplorerChanged;};
     // Visibility may change between the parent's snapshot and this child,
     // especially when the previous session just restored Explorer.
@@ -390,11 +400,11 @@ unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle
     let mut msg:MSG=mem::zeroed();
     PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_NOREMOVE);
     if RegisterHotKey(ptr::null_mut(),HOTKEY,MOD_CONTROL|MOD_ALT|MOD_SHIFT|MOD_NOREPEAT,VK_F12 as u32)==0{return Exit::HotkeyUnavailable;}
-    struct Restore(Vec<WindowId>);
+    struct Restore(Vec<WindowId>,String);
     impl Drop for Restore{
-        fn drop(&mut self){unsafe{restore(&self.0);UnregisterHotKey(ptr::null_mut(),HOTKEY);}}
+        fn drop(&mut self){unsafe{super::window_lease::recover(&self.1);restore(&self.0);UnregisterHotKey(ptr::null_mut(),HOTKEY);}}
     }
-    let mut rollback=Restore(Vec::new());
+    let mut rollback=Restore(Vec::new(),motion_marker.into());
     if SetEvent(armed.0)==0{return Exit::LinkLost;}
     for pass in 0..60{
         if parent.fired()||stop.fired(){return Exit::Requested;}

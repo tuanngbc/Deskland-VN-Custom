@@ -125,6 +125,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::taskbar_guard::tests::native_visibility_request_hides_a_window_without_moving_it -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::window_lease::native_lease_restores_style_and_respects_existing_layered_windows -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:TUANPC_DESK_START_EVIDENCE = Join-Path $env:RUNNER_TEMP "start-native.png"
           cargo test --release launcher::start::tests::native_panel_search_keyboard_and_anchor_are_independent_of_spotlight -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

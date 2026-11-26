@@ -21,6 +21,8 @@ unsafe extern "system" fn fixture_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARA
     if msg != WM_PAINT { return DefWindowProcW(hwnd,msg,w,l); }
     let mut ps: PAINTSTRUCT = std::mem::zeroed();
     let dc = BeginPaint(hwnd,&mut ps);
+    let mut client:RECT=std::mem::zeroed();GetClientRect(hwnd,&mut client);
+    let background=CreateSolidBrush(0x00ede6d1);FillRect(dc,&client,background);DeleteObject(background);
     for (left,top,right,bottom,color) in [
         (0,0,WIDTH,HEIGHT,0x00ede6d1),
         (0,0,WIDTH,34,0x00453928),
@@ -202,9 +204,12 @@ fn native_fluidwin_genie_presented_pixels(){
 fn native_fluidwin_gpu_capture_full_resolution(){
     if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
     unsafe{
-        let source=window(false).unwrap();
+        let source=window(true).unwrap();
         SetWindowPos(source.0,null_mut(),16,16,2110,980,SWP_NOACTIVATE|SWP_NOZORDER);
         UpdateWindow(source.0);
+        let mut area:RECT=std::mem::zeroed();
+        assert!(windows_sys::Win32::Graphics::Dwm::DwmGetWindowAttribute(source.0,
+            windows_sys::Win32::Graphics::Dwm::DWMWA_EXTENDED_FRAME_BOUNDS as u32,(&mut area as *mut RECT).cast(),std::mem::size_of::<RECT>() as u32)>=0);
         let handle=source.0 as usize;
         let result=std::thread::scope(|scope|{
             let (tx,rx)=mpsc::sync_channel(1);
@@ -219,8 +224,9 @@ fn native_fluidwin_gpu_capture_full_resolution(){
             }
         });
         let super::stage_snapshot::MotionFrame::Gpu(frame)=result.expect("native resolution WGC GPU capture")else{panic!("motion source returned a CPU thumbnail")};
-        assert_eq!((frame.width,frame.height),(2110,980));
-        let area=RECT{left:16,top:16,right:2126,bottom:996};let icon=RECT{left:400,top:1040,right:448,bottom:1088};
+        assert_eq!((frame.width,frame.height),(area.right-area.left,area.bottom-area.top));
+        assert!(frame.width>1024,"full-window source must exceed the old thumbnail cap");
+        let icon=RECT{left:400,top:1040,right:448,bottom:1088};
         let pipeline=super::fluidwin_mesh::Pipeline::new(&frame.gpu.context()).unwrap();
         for effect in [super::motion::WindowEffect::Genie,super::motion::WindowEffect::Drop,super::motion::WindowEffect::Scale]{
             let layer={let _batch=frame.gpu.context();super::fluidwin_mesh::Layer::from_gpu(pipeline.clone(),&frame,area,icon,super::DockSide::Bottom,effect,96).unwrap()};
@@ -240,7 +246,7 @@ fn native_fluidwin_gpu_capture_full_resolution(){
                 }
             }
         }
-        println!("FLUIDWIN_GPU_CAPTURE source=2110x980 cpu_readback_in_runtime=false rendered_perimeter=CHECKED owner_artifact_acceptance=FAIL");
+        println!("FLUIDWIN_GPU_CAPTURE source={}x{} cpu_readback_in_runtime=false rendered_perimeter=CHECKED owner_artifact_acceptance=FAIL",frame.width,frame.height);
     }
 }
 

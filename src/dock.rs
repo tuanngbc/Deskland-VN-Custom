@@ -38,6 +38,7 @@ mod stage_projection;
 mod stage_snapshot;
 mod window_effect;
 mod shell_menu;
+mod window_lease;
 mod fluidwin_mesh;
 mod stage_peek;
 mod clipboard_history;
@@ -2155,7 +2156,7 @@ fn sync_win_key(){
     if WIN_KEY_FAILED.get()||WIN_KEY.with(|s|s.borrow().is_some()){return;}
     let generation=WIN_KEY_TOKEN.with(|n|{let next=n.get().wrapping_add(1).max(1);n.set(next);next});
     match win_key::Hook::install_mode(CONTROL.get(),generation,on,context){
-        Ok(hook)=>{WIN_KEY.with(|s|s.replace(Some(hook)));win_key_status("installed");}
+        Ok(hook)=>{WIN_KEY.with(|s|s.replace(Some(hook)));win_key_status(if on{"installed"}else if requested{"waiting"}else{"off"});}
         Err(reason)=>{
             crate::log!("DOCK_WIN_KEY install failed: {reason}");
             WIN_KEY_FAILED.set(true);win_key_status("failed");

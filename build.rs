@@ -40,6 +40,7 @@ fn main() {
         println!("cargo:rerun-if-changed=third_party/fluidwin/index_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/upstream");
         println!("cargo:rerun-if-changed=third_party/fluidwin/shell_menu_bridge.cpp");
+        println!("cargo:rerun-if-changed=third_party/fluidwin/window_lease.cpp");
         cc::Build::new()
             .cpp(true)
             .flag("/std:c++17")
@@ -50,6 +51,7 @@ fn main() {
             .file("third_party/fluidwin/motion_renderer.cpp")
             .file("third_party/fluidwin/index_bridge.cpp")
             .file("third_party/fluidwin/shell_menu_bridge.cpp")
+            .file("third_party/fluidwin/window_lease.cpp")
             .compile("tlauncher_fluidwin_motion");
         println!("cargo:rustc-link-lib=d3dcompiler");
         println!("cargo:rustc-link-lib=uuid");
