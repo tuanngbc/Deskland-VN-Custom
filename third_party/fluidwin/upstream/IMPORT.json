@@ -69,6 +69,12 @@
       "source_git_blob": "4292ad2c874d5b0024a6a9e806bcd46ae6d31a2c",
       "source_worktree_sha256": "68c679ab949975ac596dca891330fbf19486857f29953b60d07f7ec73b390a74",
       "local_changes": "None beyond Git newline normalization"
+    },
+    {
+      "path": "jumplist.h",
+      "source_git_blob": "587961f986fe55053f20cca5d68f728d9a4546e3",
+      "source_worktree_sha256": "551845c373e46a3b3cc507945667e45a491bd36b991eea715e179b659ced0037",
+      "local_changes": "On-demand one-shot index read using the original parser/cache/matcher; no permanent watcher thread"
     }
   ]
 }

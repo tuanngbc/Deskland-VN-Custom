@@ -59,7 +59,7 @@ fn main() {
         println!("cargo:rustc-link-lib=uuid");
         println!("cargo:rustc-link-lib=ole32");
         println!("cargo:rustc-link-lib=shell32");
-        for lib in ["d2d1","dwrite","dwmapi","oleaut32","runtimeobject","shlwapi","advapi32","version","dxva2"] {
+        for lib in ["d2d1","dwrite","dwmapi","oleaut32","runtimeobject","shlwapi","advapi32","version","dxva2","propsys"] {
             println!("cargo:rustc-link-lib={lib}");
         }
         let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());

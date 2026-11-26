@@ -634,6 +634,7 @@ pub(super) unsafe fn paint_button(item:&DRAWITEMSTRUCT,dark:bool){
         if item.itemState&ODS_DISABLED!=0{p.muted}else{p.ink},DT_CENTER|DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);
 }
 pub(super) unsafe fn close_panels(){
+    super::jump_list::close();
     super::audio_mixer::close_for(ptr::null_mut());
     for hwnd in [AUDIO_WINDOW.with(Cell::get)] {
         if !hwnd.is_null(){DestroyWindow(hwnd);}

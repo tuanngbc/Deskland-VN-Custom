@@ -47,6 +47,7 @@ mod stage_capture_lab;
 pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>{stage_capture_lab::inspect(path,true)}
 mod utilities;
 mod audio_mixer;
+mod jump_list;
 mod wifi;
 mod control_center;
 pub(crate) mod panel_chrome;
@@ -1805,7 +1806,7 @@ unsafe fn activate(hwnd:HWND,item:&Item) {
 }
 #[derive(Clone)]
 enum AppOperation{
-    Open, NewWindow, ShowMenu, TogglePin, Close(Vec<WindowIdentity>), Advanced, ChangeIcon, ResetIcon,
+    Open, NewWindow, ShowMenu, JumpList, TogglePin, Close(Vec<WindowIdentity>), Advanced, ChangeIcon, ResetIcon,
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Hash)]
 struct WindowIdentity{hwnd:usize,pid:u32,tid:u32}
@@ -1989,6 +1990,7 @@ unsafe fn app_menu(owner:HWND,path:&str,picker:bool){
         }
         add(if item.pinned{"Bỏ ghim khỏi Dock"}else{"Ghim vào Dock"},AppOperation::TogglePin);
         if item.path!=internal_app::KEY{
+            add(crate::launcher::localized("Lệnh ứng dụng và tệp gần đây…","App commands and recent files…","应用命令和最近文件…"),AppOperation::JumpList);
             add("Đổi icon ứng dụng…",AppOperation::ChangeIcon);
             if STATE.with(|s|crate::app_icons::has(&s.borrow().prefs.app_icons,&item.path)){
                 add("Khôi phục icon mặc định",AppOperation::ResetIcon);
@@ -2035,6 +2037,12 @@ unsafe fn perform_app_action(owner:HWND,path:&str,operation:AppOperation){
     let Some((bar,index,mut item))=selected else{return;};
     match operation{
         AppOperation::ShowMenu=>app_menu(owner,path,false),
+        AppOperation::JumpList=>{
+            let source=WindowIdentity::read(item.hwnd);
+            let others=STATE.with(|s|s.borrow().windows.iter().filter(|w|!w.path.eq_ignore_ascii_case(path))
+                .filter_map(|w|w.path.strip_prefix("shell:AppsFolder\\").map(str::to_owned).or_else(||w.stage_aumid.clone())).collect());
+            jump_list::open(owner,path,source,others);
+        }
         AppOperation::Open=>activate(owner,&item),
         AppOperation::NewWindow=>{item.hwnd=ptr::null_mut();activate(owner,&item);},
         AppOperation::TogglePin=>emit(Event::Edit(if item.pinned{Edit::Unpin(item.path)}else{Edit::Pin(item.path)})),
@@ -3061,6 +3069,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_INTERNAL_APP if hwnd==CONTROL.with(Cell::get)=>{queue_refresh();0},
         WM_TICK=>{SetTimer(hwnd,2,60,None);0},
         WM_UTILITY_READY=>{show_utilities();0},
+        WM_TIMER if w==jump_list::TIMER&&hwnd==CONTROL.get()=>{jump_list::poll();0},
         WM_SHELL_FALLBACK if hwnd==CONTROL.with(Cell::get)=>{
             let owner=w as HWND;
             if !local_shell_buttons()&&!control_center::open_for(owner){
