@@ -4,20 +4,29 @@ use std::{cell::RefCell,ffi::c_void,mem,ptr::{self,NonNull},sync::Mutex};
 use windows_sys::Win32::{Foundation::*,Graphics::Gdi::*,UI::{HiDpi::GetDpiForWindow,WindowsAndMessaging::*}};
 pub(super) const TIMER:usize=33;
 pub(super) const NOTICE:u32=WM_APP+144;
-static ELIGIBLE:Mutex<Option<WindowIdentity>>=Mutex::new(None);
+#[derive(Clone,Copy)]
+struct HotkeyTarget{id:WindowIdentity,maximized:bool,maximize_box:bool}
+impl HotkeyTarget{
+    fn accepts(self,key:u16)->bool{matches!(key,0x5A|0x25|0x27)||vertical_action(key,self.maximized,self.maximize_box).is_some()}
+}
+fn vertical_action(key:u16,maximized:bool,maximize_box:bool)->Option<super::window_geometry::Action>{
+    match key{0x26 if !maximized&&maximize_box=>Some(super::window_geometry::Action::Maximize),
+        0x28 if maximized=>Some(super::window_geometry::Action::Restore),_=>None}
+}
+static ELIGIBLE:Mutex<Option<HotkeyTarget>>=Mutex::new(None);
 static REQUEST:Mutex<Option<(usize,WindowIdentity,u16)>>=Mutex::new(None);
 pub(super) fn refresh_hotkey(){
     let enabled=STATE.with(|s|{let Ok(s)=s.try_borrow()else{return false;};s.prefs.enabled&&s.prefs.snap_layouts&&!s.suspended});
-    let id=if enabled{unsafe{WindowIdentity::read(GetForegroundWindow()).filter(|id|eligible(*id)&&GetWindowLongW(id.hwnd as HWND,GWL_STYLE) as u32&WS_POPUP==0)}}else{None};
+    let id=if enabled{unsafe{WindowIdentity::read(GetForegroundWindow()).filter(|id|eligible(*id)&&GetWindowLongW(id.hwnd as HWND,GWL_STYLE) as u32&WS_POPUP==0)
+        .map(|id|HotkeyTarget{id,maximized:IsZoomed(id.hwnd as HWND)!=0,maximize_box:GetWindowLongW(id.hwnd as HWND,GWL_STYLE) as u32&WS_MAXIMIZEBOX!=0})}}else{None};
     if let Ok(mut slot)=ELIGIBLE.lock(){*slot=id;}
     if !enabled{if let Ok(mut slot)=REQUEST.lock(){*slot=None;}}
 }
 /// The hook never performs COM, permission queries or foreign window calls.
-/// Only a bounded successful enqueue consumes a physical Win+Z chord.
+/// Only a bounded successful enqueue consumes a supported physical chord.
 pub(super) unsafe fn queue_hotkey(control:HWND,ticket:usize,key:u16)->bool{
-    let Some(id)=ELIGIBLE.try_lock().ok().and_then(|slot|*slot).filter(|id|id.hwnd==GetForegroundWindow() as usize)else{return false;};
-    if !matches!(key,0x5A|0x25|0x27){return false;}
-    let Ok(mut slot)=REQUEST.try_lock()else{return false;};if slot.is_some(){return false;}*slot=Some((ticket,id,key));
+    let Some(target)=ELIGIBLE.try_lock().ok().and_then(|slot|*slot).filter(|target|target.id.hwnd==GetForegroundWindow() as usize&&target.accepts(key))else{return false;};
+    let Ok(mut slot)=REQUEST.try_lock()else{return false;};if slot.is_some(){return false;}*slot=Some((ticket,target.id,key));
     if PostMessageW(control,NOTICE,ticket,0)==0{*slot=None;return false;}true
 }
 pub(super) unsafe fn receive_hotkey(ticket:usize,current:bool){
@@ -25,6 +34,12 @@ pub(super) unsafe fn receive_hotkey(ticket:usize,current:bool){
     let Some((_,id,key))=request.filter(|_|current)else{return;};
     let enabled=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.snap_layouts&&!s.suspended});
     if !enabled||GetForegroundWindow() as usize!=id.hwnd||!eligible(id){return;}
+    if matches!(key,0x26|0x28){
+        if let Some(action)=vertical_action(key,IsZoomed(id.hwnd as HWND)!=0,GetWindowLongW(id.hwnd as HWND,GWL_STYLE) as u32&WS_MAXIMIZEBOX!=0){
+            close_for(ptr::null_mut());super::window_geometry::command(id,action);
+        }
+        return;
+    }
     let monitor=MonitorFromWindow(id.hwnd as HWND,MONITOR_DEFAULTTONULL);
     let owner=STATE.with(|s|{let s=s.borrow();s.bars.iter().filter(|b|!b.hidden).find(|b|MonitorFromWindow(b.hwnd,MONITOR_DEFAULTTONULL)==monitor)
         .or_else(||s.bars.iter().find(|b|!b.hidden)).map(|b|b.hwnd)});
@@ -193,6 +208,22 @@ pub(super) unsafe fn probe(owner:HWND,id:WindowIdentity){
     let quarter=RECT{left:area.left,top:area.top,right:(area.left+area.right)/2,bottom:(area.top+area.bottom)/2};
     assert!(tlauncher_snap_arrow(&quarter,false,true,&mut expected));assert_eq!((expected.left,expected.top,expected.right,expected.bottom),((area.left+area.right)/2,area.top,area.right,(area.top+area.bottom)/2));
     assert!(!tlauncher_snap_arrow(&quarter,false,false,&mut expected));
+    // Original Win+Up only maximizes a normal window; Win+Down only restores
+    // a maximized window. Normal-window minimization stays on Windows' path.
+    for animated in [false,true]{
+        prepare();super::motion::configure(super::motion::Settings{enabled:animated,..policy});
+        SetForegroundWindow(h);wait(&||GetForegroundWindow()==h);refresh_hotkey();
+        assert!(!queue_hotkey(super::CONTROL.get(),405,0x28));
+        assert!(queue_hotkey(super::CONTROL.get(),405,0x26));receive_hotkey(405,true);
+        wait(&||!super::window_geometry::active()&&IsZoomed(h)!=0);super::window_effect::fixture_settle_source(h);
+        assert_eq!(GetWindowLongPtrW(h,GWL_EXSTYLE),style);assert!(GetPropW(h,marker.as_ptr()).is_null());
+        refresh_hotkey();assert!(!queue_hotkey(super::CONTROL.get(),406,0x26));
+        assert!(queue_hotkey(super::CONTROL.get(),406,0x28));receive_hotkey(406,true);
+        wait(&||!super::window_geometry::active()&&IsZoomed(h)==0);super::window_effect::fixture_settle_source(h);
+        assert_eq!(GetWindowLongPtrW(h,GWL_EXSTYLE),style);assert!(GetPropW(h,marker.as_ptr()).is_null());
+        println!("FLUIDWIN_VERTICAL_KEYS animation_enabled={animated} maximize=PASS restore=PASS normal_down=NATIVE source_style=RESTORED journal=CLEARED");
+    }
+    super::motion::configure(super::motion::Settings{enabled:false,..policy});
     prepare();assert!(open(owner,id));let window=panel();let start=Instant::now();while start.elapsed()<Duration::from_millis(400){pump();}
     struct Accessible(*mut c_void);impl Drop for Accessible{fn drop(&mut self){unsafe{tlauncher_snap_accessible_free(self.0);}}}
     let access=Accessible(OPEN.with(|s|tlauncher_snap_accessible(s.borrow().as_ref().unwrap().native.0.as_ptr())));assert!(!access.0.is_null());
@@ -206,4 +237,18 @@ pub(super) unsafe fn probe(owner:HWND,id:WindowIdentity){
     println!("FLUIDWIN_SNAP_HOTKEY_QUEUE valid=OPEN stale_ticket=PRESERVED invalid_generation=REJECTED changed_foreground=REJECTED physical_keys=NOT_INJECTED");
     drop(reset);wait(&||{let mut r:RECT=mem::zeroed();GetWindowRect(h,&mut r)!=0&&super::same_rect(r,original)});super::window_effect::fixture_settle_source(h);
     println!("FLUIDWIN_SNAP_LAYOUT_FIXTURE regions=11 keyboard=PASS no_premature_move=PASS screen=CAPTURED prepared={animated} cancel=PASS native_maximized=PASS source_style=RESTORED journal=CLEARED");
+}
+
+#[cfg(test)]mod tests{
+    use super::*;
+    #[test]fn vertical_keys_preserve_unsupported_native_states(){
+        use super::super::window_geometry::Action;
+        assert!(matches!(vertical_action(0x26,false,true),Some(Action::Maximize)));
+        assert!(matches!(vertical_action(0x28,true,true),Some(Action::Restore)));
+        assert!(matches!(vertical_action(0x28,true,false),Some(Action::Restore)));
+        assert!(vertical_action(0x28,false,true).is_none()); // Windows may minimize
+        assert!(vertical_action(0x26,true,true).is_none()); // Windows may change Snap
+        assert!(vertical_action(0x26,false,false).is_none()); // no maximize box
+        for key in [0x5A,0x25,0x27,0x24,0x23]{assert!(vertical_action(key,false,true).is_none());}
+    }
 }

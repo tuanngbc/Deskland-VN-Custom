@@ -4,7 +4,7 @@
     "shellContextMenu": "Desktop and Explorer context menus",
     "altTabOverview": "Window overview with Alt+Tab",
     "snapLayouts": "FluidWin layouts with Windows keys",
-    "snapLayoutsHint": "Win+Z opens layouts; Win+Left/Right snaps the window. In the picker: Tab or arrows select, Enter applies, Esc cancels.",
+    "snapLayoutsHint": "Win+Z opens layouts; Win+Left/Right snaps; Win+Up maximizes, Win+Down restores a maximized window. In the picker: Tab or arrows select, Enter applies, Esc cancels.",
     "jellyDrag": "Jelly effect while dragging windows",
     "jellyDragHint": "Use live content while dragging normal windows. Incompatible windows keep Windows behavior.",
     "altTabOverviewHint": "Show open windows on the current display. Release Alt to select; Esc to cancel.",

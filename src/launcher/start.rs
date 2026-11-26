@@ -778,7 +778,7 @@ unsafe fn entry_menu(hwnd:HWND,tile:Tile,mut at:POINT){
     if shell{actions.push(super::localized("Lệnh ứng dụng Windows…","Windows app commands…","Windows 应用命令…"));}
     ClientToScreen(hwnd,&mut at);
     match action_menu(hwnd,at,&actions,0){
-        id if shell&&id==shell_command=>super::app_menu::show(hwnd,at,&entry),
+        id if shell&&id==shell_command=>{MENU.set(true);super::app_menu::show(hwnd,at,&entry);MENU.set(false);},
         1=>launch(hwnd,entry,true),
         2=>if let Some(edit)=edit{PIN_EDIT.with(|p|p.replace(Some(edit)));},
         3 if location=>{

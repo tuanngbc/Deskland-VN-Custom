@@ -95,7 +95,7 @@ impl Drop for Quit{fn drop(&mut self){unsafe{CloseHandle(self.0 as HANDLE);}}}
 #[derive(Clone,Copy,Default)]struct SnapChord{held:u16,mask:bool}
 impl SnapChord{
     fn edge(&mut self,vk:u16,down:bool,compatible:bool,queue:impl FnOnce()->bool)->bool{
-        if !matches!(vk,0x5A|VK_LEFT|VK_RIGHT){return false;}
+        if !matches!(vk,0x5A|VK_LEFT|VK_RIGHT|VK_UP|VK_DOWN){return false;}
         if !down{if self.held==vk{self.held=0;return true;}return false;}
         if self.held==vk{return true;}
         if self.held!=0{return false;}
@@ -285,12 +285,12 @@ mod tests{
         let mut chord=SnapChord::default();
         assert!(!chord.edge(b'Z'.into(),true,false,||panic!("modified/no-Win chord must pass")));
         assert!(!chord.edge(b'Z'.into(),true,true,||false));assert!(!chord.mask);
-        assert!(!chord.edge(VK_UP,true,true,||panic!("Win+Up remains native")));
+        assert!(!chord.edge(VK_UP,true,true,||false)); // ineligible state keeps Windows routing
         assert!(chord.edge(b'Z'.into(),true,true,||true));assert!(chord.mask);
         assert!(chord.edge(b'Z'.into(),true,false,||panic!("autorepeat must not enqueue again")));
         assert!(chord.edge(b'Z'.into(),false,false,||panic!("release must not enqueue")));
         assert!(!chord.edge(b'Z'.into(),false,false,||false));
-        for arrow in [VK_LEFT,VK_RIGHT]{assert!(chord.edge(arrow,true,true,||true));assert!(chord.edge(arrow,true,true,||panic!("repeat")));assert!(chord.edge(arrow,false,false,||false));}
+        for arrow in [VK_LEFT,VK_RIGHT,VK_UP,VK_DOWN]{assert!(chord.edge(arrow,true,true,||true));assert!(chord.edge(arrow,true,true,||panic!("repeat")));assert!(chord.edge(arrow,false,false,||false));}
         // A deferred physical Win down is not replayed for the consumed chord,
         // and its release cannot produce a standalone Start tap.
         let mut keys=Keys::default();assert_eq!(keys.edge(stroke(VK_LWIN),true,11,false,false),Edge::Hold);

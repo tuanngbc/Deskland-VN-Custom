@@ -26,9 +26,9 @@
       "adaptation": "Hexadecimal SSID in a temporary manual open-network XML profile; revalidate clicked interface and refuse a saved or newly secured network; preserve existing known-profile path and Windows credential UI; TEST builds remain read-only."
     },
     {
-      "source": "fluidwin.cpp::suAffiancaTasto / affianca.h::zonaDi / rettZona",
+      "source": "fluidwin.cpp::suAffiancaTasto / WM_ZOOM_TASTO keyboard route / affianca.h::zonaDi / rettZona",
       "integration": ["stack_bridge.cpp", "upstream/affianca.h", "../../src/dock/snap_layout.rs"],
-      "adaptation": "Original side-key half/center/quarter/adjacent-display geometry; only shared TLauncher guarded/native geometry controller issues foreign commands. No global Windows Snap-policy mutation. Full imported-header provenance is in upstream/IMPORT.json."
+      "adaptation": "Original side-key half/center/quarter/adjacent-display geometry and cached foreground-state Win+Up normal maximize / Win+Down maximized restore routing; only shared TLauncher guarded/native geometry controller issues foreign commands. Hook uses a cached target and bounded queue, revalidated by Dock before execution; unsupported states retain native routing. No global Windows Snap-policy mutation. Full imported-header provenance is in upstream/IMPORT.json."
     }
   ]
 }
