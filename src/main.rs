@@ -1073,6 +1073,10 @@ struct App {
 impl App {
     fn configure_dock(&mut self) {
         self.cfg.dock.appearance.reduced_motion=false;
+        if dock::corners::configure(self.cfg.dock.appearance.corners){
+            launcher::corners_changed();web::corners_changed();
+            if let Some(hwnd)=settings::hwnd(){unsafe{dock::corners::apply_dwm(hwnd);}}
+        }
         if app_icons::set(&self.cfg.dock.app_icons){launcher::start::icons_changed();}
         launcher::dock_pins(&self.cfg.dock.pinned);
         self.dock_error=None;
@@ -2425,6 +2429,7 @@ fn main() {
     let interval = 1000.0 / fps.max(1.0);
     let mut cfg = load_config(arg_value(&args, "--theme"));
     dock::motion::configure(cfg.motion);
+    dock::corners::configure(cfg.dock.appearance.corners);
     launcher::spotlight_locale(&lang_eff(&cfg.lang).0);
     if let Some(mode) = arg_value(&args, "--mode") {
         if matches!(mode.as_str(), "mirror" | "independent" | "panorama") {

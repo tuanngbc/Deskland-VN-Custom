@@ -81,8 +81,8 @@ pub(super) unsafe fn frame(hwnd:HWND,width:i32,height:i32,dpi:u32,anchor:Anchor)
     SetLayeredWindowAttributes(hwnd,0,anchor.alpha(),LWA_ALPHA);
 }
 pub(super) unsafe fn clip_corners(hwnd:HWND,width:i32,height:i32,dpi:u32){
-    let r=scale(dpi,32).max(2);
-    let region=CreateRoundRectRgn(0,0,width+1,height+1,r,r);
+    let r=super::corners::radius(scale(dpi,32) as f32).round() as i32;
+    let region=if r==0{CreateRectRgn(0,0,width,height)}else{CreateRoundRectRgn(0,0,width+1,height+1,r,r)};
     if !region.is_null()&&SetWindowRgn(hwnd,region,0)==0{DeleteObject(region);}
 }
 pub(super) unsafe fn disable_system_border(hwnd:HWND){
@@ -93,7 +93,7 @@ pub(super) unsafe fn disable_system_border(hwnd:HWND){
 }
 /// Common shadow for the three Dock panels. Its transparent surface never
 /// covers the capsule; the Dock-facing falloff reaches zero within the gap.
-pub(crate) struct PanelShadow{pub(super) hwnd:HWND,layer:Layer,style:(i32,i32,u32,DockSide,bool),inset:(i32,i32),at:(i32,i32)}
+pub(crate) struct PanelShadow{pub(super) hwnd:HWND,layer:Layer,style:(i32,i32,u32,DockSide,bool,super::appearance::CornerStyle),inset:(i32,i32),at:(i32,i32)}
 impl Drop for PanelShadow{
     fn drop(&mut self){unsafe{DestroyWindow(self.hwnd);}}
 }
@@ -101,7 +101,7 @@ impl PanelShadow{
     pub(crate) unsafe fn opacity(&self,opacity:u8){let _=self.layer.present_at(self.hwnd,None,opacity);}
     pub(crate) unsafe fn sync(slot:&mut Option<Self>,panel:HWND,owner:HWND,rect:RECT,dpi:u32,side:DockSide,dark:bool){
         let (width,height)=(rect.right-rect.left,rect.bottom-rect.top);
-        let style=(width,height,dpi,side,dark);
+        let style=(width,height,dpi,side,dark,super::corners::current());
         if let Some(shadow)=slot.as_mut().filter(|s|s.style==style){
             let at=(rect.left-shadow.inset.0,rect.top-shadow.inset.1);
             if shadow.at!=at{
@@ -124,7 +124,7 @@ impl PanelShadow{
         let Some(mut layer)=Layer::new(w,h)else{return;};
         let card=Rect{x:left as f32,y:top as f32,w:width as f32,h:height as f32};
         let canvas=Rect{x:0.0,y:0.0,w:w as f32,h:h as f32};
-        let radius=scale(dpi,16) as f32;
+        let radius=super::corners::radius(scale(dpi,16) as f32);
         let data=layer.pixels();data.fill(0);
         draw(data,w,h,canvas,|x,y|{
             let d=distance(card,radius,x,y);
@@ -161,6 +161,7 @@ impl Drop for StartCorners{
 impl StartCorners{
     pub(crate) unsafe fn opacity(&self,opacity:u8){let _=self.layer.present_at(self.hwnd,None,opacity);}
     pub(crate) unsafe fn paint(slot:&mut Option<Self>,owner:HWND,dc:HDC,w:i32,h:i32,dpi:u32){
+        if super::corners::radius(16.0)==0.0{*slot=None;return;}
         if slot.as_ref().is_none_or(|s|s.layer.size!=(w,h)){
             *slot=None;
             let class=crate::desktop::wide("STATIC");
@@ -172,7 +173,7 @@ impl StartCorners{
             *slot=Some(Self{hwnd,layer});
         }
         let Some(edge)=slot.as_mut()else{return;};
-        let r=scale(dpi,16).min(w/2).min(h/2);
+        let r=(super::corners::radius(scale(dpi,16) as f32).round() as i32).min(w/2).min(h/2);
         edge.layer.pixels().fill(0);
         let dest=edge.layer.dc();
         for (x,y) in [(0,0),(w-r,0),(0,h-r),(w-r,h-r)]{
@@ -207,7 +208,7 @@ pub(crate) unsafe fn start_frame(hwnd:HWND,width:i32,height:i32,dpi:u32){
     let disabled=1u32; // DWMNCRP_DISABLED: the shared shadow supplies the frame.
     let _=DwmSetWindowAttribute(hwnd,2,(&disabled as *const u32).cast(),4);
     disable_system_border(hwnd);
-    let r=scale(dpi,16).min(width/2).min(height/2);
+    let r=(super::corners::radius(scale(dpi,16) as f32).round() as i32).min(width/2).min(height/2);
     let region=CreateRectRgn(0,r,width,height-r);
     let line=CreateRectRgn(0,0,0,0);
     if region.is_null()||line.is_null(){
@@ -229,6 +230,7 @@ pub(crate) unsafe fn start_frame(hwnd:HWND,width:i32,height:i32,dpi:u32){
     if SetWindowRgn(hwnd,region,0)==0{DeleteObject(region);clip_corners(hwnd,width,height,dpi);}
 }
 pub(super) fn mask_popup(data:&mut [u8],w:i32,h:i32,radius:f32,opacity:u8){
+    let radius=super::corners::radius(radius);
     let (w,h)=(w as usize,h as usize);
     let r=radius.min(w.min(h) as f32*0.5);
     for (y,row) in data.chunks_exact_mut(w*4).enumerate(){

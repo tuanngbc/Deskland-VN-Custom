@@ -1,6 +1,11 @@
 {
   "name": "简体中文",
   "ui": {
+    "ownCorners": "TLauncher 边角",
+    "ownCornersHint": "应用于程序坞、菜单和 TLauncher 窗口。",
+    "cornersRounded": "圆角",
+    "cornersSmall": "小圆角",
+    "cornersSquare": "直角",
     "utilityItem_downloads": "下载文件堆栈",
     "utilityItem_recycleBin": "回收站",
     "shellContextMenu": "桌面与资源管理器右键菜单",

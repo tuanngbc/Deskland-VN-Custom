@@ -53,6 +53,17 @@ UINT native_menu(HMENU items,POINT point,HWND owner){
 }
 
 extern "C" {
+void tlauncher_fluidwin_corner_policy(int style) noexcept {
+    raggio::stile()=std::clamp(style,0,2);
+    raggio::riapplica();
+}
+bool tlauncher_fluidwin_corner_policy_fixture(int style) noexcept {
+    tlauncher_fluidwin_corner_policy(style);
+    style=std::clamp(style,0,2);
+    const auto base=raggio::windhawk()>0?raggio::windhawk():8;
+    return raggio::stile()==style && raggio::fattore()==(style==0?1.0f:style==1?0.5f:0.0f) &&
+        raggio::vetro()==(style==0?base:style==1?(base+1)/2:0) && raggio::preferenzaDwm()==(style==0?2:style==1?3:1);
+}
 void tlauncher_fluidwin_menu_policy(int language,double speed,bool reduced) noexcept {
     menu::motionSpeed=std::isfinite(speed)?std::clamp(speed,0.25,2.0):0.70;
     menu::reducedMotion=reduced;

@@ -42,6 +42,7 @@ pub(super) fn control_backing(base: f32) -> f32 {
 
 pub type Atlas = HashMap<String, Option<Arc<crate::launcher::IconPixels>>>;
 pub struct Surface {
+    corner_style:super::appearance::CornerStyle,
     layer:Layer,glass:Rect,material:Material,static_pixels:Vec<u8>,motion_pixels:Vec<u8>,icons:IconRasters,metric:Option<MetricInk>,clock:Option<ClockInk>,popup_anchor:Option<crate::launcher::DockAnchor>,backdrop:Option<super::glass::Glass>,
 }
 struct MetricInk{size:(i32,i32),fonts:[HFONT;3],mask:Layer,pixels:Vec<u8>,key:Option<(usize,MetricOptions,bool,bool)>,painted_at:Option<Instant>}
@@ -154,7 +155,7 @@ impl ClockInk{
 impl Surface {
     pub unsafe fn new(w:i32,h:i32,glass:Rect,material:Material)->Option<Self>{
         let layer=Layer::new(w,h)?;
-        Some(Self{layer,glass,material,static_pixels:Vec::new(),motion_pixels:Vec::new(),icons:IconRasters::default(),metric:None,clock:None,popup_anchor:None,backdrop:None})
+        Some(Self{corner_style:super::corners::current(),layer,glass,material,static_pixels:Vec::new(),motion_pixels:Vec::new(),icons:IconRasters::default(),metric:None,clock:None,popup_anchor:None,backdrop:None})
     }
     pub unsafe fn refresh_glass(&mut self,layout:&Layout,dpi:u32){
         if super::glass::Glass::refresh(&mut self.backdrop,layout.window,dpi,self.material.dark,self.material.transparency){
@@ -169,7 +170,7 @@ impl Surface {
         if self.material!=value{self.material=value;self.static_pixels.clear();self.motion_pixels.clear();}
     }
     pub fn has_motion_frame(&self,layout:&Layout,openness:f32)->bool{
-        openness>0.003&&openness<1.0&&self.glass==layout.glass&&!self.motion_pixels.is_empty()
+        self.corner_style==super::corners::current()&&openness>0.003&&openness<1.0&&self.glass==layout.glass&&!self.motion_pixels.is_empty()
     }
     unsafe fn present_motion(&mut self,hwnd:HWND,layout:&Layout,openness:f32,rail_face:usize,rail_opacity:f32)->bool{
         let (w,h)=self.layer.size;
@@ -188,6 +189,7 @@ impl Surface {
     }
     pub unsafe fn paint(&mut self,hwnd:HWND,layout:&Layout,items:&[super::Item],atlas:&Atlas,start_icon:super::StartIcon,active:Option<usize>,minimized:u16,attention:u16,
         hover:Option<usize>,drop_target:Option<usize>,openness:f32,feedback:Option<(usize,FeedbackKind,f32)>,metrics:Option<MetricOptions>,rail_face:usize,rail_opacity:f32,keyboard:Option<usize>,start_motion:f32)->bool{
+        let style=super::corners::current();if self.corner_style!=style{self.corner_style=style;self.static_pixels.clear();self.motion_pixels.clear();}
         if self.has_motion_frame(layout,openness){
             return self.present_motion(hwnd,layout,openness,rail_face,rail_opacity);
         }
@@ -540,7 +542,7 @@ fn render_glass(data:&mut[u8],w:i32,h:i32,rect:Rect,tint:Material,scale:f32){
 }
 fn render_glass_sample(data:&mut[u8],w:i32,h:i32,rect:Rect,tint:Material,scale:f32,glass:Option<&super::glass::Glass>){
     data.fill(0);
-    let radius=rect.w.min(rect.h)*0.40;
+    let radius=super::corners::radius(rect.w.min(rect.h)*0.40);
     let margin=9.0*scale;
     let start=((rect.x-margin).floor() as i32).clamp(0,w);
     let end=((rect.x+rect.w+margin).ceil() as i32).clamp(start,w);

@@ -5,6 +5,13 @@
   "note": "Section adaptations, not claims that these full headers were imported. Original CRLF worktree byte hashes and canonical Git blobs are recorded; existing notices and original license are preserved.",
   "sections": [
     {
+      "source": "raggio.h::stile / fattore / preferenzaDwm / registra / riapplica",
+      "source_git_blob": "037ac1eb57705a9fecf7dc7d1f5fa22a5e50f7a1",
+      "source_worktree_sha256": "a289088cf7e88b65edcf9d8a1114f1923946fe1430cf2ebe4e72e97babd4aefa",
+      "integration": ["shell_menu_bridge.cpp", "upstream/menu.h", "../../src/dock/corners.rs", "../../src/dock/panel_chrome.rs", "../../src/dock/surface.rs", "../../src/launcher.rs", "../../src/launcher/start.rs", "../../src/web.rs"],
+      "adaptation": "Original rounded/small/square factors and DWM preference table, shared by existing TLauncher own-UI appearance profile and native Rust raster/mask/region/shadow owners; original C++ glass/menu uses raggio directly. Imported menu joins original marked-HWND registration so stale handles are rejected. Rust DWM changes additionally require current-process identity; no foreign application attributes are changed. Existing TLauncher base radii/default design are retained; no Windhawk installation/patching or system policy writer. Geometry caches reject previous styles; Start and compact Spotlight refresh on the owning main thread; native controls/profile/vi-en-zh Settings are preserved. Whole original Settings replacement remains separate."
+    },
+    {
       "source": "widget.h::meteo / descrizione / fahrenheitDiWindows / gradi / nomeGiorno / lavoroCerca; centro.h city-search lifecycle",
       "source_git_blob": "5a1628bdb1006b73c822f47332f7477fc47d27f3",
       "source_worktree_sha256": "9c541a24e2cb54ed4c1036496e8ba4d22e602c33dfb1086905e60c045c542df5",

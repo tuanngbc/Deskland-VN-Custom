@@ -76,6 +76,11 @@ pub fn configure(appearance: Appearance) {
     });
     if let Some(hwnd)=hwnd{unsafe{InvalidateRect(hwnd,std::ptr::null(),0);}}
 }
+pub(crate) fn corners_changed(){
+    let hwnd=STATE.with(|s|s.borrow().as_ref().map(|s|s.hwnd));
+    if let Some(hwnd)=hwnd{unsafe{InvalidateRect(hwnd,std::ptr::null(),0);}}
+    start::corners_changed();
+}
 
 const CLASS: &str = "TuanpcDeskLauncherGlass";
 const ROW: i32 = 54;
@@ -820,6 +825,7 @@ unsafe fn paint(hwnd: HWND) {
     let high=fullscreen::high_contrast();
     let mut ps: PAINTSTRUCT = std::mem::zeroed(); let target = BeginPaint(hwnd, &mut ps);
     if let Some((w, h, scale, glass, query, rows, selected, count, error, select_all,dock_start)) = model {
+        let corner_radius=crate::dock::corners::radius(20.0*scale);
         let px = |v: i32| (v as f32 * scale).round() as i32;
         let pad = px(12); let ww = w+2*pad; let hh = h+2*pad;
         let mut info: BITMAPINFO = std::mem::zeroed(); info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
@@ -843,7 +849,7 @@ unsafe fn paint(hwnd: HWND) {
         if let Some(mut overlay) = tiny_skia::Pixmap::new(w as u32, h as u32) {
             let mut color = tiny_skia::Paint::default(); color.anti_alias = true;
             color.set_color_rgba8(255,255,255,if dark {65} else {155});
-            overlay.stroke_path(&round_path(0.75,0.75,w as f32-1.5,h as f32-1.5,20.0*scale), &color, &tiny_skia::Stroke {width:scale.max(1.0),..Default::default()}, tiny_skia::Transform::identity(), None);
+            overlay.stroke_path(&round_path(0.75,0.75,w as f32-1.5,h as f32-1.5,corner_radius), &color, &tiny_skia::Stroke {width:scale.max(1.0),..Default::default()}, tiny_skia::Transform::identity(), None);
             if !rows.is_empty() {
                 color.set_color_rgba8(if dark {255} else {30}, if dark {255} else {45}, if dark {255} else {60}, if dark {28} else {24});
                 overlay.fill_path(&round_path(px(9) as f32,px(TOP+selected as i32*ROW) as f32,(w-px(18)) as f32,px(ROW-3) as f32,9.0*scale), &color, tiny_skia::FillRule::Winding, tiny_skia::Transform::identity(), None);
@@ -903,7 +909,7 @@ unsafe fn paint(hwnd: HWND) {
         GdiFlush();
         for (icon,x,y) in icons { blend_pixels(pixels,ww,pad+x,pad+y,&icon.pixels,icon.width,icon.height,false); }
         for y in 0..hh { for x in 0..ww {
-            let (coverage,distance)=panel_coverage((x-pad) as f32+0.5,(y-pad) as f32+0.5,w as f32,h as f32,20.0*scale);
+            let (coverage,distance)=panel_coverage((x-pad) as f32+0.5,(y-pad) as f32+0.5,w as f32,h as f32,corner_radius);
             let i=((y*ww+x)*4) as usize;
             let shadow=(-distance.max(0.0)/(3.5*scale)).exp()*0.22;
             for c in 0..3 { pixels[i+c]=(pixels[i+c] as f32*coverage) as u8; }

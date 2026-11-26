@@ -1,6 +1,11 @@
 {
   "name": "English",
   "ui": {
+    "ownCorners": "TLauncher corners",
+    "ownCornersHint": "Applies to Dock, menus and TLauncher windows.",
+    "cornersRounded": "Rounded",
+    "cornersSmall": "Small",
+    "cornersSquare": "Square",
     "shellContextMenu": "Desktop and Explorer context menus",
     "altTabOverview": "Window overview with Alt+Tab",
     "snapLayouts": "FluidWin layouts with Windows keys",

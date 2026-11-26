@@ -105,6 +105,7 @@ pub(super) unsafe fn open(owner:HWND,id:WindowIdentity)->bool{
     let Some(area)=super::window_effect::visible_area(h)else{return false;};
     super::utilities::close_panels();super::show_desktop::pause();super::window_geometry::cancel();super::window_motion::cancel();super::window_effect::cancel();
     let motion=super::motion::settings();
+    super::shell_menu::configure_menu();
     #[cfg(target_env="msvc")]
     let raw={let labels=labels();let pointers:Vec<_>=labels.iter().map(|s|s.as_ptr()).collect();
         tlauncher_snap_open(h,POINT{x:area.left+(area.right-area.left)/2,y:area.top+32},crate::desktop::wide(&title()).as_ptr(),crate::desktop::wide(&text("Chọn","Choose","选择")).as_ptr(),pointers.as_ptr(),pointers.len() as u32,f64::from(motion.speed)/100.0,!super::motion::allowed())};

@@ -6,6 +6,8 @@ pub(super) const NOTICE:u32=WM_APP+106;
 #[cfg(target_env="msvc")]
 extern "C" {
     fn tlauncher_fluidwin_menu_policy(language:i32,speed:f64,reduced:bool);
+    fn tlauncher_fluidwin_corner_policy(style:i32);
+    #[cfg(test)]fn tlauncher_fluidwin_corner_policy_fixture(style:i32)->bool;
     #[cfg(test)]fn tlauncher_fluidwin_menu_policy_fixture(language:i32,speed:f64,reduced:bool)->bool;
     fn tlauncher_fluidwin_shell_hit(x:i32,y:i32)->i32;
     fn tlauncher_fluidwin_shell_menu(owner:HWND,x:i32,y:i32)->i32;
@@ -19,6 +21,7 @@ extern "C" {
 }
 pub(super) fn configure_menu(){
     #[cfg(target_env="msvc")]unsafe{
+        tlauncher_fluidwin_corner_policy(super::corners::current() as i32);
         let language=match crate::launcher::localized("vi","en","zh"){"vi"=>0,"zh"=>2,_=>1};
         tlauncher_fluidwin_menu_policy(language,super::motion::settings().speed.clamp(25,200) as f64/100.0,!super::popup_motion_allowed());
     }
@@ -106,6 +109,7 @@ fn native_imported_menu_selects_nested_shell_command(){
         assert!(!owner.is_null());
         let tid=windows_sys::Win32::System::Threading::GetCurrentThreadId();
         for language in 0..3{
+        assert!(tlauncher_fluidwin_corner_policy_fixture(language));
         for speed in [0.25,0.5,0.7,0.75,1.0,1.5,2.0]{for reduced in [false,true]{assert!(tlauncher_fluidwin_menu_policy_fixture(language,speed,reduced));}}
         tlauncher_fluidwin_menu_policy(language,0.7,language==2);
         let (stop_tx,stop_rx)=std::sync::mpsc::channel();
@@ -166,6 +170,6 @@ fn native_imported_menu_selects_nested_shell_command(){
         let native_messages=tlauncher_fluidwin_owner_draw_fixture(owner);
         DestroyWindow(owner);shutdown();CoUninitialize();
         assert_eq!(native_messages,3,"native extension fallback must route measurement and drawing messages");
-        println!("FLUIDWIN_SHELL_MENU nested_keyboard=PASS locales=vi,en,zh owner_speed=0.70 reduced_motion=PASS msaa_names_roles_bounds=PASS disabled_action=REFUSED accessible_select=PASS disconnected_provider=PASS owner_shell_commands=NOT_VERIFIED");
+        println!("FLUIDWIN_SHELL_MENU nested_keyboard=PASS locales=vi,en,zh corners=rounded,small,square owner_speed=0.70 reduced_motion=PASS msaa_names_roles_bounds=PASS disabled_action=REFUSED accessible_select=PASS disconnected_provider=PASS owner_shell_commands=NOT_VERIFIED");
     }
 }

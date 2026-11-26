@@ -63,6 +63,7 @@ mod notifications;
 mod news;
 mod weather_panel;
 mod weather_city;
+pub(crate) mod corners;
 mod overview;
 mod jump_list;
 mod folder_stack;
@@ -88,7 +89,7 @@ pub use control_center::MetricOptions;
 pub use glass_probe::probe as glass_probe;
 pub(crate) use glass_probe::Layer as PopupPixels;
 pub(crate) use surface::Palette as PopupPalette;
-pub use appearance::{Appearance,DockSide,StartIcon,Theme};
+pub use appearance::{Appearance,CornerStyle,DockSide,StartIcon,Theme};
 pub use options::{Options,Edit,DisplayMode,DisplayTarget,StageStyle,WindowMode,WindowPolicy};
 pub use runtime::{Runtime,Event};
 use runtime::Command;
@@ -3854,6 +3855,7 @@ unsafe fn drain_commands() {
     for command in commands {
         match command {
             Command::Configure(options)=>{
+                shell_menu::configure_menu();
                 if !options.enabled{topmost::reset();}
                 if !options.enabled{capture_access::reset();}
                 if !options.enabled{shelf::reset();}

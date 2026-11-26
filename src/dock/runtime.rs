@@ -25,6 +25,7 @@ pub struct Runtime {
 }
 impl Runtime {
     pub fn new(options: Options, owner:usize) -> Result<Self,String> {
+        super::corners::configure(options.appearance.corners);
         let (commands,receiver)=mpsc::channel();let (events_tx,events)=mpsc::channel();
         let (ready_tx,ready)=mpsc::sync_channel(1);
         let thread=std::thread::Builder::new().name("Deskland Dock & Stage".into()).spawn(move || {
@@ -41,7 +42,7 @@ impl Runtime {
             unsafe {windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(self.control as _,super::WM_CONFIG,0,0);}
         }
     }
-    pub fn configure(&self,options:Options) {self.send(Command::Configure(options));}
+    pub fn configure(&self,options:Options) {super::corners::configure(options.appearance.corners);self.send(Command::Configure(options));}
     pub fn set_taskbar_hidden(&self,hidden:bool){self.send(Command::Taskbar(hidden));}
     pub fn focus(&self){self.send(Command::Focus);}
     pub fn suspend(&self,on:bool) {self.send(Command::Suspend(on));}
@@ -239,8 +240,22 @@ mod tests {
                 control_center::close_for(owner);assert_eq!(IsWindow(popup),0);
             }
         }
-        drop(runtime);for hwnd in old{assert_eq!(unsafe{IsWindow(hwnd as HWND)},0);}
-        println!("DOCK_EDGES four_positions=PASS top_popup_below=PASS reconfigure=PASS teardown=PASS physical_mixed_dpi=NOT_VERIFIED");
+        for corners in [super::super::CornerStyle::Rounded,super::super::CornerStyle::Small,super::super::CornerStyle::Square]{
+            options.appearance.corners=corners;runtime.configure(options.clone());
+            let handles=runtime.inspect_with_paint(true);assert_eq!(handles.len(),1);
+            assert_eq!(super::super::corners::current(),corners);
+            unsafe{
+                let hwnd=handles[0] as HWND;let mut bounds:RECT=std::mem::zeroed();assert_ne!(GetWindowRect(hwnd,&mut bounds),0);DwmFlush();
+                let (w,h)=(bounds.right-bounds.left,bounds.bottom-bounds.top);let mut pixels=Layer::new(w,h).unwrap();
+                let dc=GetDC(ptr::null_mut());assert_ne!(BitBlt(pixels.dc(),0,0,w,h,dc,bounds.left,bounds.top,SRCCOPY|CAPTUREBLT),0);ReleaseDC(ptr::null_mut(),dc);GdiFlush();
+                if let Some(root)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
+                    let rgba=pixels.pixels().chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],255]).collect::<Vec<_>>();
+                    image::save_buffer(std::path::PathBuf::from(root).join(format!("dock-corners-{}.png",corners.key())),&rgba,w as u32,h as u32,image::ColorType::Rgba8).unwrap();
+                }
+            }
+        }
+        drop(runtime);super::super::corners::configure(super::super::CornerStyle::Rounded);for hwnd in old{assert_eq!(unsafe{IsWindow(hwnd as HWND)},0);}
+        println!("DOCK_EDGES four_positions=PASS top_popup_below=PASS corners=rounded,small,square reconfigure=PASS teardown=PASS physical_mixed_dpi=NOT_VERIFIED");
     }
     #[test]
     #[ignore = "real isolated Windows HWND/thread lifecycle; explicitly run in CI"]

@@ -244,6 +244,7 @@
       <option value="bottom" data-i18n="dockBottom">Bên dưới</option><option value="top" data-i18n="dockTop">Bên trên</option><option value="left" data-i18n="dockLeft">Bên trái</option><option value="right" data-i18n="dockRight">Bên phải</option>
     </select></label>
     <label class="setting-row"><b>Màu Dock</b><select id="dockLook_theme"><option value="auto" data-i18n="appearanceSystem">Theo hệ thống</option><option value="light" data-i18n="launcherLight">Sáng</option><option value="dark" data-i18n="launcherDark">Tối</option></select></label>
+    <label class="setting-row"><div><b data-i18n="ownCorners">Kiểu góc TLauncher</b><small data-i18n="ownCornersHint">Áp dụng cho Dock, menu và cửa sổ TLauncher.</small></div><select id="dockLook_corners"><option value="rounded" data-i18n="cornersRounded">Bo tròn</option><option value="small" data-i18n="cornersSmall">Bo nhẹ</option><option value="square" data-i18n="cornersSquare">Vuông</option></select></label>
     <label class="setting-row switch-row"><b data-i18n="dockAutoHide">Ẩn Dock khi cửa sổ phóng tối đa</b><input type="checkbox" id="dockLook_autoHide" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <p class="monitor-detail" data-i18n="dockAlphaHint">Điều chỉnh mức trong suốt của lớp kính trên Dock.</p>
     <button class="ghost-btn" id="dockLookReset" type="button" data-i18n="dockLookReset">Khôi phục kiểu hiển thị Dock</button>
@@ -985,10 +986,10 @@ const dockFallbackText={
   dockDisplayNone:'Chưa có màn hình',dockDisplayOff:'Đã tắt',dockDisplayTarget:'Màn hình hiển thị'
 };
 const dockText=key=>{const value=t(key);return value===key?dockFallbackText[key]||value:value;};
-const dockLookDefaults={size:100,iconSize:44,startIcon:'windows',spacing:10,edgeGap:8,transparency:36,position:'bottom',theme:'auto',magnification:38,autoHide:false};
+const dockLookDefaults={size:100,iconSize:44,startIcon:'windows',spacing:10,edgeGap:8,transparency:36,position:'bottom',theme:'auto',corners:'rounded',magnification:38,autoHide:false};
 const dockLookRanges=['size','iconSize','spacing','edgeGap','transparency','magnification'];
 const dockLookSwitches=['autoHide'];
-const dockLookKeys=[...dockLookRanges,'position','theme','startIcon',...dockLookSwitches];
+const dockLookKeys=[...dockLookRanges,'position','theme','corners','startIcon',...dockLookSwitches];
 function showDockAppearance(){
   const appearance={...dockLookDefaults,...dockOptions.appearance};
   for(const key of dockLookKeys){

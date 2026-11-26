@@ -587,6 +587,7 @@ fn open_fallback(state: &State) {
 
 /// Cập nhật giao diện theo trạng thái thật (gọi sau mỗi lần vòng lặp chính áp dụng thay đổi).
 pub fn sync(state: &State) {
+    if let Some(hwnd)=hwnd(){unsafe{crate::dock::corners::apply_dwm(hwnd);}}
     UI.with(|u| {
         let mut b = u.borrow_mut();
         let Some(ui) = b.as_mut() else { return };
@@ -694,6 +695,10 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
             AppendMenuW(look,MF_SEPARATOR,0,std::ptr::null());
             for (theme,title) in [(DockTheme::Auto,"Theo màu hệ thống"),(DockTheme::Light,"Giao diện sáng"),(DockTheme::Dark,"Giao diện tối")]{
                 item(title,appearance.theme==theme,Appearance{theme,..appearance.clone()});
+            }
+            for (corners,vi,en,zh) in [(crate::dock::CornerStyle::Rounded,"Góc bo tròn","Rounded corners","圆角"),
+                (crate::dock::CornerStyle::Small,"Góc bo nhẹ","Small corners","小圆角"),(crate::dock::CornerStyle::Square,"Góc vuông","Square corners","直角")]{
+                item(crate::launcher::localized(vi,en,zh),appearance.corners==corners,Appearance{corners,..appearance.clone()});
             }
             AppendMenuW(look,MF_SEPARATOR,0,std::ptr::null());
             for (size,title) in [(80,"Dock nhỏ · 80%"),(100,"Dock chuẩn · 100%"),(125,"Dock lớn · 125%")]{

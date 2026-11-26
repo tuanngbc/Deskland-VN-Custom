@@ -124,10 +124,12 @@ fn theme_title_bar(hwnd: F::HWND) {
     let dark: i32 = if light { 0 } else { 1 };
     let color: u32 = if light { 0x00FB_F9F7 } else { 0x0023_1B11 };
     unsafe {
+        crate::dock::corners::apply_dwm(hwnd);
         DwmSetWindowAttribute(hwnd, 20, &dark as *const i32 as *const _, 4);
         DwmSetWindowAttribute(hwnd, 35, &color as *const u32 as *const _, 4);
     }
 }
+pub(crate) fn corners_changed(){let hwnd=WEB.with(|s|s.borrow().as_ref().map(|s|s.hwnd));if let Some(hwnd)=hwnd{theme_title_bar(hwnd);}}
 
 fn resize(hwnd: F::HWND) {
     let controller=WEB.with(|w|w.borrow().as_ref().filter(|w|w.hwnd==hwnd).map(|w|w.controller.clone()));

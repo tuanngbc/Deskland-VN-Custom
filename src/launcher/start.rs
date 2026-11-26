@@ -274,6 +274,12 @@ unsafe fn place(hwnd:HWND){
     }
     if IsWindowVisible(hwnd)!=0{sync_shadow(hwnd,r,dpi,side,dark);}
 }
+pub(crate) fn corners_changed(){
+    let geometry=START.with(|s|{let s=s.borrow();let m=s.as_ref()?;Some((m.hwnd,px(m.frame.width,m.scale),px(m.view.flow.height,m.scale),m.dock_dpi))});
+    if let Some((hwnd,w,h,dpi))=geometry{unsafe{
+        CORNERS.with(|s|s.replace(None));chrome::start_frame(hwnd,w,h,dpi);place(hwnd);InvalidateRect(hwnd,ptr::null(),0);
+    }}
+}
 unsafe fn sync_shadow(hwnd:HWND,rect:RECT,dpi:u32,side:crate::dock::DockSide,dark:bool){
     SHADOW.with(|s|chrome::PanelShadow::sync(&mut s.borrow_mut(),hwnd,ptr::null_mut(),rect,dpi,side,dark));
 }

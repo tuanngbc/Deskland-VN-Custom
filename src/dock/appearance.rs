@@ -2,6 +2,16 @@
 use serde_json::{json,Value};
 
 #[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
+#[repr(u32)]
+pub enum CornerStyle{#[default] Rounded,Small,Square}
+impl CornerStyle{
+    pub(crate) fn parse(value:&Value)->Self{match value.as_str(){Some("small")=>Self::Small,Some("square")=>Self::Square,_=>Self::Rounded}}
+    pub(crate) fn key(self)->&'static str{match self{Self::Rounded=>"rounded",Self::Small=>"small",Self::Square=>"square"}}
+    pub(crate) fn factor(self)->f32{match self{Self::Rounded=>1.0,Self::Small=>0.5,Self::Square=>0.0}}
+    pub(crate) fn dwm(self)->u32{match self{Self::Rounded=>2,Self::Small=>3,Self::Square=>1}}
+}
+
+#[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
 pub enum DockSide { #[default] Bottom, Top, Left, Right }
 impl DockSide {
     pub(crate) fn horizontal(self)->bool{matches!(self,Self::Bottom|Self::Top)}
@@ -37,6 +47,7 @@ pub struct Appearance {
     pub transparency:u32,
     pub position:DockSide,
     pub theme:Theme,
+    pub corners:CornerStyle,
     pub magnification:u32,
     pub animation_speed:u32,
     pub reduced_motion:bool,
@@ -44,7 +55,7 @@ pub struct Appearance {
 }
 impl Default for Appearance {
     fn default()->Self{Self{size:100,icon_size:44,start_icon:StartIcon::default(),spacing:10,edge_gap:8,transparency:36,position:DockSide::Bottom,theme:Theme::Auto,
-        magnification:38,animation_speed:100,reduced_motion:false,auto_hide:false}}
+        corners:CornerStyle::Rounded,magnification:38,animation_speed:100,reduced_motion:false,auto_hide:false}}
 }
 impl Appearance {
     pub(super) fn motion_reduced(&self)->bool{self.reduced_motion||!super::motion::allowed()}
@@ -66,6 +77,7 @@ impl Appearance {
             transparency:bounded(&v["transparency"],old.transparency,4,74),
             position:DockSide::parse(&v["position"]),
             theme:Theme::parse(&v["theme"]),
+            corners:CornerStyle::parse(&v["corners"]),
             magnification:bounded(&v["magnification"],old.magnification,0,55),
             animation_speed:bounded(&v["animationSpeed"],old.animation_speed,25,200),
             reduced_motion:v["reducedMotion"].as_bool().unwrap_or(false),
@@ -74,7 +86,7 @@ impl Appearance {
     }
     pub fn json(&self)->Value {
         json!({"size":self.size,"iconSize":self.icon_size,"startIcon":self.start_icon.key(),"spacing":self.spacing,"edgeGap":self.edge_gap,"transparency":self.transparency,
-            "position":self.position.key(),"theme":self.theme.key(),"magnification":self.magnification,
+            "position":self.position.key(),"theme":self.theme.key(),"corners":self.corners.key(),"magnification":self.magnification,
             "animationSpeed":self.animation_speed,"reducedMotion":self.reduced_motion,"autoHide":self.auto_hide})
     }
 }
@@ -82,6 +94,15 @@ impl Appearance {
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]fn own_corner_styles_roundtrip_without_changing_foreign_motion_options(){
+        assert_eq!(Appearance::from_json(&json!({})).corners,CornerStyle::Rounded);
+        assert_eq!(Appearance::from_json(&json!({"corners":"unknown"})).corners,CornerStyle::Rounded);
+        for style in [CornerStyle::Rounded,CornerStyle::Small,CornerStyle::Square]{
+            let appearance=Appearance{corners:style,..Default::default()};assert_eq!(Appearance::from_json(&appearance.json()),appearance);
+        }
+        assert_eq!(CornerStyle::Rounded.factor(),1.0);assert_eq!(CornerStyle::Small.factor(),0.5);assert_eq!(CornerStyle::Square.factor(),0.0);
+        assert_eq!([CornerStyle::Rounded.dwm(),CornerStyle::Small.dwm(),CornerStyle::Square.dwm()],[2,3,1]);
+    }
     #[test]
     fn start_icon_defaults_for_old_profiles_and_roundtrips(){
         let old=Appearance::from_json(&json!({"iconSize":48}));

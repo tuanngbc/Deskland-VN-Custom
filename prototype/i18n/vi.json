@@ -1,6 +1,11 @@
 {
   "name": "Tiếng Việt",
   "ui": {
+    "ownCorners": "Kiểu góc TLauncher",
+    "ownCornersHint": "Áp dụng cho Dock, menu và cửa sổ TLauncher.",
+    "cornersRounded": "Bo tròn",
+    "cornersSmall": "Bo nhẹ",
+    "cornersSquare": "Vuông",
     "shellContextMenu": "Menu chuột phải Desktop và Explorer",
     "altTabOverview": "Tổng quan cửa sổ bằng Alt+Tab",
     "snapLayouts": "Bố cục FluidWin bằng phím Windows",
