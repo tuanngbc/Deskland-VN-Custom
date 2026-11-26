@@ -343,6 +343,13 @@ fn native_live_capture_texture_and_screen_perimeters(){
 }
 
 #[cfg(all(test,target_env="msvc"))]
+unsafe fn pump(){
+    let mut msg:MSG=std::mem::zeroed();
+    while PeekMessageW(&mut msg,null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}
+    DwmFlush();
+}
+
+#[cfg(all(test,target_env="msvc"))]
 fn pump_static_fixture(fixture:&Fixture,allow_print:bool)->Result<Option<(super::stage_snapshot::GpuFrame,super::stage_snapshot::CaptureTiming)>,String>{
     let handle=fixture.0 as usize;
     std::thread::scope(|scope|{
@@ -380,8 +387,27 @@ fn native_static_photos_keep_original_pixels_and_reject_unsafe_sources(){
             let (frame,timing)=pump_static_fixture(&source,false).unwrap().expect("rectangular source must use static photo");
             assert_eq!((frame.width,frame.height),(640,420));assert_eq!(timing.capture_backend,Some("gdi-uncovered-screen"));assert!(!timing.gpu_to_gpu);assert_eq!(timing.live_frames,0);
             let pixels=frame.fixture_pixels().unwrap();assert!(pixels.chunks_exact(4).all(|p|p==expected),"{name} complete texture including all perimeter pixels");save(name,&pixels,frame.width,frame.height);
-            let mut screen=Layer::new(656,436).unwrap();let dc=GetDC(ptr::null_mut());assert_ne!(BitBlt(screen.dc,0,0,656,436,dc,24,24,SRCCOPY|CAPTUREBLT),0);ReleaseDC(ptr::null_mut(),dc);
+            let mut screen=Layer::new(656,436).unwrap();let dc=GetDC(ptr::null_mut());assert_ne!(BitBlt(screen.dc(),0,0,656,436,dc,24,24,SRCCOPY|CAPTUREBLT),0);ReleaseDC(ptr::null_mut(),dc);
             let mut screen=screen.pixels().to_vec();for p in screen.chunks_exact_mut(4){p[3]=255;}save(&format!("source-{name}"),&screen,656,436);
+            let area=RECT{left:32,top:32,right:672,bottom:452};let icon=RECT{left:330,top:650,right:378,bottom:698};
+            let pipeline=super::fluidwin_mesh::Pipeline::new(&frame.gpu.context()).unwrap();
+            for effect in [super::motion::WindowEffect::Genie,super::motion::WindowEffect::Drop,super::motion::WindowEffect::Scale]{
+                let layer={let _batch=frame.gpu.context();super::fluidwin_mesh::Layer::from_gpu(pipeline.clone(),&frame,area,icon,super::DockSide::Bottom,effect,96).unwrap()};
+                assert!({let _batch=frame.gpu.context();layer.enable_evidence()});
+                for (index,progress) in [0.0,0.05,0.25,0.5,0.85,0.97,1.0,0.85,0.5,0.0].into_iter().enumerate(){
+                    let deadline=Instant::now()+Duration::from_secs(1);
+                    loop{let status={let _batch=frame.gpu.context();layer.paint(progress,255)};if status==1{break;}assert!(status==2&&Instant::now()<deadline);std::thread::sleep(Duration::from_millis(8));}
+                    let (pixels,w,h)={let _batch=frame.gpu.context();layer.rendered_pixels().unwrap()};
+                    if progress<0.85{assert!(pixels.chunks_exact(4).filter(|p|p[3]>16).count()>256);}
+                    for p in pixels.chunks_exact(4){
+                        assert!(p[..3].iter().all(|&c|c<=p[3]),"static premultiplication on full rendered canvas");
+                        let neutral=p[..3].iter().max().unwrap()-p[..3].iter().min().unwrap()<=12;
+                        let source_color=match name{"red"=>p[0].abs_diff(p[1])<=3&&p[2]>=p[0].min(p[1]),"green"=>p[0].abs_diff(p[2])<=3&&p[1]>=p[0].min(p[2]),"blue"=>p[1].abs_diff(p[2])<=3&&p[0]>=p[1].min(p[2]),_=>false};
+                        assert!(neutral||source_color,"static unexpected chroma {name} {} pose {index}: {p:?}",effect.name());
+                    }
+                    save(&format!("{name}-{}-{index}",effect.name()),&pixels,w as i32,h as i32);
+                }
+            }
         }
         // A real occluder forces the original PrintWindow route. Its blue
         // pixels must never appear in the source's red texture.

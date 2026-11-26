@@ -102,7 +102,8 @@ impl Attempt{
             stage_snapshot::MotionFrame::Cpu(frame)=>self.capture(frame,req.area)?,
             stage_snapshot::MotionFrame::Gpu(frame)=>{
                 self.values["captureWidth"]=json!(frame.width);self.values["captureHeight"]=json!(frame.height);
-                self.values["gpuToGpu"]=json!(true);
+                self.values["gpuToGpu"]=json!(frame.gpu_to_gpu);
+                self.values["captureBackend"]=json!(frame.capture_backend);
                 self.values["captureValid"]=json!(frame.width==req.area.right-req.area.left&&frame.height==req.area.bottom-req.area.top);
                 if self.values["captureValid"]!=true{return Err("capture-aspect-mismatch");}
             }

@@ -176,7 +176,7 @@ impl CaptureDevice {
                             gpu.context().CopySubresourceRegion(&copied,0,0,0,0,&texture,0,Some(&region));
                             if !valid(){return Err("capture cancelled before GPU handoff".into());}
                             record(timing,|t|t.gpu_to_gpu=true);
-                            let frame=GpuFrame{texture:copied,width:right-left,height:bottom-top,gpu:gpu.clone()};
+                            let frame=GpuFrame{texture:copied,width:right-left,height:bottom-top,gpu:gpu.clone(),gpu_to_gpu:true,capture_backend:if stream.is_some(){"wgc-live"}else{"wgc-snapshot"}};
                             if stream.is_some(){retained=Some(frame.clone());saved_crop=Some((left,top,right,bottom));}
                             record(timing,|t|t.live_frames+=u64::from(stream.is_some()));
                             return Ok(MotionFrame::Gpu(frame));
@@ -418,6 +418,7 @@ pub(super) type Frame=(Vec<u8>,i32,i32);
 #[derive(Clone)]
 pub(super) struct GpuFrame{
     pub texture:ID3D11Texture2D,pub width:i32,pub height:i32,pub gpu:Arc<crate::shell_gpu::ShellGpu>,
+    pub gpu_to_gpu:bool,pub capture_backend:&'static str,
 }
 #[cfg(test)]impl GpuFrame{
     pub(super) unsafe fn fixture_pixels(&self)->Result<Vec<u8>,String>{
@@ -487,7 +488,7 @@ pub(super) unsafe fn static_motion_frame(hwnd:HWND,valid:impl Fn()->bool,timing:
         gpu.context().UpdateSubresource(&texture,0,None,pixels.cast(),w as u32*4,0);
         if !valid(){return Err("static capture cancelled after upload".into());}
         record(timing,|t|{t.gpu_to_gpu=false;t.capture_backend=Some(if backend==1{"gdi-uncovered-screen"}else{"printwindow-static"});t.cpu_snapshot_bytes=w as u64*h as u64*4;});
-        Ok(Some(MotionFrame::Gpu(GpuFrame{texture,width:w,height:h,gpu})))
+        Ok(Some(MotionFrame::Gpu(GpuFrame{texture,width:w,height:h,gpu,gpu_to_gpu:false,capture_backend:if backend==1{"gdi-uncovered-screen"}else{"printwindow-static"}})))
     }
     #[cfg(not(target_env="msvc"))]{let _=(hwnd,valid,timing,allow_print);Ok(None)}
 }

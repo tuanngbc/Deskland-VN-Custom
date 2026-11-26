@@ -38,9 +38,11 @@ bool rectangular(const Identity& id){
         shape=full&&EqualRgn(region,full);if(full)DeleteObject(full);
     }
     DeleteObject(region);if(!shape)return false;
-    if(IsZoomed(id.h)||!(id.style&(WS_CAPTION|WS_THICKFRAME)))return true;
     DWM_WINDOW_CORNER_PREFERENCE corner=DWMWCP_DEFAULT;
-    return SUCCEEDED(DwmGetWindowAttribute(id.h,DWMWA_WINDOW_CORNER_PREFERENCE,&corner,sizeof(corner)))&&corner==DWMWCP_DONOTROUND;
+    const bool known=SUCCEEDED(DwmGetWindowAttribute(id.h,DWMWA_WINDOW_CORNER_PREFERENCE,&corner,sizeof(corner)));
+    if(known&&(corner==DWMWCP_ROUND||corner==DWMWCP_ROUNDSMALL))return false;
+    if(IsZoomed(id.h)||!(id.style&(WS_CAPTION|WS_THICKFRAME)))return true;
+    return known&&corner==DWMWCP_DONOTROUND;
 }
 bool uncovered(const Identity& id){
     if(!permitted(id))return false;

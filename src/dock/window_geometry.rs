@@ -24,6 +24,7 @@ enum Phase{Capture,Prime,Conceal,RestoreBeforeSnap,Observe,Travel(motion::Span),
 struct Transition{
     id:WindowIdentity,action:Action,area:RECT,target:RECT,monitor:usize,dpi:u32,phase:Phase,
     capture:Option<stage_snapshot::TransitionCapture>,proxy:Option<Proxy>,lease:Option<Lease>,
+    timing:Option<stage_snapshot::CaptureTimingHandle>,
     started:Instant,phase_at:Instant,last_present:Instant,frames:u32,reveal_frames:u32,stable:u32,commanded:bool,done:bool,native_reason:Option<String>,
 }
 thread_local!{static ACTIVE:RefCell<Option<Transition>>=const{RefCell::new(None)};}
@@ -39,7 +40,8 @@ impl Transition{
     fn finish(&mut self,reason:Option<&str>){
         if self.done{return;}self.done=true;
         let value=json!({"action":self.action.name(),"requestedEffect":"fluidwin-geometry","actualEffect":if reason.is_none(){"fluidwin-geometry"}else{"windows"},
-            "fallbackReason":reason,"preparedFrames":self.frames,"revealFrames":self.reveal_frames,"commandIssued":self.commanded,"elapsedMs":self.started.elapsed().as_millis() as u64});
+            "fallbackReason":reason,"preparedFrames":self.frames,"revealFrames":self.reveal_frames,"commandIssued":self.commanded,"elapsedMs":self.started.elapsed().as_millis() as u64,
+            "captureTiming":self.timing.as_ref().and_then(|t|t.lock().ok().map(|t|json!(*t)))});
         if cfg!(test)||crate::trial::active(){eprintln!("FLUIDWIN_GEOMETRY {value}");}
         if let Ok(mut last)=LAST.lock(){*last=Some(value);}
     }
@@ -211,7 +213,7 @@ pub(super) unsafe fn apply(id:WindowIdentity,action:Action)->bool{
     let Ok(capture)=stage_snapshot::transition_capture(id,CONTROL.get())else{return false;};
     let now=Instant::now();
     ACTIVE.with(|s|s.replace(Some(Transition{id,action,area,target:area,monitor:monitor as usize,dpi:GetDpiForWindow(h),phase:Phase::Capture,
-        capture:Some(capture),proxy:None,lease:None,started:now,phase_at:now,last_present:now,frames:0,reveal_frames:0,stable:0,commanded:false,done:false,native_reason:None})));
+        timing:Some(capture.timing.clone()),capture:Some(capture),proxy:None,lease:None,started:now,phase_at:now,last_present:now,frames:0,reveal_frames:0,stable:0,commanded:false,done:false,native_reason:None})));
     if SetTimer(CONTROL.get(),TIMER,20,None)==0{cancel();return false;}true
 }
 
@@ -229,7 +231,7 @@ pub(super) unsafe fn command(id:WindowIdentity,action:Action)->bool{
     let Some(area)=super::window_effect::visible_area(h)else{return false;};let now=Instant::now();
     if ShowWindowAsync(h,SW_RESTORE)==0{return false;}
     ACTIVE.with(|s|s.replace(Some(Transition{id,action,area,target:area,monitor:MonitorFromWindow(h,MONITOR_DEFAULTTONULL) as usize,dpi:GetDpiForWindow(h),phase:Phase::NativeRestoreSnap,
-        capture:None,proxy:None,lease:None,started:now,phase_at:now,last_present:now,frames:0,reveal_frames:0,stable:0,commanded:false,done:false,native_reason:Some("native-motion-policy-or-capture".into())})));
+        timing:None,capture:None,proxy:None,lease:None,started:now,phase_at:now,last_present:now,frames:0,reveal_frames:0,stable:0,commanded:false,done:false,native_reason:Some("native-motion-policy-or-capture".into())})));
     if SetTimer(CONTROL.get(),TIMER,20,None)==0{cancel();return false;}true
 }
 
