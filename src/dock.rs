@@ -3864,7 +3864,7 @@ fn queue_refresh() {
 }
 unsafe extern "system" fn window_event(_:HWINEVENTHOOK,event:u32,hwnd:HWND,object:i32,child:i32,_thread:u32,_time:u32) {
     if object==0 && child==0 {
-        if event==EVENT_SYSTEM_FOREGROUND{snap_layout::refresh_hotkey();}
+        if event==EVENT_SYSTEM_FOREGROUND||event==EVENT_OBJECT_LOCATIONCHANGE&&hwnd==GetForegroundWindow(){snap_layout::refresh_hotkey();}
         window_geometry::event(event,hwnd);
         window_motion::event(event,hwnd);
         if event==EVENT_OBJECT_DESTROY{show_desktop::forget(hwnd);stage_snapshot::forget(hwnd);}

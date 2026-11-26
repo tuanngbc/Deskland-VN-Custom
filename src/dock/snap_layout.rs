@@ -5,20 +5,29 @@ use windows_sys::Win32::{Foundation::*,Graphics::Gdi::*,UI::{HiDpi::GetDpiForWin
 pub(super) const TIMER:usize=33;
 pub(super) const NOTICE:u32=WM_APP+144;
 #[derive(Clone,Copy)]
-struct HotkeyTarget{id:WindowIdentity,maximized:bool,maximize_box:bool}
+struct HotkeyTarget{id:WindowIdentity,maximized:bool,normal_maximize:bool}
 impl HotkeyTarget{
-    fn accepts(self,key:u16)->bool{matches!(key,0x5A|0x25|0x27)||vertical_action(key,self.maximized,self.maximize_box).is_some()}
+    fn accepts(self,key:u16)->bool{matches!(key,0x5A|0x25|0x27)||vertical_action(key,self.maximized,self.normal_maximize).is_some()}
 }
-fn vertical_action(key:u16,maximized:bool,maximize_box:bool)->Option<super::window_geometry::Action>{
-    match key{0x26 if !maximized&&maximize_box=>Some(super::window_geometry::Action::Maximize),
+fn vertical_action(key:u16,maximized:bool,normal_maximize:bool)->Option<super::window_geometry::Action>{
+    match key{0x26 if !maximized&&normal_maximize=>Some(super::window_geometry::Action::Maximize),
         0x28 if maximized=>Some(super::window_geometry::Action::Restore),_=>None}
+}
+fn normal_restore_size(show:u32,current:RECT,normal:RECT)->bool{
+    show==SW_SHOWNORMAL as u32&&current.right-current.left==normal.right-normal.left&&current.bottom-current.top==normal.bottom-normal.top
+}
+unsafe fn normal_maximize(hwnd:HWND)->bool{
+    if GetWindowLongW(hwnd,GWL_STYLE) as u32&WS_MAXIMIZEBOX==0{return false;}
+    let mut placement:WINDOWPLACEMENT=mem::zeroed();placement.length=mem::size_of::<WINDOWPLACEMENT>() as u32;
+    let mut current:RECT=mem::zeroed();
+    GetWindowPlacement(hwnd,&mut placement)!=0&&GetWindowRect(hwnd,&mut current)!=0&&normal_restore_size(placement.showCmd,current,placement.rcNormalPosition)
 }
 static ELIGIBLE:Mutex<Option<HotkeyTarget>>=Mutex::new(None);
 static REQUEST:Mutex<Option<(usize,WindowIdentity,u16)>>=Mutex::new(None);
 pub(super) fn refresh_hotkey(){
     let enabled=STATE.with(|s|{let Ok(s)=s.try_borrow()else{return false;};s.prefs.enabled&&s.prefs.snap_layouts&&!s.suspended});
     let id=if enabled{unsafe{WindowIdentity::read(GetForegroundWindow()).filter(|id|eligible(*id)&&GetWindowLongW(id.hwnd as HWND,GWL_STYLE) as u32&WS_POPUP==0)
-        .map(|id|HotkeyTarget{id,maximized:IsZoomed(id.hwnd as HWND)!=0,maximize_box:GetWindowLongW(id.hwnd as HWND,GWL_STYLE) as u32&WS_MAXIMIZEBOX!=0})}}else{None};
+        .map(|id|HotkeyTarget{id,maximized:IsZoomed(id.hwnd as HWND)!=0,normal_maximize:normal_maximize(id.hwnd as HWND)})}}else{None};
     if let Ok(mut slot)=ELIGIBLE.lock(){*slot=id;}
     if !enabled{if let Ok(mut slot)=REQUEST.lock(){*slot=None;}}
 }
@@ -35,7 +44,7 @@ pub(super) unsafe fn receive_hotkey(ticket:usize,current:bool){
     let enabled=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.snap_layouts&&!s.suspended});
     if !enabled||GetForegroundWindow() as usize!=id.hwnd||!eligible(id){return;}
     if matches!(key,0x26|0x28){
-        if let Some(action)=vertical_action(key,IsZoomed(id.hwnd as HWND)!=0,GetWindowLongW(id.hwnd as HWND,GWL_STYLE) as u32&WS_MAXIMIZEBOX!=0){
+        if let Some(action)=vertical_action(key,IsZoomed(id.hwnd as HWND)!=0,normal_maximize(id.hwnd as HWND)){
             close_for(ptr::null_mut());super::window_geometry::command(id,action);
         }
         return;
@@ -242,6 +251,14 @@ pub(super) unsafe fn probe(owner:HWND,id:WindowIdentity){
 
 #[cfg(test)]mod tests{
     use super::*;
+    #[test]fn normal_size_rejects_windows_snap_and_non_normal_placement(){
+        let current=RECT{left:-1400,top:150,right:-600,bottom:750};
+        let normal=RECT{left:100,top:50,right:900,bottom:650};
+        assert!(normal_restore_size(SW_SHOWNORMAL as u32,current,normal),"placement origin may use a different workspace coordinate system");
+        for show in [SW_SHOWMAXIMIZED,SW_SHOWMINIMIZED,SW_RESTORE]{assert!(!normal_restore_size(show as u32,current,normal));}
+        assert!(!normal_restore_size(SW_SHOWNORMAL as u32,RECT{right:-700,..current},normal),"native snapped width must keep Windows Win+Up semantics");
+        assert!(!normal_restore_size(SW_SHOWNORMAL as u32,RECT{bottom:650,..current},normal),"native vertically snapped height must keep Windows Win+Up semantics");
+    }
     #[test]fn vertical_keys_preserve_unsupported_native_states(){
         use super::super::window_geometry::Action;
         assert!(matches!(vertical_action(0x26,false,true),Some(Action::Maximize)));

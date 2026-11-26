@@ -199,7 +199,7 @@
       "adaptation": "Hexadecimal SSID in a temporary manual open-network XML profile; revalidate clicked interface and refuse a saved or newly secured network; preserve existing known-profile path and Windows credential UI; TEST builds remain read-only."
     },
     {
-      "source": "fluidwin.cpp::suAffiancaTasto / WM_ZOOM_TASTO keyboard route / affianca.h::zonaDi / rettZona",
+      "source": "fluidwin.cpp::suAffiancaTasto / aggiornaFgZoom / WM_ZOOM_TASTO keyboard route / affianca.h::zonaDi / rettZona",
       "integration": [
         "stack_bridge.cpp",
         "upstream/affianca.h",
