@@ -1,12 +1,29 @@
 //! sistema.h radio flow, on the existing utility worker with typed WinRT.
 //! No scans, permanent worker, optimistic state, or administrator operations.
 use std::{sync::{Arc,atomic::{AtomicI32,Ordering}},time::{Duration,Instant}};
-use windows::{core::Result,Devices::Radios::{Radio,RadioKind,RadioState,RadioAccessStatus}};
+use windows::{core::{Result,Interface,factory},Devices::Radios::{Radio,RadioKind,RadioState,RadioAccessStatus,IRadioStatics}};
+use windows_future::IAsyncOperation;
+use windows_collections::IVectorView;
 const DENIED:i32=0x80070005u32 as i32;
 const STALE:i32=0x800704d5u32 as i32;
 const TIMEOUT:i32=0x800705b4u32 as i32;
 const UNAVAILABLE:i32=0x80070490u32 as i32;
 static ACCESS:AtomicI32=AtomicI32::new(0);
+fn permission_operation()->Result<IAsyncOperation<RadioAccessStatus>>{unsafe{
+    let factory=factory::<Radio,IRadioStatics>()?;let mut raw=std::ptr::null_mut();
+    (factory.vtable().RequestAccessAsync)(factory.as_raw(),&mut raw).ok()?;
+    if raw.is_null(){return Err(windows::core::Error::from_hresult(windows::core::HRESULT(0x80004003u32 as i32)));}
+    Ok(IAsyncOperation::from_raw(raw))
+}}
+fn enumerate_operation()->Result<IAsyncOperation<IVectorView<Radio>>>{unsafe{
+    // Each read owns its factory within the initialized calling apartment.
+    // Generated Radio static helpers retain a process-wide factory cache;
+    // on-demand workers may uninitialize their apartments between reads.
+    let factory=factory::<Radio,IRadioStatics>()?;let mut raw=std::ptr::null_mut();
+    (factory.vtable().GetRadiosAsync)(factory.as_raw(),&mut raw).ok()?;
+    if raw.is_null(){return Err(windows::core::Error::from_hresult(windows::core::HRESULT(0x80004003u32 as i32)));}
+    Ok(IAsyncOperation::from_raw(raw))
+}}
 #[derive(Clone,Copy,PartialEq,Eq)]pub(super) enum Kind{Wifi,Bluetooth}
 impl Kind{fn native(self)->RadioKind{match self{Self::Wifi=>RadioKind::WiFi,Self::Bluetooth=>RadioKind::Bluetooth}}}
 #[derive(Clone)]pub(super) struct Request{pub kind:Kind,radio:Radio,observed:RadioState,on:bool}
@@ -26,7 +43,7 @@ pub(super) fn request(request:Request)->Change{
     let permission:Arc<dyn Fn()->std::result::Result<(),i32>+Send+Sync>=if crate::trial::active()||cfg!(test){Arc::new(||Err(DENIED))}
     else{match ACCESS.load(Ordering::Acquire){
         1=>Arc::new(||Ok(())),n if n!=0=>Arc::new(||Err(DENIED)),
-        _=>match Radio::RequestAccessAsync(){
+        _=>match permission_operation(){
             Err(e)=>{let error=e.code().0;Arc::new(move||Err(error))},
             Ok(op)=>Arc::new(move||{
                 let result=wait(||if op.Status()?.0==0{Ok(None)}else{op.GetResults().map(Some)},||{let _=op.Cancel();},Duration::from_secs(15))?;
@@ -57,7 +74,7 @@ pub(super) fn read(kind:Kind,change:Option<Change>)->View{
     struct Apartment;impl Drop for Apartment{fn drop(&mut self){unsafe{RoUninitialize();}}}let _apartment=Apartment;
     view.outcome=change.map(apply);
     let result=(||->std::result::Result<Vec<Row>,i32>{
-        let op=Radio::GetRadiosAsync().map_err(|e|e.code().0)?;
+        let op=enumerate_operation().map_err(|e|e.code().0)?;
         let list=wait(||if op.Status()?.0==0{Ok(None)}else{op.GetResults().map(Some)},||{let _=op.Cancel();},Duration::from_secs(3))?;
         let mut rows=Vec::new();for i in 0..list.Size().map_err(|e|e.code().0)?.min(32){
             let radio=list.GetAt(i).map_err(|e|e.code().0)?;if radio.Kind().map_err(|e|e.code().0)?!=kind.native(){continue;}

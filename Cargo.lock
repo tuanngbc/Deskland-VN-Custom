@@ -1113,6 +1113,8 @@ dependencies = [
  "urlencoding",
  "webview2-com",
  "windows",
+ "windows-collections",
+ "windows-future",
  "windows-numerics",
  "windows-sys 0.59.0",
 ]
