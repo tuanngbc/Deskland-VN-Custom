@@ -474,6 +474,8 @@ pub(super) fn hub_view(snapshot:&Snapshot,profile:&Profile,dock_mode:bool,live:b
         hint:crate::launcher::localized("Bài hát, ảnh bìa và điều khiển phát","Track, artwork and playback controls","曲目、封面与播放控制").into(),icon:None,action:Some(Command::Media)});
     cards.push(Card{title:crate::launcher::localized("Tổng quan cửa sổ","Window overview","窗口概览").into(),
         hint:crate::launcher::localized("Cửa sổ đang mở trên màn hình này","Open windows on this display","此显示器上打开的窗口").into(),icon:None,action:Some(Command::Overview)});
+    cards.push(Card{title:crate::launcher::localized("Bố cục cửa sổ","Snap layouts","窗口布局").into(),
+        hint:crate::launcher::localized("Chọn cửa sổ và bố cục chia màn hình","Choose a window and a screen layout","选择窗口和屏幕布局").into(),icon:None,action:Some(Command::SnapLayouts)});
     if !cards.iter().any(|c|matches!(c.action,Some(Command::Widget(Widget::Desktop)))){
         cards.push(Card{title:crate::launcher::localized("Hiện Desktop","Show desktop","显示桌面").into(),hint:String::new(),icon:Some(Widget::Desktop),action:Some(Command::Desktop(false))});
     }
@@ -583,6 +585,7 @@ thread_local! {
 
 pub(super) unsafe fn panel_open_for(owner:HWND)->bool{
     if super::overview::open_for(owner){return true;}
+    if super::snap_layout::open_for(owner){return true;}
     if super::media::open_for(owner){return true;}
     if super::app_previews::open_for(owner){return true;}
     super::folder_stack::open_for(owner)||super::audio_mixer::open_for(owner)||super::calendar::open_for(owner)||control_center::open_for(owner)||[AUDIO_WINDOW.with(Cell::get)]
@@ -655,6 +658,7 @@ pub(super) unsafe fn paint_button(item:&DRAWITEMSTRUCT,dark:bool){
         if item.itemState&ODS_DISABLED!=0{p.muted}else{p.ink},DT_CENTER|DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);
 }
 pub(super) unsafe fn close_panels(){
+    super::snap_layout::close_for(ptr::null_mut());
     super::overview::close_for(ptr::null_mut());
     super::media::close_for(ptr::null_mut());
     super::app_previews::close_for(ptr::null_mut());
@@ -720,6 +724,7 @@ pub(super) unsafe fn audio_panel(owner:HWND,point:POINT,level:u32,muted:bool){
 }
 
 pub(super) unsafe fn close_panels_for(owner:HWND){
+    super::snap_layout::close_for(owner);
     super::overview::close_for(owner);
     super::media::close_for(owner);
     super::app_previews::close_for(owner);

@@ -67,7 +67,7 @@ impl Transition{
                 // Keep only the native command pending while restore runs.
                 // This preserves the requested Snap even if capture failed.
                 if ShowWindowAsync(self.id.hwnd as HWND,SW_RESTORE)!=0{
-                    self.proxy=None;self.capture=None;self.native_reason=Some(reason.into());self.phase(Phase::NativeRestoreSnap);return true;
+                    self.proxy=None;self.capture=None;self.stable=0;self.native_reason=Some(reason.into());self.phase(Phase::NativeRestoreSnap);return true;
                 }
             }else{self.commanded=self.action.issue(self.id.hwnd as HWND);}
         }
@@ -76,9 +76,16 @@ impl Transition{
     unsafe fn step(&mut self)->bool{
         if matches!(self.phase,Phase::NativeRestoreSnap){
             let h=self.id.hwnd as HWND;
-            if self.id.matches(h)&&IsWindowVisible(h)!=0&&IsIconic(h)==0{
-                if IsZoomed(h)==0{self.commanded=self.action.issue(h);}
-                else if self.phase_at.elapsed()<Duration::from_millis(550){return true;}
+            if self.id.matches(h)&&IsWindowVisible(h)!=0&&IsIconic(h)==0&&super::previews::permitted_pid(h).is_ok()
+                &&GetDpiForWindow(h)==self.dpi&&MonitorFromWindow(h,MONITOR_DEFAULTTONULL) as usize==self.monitor
+                &&STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&!s.suspended}){
+                if IsZoomed(h)==0{
+                    if let Some(rect)=super::window_effect::visible_area(h){
+                        if super::same_rect(rect,self.target){self.stable+=1;}else{self.target=rect;self.stable=0;}
+                        if self.stable>=2{self.commanded=self.action.issue(h);}
+                    }
+                }
+                if !self.commanded&&self.phase_at.elapsed()<Duration::from_millis(550){return true;}
             }
             let reason=self.native_reason.take();self.finish(reason.as_deref());return false;
         }
@@ -188,6 +195,24 @@ pub(super) unsafe fn apply(id:WindowIdentity,action:Action)->bool{
     let now=Instant::now();
     ACTIVE.with(|s|s.replace(Some(Transition{id,action,area,target:area,monitor:monitor as usize,dpi:GetDpiForWindow(h),phase:Phase::Capture,
         capture:Some(capture),proxy:None,lease:None,started:now,phase_at:now,last_present:now,frames:0,stable:0,commanded:false,done:false,native_reason:None})));
+    if SetTimer(CONTROL.get(),TIMER,20,None)==0{cancel();return false;}true
+}
+
+/// Requested geometry remains usable with native motion/reduced motion or an
+/// unavailable capture device. A maximized Snap waits for native restore.
+pub(super) unsafe fn command(id:WindowIdentity,action:Action)->bool{
+    let h=id.hwnd as HWND;
+    if !id.matches(h)||IsWindowVisible(h)==0||IsIconic(h)!=0||GetWindowLongW(h,GWL_STYLE) as u32&WS_THICKFRAME==0
+        ||super::previews::permitted_pid(h).is_err()||super::window_effect::elevation(id.pid)!=Some(false)
+        ||!STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&!s.suspended})
+        ||matches!(action,Action::Snap(r) if r.right<=r.left||r.bottom<=r.top){return false;}
+    if apply(id,action){return true;}
+    super::show_desktop::pause();super::window_motion::cancel();super::window_effect::cancel();cancel();
+    if !matches!(action,Action::Snap(_))||IsZoomed(h)==0{return action.issue(h);}
+    let Some(area)=super::window_effect::visible_area(h)else{return false;};let now=Instant::now();
+    if ShowWindowAsync(h,SW_RESTORE)==0{return false;}
+    ACTIVE.with(|s|s.replace(Some(Transition{id,action,area,target:area,monitor:MonitorFromWindow(h,MONITOR_DEFAULTTONULL) as usize,dpi:GetDpiForWindow(h),phase:Phase::NativeRestoreSnap,
+        capture:None,proxy:None,lease:None,started:now,phase_at:now,last_present:now,frames:0,stable:0,commanded:false,done:false,native_reason:Some("native-motion-policy-or-capture".into())})));
     if SetTimer(CONTROL.get(),TIMER,20,None)==0{cancel();return false;}true
 }
 

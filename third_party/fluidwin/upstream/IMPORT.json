@@ -111,6 +111,12 @@
       "source_git_blob": "6542f44f7ceaa7f5ea5a510808f3e87285489602",
       "source_worktree_sha256": "2305647f1b5ae79beef74ffcec7623d8be69e3633b734771cca544c4c17888a0",
       "local_changes": "Scoped overlay/font/DWM teardown; selected monitor, caller motion policy, bounded source revalidation and external identity-checked activation"
+    },
+    {
+      "path": "affianca.h",
+      "source_git_blob": "392b6c61c62ed14c2e887919f1b5878ec36da0b9",
+      "source_worktree_sha256": "5902107ef9f991a32f2d627d415c671be69f33dd4e9bd8236febe362ad0f50cf",
+      "local_changes": "Compile only layout/geometry without global Snap-policy writers; scoped panel destruction; keyboard selection and localized selection names; owner speed/reduced motion; no redraw at rest"
     }
   ]
 }

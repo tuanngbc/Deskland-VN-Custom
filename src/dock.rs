@@ -39,6 +39,7 @@ mod stage_snapshot;
 mod window_effect;
 mod window_motion;
 mod window_geometry;
+mod snap_layout;
 mod show_desktop;
 mod jelly;
 mod shell_menu;
@@ -136,6 +137,7 @@ const MENU_APP_ICON:usize=523;
 const MENU_APP_ICON_RESET:usize=524;
 const MENU_SHOW_DESKTOP:usize=525;
 const MENU_RESTORE_DESKTOP:usize=526;
+const MENU_SNAP_LAYOUTS:usize=527;
 const MENU_WINDOW_FIRST:usize=2000;
 const MENU_MOVE_FIRST:usize=2100;
 const STAGE_RAIL_CLASS:&str="TuanpcDeskStageReveal";
@@ -1738,6 +1740,8 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::AudioMixer=>{let mut point=POINT{x:0,y:0};GetCursorPos(&mut point);audio_mixer::open(owner,point);},
         Command::Media=>{let mut point=POINT{x:0,y:0};GetCursorPos(&mut point);media::open(owner,point);},
         Command::Overview=>overview::show(owner,false,1),
+        Command::SnapLayouts=>snap_layout::choose_window(owner),
+        Command::SnapWindow(id)=>{snap_layout::open(owner,id);},
         Command::Desktop(restore)=>show_desktop::perform(owner,restore),
         Command::Comfort(action)=>comfort::perform(owner,action),
         Command::Recycle(action)=>recycle_bin::perform(owner,action),
@@ -2567,6 +2571,9 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
             AppendMenuW(menu,MF_STRING,MENU_RESTORE,wide("Khôi phục kích thước").as_ptr());
             AppendMenuW(menu,MF_STRING,MENU_SNAP_LEFT,wide("Chia nửa trái").as_ptr());
             AppendMenuW(menu,MF_STRING,MENU_SNAP_RIGHT,wide("Chia nửa phải").as_ptr());
+            if GetWindowLongW(item.hwnd,GWL_STYLE) as u32&WS_THICKFRAME!=0{
+                AppendMenuW(menu,MF_STRING,MENU_SNAP_LAYOUTS,wide(crate::launcher::localized("Bố cục cửa sổ…","Snap layouts…","窗口布局…")).as_ptr());
+            }
             AppendMenuW(menu,MF_STRING,MENU_EXPAND,wide("Lấp vùng làm việc (giữ kiểu cửa sổ)").as_ptr());
             if owner.is_some()&&IsIconic(item.hwnd)==0&&IsZoomed(item.hwnd)==0{
                 let outputs=displays();
@@ -2619,6 +2626,7 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     match cmd {
         MENU_SHOW_DESKTOP=>show_desktop::perform(hwnd,false),
         MENU_RESTORE_DESKTOP=>show_desktop::perform(hwnd,true),
+        MENU_SNAP_LAYOUTS=>{if let Some(id)=selected.as_ref().and_then(|item|WindowIdentity::read(item.hwnd)){snap_layout::open(hwnd,id);}},
         MENU_TASK_MANAGER=>open_task_manager(),
         MENU_ADD_APP=>pin_from_file(hwnd),
         MENU_MORE_APPS=>more_apps(hwnd),
@@ -2675,10 +2683,7 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
                                 let middle=r.left+(r.right-r.left)/2;
                                 if cmd==MENU_SNAP_LEFT{r.right=middle;}else{r.left=middle;}
                             }
-                            if !WindowIdentity::read(item.hwnd).is_some_and(|id|window_geometry::apply(id,window_geometry::Action::Snap(r))){
-                                ShowWindowAsync(item.hwnd,SW_RESTORE);
-                                SetWindowPos(item.hwnd,HWND_TOP,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_SHOWWINDOW|SWP_ASYNCWINDOWPOS);
-                            }
+                            if let Some(id)=WindowIdentity::read(item.hwnd){window_geometry::command(id,window_geometry::Action::Snap(r));}
                         }
                     }
                     _=>{}
@@ -3123,6 +3128,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER if w==overview::TIMER&&hwnd==CONTROL.get()=>{overview::poll();0},
         WM_TIMER if w==window_motion::TIMER&&hwnd==CONTROL.get()=>{window_motion::tick();0},
         WM_TIMER if w==window_geometry::TIMER&&hwnd==CONTROL.get()=>{window_geometry::tick();0},
+        WM_TIMER if w==snap_layout::TIMER&&hwnd==CONTROL.get()=>{snap_layout::poll();0},
         WM_TIMER if w==show_desktop::TIMER&&hwnd==CONTROL.get()=>{show_desktop::tick();0},
         WM_SHELL_FALLBACK if hwnd==CONTROL.with(Cell::get)=>{
             let owner=w as HWND;
@@ -3386,6 +3392,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}else{refresh_dock_clock();sync_win_key();request_dock_status();motion_guard::sync();}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
         WM_TIMECHANGE=>{refresh_dock_clock();0},
         WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_THEMECHANGED|WM_DPICHANGED=>{
+            snap_layout::close_for(ptr::null_mut());
             window_geometry::cancel();
             show_desktop::pause();
             window_motion::cancel();
@@ -3784,6 +3791,7 @@ unsafe fn drain_commands() {
     for command in commands {
         match command {
             Command::Configure(options)=>{
+                snap_layout::close_for(ptr::null_mut());
                 window_geometry::cancel();
                 show_desktop::pause();
                 window_motion::cancel();
@@ -3814,6 +3822,7 @@ unsafe fn drain_commands() {
                 if enable_default&&!cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active(){start_saved_taskbar_mode();}
             },
             Command::Suspend(on)=>{
+                if on{snap_layout::close_for(ptr::null_mut());}
                 if on{window_geometry::cancel();}
                 if on{show_desktop::pause();}
                 if on{window_motion::cancel();}
@@ -3964,7 +3973,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
                 if !utilities::route_panel_keyboard(&msg){TranslateMessage(&msg);DispatchMessageW(&msg);}
             }
         }
-        window_geometry::cancel();show_desktop::reset();window_motion::cancel();window_effect::reset();motion_guard::stop();
+        snap_layout::close_for(ptr::null_mut());window_geometry::cancel();show_desktop::reset();window_motion::cancel();window_effect::reset();motion_guard::stop();
         clipboard_history::configure(control,false,0);
         if taskbar_active(){show_taskbar(taskbar_guard::Exit::Requested,"Đã hiện lại thanh tác vụ khi thoát Deskland.");}
         WIN_KEY.with(|s|drop(s.borrow_mut().take()));

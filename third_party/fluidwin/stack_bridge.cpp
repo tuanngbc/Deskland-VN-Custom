@@ -6,6 +6,8 @@
 #include "upstream/anteprime.h"
 #include "upstream/comodita.h"
 #include "upstream/panoramica.h"
+#define TLAUNCHER_EMBEDDED_SNAP
+#include "upstream/affianca.h"
 
 namespace{
 struct Apartment{bool active=false;~Apartment(){if(active)OleUninitialize();}};
@@ -17,11 +19,31 @@ struct Preview{
         panel.chiudiFinestra=[this](HWND h){target=h;action=2;};
     }
 };
+struct Snap{
+    affianca::Riquadro panel;RECT selected{};bool chosen=false;
+    Snap(){panel.scelto=[this](HWND,const RECT& r,HMONITOR){selected=r;chosen=true;};}
+};
 panoramica::Panoramica* overview=nullptr;
 double stackSpeed=0.70;
 double speed(){return stackSpeed;}
 }
 extern "C"{
+void* tlauncher_snap_open(HWND source,POINT anchor,const wchar_t* title,const wchar_t* const* labels,unsigned count,double speed,bool reduced)noexcept{
+    try{
+        if(!IsWindow(source)||!title||!labels||count!=11)return nullptr;
+        auto snap=std::make_unique<Snap>();snap->panel.motionSpeed=speed;snap->panel.reducedMotion=reduced;snap->panel.panelTitle=title;
+        for(unsigned i=0;i<count;i++)snap->panel.labels.emplace_back(labels[i]?labels[i]:L"");
+        RECT button{anchor.x-1,anchor.y-1,anchor.x+1,anchor.y+1};snap->panel.mostra(source,anchor,button,true);
+        return snap->panel.aperta()?snap.release():nullptr;
+    }catch(...){return nullptr;}
+}
+int tlauncher_snap_poll(void* raw,RECT* selected)noexcept{
+    if(!raw||!selected)return -1;auto& snap=*static_cast<Snap*>(raw);snap.panel.poll();
+    if(snap.panel.aperta())return 0;if(snap.chosen&&!snap.panel.abandoned){*selected=snap.selected;return 1;}return 2;
+}
+HWND tlauncher_snap_window(void* raw)noexcept{return raw?static_cast<Snap*>(raw)->panel.window():nullptr;}
+void tlauncher_snap_key(void* raw,unsigned key)noexcept{if(raw)static_cast<Snap*>(raw)->panel.key(key);}
+void tlauncher_snap_free(void* raw)noexcept{delete static_cast<Snap*>(raw);}
 HWND tlauncher_overview_show(bool(*valid)(HWND),const RECT* area,double speed,bool reduced,bool alt,int steps) noexcept{
     try{
         if(overview||!valid||!area)return nullptr;

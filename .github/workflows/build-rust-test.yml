@@ -249,7 +249,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $false
           $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
           $fixtureFailed = $false
-          foreach ($fixture in 'native_guarded_desktop_cascade','native_guarded_geometry_commands') {
+          foreach ($fixture in 'native_guarded_desktop_cascade','native_guarded_geometry_commands','native_original_snap_layout') {
             cargo test --release "dock::stage_capture_lab::$fixture" -- --ignored --exact --nocapture --test-threads=1
             if ($LASTEXITCODE -ne 0) { $fixtureFailed = $true }
           }

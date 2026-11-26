@@ -620,6 +620,10 @@ fn native_guarded_desktop_cascade(){guarded_motion_fixture(false,Some("desktop")
 #[ignore="independent hosted prepared maximize/restore/Snap through the real foreign-window controller"]
 fn native_guarded_geometry_commands(){guarded_motion_fixture(true,Some("geometry"));}
 #[cfg(all(test,target_env="msvc"))]
+#[test]
+#[ignore="original Snap picker keyboard selection and guarded/native geometry on hosted foreign HWND"]
+fn native_original_snap_layout(){guarded_motion_fixture(true,Some("snap-layout"));}
+#[cfg(all(test,target_env="msvc"))]
 fn guarded_motion_fixture(compatibility:bool,scope:Option<&str>){
     if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
     use std::ffi::OsString;
