@@ -20,7 +20,11 @@ pub(super) fn wanted()->bool{REQUEST.with(|r|r.borrow().is_some())||PINS.with(|p
 pub(super) fn owned(id:WindowIdentity)->bool{PINS.with(|p|p.borrow().iter().any(|p|p.id==id&&p.confirmed&&!p.releasing))}
 pub(super) fn diagnostics()->serde_json::Value{serde_json::json!({"hotkeyRegistered":HOTKEY_BOUND.load(Ordering::Acquire),"hotkeyError":HOTKEY_ERROR.load(Ordering::Acquire),"confirmedWindows":CONFIRMED.load(Ordering::Acquire),"permissionEscalation":false})}
 unsafe extern "system" fn owned_window(h:HWND,raw:LPARAM)->BOOL{
-    let (source,found)=&mut *(raw as *mut (HWND,bool));if GetWindow(h,GW_OWNER)==*source{*found=true;return 0;}1
+    let (source,found)=&mut *(raw as *mut (HWND,bool));
+    // Windows promotes/demotes the owner's non-topmost popups together. An
+    // already-topmost owned popup would lose its independent original state
+    // on unpin, so refuse that group (including hidden topmost popups).
+    if GetWindow(h,GW_OWNER)==*source&&GetWindowLongW(h,GWL_EXSTYLE) as u32&WS_EX_TOPMOST!=0{*found=true;return 0;}1
 }
 unsafe fn eligible(id:WindowIdentity)->bool{
     let h=id.hwnd as HWND;let mut class=[0u16;128];let n=GetClassNameW(h,class.as_mut_ptr(),128).max(0) as usize;
@@ -107,7 +111,10 @@ pub(super) unsafe fn shutdown(){reset();if BOUND.replace(false){UnregisterHotKey
 #[cfg(all(test,target_env="msvc"))]
 pub(super) unsafe fn probe(owner:HWND,id:WindowIdentity){
     use std::{mem,ptr};
-    let h=id.hwnd as HWND;assert!(eligible(id));
+    let h=id.hwnd as HWND;
+    let mut owners=(h,false);EnumWindows(Some(owned_window),(&mut owners as *mut (HWND,bool)) as LPARAM);
+    assert!(eligible(id),"fixture eligibility identity={} visible={} iconic={} root={} owned={} ownedTopmost={} exstyle={:#x} elevation={:?} permission={:?}",
+        id.matches(h),IsWindowVisible(h),IsIconic(h),GetAncestor(h,GA_ROOT)==h,!GetWindow(h,GW_OWNER).is_null(),owners.1,GetWindowLongW(h,GWL_EXSTYLE),super::window_effect::elevation(id.pid),super::previews::permitted_pid(h));
     let original=GetWindowLongPtrW(h,GWL_EXSTYLE);let mut rect:RECT=mem::zeroed();assert_ne!(GetWindowRect(h,&mut rect),0);
     let settings=super::motion::settings();let (enabled,shortcut)=STATE.with(|s|{let mut s=s.borrow_mut();let old=(s.prefs.enabled,s.prefs.always_on_top);s.prefs.enabled=true;s.prefs.always_on_top=true;old});
     struct Reset{enabled:bool,shortcut:bool,settings:super::motion::Settings}

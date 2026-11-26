@@ -9,7 +9,7 @@
       "source_git_blob": "17519dee3f8d60b3599b427cbb33a297dd9129cf",
       "source_worktree_sha256": "e635f67fcce5978aca9d2f79da57529f4c18ff79fd59dee707c961e3b32350ef",
       "integration": ["window_lease.cpp", "../../src/dock/topmost.rs", "../../src/dock/motion_guard.rs"],
-      "adaptation": "Original nonactivating SetWindowPos topmost behavior, explicit marker-before-mutation and synchronous foreign enable on existing pool. Existing single detached Guardian, process-birth identity, pending-begin acknowledgement, distinct lease kind/key, exact-bit restoration and startup orphan recovery. Refuses pre-existing topmost, elevated, Shell, owned/owner-with-owned windows. Adds native Dock/Control Center routes and opt-in Ctrl+Win+T with vi/en/zh Settings; no global policy, permanent worker or reassertion against another app."
+      "adaptation": "Original nonactivating SetWindowPos topmost behavior, explicit marker-before-mutation and synchronous foreign enable on existing pool. Existing single detached Guardian, process-birth identity, pending-begin acknowledgement, distinct lease kind/key, exact-bit restoration and startup orphan recovery. Refuses pre-existing topmost, elevated, Shell, owned targets and owner groups with pre-existing topmost popups. Adds native Dock/Control Center routes and opt-in Ctrl+Win+T with vi/en/zh Settings; no global policy, permanent worker or reassertion against another app."
     },
     {
       "source": "notch.h::scaffale / Bersaglio / appoggia / trascinaFuori",
