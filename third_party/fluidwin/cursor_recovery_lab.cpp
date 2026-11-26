@@ -26,6 +26,25 @@ Bytes animation(){
 struct File{std::wstring path;~File(){if(!path.empty())DeleteFileW(path.c_str());}};
 struct Cursor{HCURSOR h=nullptr;~Cursor(){if(h)DestroyCursor(h);}Cursor()=default;Cursor(const Cursor&)=delete;};
 struct BitmapInfo{ICONINFO value{};~BitmapInfo(){if(value.hbmColor)DeleteObject(value.hbmColor);if(value.hbmMask)DeleteObject(value.hbmMask);}};
+struct OriginInfo{
+    ICONINFOEXW value{};
+    OriginInfo(){value.cbSize=sizeof(value);}
+    ~OriginInfo(){if(value.hbmColor)DeleteObject(value.hbmColor);if(value.hbmMask)DeleteObject(value.hbmMask);}
+};
+bool origin(HCURSOR cursor,UINT role,const wchar_t* syntheticFile=nullptr){
+    OriginInfo info;SetLastError(0);
+    if(!GetIconInfoExW(cursor,&info.value)){
+        std::printf("CURSOR_ORIGIN role=%u query=FAILED error=%lu source=UNRESOLVED global_writes=0\n",role,GetLastError());return false;
+    }
+    const bool module=info.value.szModName[0]!=0,name=info.value.szResName[0]!=0;
+    const bool exactSynthetic=syntheticFile&&(!_wcsicmp(info.value.szModName,syntheticFile)||!_wcsicmp(info.value.szResName,syntheticFile));
+    // Metadata is discovery only. A module/id/name does not establish that
+    // an independent reload reproduces every current ANI frame and timing.
+    // No source path, cursor pixel or user scheme is logged/exported here.
+    std::printf("CURSOR_ORIGIN role=%u query=OK module=%d resource_id=%u resource_name=%d synthetic_path_matches=%d hotspot=%lu,%lu restoration=NOT_PROVEN global_writes=0\n",
+        role,int(module),UINT(info.value.wResID),int(name),int(exactSynthetic),info.value.xHotspot,info.value.yHotspot);
+    return !info.value.fIcon;
+}
 bool frame(HCURSOR cursor,UINT step,Bytes& pixels){
     HDC dc=CreateCompatibleDC(nullptr);if(!dc)return false;
     BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=32;info.bmiHeader.biHeight=-32;info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;
@@ -50,6 +69,7 @@ extern "C" int tlauncher_cursor_recovery_copy_fixture()noexcept{
         // DestroyCursor's contract. Explicitly omit LR_SHARED so this source
         // has a private lifetime that the fixture is permitted to destroy.
         Cursor original;original.h=static_cast<HCURSOR>(LoadImageW(nullptr,file.path.c_str(),IMAGE_CURSOR,0,0,LR_LOADFROMFILE));if(!original.h)return 4;
+        if(!origin(original.h,0,file.path.c_str()))return 19;
         // CopyCursor/CopyIcon is explicitly unsuitable for ANI. CopyImage with
         // no RETURNORG/FROMRESOURCE/DELETEORG flags must create a private copy.
         // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-copycursor
@@ -61,6 +81,7 @@ extern "C" int tlauncher_cursor_recovery_copy_fixture()noexcept{
         bool exactCopy=true;
         for(UINT i=0;i<2;++i){if(!frame(copy.h,i,after[i]))return 14;if(after[i]!=before[i])exactCopy=false;}
         const bool copiedFramesDistinct=after[0]!=after[1];
+        if(!origin(copy.h,1,file.path.c_str()))return 20;
         // Retain an independent file-loaded original too. This preserves the
         // whole ANI rather than assuming CopyImage retains its frame table.
         Cursor reload;reload.h=static_cast<HCURSOR>(LoadImageW(nullptr,file.path.c_str(),IMAGE_CURSOR,0,0,LR_LOADFROMFILE));
@@ -77,6 +98,15 @@ extern "C" int tlauncher_cursor_recovery_copy_fixture()noexcept{
             const auto shared=LoadCursorW(nullptr,MAKEINTRESOURCEW(id));if(!shared)return 10;
             Cursor snapshot;snapshot.h=static_cast<HCURSOR>(CopyImage(shared,IMAGE_CURSOR,0,0,0));if(!snapshot.h||snapshot.h==shared||!sameHotspot(shared,snapshot.h))return 11;
         }
+        // All upstream roles, read-only. Unsupported roles and absent origin
+        // metadata remain explicit unknowns rather than a guessed theme file.
+        unsigned queried=0,unresolved=0;
+        for(WORD id:{WORD(32512),WORD(32651),WORD(32650),WORD(32514),WORD(32515),WORD(32513),WORD(32631),WORD(32648),WORD(32645),WORD(32644),WORD(32642),WORD(32643),WORD(32646),WORD(32516),WORD(32649),WORD(32671),WORD(32672)}){
+            const auto shared=LoadCursorW(nullptr,MAKEINTRESOURCEW(id));
+            if(shared){++queried;if(!origin(shared,id))++unresolved;}
+            else{++unresolved;std::printf("CURSOR_ORIGIN role=%u load=UNAVAILABLE global_writes=0\n",UINT(id));}
+        }
+        std::printf("CURSOR_ORIGIN_DISCOVERY queried=%u unresolved=%u system_restore=NOT_IMPLEMENTED\n",queried,unresolved);
         std::printf("CURSOR_RECOVERY CopyImage_exact=%d copied_frames_distinct=%d file_reload_both_frames=1 private_source_destroyed=1 global_writes=0\n",int(exactCopy),int(copiedFramesDistinct));
         // 100 is an observed lossy CopyImage rejected as a backup, not parity.
         return exactCopy?0:100;
