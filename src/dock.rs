@@ -731,6 +731,7 @@ fn available_items(all:&[AppWindow],screen:RECT,prefs:&Preferences)->Vec<Item>{
     }
     for w in all {
         if !prefs.all_windows && !rect_intersects(screen,w.rect){continue;}
+        if prefs.hidden_apps.iter().any(|p|p.eq_ignore_ascii_case(&w.path)){continue;}
         if !seen.insert(w.path.to_lowercase()){continue;}
         let selected=all.iter().find(|a|a.path.eq_ignore_ascii_case(&w.path) && rect_intersects(screen,a.rect)).unwrap_or(w);
         result.push(Item{path:selected.path.clone(),title:selected.title.clone(),hwnd:selected.hwnd,
@@ -1756,6 +1757,8 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::Calendar=>calendar::show(owner,dock_app_anchor(owner,None)),
         Command::Notifications(action)=>notifications::perform(owner,ptr::null_mut(),action),
         Command::News(action)=>news::perform(owner,ptr::null_mut(),action),
+        Command::HiddenApps=>show_hidden_apps(owner),
+        Command::ShowHiddenApp(path)=>emit(Event::Edit(Edit::ShowHiddenApp(path))),
         Command::Weather(action)=>weather_panel::perform(owner,ptr::null_mut(),action),
         Command::Topmost(id)=>if let Some(id)=id{topmost::toggle(owner,id);}else{topmost::choose(owner);},
         Command::Shelf(action)=>shelf::perform(owner,ptr::null_mut(),action),
@@ -1861,7 +1864,7 @@ unsafe fn activate(hwnd:HWND,item:&Item) {
 }
 #[derive(Clone)]
 enum AppOperation{
-    Open, NewWindow, ShowMenu, JumpList, TogglePin, Close(Vec<WindowIdentity>), Advanced, ChangeIcon, ResetIcon,
+    Open, NewWindow, ShowMenu, JumpList, TogglePin, HideDock, Close(Vec<WindowIdentity>), Advanced, ChangeIcon, ResetIcon,
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Hash)]
 struct WindowIdentity{hwnd:usize,pid:u32,tid:u32}
@@ -2045,6 +2048,7 @@ unsafe fn app_menu(owner:HWND,path:&str,picker:bool){
             add("Mở thêm",AppOperation::NewWindow);
         }
         add(if item.pinned{"Bỏ ghim khỏi Dock"}else{"Ghim vào Dock"},AppOperation::TogglePin);
+        if !item.pinned{add(crate::launcher::localized("Ẩn khỏi Dock","Hide from Dock","从 Dock 隐藏"),AppOperation::HideDock);}
         if item.path!=internal_app::KEY{
             add(crate::launcher::localized("Lệnh ứng dụng và tệp gần đây…","App commands and recent files…","应用命令和最近文件…"),AppOperation::JumpList);
             add("Đổi icon ứng dụng…",AppOperation::ChangeIcon);
@@ -2064,6 +2068,17 @@ unsafe fn app_menu(owner:HWND,path:&str,picker:bool){
     let hint=if all==0{if item.pinned{"Đã ghim".into()}else{String::new()}}
         else{format!("{all} cửa sổ{}",if item.pinned{" · Đã ghim"}else{""})};
     control_center::show_list(owner,dock_app_anchor(owner,Some(path)),View{title:if picker{"Chọn cửa sổ".into()}else{name},hint,cards,metrics:None});
+}
+unsafe fn show_hidden_apps(owner:HWND){
+    use control_center::{Card,Command,View};
+    let hidden=STATE.with(|s|s.borrow().prefs.hidden_apps.clone());
+    let text=|vi:&str,en:&str,zh:&str|crate::launcher::localized(vi,en,zh).to_owned();
+    let mut cards=hidden.iter().map(|path|Card{title:basename(path),hint:text("Hiện lại trên Dock","Show on Dock again","在 Dock 中重新显示"),icon:None,
+        action:Some(Command::ShowHiddenApp(Some(path.clone())))}).collect::<Vec<_>>();
+    if !cards.is_empty(){cards.push(Card{title:text("Hiện lại tất cả","Show all again","重新显示全部"),hint:String::new(),icon:None,action:Some(Command::ShowHiddenApp(None))});}
+    else{cards.push(Card{title:text("Không có ứng dụng bị ẩn","No hidden apps","没有隐藏的应用"),hint:String::new(),icon:None,action:None});}
+    control_center::show_list(owner,dock_app_anchor(owner,None),View{title:text("Ứng dụng ẩn khỏi Dock","Apps hidden from Dock","从 Dock 隐藏的应用"),
+        hint:text("Các cửa sổ và Stage Manager vẫn hoạt động","Windows and Stage Manager remain available","窗口和 Stage Manager 仍然可用"),cards,metrics:None});
 }
 unsafe fn more_apps(owner:HWND){
     use control_center::{Card,Command,View};
@@ -2102,6 +2117,7 @@ unsafe fn perform_app_action(owner:HWND,path:&str,operation:AppOperation){
         AppOperation::Open=>activate(owner,&item),
         AppOperation::NewWindow=>{item.hwnd=ptr::null_mut();activate(owner,&item);},
         AppOperation::TogglePin=>emit(Event::Edit(if item.pinned{Edit::Unpin(item.path)}else{Edit::Pin(item.path)})),
+        AppOperation::HideDock=>{if !item.pinned{emit(Event::Edit(Edit::HideApp(item.path)));}},
         AppOperation::Close(ids)=>{
             let safe=STATE.with(|s|{
                 let state=s.borrow();
@@ -4194,6 +4210,24 @@ mod tests{
         assert_eq!(global.len(),1);assert_eq!(global[0].hwnd,2 as HWND);assert_eq!(global[0].count,2);
     }
     #[test] fn settings_serialization(){let p=Preferences{pinned:vec!["C:\\A\\foo.exe".into()],all_windows:true,stage_side:"right".into(),..Default::default()};assert_eq!(Preferences::from_json(&p.json()),p);}
+    #[test] fn hidden_dock_apps_preserve_stage_sources_counts_pins_and_profile_roundtrip(){
+        let screen=rect([0,0,1920,1080]);
+        let windows=vec![AppWindow{hwnd:1 as HWND,title:"Alpha one".into(),path:"C:\\Apps\\alpha.exe".into(),rect:screen,stage_aumid:None},
+            AppWindow{hwnd:2 as HWND,title:"Alpha two".into(),path:"C:\\Apps\\alpha.exe".into(),rect:screen,stage_aumid:None}];
+        let mut prefs=Preferences::default();let visible=item_list(&windows,screen,&prefs);assert_eq!(visible[0].count,2);
+        Edit::HideApp("c:\\apps\\ALPHA.EXE".into()).apply(&mut prefs);assert!(item_list(&windows,screen,&prefs).is_empty());
+        assert_eq!(Preferences::from_json(&prefs.json()).hidden_apps,prefs.hidden_apps);
+        // Dock filtering does not remove the windows from the shared inventory
+        // used by Stage/Show Desktop or mutate their HWNDs/native visibility.
+        let cards=workspaces::Workspaces::default().cards("main",screen,&[screen],&windows,false,true,ptr::null_mut());
+        assert_eq!(cards.iter().map(|c|c.members.len()).sum::<usize>(),2);assert_eq!(windows.len(),2);
+        Edit::ShowHiddenApp(Some("C:\\Apps\\alpha.exe".into())).apply(&mut prefs);assert_eq!(item_list(&windows,screen,&prefs)[0].count,2);
+        Edit::HideApp(windows[0].path.clone()).apply(&mut prefs);Edit::Pin(windows[0].path.clone()).apply(&mut prefs);
+        assert!(prefs.hidden_apps.is_empty());assert!(item_list(&windows,screen,&prefs)[0].pinned);
+        Edit::HideApp(windows[0].path.clone()).apply(&mut prefs);assert!(prefs.hidden_apps.is_empty(),"pinned app cannot be hidden");
+        Edit::Unpin(windows[0].path.clone()).apply(&mut prefs);Edit::HideApp(windows[0].path.clone()).apply(&mut prefs);
+        Edit::ShowHiddenApp(None).apply(&mut prefs);assert!(prefs.hidden_apps.is_empty());
+    }
     #[test] fn unpinned_global_dock_prefers_local_window_and_keeps_remote_fallback(){
         let windows=vec![
             AppWindow{hwnd:1 as HWND,title:"remote".into(),path:"C:\\Apps\\alpha.exe".into(),rect:rect([100,0,700,900]),stage_aumid:None},

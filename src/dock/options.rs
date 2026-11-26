@@ -134,6 +134,7 @@ pub struct Options {
     pub clipboard_history:bool,
     pub clipboard_history_limit:u32,
     pub pinned: Vec<String>,
+    pub hidden_apps: Vec<String>,
     pub app_icons:crate::app_icons::Overrides,
     pub all_windows: bool,
     pub native_shell_buttons: bool,
@@ -162,6 +163,7 @@ pub enum Edit {
     FollowDisplay(String),
     NewsSource(u8),
     WeatherUnit(u8),
+    HideApp(String), ShowHiddenApp(Option<String>),
     Pin(String), Unpin(String), MovePin { path:String, anchor:String, after:bool }, AllWindows(bool), StageSide(String), DockEnabled(bool), StageEnabled(bool),
     StageStyle(String, StageStyle),
     StagePresentation(bool), StageCardHeight(u32), StageGroupHeight(String,u32),
@@ -176,6 +178,14 @@ impl Edit {
             Self::FollowDisplay(id)=>{if options.dock_display.mode==DisplayMode::Follow{if let Some(id)=display_id(&id){options.dock_display.selected=Some(id);}}},
             Self::NewsSource(source)=>options.news_source=source.min(5),
             Self::WeatherUnit(unit)=>options.weather_unit=unit.min(2),
+            Self::HideApp(path)=>{
+                if !path.is_empty()&&path.len()<=32760&&!path.chars().any(char::is_control)&&options.hidden_apps.len()<128
+                    &&!options.pinned.iter().any(|p|p.eq_ignore_ascii_case(&path))&&!options.hidden_apps.iter().any(|p|p.eq_ignore_ascii_case(&path)){
+                    options.hidden_apps.push(path);
+                }
+            },
+            Self::ShowHiddenApp(Some(path))=>options.hidden_apps.retain(|p|!p.eq_ignore_ascii_case(&path)),
+            Self::ShowHiddenApp(None)=>options.hidden_apps.clear(),
             Self::AppIcon{key,file}=>{
                 let Some(key)=crate::app_icons::normalized(&key)else{return;};
                 match file{
@@ -187,7 +197,7 @@ impl Edit {
                     _=>{}
                 }
             }
-            Self::Pin(path)=>{if options.pinned.len()<32 && !path.is_empty() && path.len()<=32760 && !path.contains('\0') && !options.pinned.iter().any(|p|p.eq_ignore_ascii_case(&path)){options.pinned.push(path);}}
+            Self::Pin(path)=>{if options.pinned.len()<32 && !path.is_empty() && path.len()<=32760 && !path.contains('\0') && !options.pinned.iter().any(|p|p.eq_ignore_ascii_case(&path)){options.hidden_apps.retain(|p|!p.eq_ignore_ascii_case(&path));options.pinned.push(path);}}
             Self::Unpin(path)=>options.pinned.retain(|p|!p.eq_ignore_ascii_case(&path)),
             Self::MovePin{path,anchor,after}=>{
                 if let (Some(from),Some(to))=(options.pinned.iter().position(|p|p.eq_ignore_ascii_case(&path)),
@@ -243,7 +253,7 @@ impl Edit {
 }
 impl Default for Options {
     fn default() -> Self {
-        Self { enabled: false, taskbar_default:true, stage_enabled: false, stage_peek:false, stage_peek_delay:350,clipboard_history:false,clipboard_history_limit:20,pinned: Vec::new(), app_icons:Default::default(), all_windows: false, native_shell_buttons:false, start_shortcut:false, win_key_start:false, shell_context_menu:false, alt_tab_overview:false, snap_layouts:false, always_on_top:false, jelly_drag:false, news_source:0, weather_unit:0, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), stage_perspective:true,stage_card_height:0,stage_card_overrides:BTreeMap::new(),appearance: Appearance::default(),utility_profiles:BTreeMap::new(),window_policies:BTreeMap::new() }
+        Self { enabled: false, taskbar_default:true, stage_enabled: false, stage_peek:false, stage_peek_delay:350,clipboard_history:false,clipboard_history_limit:20,pinned: Vec::new(), hidden_apps:Vec::new(), app_icons:Default::default(), all_windows: false, native_shell_buttons:false, start_shortcut:false, win_key_start:false, shell_context_menu:false, alt_tab_overview:false, snap_layouts:false, always_on_top:false, jelly_drag:false, news_source:0, weather_unit:0, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), stage_perspective:true,stage_card_height:0,stage_card_overrides:BTreeMap::new(),appearance: Appearance::default(),utility_profiles:BTreeMap::new(),window_policies:BTreeMap::new() }
     }
 }
 impl Options {
@@ -260,6 +270,9 @@ impl Options {
             pinned: v["pinned"].as_array().map(|a| a.iter().filter_map(Value::as_str)
                 .filter(|s| !s.is_empty() && s.len() <= 32760 && !s.contains('\0'))
                 .filter(|s| seen.insert(s.to_lowercase())).take(32).map(str::to_owned).collect()).unwrap_or_default(),
+            hidden_apps:{let mut seen=HashSet::new();v["hiddenApps"].as_array().into_iter().flatten().filter_map(Value::as_str)
+                .filter(|s|!s.is_empty()&&s.len()<=32760&&!s.chars().any(char::is_control))
+                .filter(|s|seen.insert(s.to_lowercase())).take(128).map(str::to_owned).collect()},
             app_icons:v["appIcons"].as_array().into_iter().flatten().filter_map(|entry|{
                 let key=crate::app_icons::normalized(entry["app"].as_str()?)?;
                 let file=entry["image"].as_str()?;
@@ -339,6 +352,7 @@ impl Options {
             "clipboardHistory":self.clipboard_history,"clipboardHistoryLimit":self.clipboard_history_limit,
             "newsSource":self.news_source,
             "weatherUnit":self.weather_unit,
+            "hiddenApps":self.hidden_apps,
             "pinned":self.pinned,"allWindows":self.all_windows,"nativeShellButtons":self.native_shell_buttons,"startShortcut":self.start_shortcut,"winKeyStart":self.win_key_start,"shellContextMenu":self.shell_context_menu,"altTabOverview":self.alt_tab_overview,"snapLayouts":self.snap_layouts,"alwaysOnTop":self.always_on_top,"jellyDrag":self.jelly_drag,"stageSide":self.stage_side,
             "appIcons":self.app_icons.iter().map(|(app,image)|json!({"app":app,"image":image})).collect::<Vec<_>>(),
             "stagePresentation":if self.stage_perspective{"perspective"}else{"dwm"},"stageCardHeight":self.stage_card_height,"stageCardOverrides":self.stage_card_overrides,

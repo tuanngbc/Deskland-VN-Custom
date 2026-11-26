@@ -465,6 +465,8 @@ pub(super) fn hub_view(snapshot:&Snapshot,profile:&Profile,dock_mode:bool,live:b
     cards.insert(0,Card{title:"Ứng dụng chạy nền / Khay ứng dụng".into(),
         hint:"Cửa sổ đã thu nhỏ và khay thông báo Windows".into(),
         icon:Some(Widget::Windows),action:Some(Command::BackgroundApps)});
+    cards.push(Card{title:crate::launcher::localized("Ứng dụng ẩn khỏi Dock","Apps hidden from Dock","从 Dock 隐藏的应用").into(),
+        hint:String::new(),icon:None,action:Some(Command::HiddenApps)});
     cards.push(Card{title:crate::launcher::localized("Bộ trộn âm lượng","Volume mixer","音量混合器").into(),
         hint:crate::launcher::localized("Thiết bị và từng ứng dụng","Outputs and application volumes","输出设备和应用音量").into(),
         icon:Some(Widget::Sound),action:Some(Command::AudioMixer)});
