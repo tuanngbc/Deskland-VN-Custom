@@ -2,6 +2,7 @@
 // to both existing Spotlight modes. Windows draws this fallback menu because
 // the imported single-threaded D2D menu factory belongs to the Dock STA.
 #include <windows.h>
+#include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <commctrl.h>
