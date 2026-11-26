@@ -30,3 +30,13 @@ Desktop/Explorer context menus directly reuse `destro.h`, `menu.h`, `condividi.h
 `fabbriche.h`, `raggio.h`, `testi.h` and `traduzioni.h` from the same reference.
 Unmodified source hashes are recorded in `third_party/fluidwin/upstream/IMPORT.json`;
 TLauncher integration lives in `shell_menu_bridge.cpp` and `src/dock/shell_menu.rs`.
+
+Further native integrations reuse original `affianca.h`, `anteprime.h`,
+`jumplist.h`, `pila.h`, `vetro.h`, `mixer.h`, `sistema.h`, `musica.h`,
+`comodita.h`, `calendario.h`, `notifiche.h`, `onda.h` and `widget.h`, plus
+selected window-state and Dock behaviors from `fluidwin.cpp` and `dock.h`.
+These remain covered by the same Copyright (c) 2026 Clooudy and MIT license.
+Original Git blobs/byte hashes, scoped adapters and local changes are recorded
+in `third_party/fluidwin/upstream/IMPORT.json` and
+`third_party/fluidwin/ADAPTATIONS.json`. No upstream standalone service,
+executable or additional media license is implied by these source imports.
