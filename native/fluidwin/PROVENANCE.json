@@ -1,0 +1,1335 @@
+{
+  "repository": "https://github.com/clooudfn/FluidWin",
+  "version": "1.3.1",
+  "commit": "2f773a8733b84c7dbee88fff6628d14e9ac802b9",
+  "license": "MIT",
+  "copyright": "Copyright (c) 2026 Clooudy",
+  "files": [
+    {
+      "path": ".gitattributes",
+      "upstreamSha256": "ed8d631d56700dcfefdf378ce2f7735b2c0be68101cc2596e82d1aef9f38db5d"
+    },
+    {
+      "path": ".gitignore",
+      "upstreamSha256": "bf90a6222b6cac9343aa5c193e704e447d552de457afa6812f7eec9ed1b7f041"
+    },
+    {
+      "path": "LICENSE",
+      "upstreamSha256": "00458153787cf96d6efecc7c735232f93e946e434c97436d47e10f5da4b8768d"
+    },
+    {
+      "path": "README.md",
+      "upstreamSha256": "6c647cebfef2a95afaccd9183a365b69f3ccaebf7e39aa8c3eb7770bd0943b37"
+    },
+    {
+      "path": "affianca.h",
+      "upstreamSha256": "5902107ef9f991a32f2d627d415c671be69f33dd4e9bd8236febe362ad0f50cf"
+    },
+    {
+      "path": "aggiorna.h",
+      "upstreamSha256": "71bcd1c566a2a67ec904882c419adf3bf536919c9571c7074a09e78982fa700b"
+    },
+    {
+      "path": "altrui.h",
+      "upstreamSha256": "7a9544658e5d0259d6f7bc03d88aa5adfd015a9a29720dd276b48312a95966d6"
+    },
+    {
+      "path": "anteprime.h",
+      "upstreamSha256": "79d476d8ec8187dc2e8fb809c99e7a1a72f5d4bb7dc9dac9ccb68ab66223c238"
+    },
+    {
+      "path": "appunti.h",
+      "upstreamSha256": "4f6a2ca91bceada3a015fefa7d49566ed3864a22a71a22c552e96de96e57f142"
+    },
+    {
+      "path": "banner.h",
+      "upstreamSha256": "24fa0040c2dc941165e8e42f34eac6d61ea578cf1439df394db6719b53d10614"
+    },
+    {
+      "path": "calendario.h",
+      "upstreamSha256": "39913fcb3f6c60ec573bc59d47bcf366a03c9cb3afb56886ca33e207f49d967e"
+    },
+    {
+      "path": "centro.h",
+      "upstreamSha256": "da7eaf30d8b4911826b623b81ef41291c7a2e5b17368456364462f341c1c8d1d"
+    },
+    {
+      "path": "comodita.h",
+      "upstreamSha256": "5421c9d05376c7ac49e882d06917c8b033effd584db38c019fa4d573199d7c66"
+    },
+    {
+      "path": "compila.ps1",
+      "upstreamSha256": "f2350301712116e55cda783dc3a319cc0d7e1694ffeaa38c97119ce92406fec9"
+    },
+    {
+      "path": "condividi.h",
+      "upstreamSha256": "b03493049a8112948c3f91818698d464c3463996e634b043dc654c4e6c26d972"
+    },
+    {
+      "path": "cursori.h",
+      "upstreamSha256": "4e567b15b237a53460d798cee01adef8a8e28299b4c2709affec1f9fd8cfc30f"
+    },
+    {
+      "path": "destro.h",
+      "upstreamSha256": "6925576d52b55863d6eff5cd74ed7651ca55519c6b078a293d0f9745b7a7250e"
+    },
+    {
+      "path": "dock.h",
+      "upstreamSha256": "6cb19c9d27daad834660fe4cad4b269ca10609d21dccc8bcfad6e4ca7cd13a72"
+    },
+    {
+      "path": "fabbriche.h",
+      "upstreamSha256": "3edfdb8eec66b45795f1ed51a60629437b895e1ca51472b1dd8b29646e5419a9"
+    },
+    {
+      "path": "fluidwin.cpp",
+      "upstreamSha256": "e635f67fcce5978aca9d2f79da57529f4c18ff79fd59dee707c961e3b32350ef"
+    },
+    {
+      "path": "genio.h",
+      "upstreamSha256": "4513fc420cabdce1415857be24724a4b0186f835d9bc8105bbbec7389c2f326d"
+    },
+    {
+      "path": "gpu.h",
+      "upstreamSha256": "8bc6d7d9831ab49d9c1f722ef9f8164e5a41269afdf7b8011e3b16ec2397b95e"
+    },
+    {
+      "path": "icona.ico",
+      "upstreamSha256": "498901543f13484ab1f53706c852cd535a3e4c42f5252e9651ecf8a4af8c8c17"
+    },
+    {
+      "path": "icona.rc",
+      "upstreamSha256": "6f3d4e025f47870dd8b1bf6152ba71c8129608ef906f8f1676893c548b62d430"
+    },
+    {
+      "path": "icona.svg",
+      "upstreamSha256": "66151789be4f3dda18f2b5bfa0ea54d4834358d8eff2fd3be5ee7c8c9cf1b349"
+    },
+    {
+      "path": "impostazioni.h",
+      "upstreamSha256": "1c3db881c9b64d733c3ff9a78ca52de1ced15581e56c786d256e74d475b0ece9"
+    },
+    {
+      "path": "indice.h",
+      "upstreamSha256": "4a6e2b9fbb57fe95d788c2ffda1cf22dcfde882810b34eef67b84346ca77c041"
+    },
+    {
+      "path": "jumplist.h",
+      "upstreamSha256": "551845c373e46a3b3cc507945667e45a491bd36b991eea715e179b659ced0037"
+    },
+    {
+      "path": "launcher.h",
+      "upstreamSha256": "a8edbd83a2dc1d1cd32461097eee9892ddcd628a1374608f159f2f7de05353fc"
+    },
+    {
+      "path": "menu.h",
+      "upstreamSha256": "3149d2aeec61586c37c6075ecbd532657d7a4b21127f23caf79ae24784d3bda1"
+    },
+    {
+      "path": "mixer.h",
+      "upstreamSha256": "d57b052df12df8c2e5f7fa8ff8e1026e01c8ebc0745c405dfaeaa9f9e142c733"
+    },
+    {
+      "path": "musica.h",
+      "upstreamSha256": "2c93a6c14e728b33b188bc001e38f0d30f4aa42eac2fa607b41abbcfde4d2963"
+    },
+    {
+      "path": "notch.h",
+      "upstreamSha256": "c519f89e6f7f5a99aeaee5c2da7f30ddca9e85b0cce5d8792354a38873d1597a"
+    },
+    {
+      "path": "notifiche.h",
+      "upstreamSha256": "b0490f426055b9ebc136ffde91b7fc30b798d06921cb4b9ddc8c5146dfeda6ca"
+    },
+    {
+      "path": "onda.h",
+      "upstreamSha256": "d7d52d6eddf6b9abf4ec58918857a8c5b8413f2924c077525f4b8860bca4d18b"
+    },
+    {
+      "path": "osd.h",
+      "upstreamSha256": "ed363d9629e8a567e3f5ebe3180150770881684ba6b38e680906173ef02bdc9b"
+    },
+    {
+      "path": "panoramica.h",
+      "upstreamSha256": "2305647f1b5ae79beef74ffcec7623d8be69e3633b734771cca544c4c17888a0"
+    },
+    {
+      "path": "pila.h",
+      "upstreamSha256": "29e79ee91f339e0f1c801354f07a509f1d5c9e6c1a0e174e263c606303910242"
+    },
+    {
+      "path": "pool.h",
+      "upstreamSha256": "730568ff01ba6769f78ea969ec962d0e8853a0e1109153e5780f4901a135e2f2"
+    },
+    {
+      "path": "raggio.h",
+      "upstreamSha256": "a289088cf7e88b65edcf9d8a1114f1923946fe1430cf2ebe4e72e97babd4aefa"
+    },
+    {
+      "path": "ricerca.h",
+      "upstreamSha256": "4a7cc60f3374958220aa735596339455733f74461cf1d131d1a78082e75d0c44"
+    },
+    {
+      "path": "scala.h",
+      "upstreamSha256": "0bcfd42cebcbff3bd1d0305a117d5926451b2642a51732e02f08d46333190152"
+    },
+    {
+      "path": "sensori.h",
+      "upstreamSha256": "1b19e147a17c3e545dec6d2af7ecaf8fc6c5b9107a3af8999c0437b7a267aed4"
+    },
+    {
+      "path": "sfondi.h",
+      "upstreamSha256": "68fb2a1697de5fa64b57026aeccbdeee433a6225d0dc99ff36d82936875154b3"
+    },
+    {
+      "path": "sfondi/colline.jpg",
+      "upstreamSha256": "afc036590abeccb55d6586120973f4397a72df898d18b6c1f44268e34c34024f"
+    },
+    {
+      "path": "sfondi/pastello.jpg",
+      "upstreamSha256": "94b308a9474901e1797bd2c6361fbb69f0074b76463f26c025774564c029bc7c"
+    },
+    {
+      "path": "sfondi/seta.jpg",
+      "upstreamSha256": "74d2864bc80fa40cfc2d416364343b1d6893c8725228e5c44786bec0005777ad"
+    },
+    {
+      "path": "sistema.h",
+      "upstreamSha256": "68c679ab949975ac596dca891330fbf19486857f29953b60d07f7ec73b390a74"
+    },
+    {
+      "path": "stampa.h",
+      "upstreamSha256": "290f9e18a7b2581551e6c8ae955832d62a85ff8310c0685c735217f3b132d4ca"
+    },
+    {
+      "path": "suggerimento.h",
+      "upstreamSha256": "b17579e51d79b4155b4398c5adc0160f6abd0d227ae4d6bed222a47eab379c0e"
+    },
+    {
+      "path": "testi.h",
+      "upstreamSha256": "d98f422ab6b82528a28b46e7d347bf5a91ebeb4e9813746a7293d3b26bd58364"
+    },
+    {
+      "path": "traduzioni.h",
+      "upstreamSha256": "0efc1c13cc0565c00a1f02d591e4d8ed142fd2fb063ecb47fd5d49468745081f"
+    },
+    {
+      "path": "vetro.h",
+      "upstreamSha256": "0808bda50d5590efd16af7ebfafe2c3fcc87d4e7d95e246ca7a1ae569f0e82a9"
+    },
+    {
+      "path": "viva.h",
+      "upstreamSha256": "276c369965042f4185e9ad53fc1b8678403c36f2bc310b32b2a58682a2737f40"
+    },
+    {
+      "path": "widget.h",
+      "upstreamSha256": "9c541a24e2cb54ed4c1036496e8ba4d22e602c33dfb1086905e60c045c542df5"
+    },
+    {
+      "path": "wifi.h",
+      "upstreamSha256": "f952b15d8e2fa6e1951ba5dd0c163bee04d1d6517ffe7a66c89ee50f5d135116"
+    }
+  ],
+  "identityChanges": [
+    {
+      "file": "affianca.h",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "affianca.h",
+      "from": "L\"FluidWin.Affianca\"",
+      "to": "L\"TLauncher.Native.Affianca\""
+    },
+    {
+      "file": "affianca.h",
+      "from": "L\"FluidWin.Layout\"",
+      "to": "L\"TLauncher.Native.Layout\""
+    },
+    {
+      "file": "anteprime.h",
+      "from": "L\"FluidWin.Anteprima\"",
+      "to": "L\"TLauncher.Native.Anteprima\""
+    },
+    {
+      "file": "banner.h",
+      "from": "L\"Software\\\\FluidWin\\\\Banner\"",
+      "to": "tlauncher::bannerRegistry()"
+    },
+    {
+      "file": "banner.h",
+      "from": "L\"FluidWin.Banner\"",
+      "to": "L\"TLauncher.Native.Banner\""
+    },
+    {
+      "file": "centro.h",
+      "from": "L\"FluidWin.Pannello\"",
+      "to": "L\"TLauncher.Native.Pannello\""
+    },
+    {
+      "file": "centro.h",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "centro.h",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "centro.h",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "centro.h",
+      "from": "L\"*fluidwin\"",
+      "to": "L\"*tlauncher-native\""
+    },
+    {
+      "file": "centro.h",
+      "from": "L\"*fluidwin\"",
+      "to": "L\"*tlauncher-native\""
+    },
+    {
+      "file": "centro.h",
+      "from": "L\"FluidWin.Messaggi\"",
+      "to": "L\"TLauncher.Native.Messaggi\""
+    },
+    {
+      "file": "condividi.h",
+      "from": "L\"FluidWin.Condividi\"",
+      "to": "L\"TLauncher.Native.Condividi\""
+    },
+    {
+      "file": "cursori.h",
+      "from": "L\"%LOCALAPPDATA%\\\\FluidWin\\\\Cursori\"",
+      "to": "L\"%TLAUNCHER_NATIVE_TRIAL_DIR%\\\\Cursori\""
+    },
+    {
+      "file": "cursori.h",
+      "from": "L\"non salvato nella cartella di FluidWin|could not be saved in the FluidWin folder\"",
+      "to": "L\"non salvato nella cartella di TLauncher|could not be saved in the TLauncher folder\""
+    },
+    {
+      "file": "cursori.h",
+      "from": "L\"non salvato nella cartella di FluidWin|could not be saved in the FluidWin folder\"",
+      "to": "L\"non salvato nella cartella di TLauncher|could not be saved in the TLauncher folder\""
+    },
+    {
+      "file": "cursori.h",
+      "from": "L\"non salvato nella cartella di FluidWin|could not be saved in the FluidWin folder\"",
+      "to": "L\"non salvato nella cartella di TLauncher|could not be saved in the TLauncher folder\""
+    },
+    {
+      "file": "cursori.h",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "cursori.h",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "cursori.h",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"FluidWin.DockIcone\"",
+      "to": "L\"TLauncher.Native.DockIcone\""
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"FluidWin.DockVetro\"",
+      "to": "L\"TLauncher.Native.DockVetro\""
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"FluidWin.DockIcone\"",
+      "to": "L\"TLauncher.Native.DockIcone\""
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"FluidWin.\"",
+      "to": "L\"TLauncher.Native.\""
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"FluidWin.DockVetro\"",
+      "to": "L\"TLauncher.Native.DockVetro\""
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"FluidWin.DockIcone\"",
+      "to": "L\"TLauncher.Native.DockIcone\""
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"FluidWin.DockVetro\"",
+      "to": "L\"TLauncher.Native.DockVetro\""
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"FluidWin.VetroFuori\"",
+      "to": "L\"TLauncher.Native.VetroFuori\""
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"FluidWin.\"",
+      "to": "L\"TLauncher.Native.\""
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"FluidWin.\"",
+      "to": "L\"TLauncher.Native.\""
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"Impostazioni di FluidWin…\"",
+      "to": "L\"Impostazioni di TLauncher…\""
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"FluidWin settings…\"",
+      "to": "L\"TLauncher settings…\""
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"Esci da FluidWin\"",
+      "to": "L\"Esci da TLauncher\""
+    },
+    {
+      "file": "dock.h",
+      "from": "L\"Quit FluidWin\"",
+      "to": "L\"Quit TLauncher\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin.Nascosta\"",
+      "to": "L\"TLauncher.Native.Nascosta\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin.Transizioni\"",
+      "to": "L\"TLauncher.Native.Transizioni\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin.AlfaApp\"",
+      "to": "L\"TLauncher.Native.AlfaApp\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin.Stile\"",
+      "to": "L\"TLauncher.Native.Stile\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin.PrimoPiano\"",
+      "to": "L\"TLauncher.Native.PrimoPiano\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"Local\\\\FluidWin.Istanza\"",
+      "to": "L\"Local\\\\TLauncher.Native.Istanza\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"Local\\\\FluidWin.Pronto\"",
+      "to": "L\"Local\\\\TLauncher.Native.Pronto\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin.SenzaTasti\"",
+      "to": "L\"TLauncher.Native.SenzaTasti\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin.SenzaTasti\"",
+      "to": "L\"TLauncher.Native.SenzaTasti\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin.SenzaTasti\"",
+      "to": "L\"TLauncher.Native.SenzaTasti\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin.Capsula\"",
+      "to": "L\"TLauncher.Native.Capsula\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin.Angolo\"",
+      "to": "L\"TLauncher.Native.Angolo\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin (in pausa)\"",
+      "to": "L\"TLauncher (in pausa)\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin (paused)\"",
+      "to": "L\"TLauncher (paused)\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin %ls\"",
+      "to": "L\"TLauncher %ls\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"Lingua di Windows: 0x%04x, di FluidWin: %ls\"",
+      "to": "L\"Lingua di Windows: 0x%04x, di TLauncher: %ls\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin-diagnostica.txt\"",
+      "to": "L\"TLauncher-Native-diagnostica.txt\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin (in pausa)\"",
+      "to": "L\"TLauncher (in pausa)\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin (paused)\"",
+      "to": "L\"TLauncher (paused)\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin.Panoramica\"",
+      "to": "L\"TLauncher.Native.Panoramica\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin.Messaggi\"",
+      "to": "L\"TLauncher.Native.Messaggi\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"fluidwin.log\"",
+      "to": "L\"tlauncher-native.log\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin.Overlay\"",
+      "to": "L\"TLauncher.Native.Overlay\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin.Messaggi\"",
+      "to": "L\"TLauncher.Native.Messaggi\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "fluidwin.cpp",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "genio.h",
+      "from": "L\"FluidWin.Genio\"",
+      "to": "L\"TLauncher.Native.Genio\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"Software\\\\FluidWin\\\\Impostazioni\"",
+      "to": "tlauncher::settingsRegistry()"
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"FluidWin.Impostazioni\"",
+      "to": "L\"TLauncher.Native.Impostazioni\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"FluidWin.Pannello\"",
+      "to": "L\"TLauncher.Native.Pannello\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"FluidWin si apre da solo quando accedi\"",
+      "to": "L\"TLauncher si apre da solo quando accedi\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"FluidWin opens by itself when you sign in\"",
+      "to": "L\"TLauncher opens by itself when you sign in\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"Affiancamento di FluidWin\"",
+      "to": "L\"Affiancamento di TLauncher\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"FluidWin snapping\"",
+      "to": "L\"TLauncher snapping\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"Notifiche di FluidWin\"",
+      "to": "L\"Notifiche di TLauncher\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"FluidWin notifications\"",
+      "to": "L\"TLauncher notifications\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"Esci da FluidWin\"",
+      "to": "L\"Esci da TLauncher\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"Quit FluidWin\"",
+      "to": "L\"Quit TLauncher\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"Il menu di Windows, anche con il menu di FluidWin acceso\"",
+      "to": "L\"Il menu di Windows, anche con il menu di TLauncher acceso\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"The Windows menu, even with the FluidWin menu on\"",
+      "to": "L\"The Windows menu, even with the TLauncher menu on\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\"File .zip, .rar o .7z, oppure clicca per sceglierlo. Valgono solo con FluidWin aperto\"",
+      "to": "L\"File .zip, .rar o .7z, oppure clicca per sceglierlo. Valgono solo con TLauncher aperto\""
+    },
+    {
+      "file": "impostazioni.h",
+      "from": "L\".zip, .rar or .7z file, or click to choose it. Used only while FluidWin is open\"",
+      "to": "L\".zip, .rar or .7z file, or click to choose it. Used only while TLauncher is open\""
+    },
+    {
+      "file": "indice.h",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "launcher.h",
+      "from": "L\"FluidWin.Launcher\"",
+      "to": "L\"TLauncher.Native.Launcher\""
+    },
+    {
+      "file": "menu.h",
+      "from": "L\"FluidWin.Menu\"",
+      "to": "L\"TLauncher.Native.Menu\""
+    },
+    {
+      "file": "menu.h",
+      "from": "L\"FluidWin.Menu\"",
+      "to": "L\"TLauncher.Native.Menu\""
+    },
+    {
+      "file": "notch.h",
+      "from": "L\"FluidWin.Notch\"",
+      "to": "L\"TLauncher.Native.Notch\""
+    },
+    {
+      "file": "onda.h",
+      "from": "L\"FluidWin.Onda\"",
+      "to": "L\"TLauncher.Native.Onda\""
+    },
+    {
+      "file": "onda.h",
+      "from": "L\"FluidWin.Onda\"",
+      "to": "L\"TLauncher.Native.Onda\""
+    },
+    {
+      "file": "osd.h",
+      "from": "L\"FluidWin.Volume\"",
+      "to": "L\"TLauncher.Native.Volume\""
+    },
+    {
+      "file": "panoramica.h",
+      "from": "L\"FluidWin.Panoramica\"",
+      "to": "L\"TLauncher.Native.Panoramica\""
+    },
+    {
+      "file": "pila.h",
+      "from": "L\"FluidWin.Pila\"",
+      "to": "L\"TLauncher.Native.Pila\""
+    },
+    {
+      "file": "raggio.h",
+      "from": "L\"FluidWin.Angoli\"",
+      "to": "L\"TLauncher.Native.Angoli\""
+    },
+    {
+      "file": "ricerca.h",
+      "from": "L\"FluidWin.Ricerca\"",
+      "to": "L\"TLauncher.Native.Ricerca\""
+    },
+    {
+      "file": "ricerca.h",
+      "from": "L\"*fluidwin\"",
+      "to": "L\"*tlauncher-native\""
+    },
+    {
+      "file": "ricerca.h",
+      "from": "L\"Impostazioni di FluidWin\"",
+      "to": "L\"Impostazioni di TLauncher\""
+    },
+    {
+      "file": "ricerca.h",
+      "from": "L\"FluidWin settings\"",
+      "to": "L\"TLauncher settings\""
+    },
+    {
+      "file": "ricerca.h",
+      "from": "L\"*fluidwin\"",
+      "to": "L\"*tlauncher-native\""
+    },
+    {
+      "file": "sfondi.h",
+      "from": "L\"FluidWin-Colline.jpg\"",
+      "to": "L\"TLauncher-Native-Colline.jpg\""
+    },
+    {
+      "file": "sfondi.h",
+      "from": "L\"FluidWin-Seta.jpg\"",
+      "to": "L\"TLauncher-Native-Seta.jpg\""
+    },
+    {
+      "file": "sfondi.h",
+      "from": "L\"FluidWin-Pastello.jpg\"",
+      "to": "L\"TLauncher-Native-Pastello.jpg\""
+    },
+    {
+      "file": "sfondi.h",
+      "from": "L\"Software\\\\FluidWin\"",
+      "to": "tlauncher::registry()"
+    },
+    {
+      "file": "sfondi.h",
+      "from": "L\"\\\\FluidWin\"",
+      "to": "L\"\\\\TLauncher-Native\""
+    },
+    {
+      "file": "suggerimento.h",
+      "from": "L\"FluidWin.Suggerimento\"",
+      "to": "L\"TLauncher.Native.Suggerimento\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin %ls is available\"",
+      "to": "L\"TLauncher %ls is available\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin %ls está disponible\"",
+      "to": "L\"TLauncher %ls está disponible\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin %ls est disponible\"",
+      "to": "L\"TLauncher %ls est disponible\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin %ls ist verfügbar\"",
+      "to": "L\"TLauncher %ls ist verfügbar\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"O FluidWin %ls está disponível\"",
+      "to": "L\"O TLauncher %ls está disponível\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"‏FluidWin %ls متاح\"",
+      "to": "L\"‏TLauncher %ls متاح\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"You have %ls. It downloads from GitHub and FluidWin restarts.\"",
+      "to": "L\"You have %ls. It downloads from GitHub and TLauncher restarts.\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Tienes la %ls. Se descarga de GitHub y FluidWin se reinicia.\"",
+      "to": "L\"Tienes la %ls. Se descarga de GitHub y TLauncher se reinicia.\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Vous avez la %ls. Le téléchargement se fait depuis GitHub et FluidWin redémarre.\"",
+      "to": "L\"Vous avez la %ls. Le téléchargement se fait depuis GitHub et TLauncher redémarre.\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Du hast %ls. Der Download kommt von GitHub und FluidWin startet neu.\"",
+      "to": "L\"Du hast %ls. Der Download kommt von GitHub und TLauncher startet neu.\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Você tem a %ls. O download vem do GitHub e o FluidWin reinicia.\"",
+      "to": "L\"Você tem a %ls. O download vem do GitHub e o TLauncher reinicia.\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"لديك الإصدار %ls. يتم التنزيل من GitHub ثم يُعاد تشغيل FluidWin.\"",
+      "to": "L\"لديك الإصدار %ls. يتم التنزيل من GitHub ثم يُعاد تشغيل TLauncher.\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin.exe is missing from the package\"",
+      "to": "L\"TLauncher.Native.exe is missing from the package\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Falta FluidWin.exe en el paquete\"",
+      "to": "L\"Falta TLauncher.exe en el paquete\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin.exe manque dans le paquet\"",
+      "to": "L\"TLauncher.Native.exe manque dans le paquet\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin.exe fehlt im Paket\"",
+      "to": "L\"TLauncher.Native.exe fehlt im Paket\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin.exe está faltando no pacote\"",
+      "to": "L\"TLauncher.Native.exe está faltando no pacote\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"‏FluidWin.exe غير موجود في الحزمة\"",
+      "to": "L\"TLauncher.Native..exe غير موجود في الحزمة\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Can't write to FluidWin's folder (administrator needed?)\"",
+      "to": "L\"Can't write to TLauncher's folder (administrator needed?)\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"No se puede escribir en la carpeta de FluidWin (¿se necesita administrador?)\"",
+      "to": "L\"No se puede escribir en la carpeta de TLauncher (¿se necesita administrador?)\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Impossible d'écrire dans le dossier de FluidWin (administrateur requis ?)\"",
+      "to": "L\"Impossible d'écrire dans le dossier de TLauncher (administrateur requis ?)\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Kein Schreibzugriff auf den FluidWin-Ordner (Administrator nötig?)\"",
+      "to": "L\"Kein Schreibzugriff auf den TLauncher-Ordner (Administrator nötig?)\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Não é possível gravar na pasta do FluidWin (precisa de administrador?)\"",
+      "to": "L\"Não é possível gravar na pasta do TLauncher (precisa de administrador?)\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"تتعذّر الكتابة في مجلد FluidWin (هل تلزم صلاحيات المسؤول؟)\"",
+      "to": "L\"تتعذّر الكتابة في مجلد TLauncher (هل تلزم صلاحيات المسؤول؟)\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Can't replace FluidWin.exe\"",
+      "to": "L\"Can't replace TLauncher.exe\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"No se puede reemplazar FluidWin.exe\"",
+      "to": "L\"No se puede reemplazar TLauncher.exe\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Impossible de remplacer FluidWin.exe\"",
+      "to": "L\"Impossible de remplacer TLauncher.exe\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin.exe kann nicht ersetzt werden\"",
+      "to": "L\"TLauncher.Native.exe kann nicht ersetzt werden\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Não é possível substituir o FluidWin.exe\"",
+      "to": "L\"Não é possível substituir o TLauncher.exe\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"يتعذّر استبدال FluidWin.exe\"",
+      "to": "L\"يتعذّر استبدال TLauncher.exe\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Quit FluidWin\"",
+      "to": "L\"Quit TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Salir de FluidWin\"",
+      "to": "L\"Salir de TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Quitter FluidWin\"",
+      "to": "L\"Quitter TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin beenden\"",
+      "to": "L\"TLauncher beenden\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Sair do FluidWin\"",
+      "to": "L\"Sair do TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"إنهاء FluidWin\"",
+      "to": "L\"إنهاء TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin settings…\"",
+      "to": "L\"TLauncher settings…\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Configuración de FluidWin…\"",
+      "to": "L\"Configuración de TLauncher…\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Paramètres de FluidWin…\"",
+      "to": "L\"Paramètres de TLauncher…\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin-Einstellungen…\"",
+      "to": "L\"TLauncher-Native-Einstellungen…\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Configurações do FluidWin…\"",
+      "to": "L\"Configurações do TLauncher…\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"إعدادات FluidWin…\"",
+      "to": "L\"إعدادات TLauncher…\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin (paused)\"",
+      "to": "L\"TLauncher (paused)\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin (en pausa)\"",
+      "to": "L\"TLauncher (en pausa)\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin (en pause)\"",
+      "to": "L\"TLauncher (en pause)\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin (pausiert)\"",
+      "to": "L\"TLauncher (pausiert)\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin (pausado)\"",
+      "to": "L\"TLauncher (pausado)\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"‏FluidWin (متوقف مؤقتًا)\"",
+      "to": "L\"‏TLauncher (متوقف مؤقتًا)\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin snapping\"",
+      "to": "L\"TLauncher snapping\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Ajuste de FluidWin\"",
+      "to": "L\"Ajuste de TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Ancrage FluidWin\"",
+      "to": "L\"Ancrage TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin-Andocken\"",
+      "to": "L\"TLauncher-Native-Andocken\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Ajuste do FluidWin\"",
+      "to": "L\"Ajuste do TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"محاذاة FluidWin\"",
+      "to": "L\"محاذاة TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\".zip, .rar or .7z file, or click to choose it. Used only while FluidWin is open\"",
+      "to": "L\".zip, .rar or .7z file, or click to choose it. Used only while TLauncher is open\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Archivo .zip, .rar o .7z, o haz clic. Solo con FluidWin abierto\"",
+      "to": "L\"Archivo .zip, .rar o .7z, o haz clic. Solo con TLauncher abierto\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Fichier .zip, .rar ou .7z, ou cliquez. Seulement avec FluidWin ouvert\"",
+      "to": "L\"Fichier .zip, .rar ou .7z, ou cliquez. Seulement avec TLauncher ouvert\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\".zip, .rar oder .7z, oder klicken. Nur solange FluidWin läuft\"",
+      "to": "L\".zip, .rar oder .7z, oder klicken. Nur solange TLauncher läuft\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Arquivo .zip, .rar ou .7z, ou clique. Só com o FluidWin aberto\"",
+      "to": "L\"Arquivo .zip, .rar ou .7z, ou clique. Só com o TLauncher aberto\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"ملف ‎.zip‎ أو ‎.rar‎ أو ‎.7z‎، أو انقر. يعمل فقط مع FluidWin مفتوحًا\"",
+      "to": "L\"ملف ‎.zip‎ أو ‎.rar‎ أو ‎.7z‎، أو انقر. يعمل فقط مع TLauncher مفتوحًا\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin opens by itself when you sign in\"",
+      "to": "L\"TLauncher opens by itself when you sign in\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin se abre solo al iniciar sesión\"",
+      "to": "L\"TLauncher se abre solo al iniciar sesión\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin s'ouvre tout seul à la connexion\"",
+      "to": "L\"TLauncher s'ouvre tout seul à la connexion\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin öffnet sich bei der Anmeldung von selbst\"",
+      "to": "L\"TLauncher öffnet sich bei der Anmeldung von selbst\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"O FluidWin abre sozinho quando você entra\"",
+      "to": "L\"O TLauncher abre sozinho quando você entra\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"يفتح FluidWin تلقائيًا عند تسجيل الدخول\"",
+      "to": "L\"يفتح TLauncher تلقائيًا عند تسجيل الدخول\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"The Windows menu, even with the FluidWin menu on\"",
+      "to": "L\"The Windows menu, even with the TLauncher menu on\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"El menú de Windows, aun con el de FluidWin activado\"",
+      "to": "L\"El menú de Windows, aun con el de TLauncher activado\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Le menu Windows, même avec celui de FluidWin activé\"",
+      "to": "L\"Le menu Windows, même avec celui de TLauncher activé\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Das Windows-Menü, auch wenn das FluidWin-Menü an ist\"",
+      "to": "L\"Das Windows-Menü, auch wenn das TLauncher-Menü an ist\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"O menu do Windows, mesmo com o do FluidWin ligado\"",
+      "to": "L\"O menu do Windows, mesmo com o do TLauncher ligado\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"قائمة Windows، حتى مع تفعيل قائمة FluidWin\"",
+      "to": "L\"قائمة Windows، حتى مع تفعيل قائمة TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin notifications\"",
+      "to": "L\"TLauncher notifications\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Notificaciones de FluidWin\"",
+      "to": "L\"Notificaciones de TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Notifications FluidWin\"",
+      "to": "L\"Notifications TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin-Benachrichtigungen\"",
+      "to": "L\"TLauncher-Native-Benachrichtigungen\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Notificações do FluidWin\"",
+      "to": "L\"Notificações do TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"إشعارات FluidWin\"",
+      "to": "L\"إشعارات TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"could not be saved in the FluidWin folder\"",
+      "to": "L\"could not be saved in the TLauncher folder\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"no se pudo guardar en la carpeta de FluidWin\"",
+      "to": "L\"no se pudo guardar en la carpeta de TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"impossible d'enregistrer dans le dossier de FluidWin\"",
+      "to": "L\"impossible d'enregistrer dans le dossier de TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"konnte nicht im FluidWin-Ordner gespeichert werden\"",
+      "to": "L\"konnte nicht im TLauncher-Ordner gespeichert werden\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"não foi possível salvar na pasta do FluidWin\"",
+      "to": "L\"não foi possível salvar na pasta do TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"تعذّر الحفظ في مجلد FluidWin\"",
+      "to": "L\"تعذّر الحفظ في مجلد TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin settings\"",
+      "to": "L\"TLauncher settings\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Configuración de FluidWin\"",
+      "to": "L\"Configuración de TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Paramètres de FluidWin\"",
+      "to": "L\"Paramètres de TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"FluidWin-Einstellungen\"",
+      "to": "L\"TLauncher-Native-Einstellungen\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"Configurações do FluidWin\"",
+      "to": "L\"Configurações do TLauncher\""
+    },
+    {
+      "file": "traduzioni.h",
+      "from": "L\"إعدادات FluidWin\"",
+      "to": "L\"إعدادات TLauncher\""
+    },
+    {
+      "file": "vetro.h",
+      "from": "L\"FluidWin\"",
+      "to": "L\"TLauncher\""
+    },
+    {
+      "file": "vetro.h",
+      "from": "L\"FluidWin.Battito\"",
+      "to": "L\"TLauncher.Native.Battito\""
+    },
+    {
+      "file": "widget.h",
+      "from": "L\"Software\\\\FluidWin\\\\Impostazioni\"",
+      "to": "tlauncher::settingsRegistry()"
+    },
+    {
+      "file": "widget.h",
+      "from": "L\"FluidWin/1.0\"",
+      "to": "L\"TLauncher/1.0\""
+    },
+    {
+      "file": "wifi.h",
+      "from": "L\"<name>FluidWin-\"",
+      "to": "L\"<name>TLauncher-\""
+    }
+  ]
+}
