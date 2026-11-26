@@ -429,6 +429,7 @@ fn native_static_photos_keep_original_pixels_and_reject_unsafe_sources(){
         assert!(pump_static_fixture(&source,true).unwrap().is_none());SetWindowRgn(source.0,ptr::null_mut(),1);
         let style=GetWindowLongPtrW(source.0,GWL_EXSTYLE);SetWindowLongPtrW(source.0,GWL_EXSTYLE,style|WS_EX_LAYERED as isize);
         SetLayeredWindowAttributes(source.0,0,128,LWA_ALPHA);assert!(pump_static_fixture(&source,true).unwrap().is_none());SetLayeredWindowAttributes(source.0,0,255,LWA_ALPHA);SetWindowLongPtrW(source.0,GWL_EXSTYLE,style);
+        SetWindowLongPtrW(source.0,GWL_EXSTYLE,style|WS_EX_NOREDIRECTIONBITMAP as isize);assert!(pump_static_fixture(&source,true).unwrap().is_none(),"composition alpha must remain on WGC");SetWindowLongPtrW(source.0,GWL_EXSTYLE,style);
         assert_ne!(SetWindowDisplayAffinity(source.0,WDA_MONITOR),0);assert!(pump_static_fixture(&source,true).is_err());assert_ne!(SetWindowDisplayAffinity(source.0,WDA_NONE),0);
         assert!(super::stage_snapshot::static_motion_frame(source.0,||false,None,true).is_err());
         SetWindowPos(source.0,HWND_TOPMOST,20,20,2110,980,SWP_NOACTIVATE);InvalidateRect(source.0,ptr::null(),0);UpdateWindow(source.0);pump();

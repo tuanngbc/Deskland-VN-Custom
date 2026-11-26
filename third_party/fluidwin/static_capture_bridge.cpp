@@ -30,7 +30,7 @@ bool permitted(const Identity& id){
 bool rectangular(const Identity& id){
     // GDI photos have no trustworthy per-pixel alpha. Keep WGC for layered,
     // shaped and potentially rounded sources instead of flattening corners.
-    if(id.exstyle&WS_EX_LAYERED)return false;
+    if(id.exstyle&(WS_EX_LAYERED|WS_EX_NOREDIRECTIONBITMAP))return false;
     HRGN region=CreateRectRgn(0,0,0,0);if(!region)return false;
     const int type=GetWindowRgn(id.h,region);bool shape=false;
     if(type==ERROR)shape=true;
