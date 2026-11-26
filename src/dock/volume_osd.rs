@@ -68,12 +68,20 @@ mod tests{
             }
             for (index,text) in ["Pin yếu · 10%","Low battery · 10%","电量低 · 10%"].into_iter().enumerate(){
                 let ticket=200+index;let hwnd=tlauncher_battery_osd_show(owner,CLOSED,ticket,&info.rcWork,10,false,0.70,false,wide(text).as_ptr());assert!(!hwnd.is_null());
-                pump();windows_sys::Win32::Graphics::Dwm::DwmFlush();let mut label=[0u16;160];let n=GetWindowTextW(hwnd,label.as_mut_ptr(),160);assert_eq!(String::from_utf16_lossy(&label[..n as usize]),text);assert_eq!(GetForegroundWindow(),focus);
+                let settle=Instant::now();while settle.elapsed()<Duration::from_millis(200){pump();std::thread::sleep(Duration::from_millis(10));}
+                windows_sys::Win32::Graphics::Dwm::DwmFlush();let mut label=[0u16;160];let n=GetWindowTextW(hwnd,label.as_mut_ptr(),160);assert_eq!(String::from_utf16_lossy(&label[..n as usize]),text);assert_eq!(GetForegroundWindow(),focus);
                 let mut rect:RECT=std::mem::zeroed();assert_ne!(GetWindowRect(hwnd,&mut rect),0);
+                let (w,h)=(rect.right-rect.left,rect.bottom-rect.top);let mut layer=super::super::glass_probe::Layer::new(w,h).unwrap();let dc=GetDC(ptr::null_mut());assert_ne!(BitBlt(layer.dc(),0,0,w,h,dc,rect.left,rect.top,SRCCOPY|CAPTUREBLT),0);ReleaseDC(ptr::null_mut(),dc);
+                let mut rgba=layer.pixels().to_vec();for p in rgba.chunks_exact_mut(4){p.swap(0,2);p[3]=255;}
                 if let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
-                    let (w,h)=(rect.right-rect.left,rect.bottom-rect.top);let mut layer=super::super::glass_probe::Layer::new(w,h).unwrap();let dc=GetDC(ptr::null_mut());assert_ne!(BitBlt(layer.dc(),0,0,w,h,dc,rect.left,rect.top,SRCCOPY|CAPTUREBLT),0);ReleaseDC(ptr::null_mut(),dc);
-                    let mut rgba=layer.pixels().to_vec();for p in rgba.chunks_exact_mut(4){p.swap(0,2);p[3]=255;}image::save_buffer(std::path::PathBuf::from(dir).join(format!("volume-osd-battery-{index}.png")),&rgba,w as u32,h as u32,image::ColorType::Rgba8).unwrap();
+                    image::save_buffer(std::path::PathBuf::from(dir).join(format!("volume-osd-battery-{index}.png")),&rgba,w as u32,h as u32,image::ColorType::Rgba8).unwrap();
                 }
+                // A correct HWND/title alone does not prove the content reached
+                // the display. The synthetic icon/text must differ from the
+                // actual glass background after the first composition settles.
+                let base=&rgba[((h/2*w+w-4)*4) as usize..][..3];
+                let ink=rgba.chunks_exact(4).filter(|p|p[..3].iter().zip(base).any(|(a,b)|a.abs_diff(*b)>70)).count();
+                assert!(ink>80,"actual battery notice is blank for locale {index}: {ink}");
                 close(ticket-1);assert_ne!(IsWindow(hwnd),0);close(ticket);assert_eq!(IsWindow(hwnd),0);
             }
             assert_eq!(GetForegroundWindow(),focus);
