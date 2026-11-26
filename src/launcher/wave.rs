@@ -76,7 +76,7 @@ impl Wave{
         let dpi=GetDpiForWindow(owner).clamp(72,384) as f32/96.0;
         let center=POINT{x:(center.x-area.left).clamp(0,w),y:(center.y-area.top).clamp(0,h)};
         let far=(center.x.max(w-center.x) as f32).hypot(center.y.max(h-center.y) as f32);
-        Some(Self{raw,hwnd,owner,area,center,dpi,speed:f32::from(crate::dock::motion::settings().speed)/100.0,gpu,
+        Some(Self{raw,hwnd,owner,area,center,dpi,speed:crate::dock::motion::settings().speed.clamp(25,200) as f32/100.0,gpu,
             started:Instant::now(),closing:None,photo_until:far/(1700.0*dpi)+0.65,photo:true,shown:false,last_present:Instant::now()})
     }
     unsafe fn draw_at(&mut self,time:f32,fade:f32)->bool{
