@@ -5,7 +5,7 @@ use crate::desktop::wide;
 use std::{cell::RefCell,ffi::c_void,ptr,sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}}};
 use windows_sys::Win32::{Foundation::*,System::Threading::{TrySubmitThreadpoolCallback,PTP_CALLBACK_INSTANCE},UI::{Shell::ShellExecuteW,WindowsAndMessaging::*}};
 pub(super) const READY:u32=WM_APP+149;
-#[derive(Clone)]pub(super) enum Action{Open,Refresh(u64),Details(u64,u32),Dismiss(u64,u32),Back(u64),WindowsSettings}
+#[derive(Clone)]pub(super) enum Action{Open,Refresh(u64),Details(u64,u32),Dismiss(u64,u32),Clear(u64),Back(u64),WindowsSettings}
 #[derive(Clone,Debug,PartialEq,Eq)]struct Item{id:u32,time:i64,app:String,aumid:String,title:String,body:String}
 #[derive(Default)]struct Snapshot{status:i32,items:Vec<Item>,command_failed:bool}
 #[derive(Default)]struct Shared{closed:AtomicBool,answer:Mutex<Option<Snapshot>>}
@@ -21,7 +21,18 @@ unsafe extern "C"{
     fn tlauncher_notifications_remove(raw:*mut c_void,id:u32,time:i64,aumid:*const u16,read_only:bool)->bool;
     #[cfg(test)]fn tlauncher_notifications_identity_fixture()->bool;
 }
-struct Job{popup:usize,ticket:usize,work:Arc<Shared>,remove:Option<Item>}
+struct Job{popup:usize,ticket:usize,work:Arc<Shared>,remove:Vec<Item>}
+fn removal_plan(snapshot:&Snapshot,id:Option<u32>,read_only:bool)->Option<Vec<Item>>{
+    if read_only||!matches!(snapshot.status,1|2)||id.is_none()&&snapshot.status!=1{return None;}
+    let rows=snapshot.items.iter().filter(|item|id.is_none_or(|id|id==item.id)).cloned().collect::<Vec<_>>();
+    if rows.is_empty()||rows.len()>64||rows.iter().any(|item|item.time<=0||item.aumid.is_empty()){return None;}
+    let mut seen=std::collections::HashSet::new();
+    if !rows.iter().all(|item|seen.insert(item.id)){return None;}Some(rows)
+}
+fn remove_rows(rows:&[Item],closed:impl Fn()->bool,mut remove:impl FnMut(&Item)->bool)->bool{
+    if rows.len()>64{return false;}
+    for row in rows{if closed()||!remove(row){return false;}}true
+}
 unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut c_void){
     let job=Box::from_raw(raw.cast::<Job>());
     struct Permit;impl Drop for Permit{fn drop(&mut self){WORKER.store(false,Ordering::Release);}}let _permit=Permit;
@@ -33,9 +44,8 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut c_void){
             struct Apartment;impl Drop for Apartment{fn drop(&mut self){unsafe{RoUninitialize();}}}let _apartment=Apartment;
             struct Reader(*mut c_void);impl Drop for Reader{fn drop(&mut self){unsafe{tlauncher_notifications_free(self.0);}}}let reader=Reader(tlauncher_notifications_create());
             if !reader.0.is_null(){
-                if let Some(item)=&job.remove{
-                    if !job.work.closed.load(Ordering::Acquire){view.command_failed=!tlauncher_notifications_remove(reader.0,item.id,item.time,wide(&item.aumid).as_ptr(),crate::trial::active()||cfg!(test));}
-                }
+                view.command_failed=!remove_rows(&job.remove,||job.work.closed.load(Ordering::Acquire),|item|
+                    tlauncher_notifications_remove(reader.0,item.id,item.time,wide(&item.aumid).as_ptr(),crate::trial::active()||cfg!(test)));
                 if !job.work.closed.load(Ordering::Acquire){
                     view.status=tlauncher_notifications_read(reader.0);
                     if matches!(view.status,1|2){
@@ -71,6 +81,9 @@ fn merge(current:&mut Snapshot,mut incoming:Snapshot){
 }
 impl Panel{
     unsafe fn submit(&mut self,remove:Option<Item>){
+        self.submit_batch(remove.into_iter().collect());
+    }
+    unsafe fn submit_batch(&mut self,remove:Vec<Item>){
         if self.pending{return;}self.pending=true;
         if WORKER.swap(true,Ordering::AcqRel){self.pending=false;self.view.status=3;return;}
         let raw=Box::into_raw(Box::new(Job{popup:self.popup,ticket:self.ticket,work:self.work.clone(),remove}));
@@ -80,7 +93,7 @@ impl Panel{
     }
     fn view(&self)->View{
         let hint=if self.pending{text("Đang đọc…","Reading…","正在读取…")}
-            else if self.view.command_failed{text("Chưa bỏ được thông báo. Hãy làm mới danh sách.","Could not dismiss this notification. Refresh the list.","无法清除此通知，请刷新列表。")}
+            else if self.view.command_failed{text("Chưa bỏ được một số thông báo. Hãy làm mới danh sách.","Some notifications could not be dismissed. Refresh the list.","部分通知无法清除，请刷新列表。")}
             else{match self.view.status{
                 0=>text("Quyền truy cập thông báo Windows chưa khả dụng cho ứng dụng này","Windows notification access is unavailable for this app","此应用暂时无法访问 Windows 通知"),
                 2=>text("Danh sách chưa đầy đủ · tối đa 64 thông báo","Partial list · up to 64 notifications","列表不完整 · 最多 64 条通知"),
@@ -102,6 +115,10 @@ impl Panel{
                     hint:format!("{} · {}",item.app,item.body),action:action(Action::Details(self.generation,item.id))});
             }
             if cards.is_empty()&&!self.pending&&self.view.status==1{cards.push(Card{icon:None,title:text("Không có thông báo","No notifications","没有通知"),hint:String::new(),action:None});}
+            if !self.view.items.is_empty(){cards.push(Card{icon:None,title:text("Bỏ tất cả thông báo","Dismiss all notifications","清除所有通知"),
+                hint:if self.view.status==1{format!("{} · {}",self.view.items.len(),text("Trong danh sách này","In this list","当前列表"))}
+                    else{text("Làm mới để có danh sách đầy đủ","Refresh to get a complete list","请刷新以获取完整列表")},
+                action:removal_plan(&self.view,None,crate::trial::active()||cfg!(test)).and_then(|_|action(Action::Clear(self.generation)))});}
         }
         cards.push(Card{icon:None,title:text("Làm mới","Refresh","刷新"),hint:String::new(),action:action(Action::Refresh(self.generation))});
         cards.push(Card{icon:None,title:text("Quyền thông báo trong Windows","Windows notification permissions","Windows 通知权限"),hint:String::new(),action:action(Action::WindowsSettings)});
@@ -126,7 +143,7 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
     }
     if matches!(action,Action::Open){
         super::utilities::close_panels();
-        control_center::show_list_capacity(owner,super::dock_app_anchor(owner,None),View{title:title(),hint:text("Đang đọc…","Reading…","正在读取…"),cards:Vec::new(),metrics:None},66);
+        control_center::show_list_capacity(owner,super::dock_app_anchor(owner,None),View{title:title(),hint:text("Đang đọc…","Reading…","正在读取…"),cards:Vec::new(),metrics:None},67);
         let (Some(window),Some(ticket))=(control_center::window(owner),control_center::ticket(owner))else{return;};
         let mut panel=Panel{owner:owner as usize,popup:window as usize,ticket,generation:1,view:Snapshot::default(),selected:None,pending:false,work:Arc::default()};
         panel.submit(None);let view=panel.view();PANEL.with(|s|s.replace(Some(panel)));control_center::update(owner,ticket,view);return;
@@ -137,8 +154,11 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
             Action::Refresh(g) if g==p.generation=>{p.submit(None);},
             Action::Back(g) if g==p.generation=>p.selected=None,
             Action::Details(g,id) if g==p.generation=>{if p.view.items.iter().any(|i|i.id==id){p.selected=Some(id);}},
-            Action::Dismiss(g,id) if g==p.generation&&!crate::trial::active()&&!cfg!(test)&&matches!(p.view.status,1|2)=>{
-                if let Some(item)=p.view.items.iter().find(|i|i.id==id).cloned(){p.submit(Some(item));p.selected=None;}
+            Action::Dismiss(g,id) if g==p.generation=>{
+                if let Some(items)=removal_plan(&p.view,Some(id),crate::trial::active()||cfg!(test)){p.submit_batch(items);p.selected=None;}
+            },
+            Action::Clear(g) if g==p.generation=>{
+                if let Some(items)=removal_plan(&p.view,None,crate::trial::active()||cfg!(test)){p.submit_batch(items);p.selected=None;}
             },_=>return None,
         }
         Some((p.ticket,p.view()))
@@ -149,6 +169,22 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
 #[cfg(test)]mod tests{
     use super::*;
     fn item(id:u32,time:i64)->Item{Item{id,time,app:"Synthetic app".into(),aumid:"Synthetic.App".into(),title:format!("Notification {id}"),body:"Synthetic notification content".into()}}
+    #[test]fn dismiss_all_requires_complete_list_valid_identity_and_stops_at_cancellation_or_failure(){
+        let mut view=Snapshot{status:1,items:vec![item(1,10),item(2,20)],command_failed:false};
+        assert!(removal_plan(&view,None,true).is_none());let plan=removal_plan(&view,None,false).unwrap();
+        // Later arrivals are outside the explicit list the user selected.
+        view.items.push(item(3,30));assert_eq!(plan.len(),2);
+        let mut removed=Vec::new();assert!(remove_rows(&plan,||false,|row|{removed.push((row.id,row.time,row.aumid.clone()));true}));
+        assert_eq!(removed.iter().map(|r|r.0).collect::<Vec<_>>(),vec![1,2]);
+        let closed=std::cell::Cell::new(false);let mut calls=0;
+        assert!(!remove_rows(&plan,||closed.get(),|_|{calls+=1;closed.set(true);true}));assert_eq!(calls,1);
+        calls=0;assert!(!remove_rows(&plan,||false,|_|{calls+=1;false}));assert_eq!(calls,1);
+        view.status=2;assert!(removal_plan(&view,None,false).is_none());assert_eq!(removal_plan(&view,Some(2),false).unwrap().len(),1);
+        view.status=1;view.items[1].time=0;assert!(removal_plan(&view,None,false).is_none());
+        view.items=vec![item(1,10),item(1,11)];assert!(removal_plan(&view,None,false).is_none());
+        view.items=vec![item(1,10);65];assert!(removal_plan(&view,None,false).is_none());
+        assert!(!remove_rows(&view.items,||false,|_|panic!("oversized batch must not remove anything")));
+    }
     #[test]fn partial_reads_preserve_missing_entries_but_revocation_discards_content(){
         let mut snapshot=Snapshot{status:1,items:vec![item(1,10),item(2,20)],command_failed:false};
         merge(&mut snapshot,Snapshot{status:2,items:vec![item(2,21),item(3,30)],command_failed:false});
@@ -192,6 +228,9 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
                 perform(owner,popup,Action::Details(generation.wrapping_sub(1),7));assert!(PANEL.with(|s|s.borrow().as_ref().unwrap().selected.is_none()));
                 perform(owner,popup,Action::Details(generation,7));assert_eq!(PANEL.with(|s|s.borrow().as_ref().unwrap().selected),Some(7));
                 perform(owner,popup,Action::Dismiss(generation,7));assert!(!PANEL.with(|s|s.borrow().as_ref().unwrap().pending),"TEST cannot dismiss a real notification");
+                perform(owner,popup,Action::Clear(generation.wrapping_sub(1)));perform(owner,popup,Action::Clear(generation));
+                assert!(!PANEL.with(|s|s.borrow().as_ref().unwrap().pending),"TEST cannot dismiss all notifications");
+                assert_eq!(PANEL.with(|s|s.borrow().as_ref().unwrap().view.items.len()),1);
                 if cycle==0{
                     use windows_sys::Win32::Graphics::{Dwm::DwmFlush,Gdi::*};
                     let painted=Instant::now();while painted.elapsed()<Duration::from_millis(450){
@@ -212,6 +251,6 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
             perform(owner,ptr::null_mut(),Action::Open);let popup=control_center::window(owner).unwrap();control_center::close_for(owner);
             pump_until(&||!WORKER.load(Ordering::Acquire));assert!(PANEL.with(|s|s.borrow().is_none()));assert_eq!(IsWindow(popup),0);
         }
-        println!("FLUIDWIN_NOTIFICATIONS history_panel=PASS stale_generation=REFUSED test_dismiss=REFUSED closed_result=IGNORED worker_teardown=PASS actual_dismiss=NOT_INVOKED banner_badge_silence=NOT_IMPLEMENTED");
+        println!("FLUIDWIN_NOTIFICATIONS history_panel=PASS stale_generation=REFUSED test_dismiss=REFUSED test_clear_all=REFUSED closed_result=IGNORED worker_teardown=PASS actual_dismiss=NOT_INVOKED banner_badge_silence=NOT_IMPLEMENTED");
     }
 }

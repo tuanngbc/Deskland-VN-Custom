@@ -40,7 +40,8 @@ bool tlauncher_notifications_item(void* raw,unsigned index,UINT32* id,INT64* tim
 }
 bool tlauncher_notifications_remove(void* raw,UINT32 id,INT64 time,const wchar_t* aumid,bool readOnly) noexcept {
     // Revalidate the actual notification identity immediately before the user's
-    // single explicit dismissal. Never use ClearNotifications or delete by ID alone.
+    // explicit dismissal (single or bounded displayed-list batch). Never use
+    // ClearNotifications or delete by ID alone; arrivals outside that list stay.
     if(readOnly||!raw||!aumid||!*aumid||time<=0)return false;
     try {
         auto& model=*static_cast<Reader*>(raw);std::vector<notifiche::Notifica> current;
