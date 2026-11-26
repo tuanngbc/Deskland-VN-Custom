@@ -70,6 +70,7 @@ mod folder_stack;
 mod shelf;
 mod shelf_previews;
 mod control_access;
+mod sensors;
 mod app_previews;
 mod comfort;
 mod recycle_bin;
@@ -1759,6 +1760,7 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::Overview=>overview::show(owner,false,1),
         Command::SnapLayouts=>snap_layout::choose_window(owner),
         Command::Calendar=>calendar::show(owner,dock_app_anchor(owner,None)),
+        Command::Sensors(action)=>sensors::perform(owner,ptr::null_mut(),action),
         Command::Notifications(action)=>notifications::perform(owner,ptr::null_mut(),action),
         Command::News(action)=>news::perform(owner,ptr::null_mut(),action),
         Command::HiddenApps=>show_hidden_apps(owner),

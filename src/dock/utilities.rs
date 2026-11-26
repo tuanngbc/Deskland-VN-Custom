@@ -480,6 +480,7 @@ pub(super) fn hub_view(snapshot:&Snapshot,profile:&Profile,dock_mode:bool,live:b
     cards.push(Card{title:crate::launcher::localized("Đang phát","Now playing","正在播放").into(),
         hint:crate::launcher::localized("Bài hát, ảnh bìa và điều khiển phát","Track, artwork and playback controls","曲目、封面与播放控制").into(),icon:None,action:Some(Command::Media)});
     cards.push(Card{title:crate::launcher::localized("Lịch","Calendar","日历").into(),hint:String::new(),icon:None,action:Some(Command::Calendar)});
+    cards.push(Card{title:crate::launcher::localized("Microphone và webcam","Microphone and webcam","麦克风与摄像头").into(),hint:String::new(),icon:None,action:Some(Command::Sensors(super::sensors::Action::Open))});
     cards.push(Card{title:crate::launcher::localized("Tin tức","News","新闻").into(),hint:String::new(),icon:None,action:Some(Command::News(super::news::Action::Open))});
     cards.push(Card{title:crate::launcher::localized("Thời tiết","Weather","天气").into(),hint:"Open-Meteo".into(),icon:None,action:Some(Command::Weather(super::weather_panel::Action::Open))});
     cards.push(Card{title:crate::launcher::localized("Thông báo","Notifications","通知").into(),

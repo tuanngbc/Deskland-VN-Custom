@@ -5,6 +5,13 @@
   "note": "Section adaptations, not claims that these full headers were imported. Original CRLF worktree byte hashes and canonical Git blobs are recorded; existing notices and original license are preserved.",
   "sections": [
     {
+      "source": "sensori.h::microfono / webcam / inUso / nomeProcesso",
+      "source_git_blob": "3e330904e648a8098f3821b42ce7a5808317cbbc",
+      "source_worktree_sha256": "1b19e147a17c3e545dec6d2af7ecaf8fc6c5b9107a3af8999c0437b7a267aed4",
+      "integration": ["sensors_bridge.cpp", "../../src/dock/sensors.rs", "../../src/dock/control_center.rs"],
+      "adaptation": "Read-only WASAPI active capture sessions and Windows webcam ConsentStore reports on explicit Control Center open/refresh. Scoped COM/process/registry handles instead of retained sensor singleton/main poll loop. Maximum 32 endpoints, 256 sessions per endpoint, 500 registry rows per root, 16 bounded basename labels per source; unknown/partial reports remain explicit. No recording, camera activation, privacy write, process launch or full-path export. Closed/ticket delivery and globally single scoped pool callback; no persistent data. Battery/headphone notices and standalone OSD remain separate incomplete routes."
+    },
+    {
       "source": "ricerca.h::pagine settings catalog",
       "source_git_blob": "cda18f93d518deeed9f2cd9025f7f035832cb822",
       "source_worktree_sha256": "4a7cc60f3374958220aa735596339455733f74461cf1d131d1a78082e75d0c44",
