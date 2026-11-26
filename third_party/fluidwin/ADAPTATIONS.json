@@ -6,6 +6,8 @@
   "sections": [
     {
       "source": "notch.h::scaffale / Bersaglio / appoggia / trascinaFuori",
+      "source_git_blob": "b44082a6634d16983c45d873d7d8db025c90627c",
+      "source_worktree_sha256": "c519f89e6f7f5a99aeaee5c2da7f30ddca9e85b0cce5d8792354a38873d1597a",
       "integration": ["shelf_bridge.cpp", "../../src/dock/shelf.rs", "../../src/dock/control_center.rs"],
       "adaptation": "Reference-only unlocked-session shelf in existing native Control Center, not Dynamic Notch. Original CF_HDROP/HDROP handling, case-insensitive deduplication, atomic maximum-200 admission, Shell IDataObject and copy/move/link drag completion semantics. Real drag starts only after a row crosses Windows drag thresholds; keyboard can copy Shell references. RAII OLE/drop registration, disconnected targets and session clear; no new thread/poll loop. Original six-item thumbnail layout remains a fidelity gap."
     },

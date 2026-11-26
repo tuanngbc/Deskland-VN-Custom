@@ -513,13 +513,16 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                     WM_MOUSEMOVE=>{
                         p.index=p.hit(x,y);
                         if let Some(point)=p.pressed_point{
-                            if (x-point.x).abs()>=chrome::scale(p.dpi,GetSystemMetrics(SM_CXDRAG)).max(4)||(y-point.y).abs()>=chrome::scale(p.dpi,GetSystemMetrics(SM_CYDRAG)).max(4){
+                            if (x-point.x).abs()>=windows_sys::Win32::UI::HiDpi::GetSystemMetricsForDpi(SM_CXDRAG,p.dpi).max(4)||(y-point.y).abs()>=windows_sys::Win32::UI::HiDpi::GetSystemMetricsForDpi(SM_CYDRAG,p.dpi).max(4){
                                 action=p.pressed.and_then(|i|p.cards().get(i)).and_then(|c|c.action.as_ref()).and_then(super::shelf::drag_command);
                                 if action.is_some(){p.pressed=None;p.pressed_point=None;}
                             }
                         }
                     }
-                    super::WM_DOCK_MOUSELEAVE=>{if GetCapture()!=hwnd{p.index=None;p.pressed=None;p.pressed_point=None;}},
+                    super::WM_DOCK_MOUSELEAVE=>{
+                        let shelf_drag=p.pressed.and_then(|i|p.cards().get(i)).and_then(|c|c.action.as_ref()).and_then(super::shelf::drag_command).is_some();
+                        if GetCapture()!=hwnd||!shelf_drag{p.index=None;p.pressed=None;p.pressed_point=None;}
+                    },
                     WM_CAPTURECHANGED=>{p.index=None;p.pressed=None;p.pressed_point=None;},
                     WM_LBUTTONDOWN=>{p.pressed=p.hit(x,y);p.pressed_point=Some(POINT{x,y});}
                     WM_LBUTTONUP=>{
