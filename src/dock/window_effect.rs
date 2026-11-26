@@ -31,6 +31,7 @@ thread_local!{
     static ACTIVE:RefCell<Option<Transition>>=const{RefCell::new(None)};
     static RECENT:RefCell<HashMap<WindowIdentity,Recent>>=RefCell::new(HashMap::new());
     static FACTORY:RefCell<Option<ProxyFactory>>=const{RefCell::new(None)};
+    #[cfg(test)] static FAIL_PRESENT:std::cell::Cell<Option<i32>>=const{std::cell::Cell::new(None)};
 }
 static LAST:Mutex<Option<Value>>=Mutex::new(None);
 
@@ -110,7 +111,9 @@ impl Attempt{
         self.values["proxyCreated"]=json!(proxy.is_some());proxy.ok_or("proxy-create-failed")
     }
     unsafe fn present(&mut self,p:&Proxy,r:RECT,progress:f64,opacity:u8)->Result<(),Reason>{
-        match p.paint(r,progress,opacity){
+        #[cfg(test)] let status=FAIL_PRESENT.with(|s|s.take()).unwrap_or_else(||p.paint(r,progress,opacity));
+        #[cfg(not(test))] let status=p.paint(r,progress,opacity);
+        match status{
             1=>{
                 let now=Instant::now();
                 if let Some(prev)=self.last_submit.replace(now){
@@ -1031,6 +1034,37 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
             assert_eq!(last()["actualEffect"],effect.name());
             assert_eq!(IsIconic(source),0);
             println!("FLUIDWIN_DOCK_PRODUCTION {} minimize=PASS restore=PASS reversal=PASS placement=PASS",effect.name());
+        }
+        if actual_policy.native_minimize!=Some(0)&&guardian_ready(){
+            let id=ids[0];let before=GetWindowLongPtrW(source,GWL_EXSTYLE);
+            let (_,marker)=super::TASKBAR_WATCH.with(|w|w.borrow().as_ref().unwrap().motion_session().unwrap());
+            let marker=wide(&marker);
+            for failure in ["cancel","injected-device-removed","injected-monitor-change"]{
+                motion::configure(motion::Settings{window_effect:motion::WindowEffect::Genie,..policy});
+                assert!(minimize(bar,path,id));
+                let start=Instant::now();
+                while !ACTIVE.with(|a|a.borrow().as_ref().is_some_and(|t|t.last_progress>0.18)){
+                    assert!(start.elapsed()<Duration::from_secs(5));timer();
+                    let mut msg:MSG=mem::zeroed();while PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                assert!(!GetPropW(source,marker.as_ptr()).is_null(),"journal exists while foreign window is concealed");
+                match failure{
+                    "cancel"=>cancel(),
+                    "injected-device-removed"=>{FAIL_PRESENT.with(|s|s.set(Some(0x887a0005u32 as i32)));timer();},
+                    _=>{ACTIVE.with(|a|a.borrow_mut().as_mut().unwrap().req.monitor=0);timer();},
+                }
+                assert!(!active());
+                let start=Instant::now();
+                while GetWindowLongPtrW(source,GWL_EXSTYLE)!=before||!GetPropW(source,marker.as_ptr()).is_null(){
+                    fixture_guard_pulse();let mut msg:MSG=mem::zeroed();
+                    while PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}
+                    assert!(start.elapsed()<Duration::from_secs(5),"foreign state after {failure}");std::thread::sleep(Duration::from_millis(10));
+                }
+                ShowWindowAsync(source,SW_RESTORE);let start=Instant::now();
+                while IsIconic(source)!=0{fixture_guard_pulse();assert!(start.elapsed()<Duration::from_secs(2));std::thread::sleep(Duration::from_millis(10));}
+                println!("FLUIDWIN_GUARDED_RECOVERY case={failure} original_style=RESTORED journal=CLEARED");
+            }
         }
     }
 }
