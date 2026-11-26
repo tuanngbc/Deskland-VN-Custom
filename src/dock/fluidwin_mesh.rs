@@ -106,6 +106,7 @@ impl Layer {
         window:RECT,icon:RECT,side:DockSide,effect:super::motion::WindowEffect,dpi:u32)->Option<Self>{
         #[cfg(target_env="msvc")]
         {
+            let icon=if effect==super::motion::WindowEffect::Scale{super::window_effect::icon_fit(window,icon)}else{icon};
             let side=match side{DockSide::Bottom=>0,DockSide::Left=>2,DockSide::Right=>3};
             let scale=(f64::from(dpi)/96.0).clamp(0.75,4.0);
             let margin=if effect==super::motion::WindowEffect::Drop{5*(icon.right-icon.left)+16}else{2};

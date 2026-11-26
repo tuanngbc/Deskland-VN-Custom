@@ -158,7 +158,7 @@ fn dims(r:RECT)->(i32,i32){(r.right-r.left,r.bottom-r.top)}
 // A geometry guard, not a texture/canvas allocation limit. The capture
 // worker has its own independently bounded frame-pool and thumbnail budgets.
 fn valid_area(r:RECT)->bool{let (w,h)=dims(r);w>0&&h>0&&w<=16384&&h<=16384}
-fn icon_fit(area:RECT,icon:RECT)->RECT{
+pub(super) fn icon_fit(area:RECT,icon:RECT)->RECT{
     let (w,h)=dims(area);let (iw,ih)=dims(icon);
     let s=(iw as f32/w as f32).min(ih as f32/h as f32);
     let (w,h)=((w as f32*s).round().max(1.0) as i32,(h as f32*s).round().max(1.0) as i32);
