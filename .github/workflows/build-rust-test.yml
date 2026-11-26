@@ -90,6 +90,8 @@ jobs:
           if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
           [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path tools/prepare-owner-uat.ps1),[ref]$tokens,[ref]$parseErrors) | Out-Null
           if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path tools/retrieve-fluidwin-reference-evidence.ps1),[ref]$tokens,[ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
           cargo test --release dock::motion::tests::live_speed_reaches_both_ui_threads_without_restarting_active_tweens -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::glass_menu::tests::native_menu_prepares_frame_and_uses_all_six_speeds -- --ignored --exact --nocapture --test-threads=1
