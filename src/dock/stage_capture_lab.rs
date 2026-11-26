@@ -230,6 +230,7 @@ fn native_fluidwin_gpu_capture_full_resolution(){
         let pipeline=super::fluidwin_mesh::Pipeline::new(&frame.gpu.context()).unwrap();
         for effect in [super::motion::WindowEffect::Genie,super::motion::WindowEffect::Drop,super::motion::WindowEffect::Scale]{
             let layer={let _batch=frame.gpu.context();super::fluidwin_mesh::Layer::from_gpu(pipeline.clone(),&frame,area,icon,super::DockSide::Bottom,effect,96).unwrap()};
+            assert!({let _batch=frame.gpu.context();layer.enable_evidence()},"pre-Present rendered evidence target");
             for (index,progress) in [0.0,0.05,0.25,0.5,0.85,0.97,1.0,0.85,0.5,0.0].into_iter().enumerate(){
                 let start=Instant::now();
                 loop{
@@ -239,6 +240,9 @@ fn native_fluidwin_gpu_capture_full_resolution(){
                     std::thread::sleep(Duration::from_millis(8));
                 }
                 let (pixels,w,h)={let _batch=frame.gpu.context();layer.rendered_pixels().expect("complete GPU output readback")};
+                if progress<0.85{
+                    assert!(pixels.chunks_exact(4).filter(|p|p[3]>16).count()>256,"rendered evidence must contain window pixels, including first pose");
+                }
                 assert!(pixels.chunks_exact(4).all(|p|p[0]<=p[3]&&p[1]<=p[3]&&p[2]<=p[3]),"all rendered pixels, including full perimeter, must be premultiplied");
                 if let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
                     let rgba=pixels.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],p[3]]).collect::<Vec<_>>();

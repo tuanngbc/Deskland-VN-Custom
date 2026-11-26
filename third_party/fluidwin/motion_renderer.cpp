@@ -116,6 +116,9 @@ struct Layer {
     ComPtr<IDXGISwapChain1> chain;
     ComPtr<ID3D11RenderTargetView> target;
     ComPtr<ID3D11ShaderResourceView> texture;
+    // Allocated only by the hosted evidence API. Copy before Present, whose
+    // flip can rotate the back buffer observed by a later readback.
+    ComPtr<ID3D11Texture2D> evidence;
     UINT w = 0, h = 0, tw = 0, th = 0;
     HANDLE frameReady=nullptr;
     ~Layer(){if(frameReady)CloseHandle(frameReady);}
@@ -285,6 +288,7 @@ struct Layer {
         ctx->PSSetShaderResources(0, 1, &tex);
         ctx->OMSetRenderTargets(0, nullptr, nullptr);
         if (!painted) return 0;
+        if(evidence){ComPtr<ID3D11Resource> rendered;target->GetResource(&rendered);ctx->CopyResource(evidence.Get(),rendered.Get());}
         const HRESULT hr = chain->Present(1, DXGI_PRESENT_DO_NOT_WAIT);
         if (hr == DXGI_ERROR_WAS_STILL_DRAWING) return 2;
         return hr == S_OK ? 1 : static_cast<int>(hr);
@@ -347,20 +351,21 @@ UINT tlauncher_fluidwin_source_mips(void* p) {
 
 // Used by explicit hosted visual fixtures: read the entire rendered target,
 // including every border texel, after real shader/raster/blend execution.
-int tlauncher_fluidwin_rendered_pixels(void* p,void* layer,void* pixels,UINT stride) {
+int tlauncher_fluidwin_enable_evidence(void* p,void* layer) {
     auto& q=*static_cast<Pipeline*>(p);auto& l=*static_cast<Layer*>(layer);
-    if(!pixels||stride<l.w*4) return 0;
     ComPtr<ID3D11Resource> resource;l.target->GetResource(&resource);
-    ComPtr<ID3D11Texture2D> rendered;if(FAILED(resource.As(&rendered))) return 0;
+    ComPtr<ID3D11Texture2D> rendered;if(FAILED(resource.As(&rendered)))return 0;
     D3D11_TEXTURE2D_DESC desc{};rendered->GetDesc(&desc);
     desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.MiscFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
-    ComPtr<ID3D11Texture2D> read;
-    if(FAILED(q.device->CreateTexture2D(&desc,nullptr,&read))) return 0;
-    q.context->CopyResource(read.Get(),rendered.Get());
+    return SUCCEEDED(q.device->CreateTexture2D(&desc,nullptr,&l.evidence));
+}
+int tlauncher_fluidwin_rendered_pixels(void* p,void* layer,void* pixels,UINT stride) {
+    auto& q=*static_cast<Pipeline*>(p);auto& l=*static_cast<Layer*>(layer);
+    if(!pixels||stride<l.w*4||!l.evidence) return 0;
     D3D11_MAPPED_SUBRESOURCE map{};
-    if(FAILED(q.context->Map(read.Get(),0,D3D11_MAP_READ,0,&map))) return 0;
+    if(FAILED(q.context->Map(l.evidence.Get(),0,D3D11_MAP_READ,0,&map))) return 0;
     for(UINT y=0;y<l.h;y++) std::memcpy(static_cast<unsigned char*>(pixels)+y*stride,static_cast<const unsigned char*>(map.pData)+y*map.RowPitch,l.w*4);
-    q.context->Unmap(read.Get(),0);return 1;
+    q.context->Unmap(l.evidence.Get(),0);return 1;
 }
 
 int tlauncher_fluidwin_draw(void* p, void* layer, const RECT* window, const RECT* icon,

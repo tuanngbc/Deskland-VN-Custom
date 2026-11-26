@@ -18,6 +18,8 @@ extern "C" {
     fn tlauncher_fluidwin_source_mips(layer: *mut c_void) -> u32;
     #[cfg(test)]
     fn tlauncher_fluidwin_rendered_pixels(pipeline:*mut c_void,layer:*mut c_void,pixels:*mut u8,stride:u32)->i32;
+    #[cfg(test)]
+    fn tlauncher_fluidwin_enable_evidence(pipeline:*mut c_void,layer:*mut c_void)->i32;
     fn tlauncher_fluidwin_draw(pipeline: *mut c_void, layer: *mut c_void,
         window: *const RECT, icon: *const RECT, canvas: *const RECT,
         side: i32, progress: f64, opacity: f32, drop: i32, dark: i32, scale: f64) -> i32;
@@ -60,6 +62,8 @@ impl Layer {
     }
     #[cfg(all(test,target_env="msvc"))]
     pub(super) unsafe fn source_mips(&self)->u32{tlauncher_fluidwin_source_mips(self.raw.as_ptr())}
+    #[cfg(all(test,target_env="msvc"))]
+    pub(super) unsafe fn enable_evidence(&self)->bool{tlauncher_fluidwin_enable_evidence(self.pipeline.0.as_ptr(),self.raw.as_ptr())!=0}
     #[cfg(all(test,target_env="msvc"))]
     pub(super) unsafe fn rendered_pixels(&self)->Option<(Vec<u8>,u32,u32)>{
         let w=u32::try_from(self.canvas.right-self.canvas.left).ok()?;
