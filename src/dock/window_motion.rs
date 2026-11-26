@@ -1,7 +1,7 @@
 //! Global native move events, one active GPU proxy and the existing Guardian.
 use super::{CONTROL,STATE,WindowIdentity,window_effect::Proxy,window_lease::Lease,stage_snapshot,jelly::Jelly};
 use std::{cell::RefCell,mem,ptr,time::{Instant,Duration},sync::mpsc::TryRecvError};
-use windows_sys::Win32::{Foundation::*,Graphics::Gdi::*,UI::{Accessibility::*,HiDpi::GetDpiForWindow,Input::KeyboardAndMouse::{GetAsyncKeyState,VK_LBUTTON},WindowsAndMessaging::*}};
+use windows_sys::Win32::{Foundation::*,Graphics::Gdi::*,UI::{Accessibility::*,HiDpi::GetDpiForWindow,Input::KeyboardAndMouse::{GetAsyncKeyState,VK_LBUTTON,VK_RBUTTON},WindowsAndMessaging::*}};
 pub(super) const TIMER:usize=30;
 thread_local!{static ACTIVE:RefCell<Option<Drag>>=const{RefCell::new(None)};static DETACH:RefCell<Option<Detach>>=const{RefCell::new(None)};}
 // Original fluidwin.cpp EVENT_OBJECT_LOCATIONCHANGE / gUltimoPosto route for
@@ -45,7 +45,9 @@ struct Detach{id:WindowIdentity,monitor:usize,dpi:u32,started:Instant,last:Optio
 #[cfg(test)]thread_local!{static PREPARE_TIMEOUT:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
 unsafe fn held()->bool{
     #[cfg(test)]if let Some(value)=HELD.get(){return value;}
-    GetAsyncKeyState(i32::from(VK_LBUTTON))<0
+    // GetAsyncKeyState reads physical buttons. Follow Windows' logical
+    // primary button, as upstream's detach path does, without changing it.
+    GetAsyncKeyState(i32::from(if GetSystemMetrics(SM_SWAPBUTTON)!=0{VK_RBUTTON}else{VK_LBUTTON}))<0
 }
 struct Drag{
     id:WindowIdentity,outer:RECT,borders:RECT,area:RECT,monitor:usize,dpi:u32,
