@@ -20,11 +20,11 @@ impl Action{
         },
     }}
 }
-enum Phase{Capture,Prime,Conceal,RestoreBeforeSnap,Observe,Travel(motion::Span),Release}
+enum Phase{Capture,Prime,Conceal,RestoreBeforeSnap,Observe,Travel(motion::Span),Release,NativeRestoreSnap}
 struct Transition{
     id:WindowIdentity,action:Action,area:RECT,target:RECT,monitor:usize,dpi:u32,phase:Phase,
     capture:Option<stage_snapshot::TransitionCapture>,proxy:Option<Proxy>,lease:Option<Lease>,
-    started:Instant,phase_at:Instant,last_present:Instant,frames:u32,stable:u32,commanded:bool,done:bool,
+    started:Instant,phase_at:Instant,last_present:Instant,frames:u32,stable:u32,commanded:bool,done:bool,native_reason:Option<String>,
 }
 thread_local!{static ACTIVE:RefCell<Option<Transition>>=const{RefCell::new(None)};}
 #[cfg(test)]thread_local!{static FAIL_PRESENT:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
@@ -63,14 +63,25 @@ impl Transition{
     unsafe fn fallback(&mut self,reason:&str)->bool{
         if let Some(lease)=&self.lease{lease.restore();}
         if !self.commanded&&self.id.matches(self.id.hwnd as HWND){
-            // Snap from maximized waits for native restore before applying its
-            // bounds; do not post an out-of-order second operation on failure.
-            if matches!(self.action,Action::Snap(_))&&IsZoomed(self.id.hwnd as HWND)!=0{ShowWindowAsync(self.id.hwnd as HWND,SW_RESTORE);}
-            else{self.action.issue(self.id.hwnd as HWND);}
+            if matches!(self.action,Action::Snap(_))&&IsZoomed(self.id.hwnd as HWND)!=0{
+                // Keep only the native command pending while restore runs.
+                // This preserves the requested Snap even if capture failed.
+                if ShowWindowAsync(self.id.hwnd as HWND,SW_RESTORE)!=0{
+                    self.proxy=None;self.capture=None;self.native_reason=Some(reason.into());self.phase(Phase::NativeRestoreSnap);return true;
+                }
+            }else{self.commanded=self.action.issue(self.id.hwnd as HWND);}
         }
         self.finish(Some(reason));false
     }
     unsafe fn step(&mut self)->bool{
+        if matches!(self.phase,Phase::NativeRestoreSnap){
+            let h=self.id.hwnd as HWND;
+            if self.id.matches(h)&&IsWindowVisible(h)!=0&&IsIconic(h)==0{
+                if IsZoomed(h)==0{self.commanded=self.action.issue(h);}
+                else if self.phase_at.elapsed()<Duration::from_millis(550){return true;}
+            }
+            let reason=self.native_reason.take();self.finish(reason.as_deref());return false;
+        }
         if !self.valid(){return self.fallback("window-or-policy-changed");}
         let h=self.id.hwnd as HWND;
         match &self.phase{
@@ -142,6 +153,7 @@ impl Transition{
                 if self.lease.as_ref().unwrap().status()==2{SetForegroundWindow(h);self.finish(None);super::queue_refresh();return false;}
                 if self.phase_at.elapsed()>Duration::from_millis(550){return self.fallback("native-reveal-pending");}
             },
+            Phase::NativeRestoreSnap=>unreachable!(),
         }
         true
     }
@@ -175,7 +187,7 @@ pub(super) unsafe fn apply(id:WindowIdentity,action:Action)->bool{
     let Ok(capture)=stage_snapshot::transition_capture(id,CONTROL.get())else{return false;};
     let now=Instant::now();
     ACTIVE.with(|s|s.replace(Some(Transition{id,action,area,target:area,monitor:monitor as usize,dpi:GetDpiForWindow(h),phase:Phase::Capture,
-        capture:Some(capture),proxy:None,lease:None,started:now,phase_at:now,last_present:now,frames:0,stable:0,commanded:false,done:false})));
+        capture:Some(capture),proxy:None,lease:None,started:now,phase_at:now,last_present:now,frames:0,stable:0,commanded:false,done:false,native_reason:None})));
     if SetTimer(CONTROL.get(),TIMER,20,None)==0{cancel();return false;}true
 }
 
