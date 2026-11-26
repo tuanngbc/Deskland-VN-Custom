@@ -121,7 +121,7 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
     if !enabled()||IsWindow(owner)==0{return;}
     if matches!(action,Action::Open){
         super::utilities::close_panels();
-        control_center::show_list_capacity(owner,super::dock_app_anchor(owner,None),View{title:title(),hint:String::new(),cards:Vec::new(),metrics:None},12);
+        control_center::show_news(owner,super::dock_app_anchor(owner,None),View{title:title(),hint:String::new(),cards:Vec::new(),metrics:None});
         let (Some(window),Some(ticket))=(control_center::window(owner),control_center::ticket(owner))else{return;};
         let source=STATE.with(|s|s.borrow().prefs.news_source);
         let cached=CACHE.with(|c|c.borrow().as_ref().filter(|(s,at,_)|*s==source&&at.elapsed()<Duration::from_secs(600)).map(|(_,_,v)|v.clone()));
@@ -155,8 +155,9 @@ pub(super) fn reset(){PANEL.with(|s|s.take());CACHE.with(|s|s.take());}
     fn native_news_panel_rejects_stale_actions_and_closed_results(){
         use windows_sys::Win32::{System::LibraryLoader::GetModuleHandleW,Graphics::{Dwm::DwmFlush,Gdi::*}};
         assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(),Ok("true"));
+        struct Locale(String);impl Drop for Locale{fn drop(&mut self){crate::launcher::spotlight_locale(&self.0);}}let _locale=Locale(text("vi","en","zh-CN"));
         unsafe{
-            STATE.with(|s|s.borrow_mut().prefs.enabled=true);
+            STATE.with(|s|{let mut s=s.borrow_mut();s.prefs.enabled=true;s.prefs.appearance.theme=super::super::Theme::Light;});
             let owner=CreateWindowExW(WS_EX_TOOLWINDOW,wide("STATIC").as_ptr(),wide("News fixture").as_ptr(),WS_POPUP,
                 10,10,260,80,ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());assert!(!owner.is_null());
             let pump=|done:&dyn Fn()->bool|{
@@ -166,23 +167,30 @@ pub(super) fn reset(){PANEL.with(|s|s.take());CACHE.with(|s|s.take());}
                 }
             };
             for cycle in 0..3{
+                let locale=["vi","en","zh-CN"][cycle];crate::launcher::spotlight_locale(locale);
                 perform(owner,ptr::null_mut(),Action::Open);let popup=control_center::window(owner).unwrap();
                 pump(&||!WORKER.load(Ordering::Acquire)&&PANEL.with(|s|s.borrow().as_ref().is_some_and(|p|!p.pending)));
                 let (generation,ticket,work,view)=PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().unwrap();
                     p.view=parse("<rss><channel><item><title>TLauncher · Tin tức thử nghiệm</title><link>https://example.invalid/story</link><pubDate>Thu, 19 Nov 2026 04:42:52 GMT</pubDate></item></channel></rss>".as_bytes());
+                    p.view.items[0].title=text("Tin thử nghiệm dài: thời tiết hôm nay và dự báo những ngày tiếp theo trong tuần","Synthetic news headline about the weather today and the forecast for the coming week","这是用于检验两行新闻标题的示例内容，包含本周天气与未来几天的预报信息");p.view.items[0].time="14:35".into();
                     (p.generation,p.ticket,p.work.clone(),p.view())
                 });control_center::update(owner,ticket,view);
                 perform(owner,popup,Action::Sources(generation.wrapping_sub(1)));assert!(!PANEL.with(|s|s.borrow().as_ref().unwrap().sources));
                 perform(owner,popup,Action::Article(generation,0)); // TEST never opens the URL.
                 perform(owner,popup,Action::Sources(generation));assert!(PANEL.with(|s|s.borrow().as_ref().unwrap().sources));
                 perform(owner,popup,Action::Back(generation));
-                if cycle==0{
+                {
                     let until=Instant::now()+Duration::from_millis(450);pump(&||Instant::now()>=until);
                     UpdateWindow(popup);DwmFlush();let mut bounds:RECT=std::mem::zeroed();GetWindowRect(popup,&mut bounds);
                     let (w,h)=(bounds.right-bounds.left,bounds.bottom-bounds.top);let mut layer=super::super::glass_probe::Layer::new(w,h).unwrap();
                     let screen=GetDC(ptr::null_mut());assert_ne!(BitBlt(layer.dc(),0,0,w,h,screen,bounds.left,bounds.top,SRCCOPY|CAPTUREBLT),0);ReleaseDC(ptr::null_mut(),screen);GdiFlush();
                     let rgba=layer.pixels().chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],255]).collect::<Vec<_>>();
-                    if let Some(root)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){image::save_buffer(std::path::PathBuf::from(root).join("news-synthetic-panel.png"),&rgba,w as u32,h as u32,image::ColorType::Rgba8).unwrap();}
+                    if let Some(root)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){image::save_buffer(std::path::PathBuf::from(root).join(format!("news-synthetic-{locale}.png")),&rgba,w as u32,h as u32,image::ColorType::Rgba8).unwrap();}
+                    let px=|n|super::super::panel_chrome::scale(windows_sys::Win32::UI::HiDpi::GetDpiForWindow(popup),n);
+                    // Article is row 1, after the source selector. Both actual
+                    // line bands need dark ink on the fixture's light glass.
+                    let top=px(67+59);for (a,b) in [(7,22),(24,39)]{let count=rgba.chunks_exact(4).enumerate().filter(|(i,p)|{let x=*i as i32%w;let y=*i as i32/w;x>=px(22)&&x<w-px(66)&&y>=top+px(a)&&y<top+px(b)&&p[..3].iter().all(|c|*c<100)}).count();assert!(count>15,"actual News line {a} missing for {locale}: {count}");}
+                    #[cfg(target_env="msvc")]{let access=super::super::control_access::get(popup);assert!(!access.is_null());assert_eq!(super::super::control_access::probe(access,control_center::fixture_access_count(owner).unwrap(),0,0),0);super::super::control_access::release(access);}
                 }
                 perform(owner,popup,Action::Source(generation,5));assert_eq!(STATE.with(|s|s.borrow().prefs.news_source),5);assert!(!PANEL.with(|s|s.borrow().as_ref().unwrap().pending));
                 perform(owner,popup,Action::Source(generation,1));assert_eq!(STATE.with(|s|s.borrow().prefs.news_source),5,"old source generation must be refused");

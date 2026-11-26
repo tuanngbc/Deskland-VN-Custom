@@ -5,6 +5,13 @@
   "note": "Section adaptations, not claims that these full headers were imported. Original CRLF worktree byte hashes and canonical Git blobs are recorded; existing notices and original license are preserved.",
   "sections": [
     {
+      "source": "centro.h::Motore::disegnaWidget News rows; dock.h::fmtNotizia",
+      "source_git_blobs": {"centro.h":"942c4ae64c59c5763801d541d70da4172f46a4a3","dock.h":"f786a3cbe2fef19e5861c8a9c51f78e14b9c981b"},
+      "source_worktree_sha256": {"centro.h":"da7eaf30d8b4911826b623b81ef41291c7a2e5b17368456364462f341c1c8d1d","dock.h":"6cb19c9d27daad834660fe4cad4b269ca10609d21dccc8bcfad6e4ca7cd13a72"},
+      "integration": ["forecast_bridge.cpp","../../src/dock/news_card.rs","../../src/dock/news.rs","../../src/dock/control_center.rs"],
+      "adaptation": "Original 56px row, title font13 medium and two fixed17px lines within34px with ellipsis; independent muted timestamp at right. Existing Control Center HWND, 2x bitmap/glass, scoped software widget target/shared factories and News data/feed/cache/actions/keyboard/MSAA/paging owner. Native failure drops canvas and repaints full real glass, clears pressed state and revokes old accessibility action revision. No extra GPU device/feed/worker/window. Source selection stays existing list, not full unified Control Center fidelity. Hosted bitmap/panel/failure/locale tests pending."
+    },
+    {
       "source": "fluidwin.cpp::suTasto volume route and UI heartbeat; dock.h::cambiaVolume; centro.h::volumeTasto",
       "source_git_blobs": {"fluidwin.cpp":"17519dee3f8d60b3599b427cbb33a297dd9129cf","dock.h":"f786a3cbe2fef19e5861c8a9c51f78e14b9c981b","centro.h":"942c4ae64c59c5763801d541d70da4172f46a4a3"},
       "source_worktree_sha256": {"fluidwin.cpp":"e635f67fcce5978aca9d2f79da57529f4c18ff79fd59dee707c961e3b32350ef","dock.h":"6cb19c9d27daad834660fe4cad4b269ca10609d21dccc8bcfad6e4ca7cd13a72","centro.h":"da7eaf30d8b4911826b623b81ef41291c7a2e5b17368456364462f341c1c8d1d"},

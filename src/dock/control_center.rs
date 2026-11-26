@@ -99,6 +99,7 @@ struct Panel {
     cols:usize,per_page:usize, row_height:i32,list:bool,shelf:bool,rasters:surface::IconRasters,entrance:Option<super::motion::Tween>,shadow:Option<chrome::PanelShadow>,hub:bool,
     access:Option<super::control_access::Provider>,access_token:usize,
     forecast:Option<super::forecast_card::Card>,
+    news_canvas:Option<super::news_card::Canvas>,
 }
 impl Drop for Panel {
     fn drop(&mut self){unsafe{for &f in &self.fonts{if !f.is_null(){DeleteObject(f);}}}}
@@ -176,6 +177,15 @@ impl Panel{
         let alpha=self.entrance.map_or(255,|t|(255.0*t.openness()).round().clamp(1.0,255.0) as u8);
         if let Some(shadow)=&self.shadow{shadow.opacity(alpha);}
         self.layer.present_at(self.hwnd,None,alpha)
+    }
+    unsafe fn paint_news(&mut self)->bool{
+        if self.news_canvas.is_none(){return true;}
+        let rows=self.cards().iter().enumerate().filter(|(_,c)|matches!(c.action.as_ref(),Some(Command::News(super::news::Action::Article(..)))))
+            .map(|(i,c)|(self.rect(i),c.title.clone(),c.hint.clone(),self.index==Some(i))).collect::<Vec<_>>();
+        let canvas=self.news_canvas.as_mut().unwrap();
+        for (rect,title,time,focused) in rows{
+            if !canvas.draw(self.ink.as_mut().unwrap_or(&mut self.layer),rect,self.dpi,&title,&time,self.anchor.dark,focused){return false;}
+        }true
     }
     fn rect(&self,i:usize)->RECT{
         let pad=chrome::scale(self.dpi,14);
@@ -262,7 +272,12 @@ impl Panel{
             // part of the DC before reporting failure. Never keep those pixels.
             self.paint();return;
         }
+        if !self.paint_news(){
+            self.news_canvas=None;self.access_token=serial();self.index=None;self.pressed=None;self.pressed_point=None;
+            if !old.is_null(){SelectObject(g,old);}self.paint();return;
+        }
         let pinned=self.pinned();
+        let news_drawn=self.news_canvas.is_some();
         let cards=self.cards();
         let mut glyphs=Vec::with_capacity(cards.len());
         let mut thumbnails=Vec::new();
@@ -270,6 +285,7 @@ impl Panel{
             if forecast_drawn&&i<pinned{continue;}
             let r=self.rect(i);
             let focused=self.index==Some(i);
+            if news_drawn&&matches!(c.action.as_ref(),Some(Command::News(super::news::Action::Article(..)))){continue;}
             let is_metric=self.metrics.is_some();
             let fill=match (self.anchor.dark,focused){
                 (true,true)=>[82,72,63],(true,false)=>[70,62,56],
@@ -424,12 +440,13 @@ pub(super) unsafe fn follow_hub(owner:HWND,dock:crate::launcher::DockAnchor){
         chrome::PanelShadow::sync(&mut p.shadow,hwnd,owner,rect,dpi,anchor.side,anchor.dark);
     });
 }
-pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,false,false,None,None);}
-pub(super) unsafe fn show_list(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,true,false,false,None,None);}
-pub(super) unsafe fn show_list_capacity(owner:HWND,anchor:chrome::Anchor,view:View,capacity:usize){show_inner(owner,anchor,view,true,false,false,Some(capacity),None);}
-pub(super) unsafe fn show_hub(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,true,false,None,None);}
-pub(super) unsafe fn show_shelf(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,false,true,None,None);shelf_page();}
-pub(super) unsafe fn show_forecast(owner:HWND,anchor:chrome::Anchor,view:View,forecast:super::forecast_card::Card){show_inner(owner,anchor,view,true,false,false,Some(8),Some(forecast));}
+pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,false,false,None,None,false);}
+pub(super) unsafe fn show_list(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,true,false,false,None,None,false);}
+pub(super) unsafe fn show_list_capacity(owner:HWND,anchor:chrome::Anchor,view:View,capacity:usize){show_inner(owner,anchor,view,true,false,false,Some(capacity),None,false);}
+pub(super) unsafe fn show_news(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,true,false,false,Some(10),None,true);}
+pub(super) unsafe fn show_hub(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,true,false,None,None,false);}
+pub(super) unsafe fn show_shelf(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,false,true,None,None,false);shelf_page();}
+pub(super) unsafe fn show_forecast(owner:HWND,anchor:chrome::Anchor,view:View,forecast:super::forecast_card::Card){show_inner(owner,anchor,view,true,false,false,Some(8),Some(forecast),false);}
 unsafe fn shelf_page(){
     let request=PANE.with(|s|{let s=s.borrow();let p=s.as_ref().filter(|p|p.shelf)?;
         let rows=p.cards().into_iter().filter_map(|c|match c.action.as_ref(){
@@ -438,7 +455,7 @@ unsafe fn shelf_page(){
     if let Some((hwnd,tag,rows,dpi))=request{super::shelf_previews::request(hwnd,tag,rows,dpi);}
 }
 pub(super) fn first_page(owner:HWND,ticket:usize){PANE.with(|s|if let Some(p)=s.borrow_mut().as_mut().filter(|p|p.owner==owner&&p.tag==ticket){p.page=0;});}
-unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bool,shelf:bool,capacity:Option<usize>,forecast:Option<super::forecast_card::Card>){
+unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bool,shelf:bool,capacity:Option<usize>,forecast:Option<super::forecast_card::Card>,news:bool){
     super::utilities::close_panels();
     let dpi=windows_sys::Win32::UI::HiDpi::GetDpiForWindow(owner).clamp(72,288);
     let px=|n|chrome::scale(dpi,n);
@@ -447,7 +464,7 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bo
     let double=!list&&view.metrics.map_or(view.cards.len()>3,|o|o.compact);
     let cols=if shelf{if work.right-work.left>=px(520){6}else if work.right-work.left>=px(320){3}else{2}}else if double&&work.right-work.left>=px(365){2}else{1};
     let width=px(if shelf{548}else if list{350}else if cols==2{432}else{328}).min(work.right-work.left);
-    let row_height=px(if shelf{74}else if list{40}else if view.metrics.is_some(){57}else{52});
+    let row_height=px(if shelf{74}else if news{56}else if list{40}else if view.metrics.is_some(){57}else{52});
     let gap=px(if list{3}else{8});
     let budget=(work.bottom-work.top-px(if has_forecast{308}else if shelf{170}else{132})).max(row_height);
     let rows=(budget/(row_height+gap)).clamp(1,if shelf{6/cols as i32}else{9}) as usize;
@@ -475,7 +492,7 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bo
     let metrics=view.metrics.map(Metrics::new);
     let start=std::time::Instant::now();
     let animated=super::motion::native_allowed();
-    let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,glass,fonts,view,metrics,index:None,pressed:None,pressed_point:None,page:0,cols,per_page,row_height,list,shelf,rasters:surface::IconRasters::default(),entrance:None,shadow:None,hub,access:None,access_token:serial(),forecast};
+    let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,glass,fonts,view,metrics,index:None,pressed:None,pressed_point:None,page:0,cols,per_page,row_height,list,shelf,rasters:surface::IconRasters::default(),entrance:None,shadow:None,hub,access:None,access_token:serial(),forecast,news_canvas:if news{super::news_card::Canvas::new()}else{None}};
     // A hidden HWND can't be relied on to dispatch WM_PAINT. Submit the
     // completed bitmap directly, then show the window with content.
     p.paint();
@@ -736,6 +753,22 @@ unsafe fn announce(hwnd:HWND){
 }
 #[cfg(test)] mod tests{
     use super::*;
+    #[cfg(target_env="msvc")]
+    #[test]#[ignore="hosted partial News draw failure/full glass repaint/stale access refusal; no feed or browser"]
+    fn native_news_failure_releases_canvas_and_preserves_accessible_list(){
+        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(),Ok("true"));unsafe{
+            let owner=CreateWindowExW(WS_EX_TOOLWINDOW,wide("STATIC").as_ptr(),wide("News fallback fixture").as_ptr(),WS_POPUP,10,10,160,60,ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),ptr::null());assert!(!owner.is_null());
+            struct Cleanup(HWND);impl Drop for Cleanup{fn drop(&mut self){unsafe{close_for(self.0);DestroyWindow(self.0);}}}let _cleanup=Cleanup(owner);
+            let cards=vec![Card{title:"Synthetic long news headline for the native row renderer".into(),hint:"14:35".into(),icon:None,action:Some(Command::News(super::super::news::Action::Article(1,0)))},Card{title:"Refresh".into(),hint:String::new(),icon:None,action:Some(Command::News(super::super::news::Action::Refresh(1)))}];
+            show_news(owner,chrome::Anchor{point:POINT{x:400,y:650},side:super::super::DockSide::Bottom,dark:false,transparency:30},View{title:"News fallback".into(),hint:"Synthetic only".into(),cards,metrics:None});
+            let popup=window(owner).unwrap();let accessible=super::super::control_access::get(popup);assert!(!accessible.is_null());
+            let old=PANE.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().unwrap();assert!(p.news_canvas.is_some());p.index=Some(0);p.pressed=Some(0);p.pressed_point=Some(POINT{x:20,y:75});p.access_token});
+            super::super::news_card::fail_next();PANE.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().unwrap();p.paint();assert!(p.news_canvas.is_none());assert_ne!(old,p.access_token);assert!(p.index.is_none()&&p.pressed.is_none()&&p.pressed_point.is_none());assert!(p.layer.pixels().chunks_exact(4).all(|p|p[..3]!=[255,0,255]));assert!(p.present());});
+            assert_eq!(SendMessageW(popup,super::super::control_access::CHOOSE,0,old as isize),0);
+            assert_eq!(super::super::control_access::probe(accessible,fixture_access_count(owner).unwrap(),0,0),0);close_for(owner);assert_eq!(super::super::control_access::probe(accessible,0,0,3),0);super::super::control_access::release(accessible);
+            println!("FLUIDWIN_NEWS_FALLBACK partial_pixels=REMOVED glass=REPAINTED canvas=RELEASED keyboard_pressed=CLEARED old_access=REFUSED msaa_list=VERIFIED");
+        }
+    }
     #[cfg(target_env="msvc")]
     #[test]#[ignore="hosted partial weather-render failure, glass repaint and accessibility revision; synthetic panel only"]
     fn native_forecast_failure_repaints_glass_and_revokes_old_access_actions(){

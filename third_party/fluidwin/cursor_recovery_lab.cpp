@@ -58,15 +58,27 @@ extern "C" int tlauncher_cursor_recovery_copy_fixture()noexcept{
         std::array<Bytes,2> before,after;
         for(UINT i=0;i<2;++i)if(!frame(original.h,i,before[i]))return 7;
         if(before[0]==before[1])return 8;
-        for(UINT i=0;i<2;++i){if(!frame(copy.h,i,after[i]))return 14;if(after[i]!=before[i]){std::printf("CURSOR_COPY phase=before_source_destroy step=%u copied_frames_distinct=%d\n",i,int(after[0]!=after[1]));return 15;}}
+        bool exactCopy=true;
+        for(UINT i=0;i<2;++i){if(!frame(copy.h,i,after[i]))return 14;if(after[i]!=before[i])exactCopy=false;}
+        const bool copiedFramesDistinct=after[0]!=after[1];
+        // Retain an independent file-loaded original too. This preserves the
+        // whole ANI rather than assuming CopyImage retains its frame table.
+        Cursor reload;reload.h=static_cast<HCURSOR>(LoadImageW(nullptr,file.path.c_str(),IMAGE_CURSOR,0,0,LR_LOADFROMFILE));
+        if(!reload.h||reload.h==original.h||!sameHotspot(original.h,reload.h))return 16;
+        for(UINT i=0;i<2;++i){Bytes pixels;if(!frame(reload.h,i,pixels)||pixels!=before[i])return 17;}
         if(!DestroyCursor(original.h))return 13;original.h=nullptr;
-        for(UINT i=0;i<2;++i)if(!frame(copy.h,i,after[i])||after[i]!=before[i]){std::printf("CURSOR_COPY phase=after_private_source_destroy step=%u\n",i);return 9;}
+        for(UINT i=0;i<2;++i){
+            Bytes pixels;if(!frame(reload.h,i,pixels)||pixels!=before[i])return 18;
+            if(exactCopy&&(!frame(copy.h,i,after[i])||after[i]!=before[i]))return 9;
+        }
         // Standard cursor handles stay shared and untouched; only independent
         // copies and the bitmaps returned by GetIconInfo are destroyed.
         for(WORD id:{WORD(32512),WORD(32514),WORD(32650),WORD(32513),WORD(32649)}){
             const auto shared=LoadCursorW(nullptr,MAKEINTRESOURCEW(id));if(!shared)return 10;
             Cursor snapshot;snapshot.h=static_cast<HCURSOR>(CopyImage(shared,IMAGE_CURSOR,0,0,0));if(!snapshot.h||snapshot.h==shared||!sameHotspot(shared,snapshot.h))return 11;
         }
-        return 0;
+        std::printf("CURSOR_RECOVERY CopyImage_exact=%d copied_frames_distinct=%d file_reload_both_frames=1 private_source_destroyed=1 global_writes=0\n",int(exactCopy),int(copiedFramesDistinct));
+        // 100 is an observed lossy CopyImage rejected as a backup, not parity.
+        return exactCopy?0:100;
     }catch(...){return 12;}
 }

@@ -157,7 +157,7 @@ jobs:
         run: |
           $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
           New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
-          cargo test --release dock::cursor_recovery_lab::native_animated_cursor_copy_keeps_frames_hotspot_and_private_lifetime -- --ignored --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'cursor-recovery-lab.log')
+          cargo test --release dock::cursor_recovery_lab::native_cursor_recovery_rejects_lossy_animation_and_verifies_file_reload -- --ignored --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'cursor-recovery-lab.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify original volume-key routing without audio or input changes
@@ -177,6 +177,31 @@ jobs:
             ${{ runner.temp }}/stage-fixture-evidence/early-source.txt
             ${{ runner.temp }}/stage-fixture-evidence/cursor-recovery-lab.log
             ${{ runner.temp }}/stage-fixture-evidence/volume-keys.log
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Verify original two-line News rows and native fallback
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
+        run: |
+          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
+          New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
+          git rev-parse HEAD | Set-Content (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'early-news-source.txt')
+          $newsFailed = $false
+          foreach ($fixture in 'dock::news_card::tests::native_news_rows_wrap_two_lines_preserve_glass_and_timestamp','dock::control_center::tests::native_news_failure_releases_canvas_and_preserves_accessible_list','dock::news::tests::native_news_panel_rejects_stale_actions_and_closed_results') {
+            cargo test --release $fixture -- --ignored --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'early-news.log') -Append
+            if ($LASTEXITCODE -ne 0) { $newsFailed = $true }
+          }
+          if ($newsFailed) { exit 1 }
+
+      - name: Upload original News evidence before full regression
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-news-early
+          path: |
+            ${{ runner.temp }}/stage-fixture-evidence/early-news-source.txt
+            ${{ runner.temp }}/stage-fixture-evidence/early-news.log
+            ${{ runner.temp }}/stage-fixture-evidence/news-*.png
           retention-days: 14
           if-no-files-found: warn
 
@@ -413,14 +438,6 @@ jobs:
           $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
           New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
           cargo test --release dock::notifications::tests::native_notification_history_reads_on_demand_and_rejects_stale_actions -- --ignored --exact --nocapture --test-threads=1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Verify on-demand News panel with original synthetic RSS and no browser
-        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
-        run: |
-          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
-          New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
-          cargo test --release dock::news::tests::native_news_panel_rejects_stale_actions_and_closed_results -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify own UI corners and refuse foreign DWM changes

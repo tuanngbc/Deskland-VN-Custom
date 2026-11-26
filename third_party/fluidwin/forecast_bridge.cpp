@@ -15,7 +15,7 @@ struct Canvas {
     ComPtr<ID2D1DCRenderTarget> dc;ComPtr<ID2D1SolidColorBrush> pen;
     ComPtr<ID2D1StrokeStyle> stroke;
     ComPtr<ID2D1Bitmap> background;UINT width=0,height=0;
-    ComPtr<IDWriteTextFormat> city,big,detail,day;float scale=0;
+    ComPtr<IDWriteTextFormat> city,big,detail,day,news;float scale=0;
     bool prepare(float d){
         auto f=fabbriche::d2d();auto text=fabbriche::testo();if(!f||!text)return false;
         if(!dc){
@@ -25,16 +25,17 @@ struct Canvas {
         if(!pen&&FAILED(dc->CreateSolidColorBrush(D2D1::ColorF(1,1,1,1),&pen)))return false;
         if(!stroke&&FAILED(f->CreateStrokeStyle(D2D1::StrokeStyleProperties(D2D1_CAP_STYLE_ROUND,D2D1_CAP_STYLE_ROUND,D2D1_CAP_STYLE_ROUND,D2D1_LINE_JOIN_ROUND),nullptr,0,&stroke)))return false;
         if(scale!=d){
-            city.Reset();big.Reset();detail.Reset();day.Reset();
+            city.Reset();big.Reset();detail.Reset();day.Reset();news.Reset();
             const auto family=vetro::famiglia(text);const wchar_t* display=wcscmp(family,L"Segoe UI Variable Text")?family:L"Segoe UI Variable Display";
             ComPtr<IDWriteFontCollection> fonts;if(SUCCEEDED(text->GetSystemFontCollection(&fonts,FALSE))){for(const auto candidate:{L"Inter Variable Display",L"Inter Display"}){UINT32 index=0;BOOL exists=FALSE;if(SUCCEEDED(fonts->FindFamilyName(candidate,&index,&exists))&&exists){display=candidate;break;}}}
             auto format=[&](const wchar_t* font,float size,DWRITE_FONT_WEIGHT weight,ComPtr<IDWriteTextFormat>& out){
                 if(FAILED(text->CreateTextFormat(font,nullptr,weight,DWRITE_FONT_STYLE_NORMAL,DWRITE_FONT_STRETCH_NORMAL,size*d,L"",&out))&&FAILED(text->CreateTextFormat(L"Segoe UI",nullptr,weight,DWRITE_FONT_STYLE_NORMAL,DWRITE_FONT_STRETCH_NORMAL,size*d,L"",&out)))return false;
                 out->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);out->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);return true;
             };
-            if(!format(family,13,DWRITE_FONT_WEIGHT_SEMI_BOLD,city)||!format(display,34,DWRITE_FONT_WEIGHT_SEMI_BOLD,big)||!format(family,11.5f,DWRITE_FONT_WEIGHT_NORMAL,detail)||!format(family,11,DWRITE_FONT_WEIGHT_NORMAL,day))return false;
+            if(!format(family,13,DWRITE_FONT_WEIGHT_SEMI_BOLD,city)||!format(display,34,DWRITE_FONT_WEIGHT_SEMI_BOLD,big)||!format(family,11.5f,DWRITE_FONT_WEIGHT_NORMAL,detail)||!format(family,11,DWRITE_FONT_WEIGHT_NORMAL,day)||!format(family,13,DWRITE_FONT_WEIGHT_MEDIUM,news))return false;
+            news->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);news->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);news->SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM,17*d,13.5f*d);
             const DWRITE_TRIMMING trim{DWRITE_TRIMMING_GRANULARITY_CHARACTER,0,0};
-            for(auto format:{city.Get(),detail.Get(),day.Get()}){ComPtr<IDWriteInlineObject> ellipsis;if(SUCCEEDED(text->CreateEllipsisTrimmingSign(format,&ellipsis)))format->SetTrimming(&trim,ellipsis.Get());}
+            for(auto format:{city.Get(),detail.Get(),day.Get(),news.Get()}){ComPtr<IDWriteInlineObject> ellipsis;if(SUCCEEDED(text->CreateEllipsisTrimmingSign(format,&ellipsis)))format->SetTrimming(&trim,ellipsis.Get());}
             day->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);scale=d;
         }
         return true;
@@ -61,6 +62,33 @@ struct Canvas {
         if(c>=95){dc->DrawLine({cx+d,cy+6*d},{cx-2*d,cy+11*d},pen.Get(),1.8f*d,stroke.Get());dc->DrawLine({cx-2*d,cy+11*d},{cx+2*d,cy+11*d},pen.Get(),1.8f*d,stroke.Get());dc->DrawLine({cx+2*d,cy+11*d},{cx-d,cy+16*d},pen.Get(),1.8f*d,stroke.Get());}
     }
 };
+}
+
+// Original centro.h News row: two 17px title lines in a 56px hit area,
+// separate muted timestamp at the right. Same scoped software canvas/factories.
+extern "C" bool tlauncher_news_row_draw(void* raw,HDC target,const Surface* surface,const RECT* logical,float dpi,const wchar_t* title,const wchar_t* time,bool dark,bool focused)noexcept{
+    if(!raw||!target||!surface||!surface->pixels||surface->width<=0||surface->height<=0||surface->stride<size_t(surface->width)*4||surface->bytes<size_t(surface->height)*surface->stride||!logical||!title||!time||!std::isfinite(dpi)||dpi<=0)return false;
+    try{
+        auto& c=*static_cast<Canvas*>(raw);POINT points[2]={{logical->left,logical->top},{logical->right,logical->bottom}};
+        if(!LPtoDP(target,points,2))return false;RECT rect={points[0].x,points[0].y,points[1].x,points[1].y};
+        if(IsRectEmpty(&rect)||rect.left<0||rect.top<0||rect.right>surface->width||rect.bottom>surface->height)return false;
+        const float d=dpi*(rect.bottom-rect.top)/float(logical->bottom-logical->top);
+        const int saved=SaveDC(target);if(!saved)return false;struct Restore{HDC dc;int n;~Restore(){RestoreDC(dc,n);}}restore{target,saved};
+        SetMapMode(target,MM_TEXT);SetWindowOrgEx(target,0,0,nullptr);SetViewportOrgEx(target,0,0,nullptr);
+        if(!c.prepare(d)||FAILED(c.dc->BindDC(target,&rect)))return false;
+        const UINT width=UINT(rect.right-rect.left),height=UINT(rect.bottom-rect.top);
+        if(!c.background||c.width!=width||c.height!=height){c.background.Reset();if(FAILED(c.dc->CreateBitmap(D2D1::SizeU(width,height),nullptr,0,D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE)),&c.background)))return false;c.width=width;c.height=height;}
+        GdiFlush();if(FAILED(c.background->CopyFromMemory(nullptr,surface->pixels+size_t(rect.top)*surface->stride+size_t(rect.left)*4,surface->stride)))return false;
+        const float w=float(width),h=float(height);c.dc->BeginDraw();c.dc->DrawBitmap(c.background.Get(),{0,0,w,h});
+        if(focused){c.pen->SetColor(D2D1::ColorF(dark?1.f:0.f,dark?1.f:0.f,dark?1.f:0.f,dark?.10f:.055f));c.dc->FillRoundedRectangle({{0,0,w,h},12*d,12*d},c.pen.Get());}
+        c.pen->SetColor(D2D1::ColorF(dark?.96f:.12f,dark?.96f:.12f,dark?.96f:.12f,1));
+        ComPtr<IDWriteTextLayout> layout;auto text=fabbriche::testo();const UINT32 count=UINT32(wcsnlen_s(title,2048));
+        if(!text||FAILED(text->CreateTextLayout(title,count,c.news.Get(),std::max(1.f,w-60*d),34*d,&layout))){c.dc->EndDraw();return false;}
+        c.dc->DrawTextLayout({8*d,6*d},layout.Get(),c.pen.Get(),D2D1_DRAW_TEXT_OPTIONS_CLIP);
+        c.pen->SetColor(D2D1::ColorF(dark?.96f:.12f,dark?.96f:.12f,dark?.96f:.12f,.62f));
+        c.dc->DrawText(time,UINT32(wcsnlen_s(time,32)),c.detail.Get(),{w-44*d,6*d,w-8*d,22*d},c.pen.Get(),D2D1_DRAW_TEXT_OPTIONS_CLIP);
+        const auto result=c.dc->EndDraw();if(FAILED(result)){c.background.Reset();c.pen.Reset();c.dc.Reset();c.scale=0;}return SUCCEEDED(result);
+    }catch(...){return false;}
 }
 extern "C" void* tlauncher_forecast_canvas_create()noexcept{try{return new Canvas;}catch(...){return nullptr;}}
 extern "C" void tlauncher_forecast_canvas_free(void* raw)noexcept{delete static_cast<Canvas*>(raw);}
