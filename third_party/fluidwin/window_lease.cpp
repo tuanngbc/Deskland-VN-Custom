@@ -8,6 +8,7 @@
 #include <mutex>
 #include <algorithm>
 #include <cwchar>
+#include <unordered_map>
 #include "upstream/altrui.h"
 #include "upstream/pool.h"
 
@@ -18,6 +19,13 @@ uintptr_t get(HWND h,const std::wstring& key,const wchar_t* suffix){return reint
 bool put(HWND h,const std::wstring& key,const wchar_t* suffix,uintptr_t value){return SetPropW(h,(key+suffix).c_str(),reinterpret_cast<HANDLE>(value))!=FALSE;}
 const wchar_t* fields[]={L".pid",L".tid",L".birthLo",L".birthHi",L".ownerLo",L".ownerHi",L".state",L".pending",L".kind"};
 bool orphan(HWND h,const std::wstring& key);
+std::shared_ptr<std::mutex> operation_for(HWND hwnd,bool recovery=false){
+    struct Operations{std::mutex guard;std::unordered_map<HWND,std::weak_ptr<std::mutex>> rows[2];};
+    static auto* operations=new Operations;
+    std::lock_guard<std::mutex> lock(operations->guard);auto& rows=operations->rows[recovery?1:0];
+    for(auto it=rows.begin();it!=rows.end();)if(it->second.expired())it=rows.erase(it);else ++it;
+    auto& weak=rows[hwnd];auto found=weak.lock();if(!found){found=std::make_shared<std::mutex>();weak=found;}return found;
+}
 std::atomic<HANDLE> fixtureReached{nullptr},fixtureResume{nullptr};
 bool identity(HWND h,const std::wstring& key){
     DWORD pid=0;const DWORD tid=GetWindowThreadProcessId(h,&pid);
@@ -68,12 +76,14 @@ struct Lease {
     BYTE alpha=0;bool topmost=false;
     std::atomic<int> state{0};std::atomic<bool> cancel{false},cleanup{false};
     std::mutex operation;
+    std::shared_ptr<std::mutex> sourceOperation;
     bool alive(){return guardian.value&&WaitForSingleObject(guardian.value,0)==WAIT_TIMEOUT;}
 };
 using Ref=std::shared_ptr<Lease>;
 DWORD WINAPI cleanup_worker(void* raw){
     std::unique_ptr<Ref> ref(static_cast<Ref*>(raw));auto& l=**ref;
     std::lock_guard<std::mutex> lock(l.operation);
+    std::lock_guard<std::mutex> sourceLock(*l.sourceOperation);
     l.state.store(restore(l.hwnd,l.key)?2:-1);return 0;
 }
 void release(const Ref& ref){
@@ -86,6 +96,10 @@ void release(const Ref& ref){
 DWORD WINAPI begin_worker(void* raw){
     std::unique_ptr<Ref> ref(static_cast<Ref*>(raw));auto& l=**ref;
     std::lock_guard<std::mutex> lock(l.operation);
+    // Visibility and topmost both affect GWL_EXSTYLE. Serialize our own
+    // enable/cleanup operations across kinds so a style snapshot cannot
+    // overwrite a simultaneous SetWindowPos topmost change.
+    std::lock_guard<std::mutex> sourceLock(*l.sourceOperation);
     struct Pending{Lease& lease;~Pending(){if(marked(lease.hwnd,lease.key))RemovePropW(lease.hwnd,(lease.key+L".pending").c_str());}}pending{l};
     if(l.cancel.load()||!l.alive()||!marked(l.hwnd,l.key)||get(l.hwnd,l.key,L".state")!=1||!risponde(l.hwnd,200)){l.state.store(-1);release(*ref);return 0;}
     if(const auto resume=fixtureResume.load()){
@@ -110,6 +124,9 @@ struct Recovery {HWND hwnd;std::wstring key;};
 struct RecoveryWork{Recovery item;std::shared_ptr<std::atomic<unsigned>> pending;};
 DWORD WINAPI recover_worker(void* raw){
     std::unique_ptr<RecoveryWork> work(static_cast<RecoveryWork*>(raw));
+    // Recovery must not wait on the owner's possibly hung begin lock. The
+    // Guardian has a separate per-HWND lock for its two restore operations.
+    const auto operation=operation_for(work->item.hwnd,true);std::lock_guard<std::mutex> sourceLock(*operation);
     restore(work->item.hwnd,work->item.key);work->pending->fetch_sub(1);return 0;
 }
 struct Scan{std::wstring key;std::vector<Recovery> items;};
@@ -158,7 +175,7 @@ static void* create_lease(HWND hwnd,HANDLE guardian,const wchar_t* marker,BYTE a
     Handle source{OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,pid)};
     const auto created=source.value?birth(source.value):0;const auto owner=birth(GetCurrentProcess());
     if(!created||!owner||!tid)return nullptr;
-    auto l=std::make_shared<Lease>();l->hwnd=hwnd;l->key=marker;l->alpha=alpha;l->topmost=topmost;
+    auto l=std::make_shared<Lease>();l->hwnd=hwnd;l->key=marker;l->alpha=alpha;l->topmost=topmost;l->sourceOperation=operation_for(hwnd);
     if(GetPropW(hwnd,marker))return nullptr;
     if(!DuplicateHandle(GetCurrentProcess(),guardian,GetCurrentProcess(),&l->guardian.value,SYNCHRONIZE,FALSE,0))return nullptr;
     if(!put(hwnd,l->key,L".pid",uintptr_t(pid)+1)||!put(hwnd,l->key,L".tid",uintptr_t(tid)+1)||
