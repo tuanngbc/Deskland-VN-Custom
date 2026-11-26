@@ -77,6 +77,11 @@ jobs:
           (cd native/fluidwin && windres icona.rc -O coff -o ../../native-build/icon.o)
           g++ -O2 -std=gnu++20 -Wall -municode -mwindows native/fluidwin/fluidwin.cpp native-build/icon.o -o native-build/TLauncher.exe $libs -static
           g++ -O2 -std=gnu++20 -Wall tests/native-base-contract.cpp native-build/icon.o -o native-build/native-contract.exe $libs -static
+          mkdir -p native-build/runtime-licenses
+          for license_dir in /ucrt64/share/licenses/gcc* /ucrt64/share/licenses/libwinpthread* /ucrt64/share/licenses/mingw-w64*; do
+            if [ -d "$license_dir" ]; then cp -r "$license_dir" native-build/runtime-licenses/; fi
+          done
+          test -n "$(ls -A native-build/runtime-licenses)"
       - name: Verify real profile, Notch resources, native startup and Guardian recovery
         shell: pwsh
         run: |
@@ -96,6 +101,7 @@ jobs:
           $dir=Join-Path 'dist' $name
           New-Item -ItemType Directory -Path $dir -Force | Out-Null
           Copy-Item native-build/TLauncher.exe $dir
+          Copy-Item native-build/runtime-licenses (Join-Path $dir 'runtime-licenses') -Recurse
           foreach ($file in 'LICENSE','NOTICE','THIRD_PARTY_NOTICES.md','TRADEMARKS.md') {Copy-Item $file $dir}
           Copy-Item native/fluidwin/LICENSE (Join-Path $dir 'FLUIDWIN-LICENSE.txt')
           Copy-Item native/fluidwin/PROVENANCE.json $dir

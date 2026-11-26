@@ -222,7 +222,7 @@ public:
     }
 
 private:
-    static constexpr const wchar_t* CHIAVE = tlauncher::settingsRegistry();
+    inline static const wchar_t* CHIAVE = tlauncher::settingsRegistry();
     struct Richiesta {
         double lat = 1000, lon = 1000; int fonte = -1;   // (1000: nessuna richiesta ancora)
         bool operator==(const Richiesta& o) const { return lat == o.lat && lon == o.lon && fonte == o.fonte; }
