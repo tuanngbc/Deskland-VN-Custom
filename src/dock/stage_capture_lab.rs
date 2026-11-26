@@ -38,6 +38,7 @@ unsafe extern "system" fn fixture_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARA
             if !GetPropW(hwnd,wide("TLauncher.Fixture.HighContrast").as_ptr()).is_null(){
                 for x in (0..client.right).step_by(4){FillRect(dc,&RECT{left:x,top:0,right:(x+2).min(client.right),bottom:client.bottom},GetStockObject(BLACK_BRUSH) as HBRUSH);}
             }
+            if !GetPropW(hwnd,wide("TLauncher.Fixture.BlackFrame").as_ptr()).is_null(){FrameRect(dc,&client,GetStockObject(BLACK_BRUSH) as HBRUSH);}
             if msg==WM_PAINT{EndPaint(hwnd,&ps);}return 0;
         }
     }
@@ -405,6 +406,16 @@ fn native_static_photos_keep_original_pixels_and_reject_unsafe_sources(){
                 }
             }
         }
+        // Preserve a legitimate application's black one-pixel frame. Original
+        // carica's darkening/recolor repair must never leak into this adapter.
+        SetPropW(source.0,wide("TLauncher.Fixture.Solid").as_ptr(),0x1000000 as HANDLE);SetPropW(source.0,wide("TLauncher.Fixture.BlackFrame").as_ptr(),1usize as HANDLE);
+        InvalidateRect(source.0,ptr::null(),0);UpdateWindow(source.0);pump();
+        let (frame,_)=pump_static_fixture(&source,false).unwrap().unwrap();let pixels=frame.fixture_pixels().unwrap();save("legitimate-black-frame",&pixels,frame.width,frame.height);
+        for y in 0..frame.height{for x in 0..frame.width{let edge=x==0||y==0||x==frame.width-1||y==frame.height-1;let i=(y as usize*frame.width as usize+x as usize)*4;assert_eq!(&pixels[i..i+4],if edge{&[0,0,0,255]}else{&[255,255,255,255]},"legitimate frame pixel {x},{y}");}}
+        RemovePropW(source.0,wide("TLauncher.Fixture.BlackFrame").as_ptr());RemovePropW(source.0,wide("TLauncher.Fixture.Solid").as_ptr());InvalidateRect(source.0,ptr::null(),0);UpdateWindow(source.0);pump();
+        let (frame,_)=pump_static_fixture(&source,false).unwrap().unwrap();let pixels=frame.fixture_pixels().unwrap();save("mixed-fine-text",&pixels,frame.width,frame.height);
+        let mut expected=Layer::new(frame.width,frame.height).unwrap();let dc=GetDC(ptr::null_mut());assert_ne!(BitBlt(expected.dc(),0,0,frame.width,frame.height,dc,32,32,SRCCOPY),0);ReleaseDC(ptr::null_mut(),dc);
+        for p in expected.pixels().chunks_exact_mut(4){p[3]=255;}assert_eq!(pixels.as_slice(),&*expected.pixels(),"full native mixed/fine-text pixels and all perimeter rows");
         // A real occluder forces the original PrintWindow route. Its blue
         // pixels must never appear in the source's red texture.
         SetPropW(source.0,wide("TLauncher.Fixture.Solid").as_ptr(),0x100 as HANDLE);InvalidateRect(source.0,ptr::null(),0);UpdateWindow(source.0);pump();
