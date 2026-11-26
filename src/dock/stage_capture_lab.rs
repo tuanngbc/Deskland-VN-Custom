@@ -68,6 +68,9 @@ unsafe extern "system" fn fixture_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARA
 }
 
 unsafe fn window(normal:bool) -> Result<Fixture,String> {
+    window_ex(normal,0)
+}
+unsafe fn window_ex(normal:bool,extra:u32) -> Result<Fixture,String> {
     #[cfg(all(test,target_env="msvc"))]
     {
         extern "C"{fn tlauncher_fixture_native_diagnostics();}
@@ -79,7 +82,7 @@ unsafe fn window(normal:bool) -> Result<Fixture,String> {
     let class = WNDCLASSW { lpfnWndProc: Some(fixture_proc), hInstance: instance,
         lpszClassName: name.as_ptr(), ..std::mem::zeroed() };
     if RegisterClassW(&class)==0 && GetLastError()!=ERROR_CLASS_ALREADY_EXISTS{return Err("RegisterClassW failed".into());}
-    let hwnd = CreateWindowExW(if normal{0}else{WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE}, name.as_ptr(), wide(CLASS).as_ptr(),
+    let hwnd = CreateWindowExW((if normal{0}else{WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE})|extra, name.as_ptr(), wide(CLASS).as_ptr(),
         if normal{WS_OVERLAPPEDWINDOW}else{WS_POPUP}, 24,24,WIDTH,HEIGHT,null_mut(),null_mut(),instance,null_mut());
     if hwnd.is_null(){return Err(format!("CreateWindowExW: {}",GetLastError()));}
     ShowWindow(hwnd,SW_SHOWNOACTIVATE);
@@ -429,7 +432,9 @@ fn native_static_photos_keep_original_pixels_and_reject_unsafe_sources(){
         assert!(pump_static_fixture(&source,true).unwrap().is_none());SetWindowRgn(source.0,ptr::null_mut(),1);
         let style=GetWindowLongPtrW(source.0,GWL_EXSTYLE);SetWindowLongPtrW(source.0,GWL_EXSTYLE,style|WS_EX_LAYERED as isize);
         SetLayeredWindowAttributes(source.0,0,128,LWA_ALPHA);assert!(pump_static_fixture(&source,true).unwrap().is_none());SetLayeredWindowAttributes(source.0,0,255,LWA_ALPHA);SetWindowLongPtrW(source.0,GWL_EXSTYLE,style);
-        SetWindowLongPtrW(source.0,GWL_EXSTYLE,style|WS_EX_NOREDIRECTIONBITMAP as isize);assert!(pump_static_fixture(&source,true).unwrap().is_none(),"composition alpha must remain on WGC");SetWindowLongPtrW(source.0,GWL_EXSTYLE,style);
+        let composition=window_ex(false,WS_EX_NOREDIRECTIONBITMAP).unwrap();
+        assert_ne!(GetWindowLongPtrW(composition.0,GWL_EXSTYLE)&WS_EX_NOREDIRECTIONBITMAP as isize,0,"composition fixture must actually own the creation style");
+        assert!(pump_static_fixture(&composition,true).unwrap().is_none(),"composition alpha must remain on WGC");drop(composition);
         assert_ne!(SetWindowDisplayAffinity(source.0,WDA_MONITOR),0);assert!(pump_static_fixture(&source,true).is_err());assert_ne!(SetWindowDisplayAffinity(source.0,WDA_NONE),0);
         assert!(super::stage_snapshot::static_motion_frame(source.0,||false,None,true).is_err());
         SetWindowPos(source.0,HWND_TOPMOST,20,20,2110,980,SWP_NOACTIVATE);InvalidateRect(source.0,ptr::null(),0);UpdateWindow(source.0);pump();
