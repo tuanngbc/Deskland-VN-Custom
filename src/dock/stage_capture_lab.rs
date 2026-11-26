@@ -59,6 +59,12 @@ unsafe extern "system" fn fixture_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARA
 }
 
 unsafe fn window(normal:bool) -> Result<Fixture,String> {
+    #[cfg(all(test,target_env="msvc"))]
+    {
+        extern "C"{fn tlauncher_fixture_native_diagnostics();}
+        static ONCE:std::sync::Once=std::sync::Once::new();
+        ONCE.call_once(||tlauncher_fixture_native_diagnostics());
+    }
     let name = wide(CLASS);
     let instance = GetModuleHandleW(std::ptr::null());
     let class = WNDCLASSW { lpfnWndProc: Some(fixture_proc), hInstance: instance,

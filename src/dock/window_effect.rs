@@ -496,7 +496,11 @@ impl Transition{
         if !self.req.guarded&&policy.native_minimize!=Some(0){return Err("native-policy-changed");}
         if self.lease.as_ref().is_some_and(|lease|lease.status()<0){return Err("guardian-lease-lost");}
         if windows_sys::Win32::UI::HiDpi::GetDpiForWindow(h)!=self.req.dpi{return Err("dpi-changed");}
-        if MonitorFromWindow(h,MONITOR_DEFAULTTONULL) as usize!=self.req.monitor{return Err("monitor-changed");}
+        // A native minimize/restore can temporarily park the HWND outside all
+        // displays. Validate the immutable destination against live topology;
+        // rcNormalPosition below detects an actual user move. A transient
+        // MonitorFromWindow(NULL) must not cancel a journaled reversal.
+        if MonitorFromRect(&self.req.area,MONITOR_DEFAULTTONULL) as usize!=self.req.monitor{return Err("monitor-changed");}
         if !placement(h).is_some_and(|p|super::same_rect(p.rcNormalPosition,self.req.normal)){return Err("window-placement-changed");}
         Ok(())
     }

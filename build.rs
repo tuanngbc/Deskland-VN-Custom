@@ -36,6 +36,7 @@ fn main() {
     if target.contains("windows") && target.contains("msvc") {
         println!("cargo:rerun-if-changed=third_party/fluidwin/motion_upstream.h");
         println!("cargo:rerun-if-changed=third_party/fluidwin/motion_renderer.cpp");
+        println!("cargo:rerun-if-changed=third_party/fluidwin/fixture_crash.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/index_upstream.h");
         println!("cargo:rerun-if-changed=third_party/fluidwin/index_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/upstream");
@@ -45,12 +46,14 @@ fn main() {
         println!("cargo:rerun-if-changed=third_party/fluidwin/stack_bridge.cpp");
         cc::Build::new()
             .cpp(true)
+            .debug(true)
             .flag("/std:c++17")
             .flag("/utf-8")
             .flag("/EHsc")
             .define("NOMINMAX", None)
             .define("WIN32_LEAN_AND_MEAN", None)
             .file("third_party/fluidwin/motion_renderer.cpp")
+            .file("third_party/fluidwin/fixture_crash.cpp")
             .file("third_party/fluidwin/index_bridge.cpp")
             .file("third_party/fluidwin/shell_menu_bridge.cpp")
             .file("third_party/fluidwin/window_lease.cpp")
