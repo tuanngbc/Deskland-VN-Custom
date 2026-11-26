@@ -9,6 +9,7 @@
 #include <iostream>
 #include <cstring>
 #include <thread>
+#include <future>
 #include <utility>
 #include "genio.h"
 #include "viva.h"
@@ -40,6 +41,10 @@ static LRESULT CALLBACK source_proc(HWND h,UINT message,WPARAM w,LPARAM l){
         if(message==WM_PAINT)EndPaint(h,&paint);return 0;
     }return DefWindowProcW(h,message,w,l);
 }
+static LRESULT CALLBACK static_source_proc(HWND h,UINT message,WPARAM w,LPARAM l){
+    if(message==WM_DESTROY){PostQuitMessage(0);return 0;}
+    return source_proc(h,message,w,l);
+}
 static void pump(){MSG message{};while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}DwmFlush();}
 static bool gpu_pixels(const genio::Immagine& image,std::vector<UINT>& pixels){
     const auto& gpu=gpu::condivisa();D3D11_TEXTURE2D_DESC description{};image.tex->GetDesc(&description);
@@ -58,11 +63,21 @@ static bool image_file(const std::filesystem::path& path,const std::vector<UINT>
     std::ofstream out(path,std::ios::binary);out.write(reinterpret_cast<const char*>(&file),sizeof(file));out.write(reinterpret_cast<const char*>(&header),sizeof(header));out.write(reinterpret_cast<const char*>(pixels.data()),pixels.size()*4);return out.good();
 }
 static int original_static_capture(genio::Motore& engine,const std::filesystem::path& dir,std::ofstream& report){
-    const auto instance=GetModuleHandleW(nullptr);WNDCLASSW type{};type.hInstance=instance;type.lpfnWndProc=source_proc;type.lpszClassName=L"FluidWin.Baseline.StaticCapture";
+    const auto instance=GetModuleHandleW(nullptr);WNDCLASSW type{};type.hInstance=instance;type.lpfnWndProc=static_source_proc;type.lpszClassName=L"FluidWin.Baseline.StaticCapture";
     if(!RegisterClassW(&type))return 30;
-    HWND source=CreateWindowExW(0,type.lpszClassName,L"Synthetic original static capture",WS_POPUP,80,80,480,320,nullptr,nullptr,instance,nullptr);
-    if(!source)return 31;struct Window{HWND h;~Window(){DestroyWindow(h);}}window{source};
-    ShowWindow(source,SW_SHOWNOACTIVATE);
+    // PrintWindow executes on stampa's pool callback. Its target must keep
+    // pumping independently while the calling engine waits for that callback.
+    // The previous same-thread fixture exercised only its 300ms screen fallback.
+    std::promise<HWND> ready;auto future=ready.get_future();
+    std::thread sourceThread([&]{
+        SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        HWND h=CreateWindowExW(0,type.lpszClassName,L"Synthetic original static capture",WS_POPUP,80,80,480,320,nullptr,nullptr,instance,nullptr);
+        if(h){ShowWindow(h,SW_SHOWNOACTIVATE);UpdateWindow(h);}ready.set_value(h);
+        if(h){MSG m{};while(GetMessageW(&m,nullptr,0,0)>0){TranslateMessage(&m);DispatchMessageW(&m);}}
+    });
+    HWND source=future.get();struct Window{HWND h;std::thread& thread;~Window(){if(h)PostMessageW(h,WM_CLOSE,0,0);thread.join();}}window{source,sourceThread};
+    if(!source)return 31;
+    report<<"static_source_owner=INDEPENDENT_PUMPING_UI_THREAD\n";
     const RECT area{80,80,560,400},expanded{64,64,576,416},icon{340,600,388,648};
     const COLORREF colors[]={RGB(255,255,255),RGB(255,0,0),RGB(0,255,0),RGB(0,0,255),RGB(0,0,0)};
     const char* names[]={"white","red","green","blue","black"};

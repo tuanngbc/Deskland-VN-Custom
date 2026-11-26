@@ -44,9 +44,10 @@ $sidecar=(Get-Content -LiteralPath ($binary.FullName+'.sha256') -Raw).Trim()
 if ($sidecar -notmatch ('^'+$binaryHash+'\s')) {throw 'Reference executable checksum mismatch.'}
 $report=Get-Content -LiteralPath (Join-Path $unpacked 'baseline.txt')
 $capture=@($report | Where-Object {$_ -match '^capture='})
+$staticCapture=@($report | Where-Object {$_ -match '^static_'})
 $proof=[ordered]@{workflowRun=$RunId;workflow=$run.path;workflowSource=$ExpectedCommit;referenceCommit=$reference;
     version=$binary.VersionInfo.ProductVersion;archiveSha256=$archiveHash;exeSha256=$binaryHash;artifactId=$artifact.id;
-    referenceJob='success';fullRunStatus=$run.status;fullRunConclusion=$run.conclusion;captureReport=$capture;
+    referenceJob='success';fullRunStatus=$run.status;fullRunConclusion=$run.conclusion;captureReport=$capture;staticCaptureReport=$staticCapture;
     ownerCandidate=$false;executedLocally=$false;testShortcutUpdated=$false}
 $proof | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $destination 'verified-reference-artifact.json') -Encoding UTF8
 $report | Select-Object -Last 24
