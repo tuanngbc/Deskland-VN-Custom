@@ -123,13 +123,15 @@ impl Panel{
         let start=self.page*PAGE;
         for (slot,row) in self.view.rows.iter().skip(start).take(PAGE).enumerate(){
             let id=ROW_BASE+slot as i32*3;let y=104+slot as i32*76;
-            let label=if row.flags&1!=0{format!("{} · {}%",row.label,row.level)}else{format!("    {} · {}%",row.label,row.level)};
+            let microphone=row.flags&8!=0;
+            let label=if microphone{text("Micrô mặc định","Default microphone","默认麦克风")}
+                else if row.flags&1!=0{format!("{} · {}%",row.label,row.level)}else{format!("    {} · {}%",row.label,row.level)};
             self.control("STATIC",&label,id,0 /* SS_LEFT */,16,y,364,21);
             let slider=self.control("msctls_trackbar32",&row.label,id+1,WS_TABSTOP|TBS_NOTICKS,16,y+25,262,32);
             SendMessageW(slider,TBM_SETRANGEMAX,1,100);SendMessageW(slider,TBM_SETPOS,1,row.level as isize);
             let label=if row.flags&2!=0{text("Bật tiếng","Unmute","取消静音")}else{text("Tắt tiếng","Mute","静音")};
             let mute=self.control("BUTTON",&label,id+2,WS_TABSTOP|BS_OWNERDRAW as u32,288,y+23,92,34);
-            EnableWindow(slider,i32::from(!read_only()));EnableWindow(mute,i32::from(!read_only()&&!self.pending));
+            EnableWindow(slider,i32::from(!read_only()&&!microphone));EnableWindow(mute,i32::from(!read_only()&&!self.pending));
         }
         self.control("BUTTON","‹",PREV,WS_TABSTOP|BS_OWNERDRAW as u32,16,416,50,32);
         self.control("BUTTON","›",NEXT,WS_TABSTOP|BS_OWNERDRAW as u32,74,416,50,32);
