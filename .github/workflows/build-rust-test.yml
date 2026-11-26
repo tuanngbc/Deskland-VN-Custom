@@ -271,6 +271,12 @@ jobs:
           cargo test --release launcher::app_menu::tests::native_app_menu_enumerates_and_releases_without_uninstalling -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Verify File Shelf Shell references without performing file operations
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test --release dock::shelf::native::tests::native_shelf_holds_references_and_releases_drop_registration -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Package Rust native build
         run: |
           $short = '${{ github.sha }}'.Substring(0, 7)

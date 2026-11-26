@@ -16,7 +16,7 @@ const METRIC_TIMER:usize=1;
 const ENTRANCE_TIMER:usize=2;
 const SINGLE_LINE:u32=DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS;
 #[derive(Clone)]
-pub(super) enum Command{AddApp,WindowsTray,BackgroundApps,AudioMixer,Media,Overview,SnapLayouts,SnapWindow(super::WindowIdentity),Desktop(bool),Comfort(super::comfort::Action),Recycle(super::recycle_bin::Action),Clipboard,ClipboardCopy(u64),ClipboardRemove(Option<u64>),Widget(UtilityWidget),Run(Action),Wifi(super::wifi::Change),Radio(super::radios::Request),Brightness(Option<super::brightness::Query>),DisplaySettings,App{path:String,operation:super::AppOperation},Window{hwnd:usize,pid:u32,tid:u32},StageMember(super::WindowIdentity)}
+pub(super) enum Command{AddApp,WindowsTray,BackgroundApps,AudioMixer,Media,Overview,SnapLayouts,SnapWindow(super::WindowIdentity),Shelf(super::shelf::Action),Desktop(bool),Comfort(super::comfort::Action),Recycle(super::recycle_bin::Action),Clipboard,ClipboardCopy(u64),ClipboardRemove(Option<u64>),Widget(UtilityWidget),Run(Action),Wifi(super::wifi::Change),Radio(super::radios::Request),Brightness(Option<super::brightness::Query>),DisplaySettings,App{path:String,operation:super::AppOperation},Window{hwnd:usize,pid:u32,tid:u32},StageMember(super::WindowIdentity)}
 #[derive(Clone)]
 pub(super) struct Card{pub icon:Option<UtilityWidget>,pub title:String,pub hint:String,pub action:Option<Command>}
 pub(super) struct View{pub title:String,pub hint:String,pub cards:Vec<Card>,pub metrics:Option<MetricOptions>}
@@ -95,7 +95,7 @@ fn metric_cards(view:&Snapshot,cfg:MetricOptions)->Vec<Card>{
 struct Panel {
     layered:bool,dirty:bool,
     hwnd:HWND,owner:HWND,tag:usize,anchor:chrome::Anchor,dpi:u32,layer:Layer,ink:Option<Layer>,
-    glass:super::glass::Glass,fonts:[HFONT;4], view:View, metrics:Option<Metrics>, index:Option<usize>, pressed:Option<usize>, page:usize,
+    glass:super::glass::Glass,fonts:[HFONT;4], view:View, metrics:Option<Metrics>, index:Option<usize>, pressed:Option<usize>, pressed_point:Option<POINT>, page:usize,
     cols:usize,per_page:usize, row_height:i32,list:bool,entrance:Option<super::motion::Tween>,shadow:Option<chrome::PanelShadow>,hub:bool,
 }
 impl Drop for Panel {
@@ -306,6 +306,7 @@ pub(super) unsafe fn status_changed(){
 pub(super) fn ticket(owner:HWND)->Option<usize>{
     PANE.with(|s|s.borrow().as_ref().filter(|p|p.owner==owner).map(|p|p.tag))
 }
+pub(super) fn window(owner:HWND)->Option<HWND>{PANE.with(|s|s.borrow().as_ref().filter(|p|p.owner==owner).map(|p|p.hwnd))}
 pub(super) unsafe fn update(owner:HWND,ticket:usize,view:View){
     let hwnd=PANE.with(|s|{
         let mut slot=s.borrow_mut();
@@ -378,7 +379,7 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bo
     let metrics=view.metrics.map(Metrics::new);
     let start=std::time::Instant::now();
     let animated=super::motion::native_allowed();
-    let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,glass,fonts,view,metrics,index:None,pressed:None,page:0,cols,per_page,row_height,list,entrance:None,shadow:None,hub};
+    let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,glass,fonts,view,metrics,index:None,pressed:None,pressed_point:None,page:0,cols,per_page,row_height,list,entrance:None,shadow:None,hub};
     // A hidden HWND can't be relied on to dispatch WM_PAINT. Submit the
     // completed bitmap directly, then show the window with content.
     p.paint();
@@ -414,7 +415,8 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bo
 unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     match msg{
         WM_ERASEBKGND=>1,
-        WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{PostMessageW(hwnd,WM_CLOSE,0,0);0},
+        WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{if !super::shelf::modal(){PostMessageW(hwnd,WM_CLOSE,0,0);}0},
+        super::shelf::CHANGED=>{super::shelf::changed(hwnd);0},
         WM_DPICHANGED=>{DestroyWindow(hwnd);0},
         WM_CLOSE=>{
             let animated=PANE.with(|s|{
@@ -435,6 +437,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_NCDESTROY=>{
+            super::shelf::detach(hwnd);
             KillTimer(hwnd,METRIC_TIMER);
             KillTimer(hwnd,ENTRANCE_TIMER);
             let owner=PANE.with(|s|{
@@ -507,11 +510,21 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let before=(p.index,p.page);
                 let mut action=None;
                 match msg{
-                    WM_MOUSEMOVE=>{p.index=p.hit(x,y);}
-                    super::WM_DOCK_MOUSELEAVE|WM_CAPTURECHANGED=>{p.index=None;p.pressed=None;}
-                    WM_LBUTTONDOWN=>{p.pressed=p.hit(x,y);}
+                    WM_MOUSEMOVE=>{
+                        p.index=p.hit(x,y);
+                        if let Some(point)=p.pressed_point{
+                            if (x-point.x).abs()>=chrome::scale(p.dpi,GetSystemMetrics(SM_CXDRAG)).max(4)||(y-point.y).abs()>=chrome::scale(p.dpi,GetSystemMetrics(SM_CYDRAG)).max(4){
+                                action=p.pressed.and_then(|i|p.cards().get(i)).and_then(|c|c.action.as_ref()).and_then(super::shelf::drag_command);
+                                if action.is_some(){p.pressed=None;p.pressed_point=None;}
+                            }
+                        }
+                    }
+                    super::WM_DOCK_MOUSELEAVE=>{if GetCapture()!=hwnd{p.index=None;p.pressed=None;p.pressed_point=None;}},
+                    WM_CAPTURECHANGED=>{p.index=None;p.pressed=None;p.pressed_point=None;},
+                    WM_LBUTTONDOWN=>{p.pressed=p.hit(x,y);p.pressed_point=Some(POINT{x,y});}
                     WM_LBUTTONUP=>{
                         let from=p.pressed.take();
+                        p.pressed_point=None;
                         if let Some(i)=p.hit(x,y).filter(|i|Some(*i)==from){action=p.cards()[i].action.clone();}
                         else if p.pages()>1&&y>=p.layer.size.1-chrome::scale(p.dpi,33){
                             p.page_delta(if x>=p.layer.size.0/2{1}else{-1});
@@ -550,8 +563,13 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             if capture{SetCapture(hwnd);}
             if msg==WM_LBUTTONUP{ReleaseCapture();}
             if let Some((owner,action))=action{
-                DestroyWindow(hwnd);
-                super::perform_control(owner,action);
+                if let Command::Shelf(action)=action{
+                    if GetCapture()==hwnd{ReleaseCapture();}
+                    super::shelf::perform(owner,hwnd,action);
+                }else{
+                    DestroyWindow(hwnd);
+                    super::perform_control(owner,action);
+                }
             }else if repaint{InvalidateRect(hwnd,ptr::null(),0);}
             0
         },

@@ -59,6 +59,7 @@ mod media;
 mod overview;
 mod jump_list;
 mod folder_stack;
+mod shelf;
 mod app_previews;
 mod comfort;
 mod recycle_bin;
@@ -1743,6 +1744,7 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::Media=>{let mut point=POINT{x:0,y:0};GetCursorPos(&mut point);media::open(owner,point);},
         Command::Overview=>overview::show(owner,false,1),
         Command::SnapLayouts=>snap_layout::choose_window(owner),
+        Command::Shelf(action)=>shelf::perform(owner,ptr::null_mut(),action),
         Command::SnapWindow(id)=>{snap_layout::open(owner,id);},
         Command::Desktop(restore)=>show_desktop::perform(owner,restore),
         Command::Comfort(action)=>comfort::perform(owner,action),
@@ -3806,6 +3808,7 @@ unsafe fn drain_commands() {
     for command in commands {
         match command {
             Command::Configure(options)=>{
+                if !options.enabled{shelf::reset();}
                 snap_layout::close_for(ptr::null_mut());
                 window_geometry::cancel();
                 show_desktop::pause();
@@ -3837,6 +3840,7 @@ unsafe fn drain_commands() {
                 if enable_default&&!cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active(){start_saved_taskbar_mode();}
             },
             Command::Suspend(on)=>{
+                if on{shelf::reset();}
                 if on{snap_layout::close_for(ptr::null_mut());}
                 if on{window_geometry::cancel();}
                 if on{show_desktop::pause();}
@@ -3996,7 +4000,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
         update_state(|s|{s.appbars.clear();s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){destroy_stage(&mut b);}});
         SURFACES.with(|s|s.borrow_mut().clear());STAGE_SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
-        comfort::reset();utilities::close_panels();UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));
+        shelf::reset();comfort::reset();utilities::close_panels();UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));
         if ATTENTION_MSG.with(|id|id.replace(0))!=0{DeregisterShellHookWindow(control);}
         ATTENTION.with(|queue|queue.borrow_mut().clear());
         internal_app::unlisten(control);
