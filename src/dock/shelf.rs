@@ -57,11 +57,11 @@ pub(super) const CHANGED:u32=windows_sys::Win32::UI::WindowsAndMessaging::WM_APP
     fn view()->View{
         let items=items();let read_only=crate::trial::active()||cfg!(test);
         let hint=if ERROR.get().is_some(){text("Chưa hoàn tất yêu cầu. Hãy kiểm tra tệp nguồn và chỗ trống trên kệ.","Request not completed. Check the source files and shelf capacity.","请求未完成，请检查源文件及暂存架容量。")}
-            else{text("Thả tệp vào đây · Kéo một hàng để lấy ra · Tối đa 200 tham chiếu","Drop files here · Drag a row out · Up to 200 references","将文件拖入此处 · 拖出一行即可取出 · 最多 200 个引用")};
+            else{text("Thả tệp vào đây · Kéo một mục ra khi cần","Drop files here · Drag an item out to use it","将文件拖入此处 · 需要时拖出一项")};
         let mut cards=vec![Card{icon:None,title:text("Thêm tệp…","Add files…","添加文件…"),hint:String::new(),action:Some(Command::Shelf(Action::Add))}];
         if !items.is_empty(){
-            cards.push(Card{icon:None,title:text("Kéo tất cả ra","Drag all out","全部拖出"),hint:text("Hoặc Enter để sao chép tham chiếu tệp","Or Enter to copy file references","或按 Enter 复制文件引用"),action:(!read_only).then_some(Command::Shelf(Action::Drag(None)))});
-            cards.push(Card{icon:None,title:text("Dọn kệ","Clear shelf","清空暂存架"),hint:text("Chỉ bỏ tham chiếu","Remove references only","仅移除引用"),action:Some(Command::Shelf(Action::Forget(None)))});
+            cards.push(Card{icon:None,title:text("Kéo tất cả ra","Drag all out","全部拖出"),hint:text("Hoặc nhấn Enter để sao chép","Or press Enter to copy","或按 Enter 复制"),action:(!read_only).then_some(Command::Shelf(Action::Drag(None)))});
+            cards.push(Card{icon:None,title:text("Dọn kệ","Clear shelf","清空暂存架"),hint:text("Không xóa tệp gốc","Keeps the original files","不会删除原文件"),action:Some(Command::Shelf(Action::Forget(None)))});
         }
         for (id,path) in items{
             cards.push(Card{icon:None,title:path.file_name().unwrap_or(path.as_os_str()).to_string_lossy().into(),
@@ -118,7 +118,7 @@ pub(super) const CHANGED:u32=windows_sys::Win32::UI::WindowsAndMessaging::WM_APP
                 let Some((_,path))=items().into_iter().find(|(key,_)|*key==id)else{return;};
                 let menu=CreatePopupMenu();if menu.is_null(){return;}
                 let read_only=crate::trial::active()||cfg!(test);
-                for (id,label) in [(1,text("Mở","Open","打开")),(2,text("Sao chép tham chiếu tệp","Copy file reference","复制文件引用")),(3,text("Bỏ khỏi kệ","Remove from shelf","从暂存架移除"))]{
+                for (id,label) in [(1,text("Mở","Open","打开")),(2,text("Sao chép","Copy","复制")),(3,text("Bỏ khỏi kệ","Remove from shelf","从暂存架移除"))]{
                     AppendMenuW(menu,MF_STRING|if read_only&&id!=3{MF_GRAYED}else{0},id,wide(&label).as_ptr());
                 }
                 let mut point=POINT{x:0,y:0};GetCursorPos(&mut point);
