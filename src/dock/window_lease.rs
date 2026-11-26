@@ -8,6 +8,7 @@ extern "C" {
     fn tlauncher_window_lease_restore(lease:*mut c_void);
     fn tlauncher_window_lease_free(lease:*mut c_void);
     fn tlauncher_window_restore_session(marker:*const u16)->u32;
+    fn tlauncher_window_restore_orphans()->u32;
 }
 pub(super) struct Lease(NonNull<c_void>);
 impl Lease{
@@ -36,6 +37,15 @@ impl Drop for Lease{fn drop(&mut self){
 pub(super) unsafe fn recover(marker:&str)->u32{
     #[cfg(target_env="msvc")]{tlauncher_window_restore_session(crate::desktop::wide(marker).as_ptr())}
     #[cfg(not(target_env="msvc"))]{let _=marker;0}
+}
+pub(super) fn recover_orphans_once(){
+    static ONCE:std::sync::Once=std::sync::Once::new();
+    ONCE.call_once(||{
+        let _=std::thread::Builder::new().name("TLauncher stale window recovery".into()).spawn(||{
+            #[cfg(target_env="msvc")]
+            unsafe{let unresolved=tlauncher_window_restore_orphans();if unresolved!=0{crate::log!("WINDOW_RECOVERY unresolved_orphans={unresolved}");}}
+        });
+    });
 }
 
 #[cfg(all(test,target_env="msvc"))]
@@ -135,7 +145,7 @@ fn native_crash_recovers_foreign_window_without_owner_memory(){
         assert!(!hwnd.is_null());
         let original=GetWindowLongPtrW(hwnd,GWL_EXSTYLE);
         let ready=std::path::PathBuf::from(std::env::var_os("RUNNER_TEMP").unwrap()).join(format!("window-lease-ready-{}.txt",std::process::id()));
-        let marker=format!("TLauncher.Motion.CrashFixture.{}",std::process::id());
+        let marker=format!("Local\\TuanpcDesk_Taskbar_{}_{:032x}_Motion",std::process::id(),std::process::id());
         let request=serde_json::json!({"guardian":std::process::id(),"marker":marker,"hwnd":hwnd as usize,"ready":ready});
         let mut owner=ChildFixture(Command::new(std::env::current_exe().unwrap())
             .args(["--ignored","--exact","dock::window_lease::native_lease_owner_fixture","--nocapture"])
@@ -150,7 +160,7 @@ fn native_crash_recovers_foreign_window_without_owner_memory(){
         owner.0.kill().unwrap();owner.0.wait().unwrap(); // only this known child fixture, never an application
         let key=crate::desktop::wide(&marker);
         assert!(!GetPropW(hwnd,key.as_ptr()).is_null(),"recovery journal survives owner process termination");
-        let helper=std::thread::spawn(move||recover(&marker));
+        let helper=std::thread::spawn(move||tlauncher_window_restore_orphans());
         let start=Instant::now();
         while !helper.is_finished(){
             while PeekMessageW(&mut msg,std::ptr::null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}

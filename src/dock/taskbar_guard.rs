@@ -23,6 +23,18 @@ const SIGNAL:u32=0x0002; // EVENT_MODIFY_STATE access
 const HOTKEY:i32=1;
 const QUIET_PROCESS:u32=0x0800_0000; // CREATE_NO_WINDOW
 
+fn process_command(role:&str,args:&[String])->io::Result<Command>{
+    let mut command=Command::new(env::current_exe()?);
+    #[cfg(test)]
+    if env::var_os("TUANPC_GUARD_FIXTURE").is_some(){
+        let request=std::iter::once(env::current_exe()?.to_string_lossy().into_owned()).chain(std::iter::once(role.into())).chain(args.iter().cloned()).collect::<Vec<_>>();
+        command.args(["--ignored","--exact","dock::taskbar_guard::tests::native_guardian_fixture_process","--nocapture"])
+            .env("TUANPC_GUARD_FIXTURE",serde_json::to_string(&request).map_err(io::Error::other)?);
+        return Ok(command);
+    }
+    command.arg(role).args(args);Ok(command)
+}
+
 struct Handle(HANDLE);
 // Kernel handles can be moved between threads; this owner closes exactly once.
 unsafe impl Send for Handle{}
@@ -286,7 +298,8 @@ impl GuardProcess{
                 let output=child.wait_with_output()?;
                 if !output.status.success(){return Err(io::Error::other("Guardian bootstrap failed"));}
                 let text=String::from_utf8_lossy(&output.stdout);
-                let mut fields=text.split_whitespace();
+                let line=text.lines().find_map(|l|l.strip_prefix("TLAUNCHER_GUARDIAN ")).ok_or_else(||io::Error::other("Missing Guardian bootstrap response"))?;
+                let mut fields=line.split_whitespace();
                 let pid=fields.next().and_then(|v|v.parse::<u32>().ok()).ok_or_else(||io::Error::other("Missing Guardian identity"))?;
                 let birth=fields.next().and_then(|v|u64::from_str_radix(v,16).ok()).ok_or_else(||io::Error::other("Missing Guardian birth time"))?;
                 unsafe{
@@ -327,6 +340,11 @@ impl Watch {
         let all=snapshot().ok_or("Thanh tác vụ Windows chưa sẵn sàng.")?;
         let hidden=all.iter().filter(|item|item.visible).map(|item|item.id).collect::<Vec<_>>();
         if hidden.is_empty(){return Err("Không thấy thanh tác vụ để ẩn.".into());}
+        Self::start_with(all,hidden)
+    }
+    #[cfg(test)]
+    unsafe fn start_motion_fixture()->Result<Self,String>{Self::start_with(Vec::new(),Vec::new())}
+    unsafe fn start_with(all:Vec<Snapshot>,hidden:Vec<WindowId>)->Result<Self,String>{
         let pid=std::process::id();
         let birth=process_birth(GetCurrentProcess()).ok_or("Không xác minh được phiên tiến trình TLauncher.")?;
         let token=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e|e.to_string())?.as_nanos();
@@ -336,9 +354,8 @@ impl Watch {
         let ready=event("Ready",1)?;
         let pulse=event("Pulse",0)?;
         let expected=all.iter().map(|v|format!("{}:{}:{}:{}",v.id.handle,v.id.pid,v.id.thread,u8::from(v.visible))).collect::<Vec<_>>().join(",");
-        let exe=env::current_exe().map_err(|e|e.to_string())?;
-        let mut command=Command::new(exe);
-        command.arg(BOOTSTRAP).arg(pid.to_string()).arg(format!("{token:032x}")).arg(expected).arg(format!("{birth:016x}"))
+        let mut command=process_command(BOOTSTRAP,&[pid.to_string(),format!("{token:032x}"),expected,format!("{birth:016x}")]).map_err(|e|e.to_string())?;
+        command
             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).creation_flags(QUIET_PROCESS)
             .env_remove("TUANPC_DESK_TASKBAR_TRIAL_TRACE");
         if let Some(profile)=crate::trial::data_dir(){command.env("TUANPC_DESK_TASKBAR_TRIAL_TRACE",profile);}
@@ -399,10 +416,10 @@ pub(crate) fn watchdog(args:&[String])->bool{
         // End-process-tree against TLauncher then cannot take recovery with it.
         let result=(||->io::Result<()>{
             use std::os::windows::io::AsRawHandle;
-            let child=Command::new(env::current_exe()?).arg(ARG).args(&args[2..])
+            let child=process_command(ARG,&args[2..])?
                 .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).creation_flags(QUIET_PROCESS).spawn()?;
             let stamp=unsafe{process_birth(child.as_raw_handle() as HANDLE)}.ok_or_else(||io::Error::other("Guardian birth unavailable"))?;
-            println!("{} {stamp:016x}",child.id());io::stdout().flush()?;
+            println!("TLAUNCHER_GUARDIAN {} {stamp:016x}",child.id());io::stdout().flush()?;
             Ok(())
         })();
         if result.is_err(){std::process::exit(1);}
@@ -419,7 +436,9 @@ pub(crate) fn watchdog(args:&[String])->bool{
         let visible=match f.next()?{"0"=>false,"1"=>true,_=>return None};
         f.next().is_none().then_some(Snapshot{id,visible})
     };
-    let Some(expected)=args[4].split(',').map(parse).collect::<Option<Vec<_>>>()else{return true;};
+    let expected=if args[4].is_empty(){Vec::new()}else{
+        let Some(expected)=args[4].split(',').map(parse).collect::<Option<Vec<_>>>()else{return true;};expected
+    };
     unsafe{
         let Ok(parent)=Handle::from_raw(OpenProcess(SYNC|PROCESS_QUERY_LIMITED_INFORMATION,0,pid))else{return true;};
         if process_birth(parent.0)!=Some(birth)||parent.fired()||!same_executable(parent.0){return true;}
@@ -453,7 +472,7 @@ impl InventoryGap{
 }
 
 unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle,expected:&[Snapshot],proof:Option<&std::path::Path>,started:Instant,motion_marker:&str)->Exit{
-    let Some(starting)=snapshot()else{return Exit::ExplorerChanged;};
+    let Some(starting)=(if expected.is_empty(){Some(Vec::new())}else{snapshot()})else{return Exit::ExplorerChanged;};
     // Visibility may change between the parent's snapshot and this child,
     // especially when the previous session just restored Explorer.
     if health(expected,Some(&starting))==Some(Exit::ExplorerChanged){return Exit::ExplorerChanged;}
@@ -468,6 +487,10 @@ unsafe fn watch(parent:Handle,stop:Handle,ready:Handle,armed:Handle,pulse:Handle
     }
     let mut rollback=Restore(Vec::new(),motion_marker.into());
     if SetEvent(armed.0)==0{return Exit::LinkLost;}
+    if expected.is_empty(){
+        if SetEvent(ready.0)==0{return Exit::LinkLost;}
+        return wait_for_restore(&[parent.0,stop.0,pulse.0],250,Duration::from_secs(6),||None);
+    }
     for pass in 0..60{
         if parent.fired()||stop.fired(){return Exit::Requested;}
         let rows=if pass==0{Some(starting.clone())}else{snapshot()};
@@ -601,6 +624,74 @@ unsafe fn wait_for_restore(signals:&[HANDLE;3],interval:u32,lease:Duration,mut h
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    #[ignore="child dispatcher for the hosted detached Guardian fixture"]
+    fn native_guardian_fixture_process(){
+        if env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+        let request=env::var("TUANPC_GUARD_FIXTURE").unwrap();
+        if let Ok(args)=serde_json::from_str::<Vec<String>>(&request){assert!(watchdog(&args));return;}
+        let request:serde_json::Value=serde_json::from_str(&request).unwrap();
+        unsafe{
+            let mut watch=Watch::start_motion_fixture().unwrap();let start=Instant::now();
+            while !watch.poll().unwrap()||watch.motion_session().is_none(){
+                assert!(start.elapsed()<Duration::from_secs(8));thread::sleep(Duration::from_millis(20));
+            }
+            let (pid,marker)=watch.motion_session().unwrap();
+            super::super::TASKBAR_WATCH.with(|w|w.replace(Some(watch)));
+            let lease=super::super::window_lease::Lease::begin(request["hwnd"].as_u64().unwrap() as usize as HWND).unwrap();
+            let start=Instant::now();
+            while lease.status()==0{
+                super::super::TASKBAR_WATCH.with(|w|w.borrow_mut().as_mut().unwrap().poll().unwrap());
+                assert!(start.elapsed()<Duration::from_secs(5));thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(lease.status(),1);
+            std::fs::write(request["ready"].as_str().unwrap(),serde_json::json!({"guardian":pid,"marker":marker}).to_string()).unwrap();
+            // Deliberately stop UI heartbeats to simulate a main-thread hang.
+            loop{thread::sleep(Duration::from_secs(1));}
+        }
+    }
+    #[test]
+    #[ignore="real detached Guardian, synthetic owner tree termination and heartbeat loss on hosted Windows"]
+    fn native_detached_guardian_recovers_after_tree_exit_and_ui_hang(){
+        if env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+        struct Child(std::process::Child);impl Drop for Child{fn drop(&mut self){let _=self.0.kill();let _=self.0.wait();}}
+        unsafe{
+            let hwnd=CreateWindowExW(0,wide("STATIC").as_ptr(),wide("Detached Guardian synthetic target").as_ptr(),WS_OVERLAPPEDWINDOW|WS_VISIBLE,
+                50,50,320,180,ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),ptr::null());
+            assert!(!hwnd.is_null());let original=GetWindowLongPtrW(hwnd,GWL_EXSTYLE);
+            let pump_until=|condition:&dyn Fn()->bool|{
+                let start=Instant::now();let mut msg:MSG=mem::zeroed();
+                while !condition(){
+                    while PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}
+                    assert!(start.elapsed()<Duration::from_secs(14),"detached Guardian failed to restore synthetic target");thread::sleep(Duration::from_millis(10));
+                }
+            };
+            for mode in ["tree-exit","ui-hang"]{
+                let path=PathBuf::from(env::var_os("RUNNER_TEMP").unwrap()).join(format!("guardian-{mode}-{}.json",std::process::id()));
+                let _=std::fs::remove_file(&path);
+                let request=serde_json::json!({"hwnd":hwnd as usize,"ready":path});
+                let mut owner=Child(Command::new(env::current_exe().unwrap()).args(["--ignored","--exact","dock::taskbar_guard::tests::native_guardian_fixture_process","--nocapture"])
+                    .env("TUANPC_GUARD_FIXTURE",request.to_string()).stdout(Stdio::inherit()).spawn().unwrap());
+                pump_until(&||path.is_file());
+                let proof:serde_json::Value=serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                let guardian=Handle::from_raw(OpenProcess(SYNC,0,proof["guardian"].as_u64().unwrap() as u32)).unwrap();
+                let marker=wide(proof["marker"].as_str().unwrap());
+                assert!(!GetPropW(hwnd,marker.as_ptr()).is_null());
+                if mode=="tree-exit"{
+                    // The only target is this freshly created synthetic test
+                    // owner. Production/application processes are never used.
+                    let status=Command::new("taskkill.exe").args(["/PID",&owner.0.id().to_string(),"/T","/F"]).status().unwrap();
+                    assert!(status.success());owner.0.wait().unwrap();
+                }
+                pump_until(&||GetWindowLongPtrW(hwnd,GWL_EXSTYLE)==original&&GetPropW(hwnd,marker.as_ptr()).is_null()&&guardian.fired());
+                assert_ne!(IsWindowVisible(hwnd),0);
+                if mode=="ui-hang"{assert!(owner.0.try_wait().unwrap().is_none(),"hung owner stays alive while independent Guardian restores");}
+                let _=std::fs::remove_file(&path);
+                println!("WINDOW_GUARDIAN mode={mode} foreign_style=RESTORED journal=CLEARED owner_memory=NOT_REQUIRED");
+            }
+            DestroyWindow(hwnd);
+        }
+    }
     #[test]
     fn transient_missing_shell_inventory_is_not_an_explorer_restart(){
         let start=Instant::now();

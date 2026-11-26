@@ -89,6 +89,36 @@ DWORD WINAPI recover_worker(void* raw){
 }
 struct Scan{std::wstring key;std::vector<Recovery> items;};
 BOOL CALLBACK collect(HWND h,LPARAM raw){auto& scan=*reinterpret_cast<Scan*>(raw);if(marked(h,scan.key))scan.items.push_back({h,scan.key});return TRUE;}
+bool orphan(HWND h,const std::wstring& key){
+    if(!marked(h,key))return false;
+    const auto encoded=reinterpret_cast<uintptr_t>(GetPropW(h,key.c_str()));
+    if(encoded<=1||encoded>uint64_t(MAXDWORD)+1)return false;
+    const DWORD pid=DWORD(encoded-1);
+    Handle owner{OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,pid)};
+    if(!owner.value)return GetLastError()==ERROR_INVALID_PARAMETER;
+    if(WaitForSingleObject(owner.value,0)==WAIT_OBJECT_0)return true;
+    const auto stamp=birth(owner.value);if(!stamp)return false;
+    return get(h,key,L".ownerLo")!=uintptr_t(uint32_t(stamp))+1||get(h,key,L".ownerHi")!=uintptr_t(uint32_t(stamp>>32))+1;
+}
+int CALLBACK collect_orphan_property(HWND h,LPWSTR property,HANDLE,ULONG_PTR raw){
+    if(reinterpret_cast<uintptr_t>(property)<=0xffff)return TRUE;
+    const std::wstring key(property);static const std::wstring prefix=L"Local\\TuanpcDesk_Taskbar_",suffix=L"_Motion";
+    if(key.size()<prefix.size()+suffix.size()||key.compare(0,prefix.size(),prefix)!=0||key.compare(key.size()-suffix.size(),suffix.size(),suffix)!=0)return TRUE;
+    auto& items=*reinterpret_cast<std::vector<Recovery>*>(raw);
+    if(items.size()<128&&orphan(h,key))items.push_back({h,key});return TRUE;
+}
+BOOL CALLBACK collect_orphan(HWND h,LPARAM raw){EnumPropsExW(h,collect_orphan_property,raw);return TRUE;}
+unsigned recover_items(const std::vector<Recovery>& items){
+    for(const auto& item:items)reveal(item.hwnd,item.key);
+    auto pending=std::make_shared<std::atomic<unsigned>>(0);
+    for(const auto& item:items){
+        pending->fetch_add(1);auto work=new(std::nothrow) RecoveryWork{item,pending};
+        if(!work||!pool::lancia(recover_worker,work,THREAD_PRIORITY_NORMAL,true)){delete work;pending->fetch_sub(1);}
+    }
+    const auto started=GetTickCount64();
+    while(pending->load()&&GetTickCount64()-started<3000)Sleep(5);
+    unsigned unresolved=0;for(const auto& item:items)if(marked(item.hwnd,item.key))unresolved++;return unresolved;
+}
 }
 
 extern "C" {
@@ -125,16 +155,10 @@ void tlauncher_window_lease_free(void* raw){if(raw){release(*static_cast<Ref*>(r
 unsigned tlauncher_window_restore_session(const wchar_t* marker){
     if(!marker)return 0;
     Scan scan{marker,{}};EnumWindows(collect,reinterpret_cast<LPARAM>(&scan));
-    // All affected windows become opaque before waiting for any style call.
-    for(const auto& item:scan.items)reveal(item.hwnd,item.key);
-    auto pending=std::make_shared<std::atomic<unsigned>>(0);
-    for(const auto& item:scan.items){
-        pending->fetch_add(1);auto work=new(std::nothrow) RecoveryWork{item,pending};
-        if(!work||!pool::lancia(recover_worker,work,THREAD_PRIORITY_NORMAL,true)){delete work;pending->fetch_sub(1);}
-    }
-    const auto started=GetTickCount64();
-    while(pending->load()&&GetTickCount64()-started<3000)Sleep(5);
-    unsigned unresolved=0;for(const auto& item:scan.items)if(marked(item.hwnd,item.key))unresolved++;
-    return unresolved;
+    return recover_items(scan.items);
+}
+unsigned tlauncher_window_restore_orphans(){
+    std::vector<Recovery> items;EnumWindows(collect_orphan,reinterpret_cast<LPARAM>(&items));
+    return recover_items(items);
 }
 }

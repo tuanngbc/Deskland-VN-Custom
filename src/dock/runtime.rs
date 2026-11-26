@@ -26,6 +26,7 @@ impl Runtime {
         let (commands,receiver)=mpsc::channel();let (events_tx,events)=mpsc::channel();
         let (ready_tx,ready)=mpsc::sync_channel(1);
         let thread=std::thread::Builder::new().name("Deskland Dock & Stage".into()).spawn(move || {
+            super::window_lease::recover_orphans_once();
             super::run(options,owner,receiver,events_tx,ready_tx);
         }).map_err(|e|e.to_string())?;
         match ready.recv() {
