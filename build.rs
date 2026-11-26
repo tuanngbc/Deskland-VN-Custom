@@ -41,6 +41,7 @@ fn main() {
         println!("cargo:rerun-if-changed=third_party/fluidwin/upstream");
         println!("cargo:rerun-if-changed=third_party/fluidwin/shell_menu_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/window_lease.cpp");
+        println!("cargo:rerun-if-changed=third_party/fluidwin/audio_bridge.cpp");
         cc::Build::new()
             .cpp(true)
             .flag("/std:c++17")
@@ -52,12 +53,13 @@ fn main() {
             .file("third_party/fluidwin/index_bridge.cpp")
             .file("third_party/fluidwin/shell_menu_bridge.cpp")
             .file("third_party/fluidwin/window_lease.cpp")
+            .file("third_party/fluidwin/audio_bridge.cpp")
             .compile("tlauncher_fluidwin_motion");
         println!("cargo:rustc-link-lib=d3dcompiler");
         println!("cargo:rustc-link-lib=uuid");
         println!("cargo:rustc-link-lib=ole32");
         println!("cargo:rustc-link-lib=shell32");
-        for lib in ["d2d1","dwrite","dwmapi","oleaut32","runtimeobject","shlwapi","advapi32"] {
+        for lib in ["d2d1","dwrite","dwmapi","oleaut32","runtimeobject","shlwapi","advapi32","version","dxva2"] {
             println!("cargo:rustc-link-lib={lib}");
         }
         let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());

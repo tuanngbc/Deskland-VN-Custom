@@ -455,6 +455,9 @@ pub(super) fn hub_view(snapshot:&Snapshot,profile:&Profile,dock_mode:bool,live:b
     cards.insert(0,Card{title:"Ứng dụng chạy nền / Khay ứng dụng".into(),
         hint:"Cửa sổ đã thu nhỏ và khay thông báo Windows".into(),
         icon:Some(Widget::Windows),action:Some(Command::BackgroundApps)});
+    cards.push(Card{title:crate::launcher::localized("Bộ trộn âm lượng","Volume mixer","音量混合器").into(),
+        hint:crate::launcher::localized("Thiết bị và từng ứng dụng","Outputs and application volumes","输出设备和应用音量").into(),
+        icon:Some(Widget::Sound),action:Some(Command::AudioMixer)});
     if super::clipboard_history::active(){
         cards.insert(1,Card{title:crate::launcher::localized("Lịch sử clipboard","Clipboard history","剪贴板历史").into(),
             hint:crate::launcher::localized("Văn bản và ảnh","Text and images","文字与图片").into(),
@@ -561,10 +564,10 @@ thread_local! {
 }
 
 pub(super) unsafe fn panel_open_for(owner:HWND)->bool{
-    super::calendar::open_for(owner)||control_center::open_for(owner)||[AUDIO_WINDOW.with(Cell::get)]
+    super::audio_mixer::open_for(owner)||super::calendar::open_for(owner)||control_center::open_for(owner)||[AUDIO_WINDOW.with(Cell::get)]
         .into_iter().any(|h|!h.is_null()&&GetWindow(h,GW_OWNER)==owner)
 }
-unsafe fn paint_shell(hwnd:HWND,dark:bool,title:&str,hint:&str){
+pub(super) unsafe fn paint_shell(hwnd:HWND,dark:bool,title:&str,hint:&str){
     let mut ps:PAINTSTRUCT=mem::zeroed();let dc=BeginPaint(hwnd,&mut ps);
     let dpi=windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd);
     let px=|n|chrome::scale(dpi,n);
@@ -584,13 +587,13 @@ unsafe fn paint_shell(hwnd:HWND,dark:bool,title:&str,hint:&str){
 }
 // Keep the actual Win32 controls and honor Windows contrast themes. Only
 // change how controls owned by this process draw themselves.
-unsafe fn high_contrast()->bool{
+pub(super) unsafe fn high_contrast()->bool{
     let mut options:HIGHCONTRASTW=mem::zeroed();
     options.cbSize=mem::size_of::<HIGHCONTRASTW>() as u32;
     SystemParametersInfoW(SPI_GETHIGHCONTRAST,options.cbSize,(&mut options as *mut HIGHCONTRASTW).cast(),0)!=0
         && options.dwFlags&HCF_HIGHCONTRASTON!=0
 }
-unsafe fn track_color(draw:&NMCUSTOMDRAW,dark:bool)->LRESULT{
+pub(super) unsafe fn track_color(draw:&NMCUSTOMDRAW,dark:bool)->LRESULT{
     if draw.dwDrawStage==CDDS_PREPAINT{return CDRF_NOTIFYITEMDRAW as LRESULT;}
     if draw.dwDrawStage!=CDDS_ITEMPREPAINT{return CDRF_DODEFAULT as LRESULT;}
     let p=Palette::new(dark);
@@ -619,7 +622,7 @@ unsafe fn track_color(draw:&NMCUSTOMDRAW,dark:bool)->LRESULT{
     }
     CDRF_SKIPDEFAULT as LRESULT
 }
-unsafe fn paint_button(item:&DRAWITEMSTRUCT,dark:bool){
+pub(super) unsafe fn paint_button(item:&DRAWITEMSTRUCT,dark:bool){
     let p=Palette::new(dark);
     let active=item.itemState&(ODS_FOCUS|ODS_SELECTED)!=0;
     let dpi=windows_sys::Win32::UI::HiDpi::GetDpiForWindow(item.hwndItem);
@@ -631,6 +634,7 @@ unsafe fn paint_button(item:&DRAWITEMSTRUCT,dark:bool){
         if item.itemState&ODS_DISABLED!=0{p.muted}else{p.ink},DT_CENTER|DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);
 }
 pub(super) unsafe fn close_panels(){
+    super::audio_mixer::close_for(ptr::null_mut());
     for hwnd in [AUDIO_WINDOW.with(Cell::get)] {
         if !hwnd.is_null(){DestroyWindow(hwnd);}
     }
@@ -690,6 +694,7 @@ pub(super) unsafe fn audio_panel(owner:HWND,point:POINT,level:u32,muted:bool){
 }
 
 pub(super) unsafe fn close_panels_for(owner:HWND){
+    super::audio_mixer::close_for(owner);
     for hwnd in [AUDIO_WINDOW.with(Cell::get)] {
         if !hwnd.is_null()&&GetWindow(hwnd,GW_OWNER)==owner{DestroyWindow(hwnd);}
     }
@@ -699,6 +704,7 @@ pub(super) unsafe fn close_panels_for(owner:HWND){
 
 pub(super) unsafe fn route_panel_keyboard(message:&MSG)->bool{
     if !(WM_KEYFIRST..=WM_KEYLAST).contains(&message.message){return false;}
+    if super::audio_mixer::keyboard(message){return true;}
     let panel=[AUDIO_WINDOW.with(Cell::get)].into_iter()
         .find(|&p|!p.is_null()&&(message.hwnd==p||IsChild(p,message.hwnd)!=0)).unwrap_or(ptr::null_mut());
     if panel.is_null(){return false;}

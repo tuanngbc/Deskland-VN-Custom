@@ -46,6 +46,7 @@ pub(crate) fn motion_diagnostics()->serde_json::Value{window_effect::diagnostics
 mod stage_capture_lab;
 pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>{stage_capture_lab::inspect(path,true)}
 mod utilities;
+mod audio_mixer;
 mod wifi;
 mod control_center;
 pub(crate) mod panel_chrome;
@@ -1716,6 +1717,7 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::AddApp=>pin_from_file(owner),
         Command::BackgroundApps=>show_background_apps(owner),
         Command::Clipboard=>show_clipboard_history(owner),
+        Command::AudioMixer=>{let mut point=POINT::default();GetCursorPos(&mut point);audio_mixer::open(owner,point);},
         Command::ClipboardCopy(id)=>{
             if clipboard_history::active()&&!clipboard_history::copy(owner,id){show_clipboard_history(owner);}
         }
