@@ -3525,6 +3525,9 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let cursor=STATE.with(|s|s.borrow().bars.iter().enumerate().find(|(_,b)|b.hwnd==hwnd)
                     .and_then(|(i,b)|b.keyboard.map(|cell|(i,cell,b.items.len()))));
                 if let Some((bar,cell,count))=cursor{
+                    let recycle=STATE.with(|s|s.borrow().bars.get(bar).and_then(|b|b.layout.as_ref())
+                        .and_then(|l|cell.checked_sub(count+2).and_then(|i|l.inline.get(i))).is_some_and(|(w,_)|*w==UtilityWidget::RecycleBin));
+                    if recycle{recycle_bin::perform(hwnd,recycle_bin::Action::Menu);return 0;}
                     let target=STATE.with(|s|s.borrow().bars.get(bar).and_then(|b|b.layout.as_ref())
                         .and_then(|l|cell.checked_sub(l.shell_index())).and_then(|i|shell_access::Target::ALL.get(i)).copied());
                     if let Some(target)=target{activate_shell(hwnd,target,target==shell_access::Target::Start);}

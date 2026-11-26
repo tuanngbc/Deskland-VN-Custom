@@ -622,6 +622,7 @@ pub(super) fn status_on(data:&mut[u8],w:i32,h:i32,cell:Rect,scale:f32,tint:[u8;3
     };
     use super::utilities::{NetworkGlyph,VolumeGlyph};
     let (network,volume)=super::utilities::status_glyphs();
+    let recycle_full=super::utilities::recycle_status().is_some_and(|(n,_)|n>0);
     let stroke=(0.78*scale).max(0.66);
     let cover=|d:f32|(0.5+stroke-edge*d).clamp(0.0,1.0);
     draw(data,w,h,ink,|x,y|{
@@ -660,7 +661,7 @@ pub(super) fn status_on(data:&mut[u8],w:i32,h:i32,cell:Rect,scale:f32,tint:[u8;3
                         .fold(horn,|d,r|d.min(arc(x,y,0.42,0.50,r,1.0,0.0))),
                 }
             }
-            Some(RecycleBin) if super::utilities::recycle_status().is_some_and(|(n,_)|n>0)=>{
+            Some(RecycleBin) if recycle_full=>{
                 let bin=RecycleBin.glyph().iter().map(|&(ax,ay,bx,by)|line(x,y,0.5+(ax-0.5)*1.17,0.5+(ay-0.5)*1.17,
                     0.5+(bx-0.5)*1.17,0.5+(by-0.5)*1.17)).fold(f32::INFINITY,f32::min);
                 bin.min(segments(&[(0.30,0.52,0.41,0.40),(0.41,0.40,0.53,0.52),(0.48,0.47,0.63,0.41)]))
