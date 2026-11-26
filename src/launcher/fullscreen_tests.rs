@@ -24,13 +24,13 @@ fn native_original_settings_pages_reach_both_spotlight_modes_without_launching_w
             super::super::refresh_results(true);
             STATE.with(|s|{let s=s.borrow();let s=s.as_ref().unwrap();assert_eq!(s.all[s.matches[s.selected]].path,Path::new("ms-settings:sound"),"later indexed result must not change the selected settings target");});
             SendMessageW(compact,WM_KEYDOWN,VK_RETURN as usize,0);
-            assert_eq!(IsWindowVisible(compact),0);
+            wait_for(||IsWindowVisible(compact)==0);
             STATE.with(|s|assert_eq!(s.borrow().as_ref().unwrap().history.json(),history));
             open(POINT{x:0,y:0},"microphone".into(),ptr::null_mut(),false);
             let hwnd=window().unwrap();wait_for(||PANEL.with(|p|p.borrow().as_ref().is_some_and(|p|p.search_settled&&p.tiles.iter().any(|t|t.entry.path==Path::new("ms-settings:sound")))));
             PANEL.with(|p|{let p=p.borrow();let p=p.as_ref().unwrap();assert_eq!(p.tiles[p.selected].entry.name,words("Âm thanh","Sound","声音"));});
             screenshot(hwnd,&format!("spotlight-settings-{language}.png"));
-            SendMessageW(hwnd,WM_KEYDOWN,VK_RETURN as usize,0);assert_eq!(IsWindowVisible(hwnd),0);
+            SendMessageW(hwnd,WM_KEYDOWN,VK_RETURN as usize,0);wait_for(||IsWindowVisible(hwnd)==0);
         }
         super::super::close_spotlight();
     }

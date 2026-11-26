@@ -1,5 +1,7 @@
 # Resource verification — TLauncher 1.0.3
 
+Verified scoped lifetime update: full runs `45803922953` (shared corners) and `45805116143` (native-restored Jelly) passed; exact packages/version/checksums were retrieved and related actual images inspected. Corner masks/DWM/foreign refusal and both-role pending-cancel/live-capture/Guardian recovery are VERIFIED_CI for those fixtures. They supersede corresponding pending statements below only; no whole-app/hardware resource measurement or owner acceptance is inferred.
+
 Notification clear-all retains at most one 64-entry selected-list snapshot for the existing scoped notification callback. It adds no thread, listener, poll timer or content persistence. Each per-item removal revalidates actual identity and stops after close/failure, then refreshes with the same reader/apartment. Hosted refusal/plan/lifetime tests are pending; actual Windows permission/removal and whole-app resources remain unverified.
 
 The original Spotlight settings catalog adds 29 static definitions and at most 29 ephemeral localized rows on an active settings search/System view. Both modes reuse existing query/selection/render owners; no new worker, catalog, network, poll timer or index. Page gear glyphs reuse native text rendering, avoiding a separate Shell-icon job for each URI. Closing/changing Compact queries removes ephemeral rows; app pins/organization/history remain under existing owners. Hosted native result/lifetime verification is pending; whole-app resource goals remain unmeasured.
