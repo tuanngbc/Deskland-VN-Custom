@@ -140,6 +140,8 @@ jobs:
           $env:TUANPC_DESK_CALENDAR_EVIDENCE = Join-Path $env:RUNNER_TEMP "calendar-evidence"
           cargo test --release dock::calendar::tests::native_calendar_navigates_and_presents_light_dark_months -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::calendar::tests::native_windows_calendars_preserve_navigation_locale_and_today -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::taskbar_guard::tests::native_visibility_request_hides_a_window_without_moving_it -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::window_lease::native_lease_restores_style_and_respects_existing_layered_windows -- --ignored --exact --nocapture --test-threads=1

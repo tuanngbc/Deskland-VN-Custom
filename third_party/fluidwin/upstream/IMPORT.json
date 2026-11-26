@@ -5,6 +5,12 @@
   "hash_note": "Git blob IDs identify canonical original source; worktree SHA-256 records the original CRLF checkout bytes.",
   "files": [
     {
+      "path": "calendario.h",
+      "source_git_blob": "cc332bee53ce8724617a59e32dba4566f2654b4f",
+      "source_worktree_sha256": "39913fcb3f6c60ec573bc59d47bcf366a03c9cb3afb56886ca33e207f49d967e",
+      "local_changes": "Original Windows CALID mapping, System32 ICU loader and month/date formatting. Adds ucal_add month navigation and optional fixed instant for hosted fixtures; retains original scoped calendar/formatter cleanup. No system locale/clock writes or extra thread."
+    },
+    {
       "path": "onda.h",
       "source_git_blob": "7fee896cb950118ef1119ad71ece411d6d129af6",
       "source_worktree_sha256": "d7d52d6eddf6b9abf4ec58918857a8c5b8413f2924c077525f4b8860bca4d18b",

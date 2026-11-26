@@ -31,6 +31,25 @@ fn first_weekday()->usize{
     if count<=1{return 0;}String::from_utf16_lossy(&value[..count as usize-1]).parse::<usize>().ok().filter(|v|*v<=6).unwrap_or(0)
 }
 
+#[repr(C)]
+struct NativeMonth{calendar:i32,days:i32,first:i32,today:i32,title:[u16;128],date:[u16;128]}
+#[cfg(target_env="msvc")]
+unsafe extern "C"{
+    fn tlauncher_calendar_read(calendar:i32,locale:*const u16,offset:i32,instant:f64,today:f64,out:*mut NativeMonth)->i32;
+}
+struct Alternate{calendar:i32,days:i32,first:i32,today:i32,title:String,date:String}
+fn instant()->f64{std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0,|t|t.as_secs_f64()*1000.0)}
+fn alternate(calendar:i32,offset:i32,basis:f64,today:f64)->Option<Alternate>{
+    #[cfg(target_env="msvc")]unsafe{
+        let mut raw:NativeMonth=mem::zeroed();
+        if tlauncher_calendar_read(calendar,wide(text("vi-VN","en-US","zh-CN")).as_ptr(),offset,basis,today,&mut raw)!=1{return None;}
+        if !(1..=31).contains(&raw.days)||!(0..=6).contains(&raw.first)||!(0..=raw.days).contains(&raw.today){return None;}
+        let string=|v:&[u16]|String::from_utf16_lossy(&v[..v.iter().position(|c|*c==0).unwrap_or(v.len())]);
+        Some(Alternate{calendar:raw.calendar,days:raw.days,first:raw.first,today:raw.today,title:string(&raw.title),date:string(&raw.date)})
+    }
+    #[cfg(not(target_env="msvc"))]{let _=(calendar,offset,basis,today);None}
+}
+
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 struct Month{year:i32,number:i32}
 impl Month{
@@ -79,7 +98,7 @@ impl Button{
 struct Panel{
     hwnd:HWND,owner:HWND,anchor:chrome::Anchor,layer:Layer,dpi:u32,glass:super::glass::Glass,shadow:Option<chrome::PanelShadow>,
     fonts:[HFONT;4],local:Local,view:Month,following:bool,dirty:bool,
-    first_weekday:usize,
+    first_weekday:usize,alternate:Option<Alternate>,offset:i32,basis:f64,
     hover:Option<Button>,focus:Option<Button>,pressed:Option<Button>,
     motion:Option<super::motion::Tween>,
 }
@@ -106,6 +125,16 @@ impl Panel{
         })
     }
     fn activate(&mut self,button:Button){
+        if let Some(calendar)=self.alternate.as_ref().map(|m|m.calendar){
+            let now=instant();
+            let offset=if button==Button::Today{0}else{self.offset+if button==Button::Previous{-1}else{1}};
+            let basis=if button==Button::Today{now}else{self.basis};
+            if let Some(month)=alternate(calendar,offset,basis,now){
+                self.alternate=Some(month);self.offset=offset;self.basis=basis;
+                self.following=button==Button::Today;self.local=Local::now();self.dirty=true;
+            }
+            return;
+        }
         self.following=button==Button::Today;
         if self.following{self.local=Local::now();}
         self.view=if self.following{self.local.month}else{
@@ -116,6 +145,14 @@ impl Panel{
     }
     fn update_time(&mut self,now:Local){
         if self.local!=now{
+            if (self.local.month,self.local.day)!=(now.month,now.day){
+                let today=instant();
+                if self.following{self.basis=today;self.offset=0;}
+                if let Some(calendar)=self.alternate.as_ref().map(|m|m.calendar){
+                    // A browsing view keeps its original month through midnight.
+                    self.alternate=alternate(calendar,self.offset,self.basis,today);
+                }
+            }
             self.local=now;
             if self.following{self.view=now.month;}
             self.dirty=true;
@@ -136,7 +173,7 @@ impl Panel{
             SetDCBrushColor(dc,chrome::color(p.panel));
             FillRect(dc,&rect(0,0,WIDTH,HEIGHT),GetStockObject(DC_BRUSH) as HBRUSH);
         }
-        l(rect(20,15,216,32),&month_name(self.view),p.ink);
+        l(rect(20,15,216,32),&self.alternate.as_ref().map_or_else(||month_name(self.view),|m|m.title.clone()),p.ink);
         SelectObject(dc,self.fonts[1]);
         l(rect(21,50,215,22),&format!("{:02}:{:02}  ·  {}",self.local.hour,self.local.minute,text("Lịch TLauncher","TLauncher Calendar","TLauncher 日历")),p.muted);
         for button in Button::ALL{
@@ -154,23 +191,27 @@ impl Panel{
         for i in 0..7{let name=names[(i+self.first_weekday)%7];
             c(rect(18+i as i32*43,84,43,24),name,p.muted);
         }
-        let first=(self.view.first()-self.first_weekday as i32).rem_euclid(7);
-        let rows=((first+self.view.days()+6)/7).max(5);
+        let first=(self.alternate.as_ref().map_or_else(||self.view.first(),|m|m.first)-self.first_weekday as i32).rem_euclid(7);
+        let days=self.alternate.as_ref().map_or_else(||self.view.days(),|m|m.days);
+        let rows=((first+days+6)/7).max(5);
         let row_height=181/rows;
         for i in 0..rows*7{
             let (month,day)=self.view.date_at(i+self.view.first()-first);
+            let (day,in_month,today)=if let Some(m)=&self.alternate{
+                let day=i-first+1;if day<1||day>days{continue;}(day,true,day==m.today)
+            }else{(day,month==self.view,month==self.local.month&&day==self.local.day)};
             let x=18+(i%7)*43;
             let y=110+(i/7)*row_height;
-            let today=month==self.local.month&&day==self.local.day;
-            let ink=if today{p.panel}else if month!=self.view{faded}else{p.ink};
+            let ink=if today{p.panel}else if !in_month{faded}else{p.ink};
             if today{
                 chrome::box_fill(dc,rect(x+7,y+1,29,row_height-2),radius(25),p.accent,None);
             }
             c(rect(x,y,43,row_height),&day.to_string(),ink);
         }
         SelectObject(dc,self.fonts[1]);
-        l(rect(19,303,212,40),&format!("{}, {:02}/{:02}/{}",day_name(self.local.weekday),
-            self.local.day,self.local.month.number,self.local.month.year),p.muted);
+        let date=self.alternate.as_ref().map_or_else(||format!("{}, {:02}/{:02}/{}",day_name(self.local.weekday),
+            self.local.day,self.local.month.number,self.local.month.year),|m|m.date.clone());
+        l(rect(19,303,212,40),&date,p.muted);
         SelectObject(dc,prev);
         GdiFlush();
         chrome::mask_popup(self.layer.pixels(),w,h,radius(16) as f32,if self.glass.is_ready(){255}else{self.anchor.alpha()});
@@ -220,9 +261,11 @@ pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor){
     let fonts=[(22,560),(12,460),(14,510),(25,490)].map(|(size,weight)|
         crate::native_text::font_pixels((size*dpi as i32+48)/96,weight));
     let local=Local::now();
+    let basis=instant();
     let glass=super::glass::Glass::capture(RECT{left:x,top:y,right:x+w,bottom:y+h},dock_dpi,anchor.dark,anchor.transparency);
     let mut panel=Panel{hwnd,owner,anchor,layer,dpi:dock_dpi,glass,shadow:None,fonts,local,view:local.month,following:true,
-        dirty:true,first_weekday:first_weekday(),hover:None,focus:None,pressed:None,motion:None};
+        dirty:true,first_weekday:first_weekday(),alternate:alternate(0,0,basis,basis),offset:0,basis,
+        hover:None,focus:None,pressed:None,motion:None};
     panel.paint();
     if super::motion::native_allowed()&&SetTimer(hwnd,MOTION_TIMER,16,None)!=0{
         panel.motion=Some(super::motion::Tween::new(true,super::motion::CALENDAR,None).prepared());
@@ -246,6 +289,12 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_ERASEBKGND=>1,
         WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{PostMessageW(hwnd,WM_CLOSE,0,0);0}
         WM_DPICHANGED=>{DestroyWindow(hwnd);0}
+        WM_SETTINGCHANGE|WM_TIMECHANGE=>{
+            PANEL.with(|s|if let Some(p)=s.borrow_mut().as_mut().filter(|p|p.hwnd==hwnd){
+                p.local=Local::now();p.view=p.local.month;p.following=true;p.offset=0;p.basis=instant();
+                p.first_weekday=first_weekday();p.alternate=alternate(0,0,p.basis,p.basis);p.dirty=true;
+            });InvalidateRect(hwnd,ptr::null(),0);0
+        }
         WM_CLOSE=>{
             let animated=PANEL.with(|s|{
                 let mut p=s.borrow_mut();let Some(p)=p.as_mut().filter(|p|p.hwnd==hwnd)else{return false;};
@@ -352,6 +401,73 @@ mod tests{
         assert_eq!(month(2026,2).date_at(0),(month(2026,1),26));
     }
 
+    #[cfg(target_env="msvc")]
+    #[test]
+    #[ignore="hosted Windows System32 ICU; reads fixed instants without changing Windows locale or time"]
+    fn native_windows_calendars_preserve_navigation_locale_and_today(){
+        if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+        let basis=1_710_936_000_000.0; // 2024-03-20 12:00 UTC
+        struct Locale(String);impl Drop for Locale{fn drop(&mut self){crate::launcher::spotlight_locale(&self.0);}}
+        let _locale=Locale(text("vi","en","zh-CN").into());
+        unsafe{
+            let owner=CreateWindowExW(WS_EX_TOOLWINDOW,wide("STATIC").as_ptr(),wide("ICU calendar fixture").as_ptr(),
+                WS_POPUP,40,40,160,48,ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
+            assert!(!owner.is_null());
+            struct Owner(HWND);impl Drop for Owner{fn drop(&mut self){unsafe{close_for(self.0);DestroyWindow(self.0);}}}let _owner=Owner(owner);
+            for language in ["vi","en","zh-CN"]{crate::launcher::spotlight_locale(language);
+                assert!(alternate(1,0,basis,basis).is_none(),"Gregorian uses the existing view");
+                assert!(alternate(999,0,basis,basis).is_none());
+                assert!(alternate(22,12001,basis,basis).is_none());
+                for id in [3,4,6,7,8,22,23]{
+                    let current=alternate(id,0,basis,basis).expect("original Windows ICU calendar");
+                    assert!((1..=current.days).contains(&current.today));assert!(!current.title.is_empty()&&!current.date.is_empty());
+                    let previous=alternate(id,-1,basis,basis).unwrap();let next=alternate(id,1,basis,basis).unwrap();
+                    assert_ne!(previous.title,current.title);assert_ne!(next.title,current.title);
+                    assert_eq!((previous.today,next.today),(0,0));
+                    let later=alternate(id,0,basis,basis+40.0*86400000.0).unwrap();
+                    assert_eq!(later.title,current.title,"browsed month stays anchored after midnight/month rollover");
+                    assert_eq!(later.today,0);
+                    if id==22{assert_eq!((current.days,current.first),(31,2));}
+                    if language=="en"{match id{
+                        6=>assert!(current.title.contains("1445")),7=>assert!(current.title.contains("2567")),
+                        8=>assert!(current.title.contains("5784")),22=>assert!(current.title.contains("1403")),_=>{}
+                    }}
+                    for dark in [false,true]{
+                        show(owner,chrome::Anchor{point:POINT{x:260,y:480},side:super::super::DockSide::Bottom,dark,transparency:32});
+                        PANEL.with(|s|{
+                            let mut slot=s.borrow_mut();let p=slot.as_mut().unwrap();
+                            p.alternate=alternate(id,0,basis,basis);p.basis=basis;p.offset=0;
+                            for first_weekday in 0..7{
+                                p.first_weekday=first_weekday;
+                                let m=p.alternate.as_ref().unwrap();let first=(m.first-first_weekday as i32).rem_euclid(7);
+                                assert!((5..=6).contains(&((first+m.days+6)/7).max(5)));p.paint();
+                            }
+                            p.first_weekday=first_weekday();p.paint();
+                            if let Some(root)=std::env::var_os("TUANPC_DESK_CALENDAR_EVIDENCE"){
+                                let (w,h)=p.layer.size;
+                                let rgba=p.layer.pixels().chunks_exact(4).flat_map(|src|{
+                                    let a=src[3] as u16;
+                                    let unpremul=|v:u8|if a==0{0}else{((v as u16*255+a/2)/a).min(255) as u8};
+                                    [unpremul(src[2]),unpremul(src[1]),unpremul(src[0]),src[3]]
+                                }).collect::<Vec<_>>();
+                                image::save_buffer(std::path::PathBuf::from(root).join(format!("calendar-{id}-{language}-{}.png",if dark{"dark"}else{"light"})),
+                                    &rgba,w as u32,h as u32,image::ColorType::Rgba8).unwrap();
+                            }
+                            // Actual panel keyboard route, without mutating Windows preferences.
+                            p.activate(Button::Next);assert_eq!(p.offset,1);
+                            assert_ne!(p.alternate.as_ref().unwrap().title,alternate(id,0,basis,basis).unwrap().title);
+                            p.activate(Button::Previous);assert_eq!(p.offset,0);
+                            assert_eq!(p.alternate.as_ref().unwrap().title,alternate(id,0,basis,basis).unwrap().title);
+                            p.activate(Button::Today);assert!(p.following);assert_eq!(p.offset,0);
+                        });
+                        close_for(owner);assert!(!open_for(owner));
+                    }
+                }
+            }
+        }
+        println!("FLUIDWIN_CALENDAR original_icu=EXECUTED calendar_ids=3,4,6,7,8,22,23 locales=vi,en,zh week_starts=7 navigation=PASS today=PASS anchored_rollover=PASS system_writes=NONE");
+    }
+
     #[test]
     #[ignore = "uses a real layered popover and a fixture HWND"]
     fn native_calendar_navigates_and_presents_light_dark_months(){
@@ -364,6 +480,7 @@ mod tests{
             for language in ["vi","en","zh-CN"]{crate::launcher::spotlight_locale(language);for dark in [false,true]{
                 let anchor=chrome::Anchor{point:POINT{x:260,y:480},side:super::super::DockSide::Bottom,dark,transparency:32};
                 show(owner,anchor);
+                PANEL.with(|s|s.borrow_mut().as_mut().unwrap().alternate=None); // explicit Gregorian fixture
                 assert!(open_for(owner));
                 let hwnd=PANEL.with(|s|s.borrow().as_ref().unwrap().hwnd);
                 assert_ne!(IsWindowVisible(hwnd),0);
