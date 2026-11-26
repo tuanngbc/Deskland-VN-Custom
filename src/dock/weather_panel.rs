@@ -39,10 +39,10 @@ impl Panel{
     fn view(&self)->View{
         let f=fahrenheit(self.unit);let unit=if f{"°F"}else{"°C"};let mut cards=Vec::new();
         if let Some(reading)=self.weather.reading.as_ref(){
-            cards.push(Card{title:format!("{:.0}{unit} · {}",degrees(reading.temperature,f),condition(reading.code)),
+            cards.push(Card{title:format!("{} · {:.0}{unit} · {}",self.weather.location.as_ref().map(|l|l.name.as_str()).unwrap_or(""),degrees(reading.temperature,f),condition(reading.code)),
                 hint:format!("{} {:.0} {} · {} {:.0}%",text("Gió","Wind","风速"),if f{reading.wind/1.609344}else{reading.wind},if f{"mph"}else{"km/h"},text("Độ ẩm","Humidity","湿度"),reading.humidity),icon:None,action:Some(Command::Weather(Action::City))});
             for (index,day) in reading.days.iter().enumerate(){cards.push(Card{title:format!("{} · {:.0}–{:.0}{unit}",day_label(&day.date,index),degrees(day.low,f),degrees(day.high,f)),hint:condition(day.code),icon:None,action:None});}
-        }else{cards.push(Card{title:text("Chọn thành phố để xem thời tiết","Choose a city to view weather","选择城市以查看天气"),hint:if self.weather.pending{text("Đang tải…","Loading…","正在加载…")}else{String::new()},icon:None,action:Some(Command::Weather(Action::City))});}
+        }else{cards.push(Card{title:self.weather.location.as_ref().map(|l|l.name.clone()).unwrap_or_else(||text("Chọn thành phố để xem thời tiết","Choose a city to view weather","选择城市以查看天气")),hint:if self.weather.pending{text("Đang tải…","Loading…","正在加载…")}else{String::new()},icon:None,action:Some(Command::Weather(Action::City))});}
         if self.weather.location.is_some(){
             cards.push(Card{title:text("Làm mới","Refresh","刷新"),hint:String::new(),icon:None,action:(!self.weather.pending).then_some(Command::Weather(Action::Refresh(self.generation)))});
             for (choice,label) in [(0,text("Theo đơn vị Windows","Windows units","跟随 Windows 单位")),(1,"Celsius · °C".into()),(2,"Fahrenheit · °F".into())]{
