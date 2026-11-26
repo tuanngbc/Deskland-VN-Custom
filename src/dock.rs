@@ -68,6 +68,7 @@ mod overview;
 mod jump_list;
 mod folder_stack;
 mod shelf;
+mod shelf_previews;
 mod app_previews;
 mod comfort;
 mod recycle_bin;

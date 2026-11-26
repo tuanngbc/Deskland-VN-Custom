@@ -59,20 +59,18 @@ pub(super) const CHANGED:u32=windows_sys::Win32::UI::WindowsAndMessaging::WM_APP
         let hint=if ERROR.get().is_some(){text("Chưa hoàn tất yêu cầu. Hãy kiểm tra tệp nguồn và chỗ trống trên kệ.","Request not completed. Check the source files and shelf capacity.","请求未完成，请检查源文件及暂存架容量。")}
             else{text("Thả tệp vào đây · Kéo một mục ra khi cần","Drop files here · Drag an item out to use it","将文件拖入此处 · 需要时拖出一项")};
         let mut cards=vec![Card{icon:None,title:text("Thêm tệp…","Add files…","添加文件…"),hint:String::new(),action:Some(Command::Shelf(Action::Add))}];
-        if !items.is_empty(){
-            cards.push(Card{icon:None,title:text("Kéo tất cả ra","Drag all out","全部拖出"),hint:text("Hoặc nhấn Enter để sao chép","Or press Enter to copy","或按 Enter 复制"),action:(!read_only).then_some(Command::Shelf(Action::Drag(None)))});
-            cards.push(Card{icon:None,title:text("Dọn kệ","Clear shelf","清空暂存架"),hint:text("Không xóa tệp gốc","Keeps the original files","不会删除原文件"),action:Some(Command::Shelf(Action::Forget(None)))});
-        }
+        cards.push(Card{icon:None,title:text("Kéo tất cả ra","Drag all out","全部拖出"),hint:text("Hoặc nhấn Enter để sao chép","Or press Enter to copy","或按 Enter 复制"),action:(!items.is_empty()&&!read_only).then_some(Command::Shelf(Action::Drag(None)))});
+        cards.push(Card{icon:None,title:text("Dọn kệ","Clear shelf","清空暂存架"),hint:text("Không xóa tệp gốc","Keeps the original files","不会删除原文件"),action:(!items.is_empty()).then_some(Command::Shelf(Action::Forget(None)))});
         for (id,path) in items{
             cards.push(Card{icon:None,title:path.file_name().unwrap_or(path.as_os_str()).to_string_lossy().into(),
                 hint:path.to_string_lossy().into(),action:Some(Command::Shelf(Action::Item(id)))});
         }
-        View{title:title(),hint,cards,metrics:None}
+        View{title:format!("{} · {}",title(),cards.len()-3),hint,cards,metrics:None}
     }
     unsafe fn open(owner:HWND){
         if !enabled()||IsWindow(owner)==0{return;}
         if raw().is_null(){MODEL.with(|s|s.replace(NonNull::new(tlauncher_shelf_create()).map(Native)));if raw().is_null(){ERROR.set(Some(-101));}}
-        control_center::show_list(owner,super::super::dock_app_anchor(owner,None),view());
+        control_center::show_shelf(owner,super::super::dock_app_anchor(owner,None),view());
         if let Some(popup)=control_center::window(owner){
             if let Some(raw)=NonNull::new(tlauncher_shelf_register(raw(),popup,CHANGED)){
                 TARGET.with(|s|s.replace(Some(Registration{owner,popup,raw})));

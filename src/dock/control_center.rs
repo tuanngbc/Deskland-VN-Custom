@@ -96,7 +96,7 @@ struct Panel {
     layered:bool,dirty:bool,
     hwnd:HWND,owner:HWND,tag:usize,anchor:chrome::Anchor,dpi:u32,layer:Layer,ink:Option<Layer>,
     glass:super::glass::Glass,fonts:[HFONT;4], view:View, metrics:Option<Metrics>, index:Option<usize>, pressed:Option<usize>, pressed_point:Option<POINT>, page:usize,
-    cols:usize,per_page:usize, row_height:i32,list:bool,entrance:Option<super::motion::Tween>,shadow:Option<chrome::PanelShadow>,hub:bool,
+    cols:usize,per_page:usize, row_height:i32,list:bool,shelf:bool,rasters:surface::IconRasters,entrance:Option<super::motion::Tween>,shadow:Option<chrome::PanelShadow>,hub:bool,
 }
 impl Drop for Panel {
     fn drop(&mut self){unsafe{for &f in &self.fonts{if !f.is_null(){DeleteObject(f);}}}}
@@ -177,16 +177,29 @@ impl Panel{
     }
     fn rect(&self,i:usize)->RECT{
         let pad=chrome::scale(self.dpi,14);
+        if self.shelf&&i<3{
+            let gap=chrome::scale(self.dpi,6);
+            let width=(self.layer.size.0-2*pad-2*gap)/3;
+            let left=pad+i as i32*(width+gap);let top=chrome::scale(self.dpi,67);
+            return RECT{left,top,right:left+width,bottom:top+chrome::scale(self.dpi,30)};
+        }
+        let i=if self.shelf{i-3}else{i};
         let gap=chrome::scale(self.dpi,if self.list{3}else{8});
-        let top=chrome::scale(self.dpi,67)+(i/self.cols) as i32*(self.row_height+gap);
+        let top=chrome::scale(self.dpi,if self.shelf{105}else{67})+(i/self.cols) as i32*(self.row_height+gap);
         let w=((self.layer.size.0-2*pad-gap*(self.cols as i32-1))/self.cols as i32).max(1);
         let left=pad+(i%self.cols) as i32*(w+gap);
         RECT{left,top,right:left+w,bottom:top+self.row_height}
     }
-    fn cards(&self)->&[Card]{
-        let start=(self.page*self.per_page).min(self.view.cards.len());
+    fn cards(&self)->Vec<&Card>{
+        let start=(self.page*self.per_page+if self.shelf{3}else{0}).min(self.view.cards.len());
         let end=(start+self.per_page).min(self.view.cards.len());
-        &self.view.cards[start..end]
+        let mut cards=Vec::with_capacity(end-start+if self.shelf{3}else{0});
+        if self.shelf{cards.extend(self.view.cards.iter().take(3));}
+        cards.extend(self.view.cards[start..end].iter());cards
+    }
+    fn card(&self,i:usize)->Option<&Card>{
+        let index=if self.shelf&&i<3{i}else{self.page*self.per_page+i};
+        self.view.cards.get(index)
     }
     fn hit(&self,x:i32,y:i32)->Option<usize>{
         self.cards().iter().enumerate().find_map(|(i,c)|{
@@ -194,7 +207,7 @@ impl Panel{
             (c.action.is_some()&&x>=r.left&&x<r.right&&y>=r.top&&y<r.bottom).then_some(i)
         })
     }
-    fn pages(&self)->usize{self.view.cards.len().div_ceil(self.per_page).max(1)}
+    fn pages(&self)->usize{self.view.cards.len().saturating_sub(if self.shelf{3}else{0}).div_ceil(self.per_page).max(1)}
     fn page_delta(&mut self,delta:isize){
         self.page=self.page.saturating_add_signed(delta).min(self.pages()-1);
         self.index=self.cards().iter().position(|c|c.action.is_some());self.pressed=None;
@@ -211,6 +224,7 @@ impl Panel{
         chrome::text(g,RECT{left:px(18),top:px(41),right:w-px(14),bottom:px(59)},&self.view.hint,p.muted,SINGLE_LINE);
         let cards=self.cards();
         let mut glyphs=Vec::with_capacity(cards.len());
+        let mut thumbnails=Vec::new();
         for (i,c) in cards.iter().enumerate(){
             let r=self.rect(i);
             let focused=self.index==Some(i);
@@ -227,6 +241,18 @@ impl Panel{
                     super::fill(g,RECT{left:r.left+px(8),top:r.top-px(2),right:r.right-px(8),bottom:r.top-px(1)},chrome::color(p.edge));
                 }
             }else{chrome::box_fill(g,r,px(20),fill,focused.then_some(p.accent));}
+            if self.shelf{
+                SelectObject(g,self.fonts[2]);
+                if let Some(Command::Shelf(super::shelf::Action::Item(id)))=c.action.as_ref(){
+                    let slot=Rect{x:r.left as f32,y:(r.top+px(1)) as f32,w:(r.right-r.left) as f32,h:px(48) as f32};
+                    if let Some(image)=super::shelf_previews::image(*id){thumbnails.push((slot,Some(image)));}
+                    else{thumbnails.push((slot,None));}
+                    chrome::text(g,RECT{left:r.left+px(3),top:r.top+px(51),right:r.right-px(3),bottom:r.bottom-px(2)},&c.title,p.ink,SINGLE_LINE|DT_CENTER);
+                }else{
+                    chrome::text(g,RECT{left:r.left+px(3),right:r.right-px(3),..r},&c.title,if c.action.is_some(){p.ink}else{p.muted},SINGLE_LINE|DT_CENTER);
+                }
+                continue;
+            }
             let inner=r.left+px(if c.icon.is_some(){if self.list{38}else{44}}else{12});
             let first=px(if is_metric||self.list{4}else{6});
             let text_bounds=RECT{left:inner,top:r.top+first,right:r.right-px(9),
@@ -272,6 +298,13 @@ impl Panel{
             for pixel in self.layer.pixels().chunks_exact_mut(4){pixel[3]=255;}
         }
         let scale=self.dpi as f32/96.0;
+        for (slot,image) in thumbnails{
+            if let Some(image)=image{self.rasters.paint(self.layer.pixels(),w,h,slot,&image);}
+            else{
+                let side=px(30) as f32;
+                surface::fallback_icon(self.layer.pixels(),w,h,Rect{x:slot.x+(slot.w-side)/2.0,y:slot.y+(slot.h-side)/2.0,w:side,h:side},p.muted);
+            }
+        }
         for (icon,badge) in glyphs{
             let data=self.layer.pixels();
             surface::rounded(data,w,h,badge,badge.w*0.5,p.accent,if self.anchor.dark{46}else{30});
@@ -342,26 +375,34 @@ pub(super) unsafe fn follow_hub(owner:HWND,dock:crate::launcher::DockAnchor){
         chrome::PanelShadow::sync(&mut p.shadow,hwnd,owner,rect,dpi,anchor.side,anchor.dark);
     });
 }
-pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,false,None);}
-pub(super) unsafe fn show_list(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,true,false,None);}
-pub(super) unsafe fn show_list_capacity(owner:HWND,anchor:chrome::Anchor,view:View,capacity:usize){show_inner(owner,anchor,view,true,false,Some(capacity));}
-pub(super) unsafe fn show_hub(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,true,None);}
+pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,false,false,None);}
+pub(super) unsafe fn show_list(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,true,false,false,None);}
+pub(super) unsafe fn show_list_capacity(owner:HWND,anchor:chrome::Anchor,view:View,capacity:usize){show_inner(owner,anchor,view,true,false,false,Some(capacity));}
+pub(super) unsafe fn show_hub(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,true,false,None);}
+pub(super) unsafe fn show_shelf(owner:HWND,anchor:chrome::Anchor,view:View){show_inner(owner,anchor,view,false,false,true,None);shelf_page();}
+unsafe fn shelf_page(){
+    let request=PANE.with(|s|{let s=s.borrow();let p=s.as_ref().filter(|p|p.shelf)?;
+        let rows=p.cards().into_iter().filter_map(|c|match c.action.as_ref(){
+            Some(Command::Shelf(super::shelf::Action::Item(id)))=>Some((*id,std::path::PathBuf::from(&c.hint))),_=>None}).collect();
+        Some((p.hwnd,p.tag,rows,p.dpi))});
+    if let Some((hwnd,tag,rows,dpi))=request{super::shelf_previews::request(hwnd,tag,rows,dpi);}
+}
 pub(super) fn first_page(owner:HWND,ticket:usize){PANE.with(|s|if let Some(p)=s.borrow_mut().as_mut().filter(|p|p.owner==owner&&p.tag==ticket){p.page=0;});}
-unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bool,capacity:Option<usize>){
+unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bool,shelf:bool,capacity:Option<usize>){
     super::utilities::close_panels();
     let dpi=windows_sys::Win32::UI::HiDpi::GetDpiForWindow(owner).clamp(72,288);
     let px=|n|chrome::scale(dpi,n);
     let Some(work)=(if hub{anchor.panel_work(dpi)}else{anchor.work()})else{return;};
     let double=!list&&view.metrics.map_or(view.cards.len()>3,|o|o.compact);
-    let cols=if double&&work.right-work.left>=px(365){2}else{1};
-    let width=px(if list{350}else if cols==2{432}else{328}).min(work.right-work.left);
-    let row_height=px(if list{40}else if view.metrics.is_some(){57}else{52});
+    let cols=if shelf{if work.right-work.left>=px(520){6}else if work.right-work.left>=px(320){3}else{2}}else if double&&work.right-work.left>=px(365){2}else{1};
+    let width=px(if shelf{548}else if list{350}else if cols==2{432}else{328}).min(work.right-work.left);
+    let row_height=px(if shelf{74}else if list{40}else if view.metrics.is_some(){57}else{52});
     let gap=px(if list{3}else{8});
-    let budget=(work.bottom-work.top-px(132)).max(row_height);
-    let rows=(budget/(row_height+gap)).clamp(1,9) as usize;
+    let budget=(work.bottom-work.top-px(if shelf{170}else{132})).max(row_height);
+    let rows=(budget/(row_height+gap)).clamp(1,if shelf{6/cols as i32}else{9}) as usize;
     let per_page=cols*rows;
-    let expected=capacity.unwrap_or_else(||view.metrics.map_or(view.cards.len(),|m|m.mask.count_ones() as usize));
-    let height=(px(84)+expected.clamp(1,per_page).div_ceil(cols) as i32*(row_height+gap)
+    let expected=capacity.unwrap_or_else(||view.metrics.map_or(view.cards.len().saturating_sub(if shelf{3}else{0}),|m|m.mask.count_ones() as usize));
+    let height=(px(if shelf{122}else{84})+expected.clamp(1,per_page).div_ceil(cols) as i32*(row_height+gap)
         +if expected>per_page{px(30)}else{0}).min(work.bottom-work.top).max(1);
     let Some(layer)=Layer::new(width,height)else{return;};
     let ink=Layer::new(width*2,height*2).inspect(|ink|{
@@ -383,7 +424,7 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bo
     let metrics=view.metrics.map(Metrics::new);
     let start=std::time::Instant::now();
     let animated=super::motion::native_allowed();
-    let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,glass,fonts,view,metrics,index:None,pressed:None,pressed_point:None,page:0,cols,per_page,row_height,list,entrance:None,shadow:None,hub};
+    let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,glass,fonts,view,metrics,index:None,pressed:None,pressed_point:None,page:0,cols,per_page,row_height,list,shelf,rasters:surface::IconRasters::default(),entrance:None,shadow:None,hub};
     // A hidden HWND can't be relied on to dispatch WM_PAINT. Submit the
     // completed bitmap directly, then show the window with content.
     p.paint();
@@ -419,8 +460,15 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bo
 unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     match msg{
         WM_ERASEBKGND=>1,
-        WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{if !super::shelf::modal()&&!super::capture_access::pending(){PostMessageW(hwnd,WM_CLOSE,0,0);}0},
+        WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{
+            let shelf=PANE.with(|s|s.borrow().as_ref().is_some_and(|p|p.hwnd==hwnd&&p.shelf));
+            if !shelf&&!super::shelf::modal()&&!super::capture_access::pending(){PostMessageW(hwnd,WM_CLOSE,0,0);}0
+        },
         super::shelf::CHANGED=>{super::shelf::changed(hwnd);0},
+        super::shelf_previews::READY=>{
+            if super::shelf_previews::receive(hwnd,w){PANE.with(|s|if let Some(p)=s.borrow_mut().as_mut().filter(|p|p.hwnd==hwnd&&p.tag==w){p.dirty=true;});InvalidateRect(hwnd,ptr::null(),0);}0
+        },
+        WM_TIMER if w==super::shelf_previews::RETRY=>{super::shelf_previews::submit(hwnd);0},
         super::notifications::READY=>{super::notifications::receive(hwnd,w);0},
         super::news::READY=>{super::news::receive(hwnd,w);0},
         crate::weather::READY=>{super::weather_panel::receive(hwnd,w);0},
@@ -444,6 +492,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_NCDESTROY=>{
+            super::shelf_previews::close(hwnd);
             super::shelf::detach(hwnd);
             super::notifications::detach(hwnd);
             super::news::detach(hwnd);
@@ -524,13 +573,13 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                         p.index=p.hit(x,y);
                         if let Some(point)=p.pressed_point.filter(|_|w&1!=0){ // MK_LBUTTON is still physically held
                             if (x-point.x).abs()>=windows_sys::Win32::UI::HiDpi::GetSystemMetricsForDpi(SM_CXDRAG,p.dpi).max(4)||(y-point.y).abs()>=windows_sys::Win32::UI::HiDpi::GetSystemMetricsForDpi(SM_CYDRAG,p.dpi).max(4){
-                                action=p.pressed.and_then(|i|p.cards().get(i)).and_then(|c|c.action.as_ref()).and_then(super::shelf::drag_command);
+                                action=p.pressed.and_then(|i|p.card(i)).and_then(|c|c.action.as_ref()).and_then(super::shelf::drag_command);
                                 if action.is_some(){p.pressed=None;p.pressed_point=None;}
                             }
                         }
                     }
                     super::WM_DOCK_MOUSELEAVE=>{
-                        let shelf_drag=p.pressed.and_then(|i|p.cards().get(i)).and_then(|c|c.action.as_ref()).and_then(super::shelf::drag_command).is_some();
+                        let shelf_drag=p.pressed.and_then(|i|p.card(i)).and_then(|c|c.action.as_ref()).and_then(super::shelf::drag_command).is_some();
                         if GetCapture()!=hwnd||!shelf_drag{p.index=None;p.pressed=None;p.pressed_point=None;}
                     },
                     WM_CAPTURECHANGED=>{p.index=None;p.pressed=None;p.pressed_point=None;},
@@ -550,7 +599,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                         if n>0{
                             let i=p.index.unwrap_or(0);
                             match key{
-                                VK_RETURN|VK_SPACE=>action=p.cards().get(i).and_then(|c|c.action.clone()),
+                                VK_RETURN|VK_SPACE=>action=p.card(i).and_then(|c|c.action.clone()),
                                 VK_HOME=>p.index=Some(0),VK_END=>p.index=Some(n-1),
                                 VK_UP|VK_DOWN|VK_LEFT|VK_RIGHT|VK_TAB=>{
                                     let step=match key{VK_UP=>-(p.cols as isize),VK_DOWN=>p.cols as isize,
@@ -573,6 +622,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let mut event=TRACKMOUSEEVENT{cbSize:mem::size_of::<TRACKMOUSEEVENT>() as u32,dwFlags:TME_LEAVE,hwndTrack:hwnd,dwHoverTime:0};
                 TrackMouseEvent(&mut event);
             }
+            if repaint{shelf_page();}
             if capture{SetCapture(hwnd);}
             if msg==WM_LBUTTONUP{ReleaseCapture();}
             if let Some((owner,action))=action{
@@ -600,6 +650,83 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
 }
 #[cfg(test)] mod tests{
     use super::*;
+    #[test]#[ignore="hosted File Shelf images/paging/lifetime; synthetic files only, no Shell file operations"]
+    fn native_shelf_grid_pages_all_references_and_releases_images(){
+        if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+        unsafe{
+            let root=std::path::PathBuf::from(std::env::var_os("RUNNER_TEMP").unwrap());
+            let path=root.join(format!("shelf-thumbnail-fixture-{}.png",std::process::id()));
+            let pixels=image::RgbaImage::from_fn(240,160,|x,y|if x<120{image::Rgba([30,80,230,255])}else if y<80{image::Rgba([240,150,30,255])}else{image::Rgba([60,210,100,255])});
+            pixels.save(&path).unwrap();
+            let owner=CreateWindowExW(WS_EX_TOOLWINDOW,wide("STATIC").as_ptr(),wide("Shelf grid fixture").as_ptr(),WS_POPUP,10,10,300,80,ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
+            assert!(!owner.is_null());
+            for (pass,dark) in [true,false].into_iter().enumerate(){
+                let mut cards=vec![
+                    Card{icon:None,title:"Add files…".into(),hint:String::new(),action:Some(Command::Shelf(super::super::shelf::Action::Add))},
+                    Card{icon:None,title:"Drag all out".into(),hint:String::new(),action:None},
+                    Card{icon:None,title:"Clear shelf".into(),hint:String::new(),action:Some(Command::Shelf(super::super::shelf::Action::Forget(None)))}];
+                for id in 1..=200{
+                    cards.push(Card{icon:None,title:format!("Tệp {id} – 文件.png"),hint:path.to_string_lossy().into(),action:Some(Command::Shelf(super::super::shelf::Action::Item(id)))});
+                }
+                show_shelf(owner,chrome::Anchor{point:POINT{x:500,y:650},side:super::super::DockSide::Bottom,dark,transparency:30},View{title:"File Shelf · 200".into(),hint:"Synthetic thumbnails · no file operations".into(),cards,metrics:None});
+                let (popup,tag,per_page)=PANE.with(|s|{let s=s.borrow();let p=s.as_ref().unwrap();assert!(p.shelf);assert!(p.per_page<=6);(p.hwnd,p.tag,p.per_page)});
+                let started=std::time::Instant::now();
+                loop{
+                    let mut msg:MSG=mem::zeroed();while PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}
+                    if super::super::shelf_previews::image(1).is_some(){break;}
+                    assert!(started.elapsed()<std::time::Duration::from_secs(20),"Shell thumbnail callback did not publish");std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                let image=super::super::shelf_previews::image(1).unwrap();
+                assert!(image.width>0&&image.height>0&&image.width<=120&&image.height<=120);
+                assert!(image.pixels.chunks_exact(4).all(|p|p[..3].iter().all(|&c|c<=p[3])));
+                assert!(image.pixels.chunks_exact(4).any(|p|p[3]>0));
+                assert!(!super::super::shelf_previews::receive(popup,tag.wrapping_add(1)));
+                let mut observed=std::collections::BTreeSet::new();
+                PANE.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().unwrap();
+                    for page in 0..p.pages(){
+                        p.page=page;
+                        for (i,card) in p.cards().iter().enumerate(){
+                            assert!(std::ptr::eq(*card,p.card(i).unwrap()));
+                            let rect=p.rect(i);assert!(rect.left>=0&&rect.right<=p.layer.size.0&&rect.top>=0&&rect.bottom<=p.layer.size.1);
+                            if let Some(Command::Shelf(super::super::shelf::Action::Item(id)))=card.action.as_ref(){assert!(observed.insert(*id));}
+                        }
+                    }
+                    p.page=0;p.index=None;p.paint();p.present();
+                });
+                assert_eq!(observed.len(),200);
+                // Native focus can return to Explorer while this shelf remains
+                // available as an incoming IDropTarget.
+                SendMessageW(popup,WM_ACTIVATE,WA_INACTIVE as usize,0);
+                let mut msg:MSG=mem::zeroed();while PeekMessageW(&mut msg,popup,WM_CLOSE,WM_CLOSE,PM_REMOVE)!=0{panic!("Shelf closed while choosing a source file");}
+                if let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
+                    windows_sys::Win32::Graphics::Dwm::DwmFlush();let mut bounds:RECT=mem::zeroed();assert_ne!(GetWindowRect(popup,&mut bounds),0);
+                    let (w,h)=(bounds.right-bounds.left,bounds.bottom-bounds.top);let mut layer=Layer::new(w,h).unwrap();let dc=GetDC(ptr::null_mut());
+                    assert_ne!(BitBlt(layer.dc(),0,0,w,h,dc,bounds.left,bounds.top,SRCCOPY|CAPTUREBLT),0);ReleaseDC(ptr::null_mut(),dc);GdiFlush();
+                    let rgba=layer.pixels().chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],255]).collect::<Vec<_>>();
+                    image::save_buffer(std::path::PathBuf::from(dir).join(format!("file-shelf-grid-{pass}.png")),&rgba,w as u32,h as u32,image::ColorType::Rgba8).unwrap();
+                }
+                SendMessageW(popup,WM_KEYDOWN,VK_END as usize,0);
+                let selected=PANE.with(|s|s.borrow().as_ref().unwrap().index.unwrap());assert_eq!(selected,per_page+2);
+                SendMessageW(popup,WM_KEYDOWN,VK_RIGHT as usize,0);
+                PANE.with(|s|assert_eq!(s.borrow().as_ref().unwrap().page,1));
+                let started=std::time::Instant::now();
+                while super::super::shelf_previews::image(1+per_page as u64).is_none(){
+                    let mut msg:MSG=mem::zeroed();while PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}
+                    assert!(started.elapsed()<std::time::Duration::from_secs(20));std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                assert!(super::super::shelf_previews::image(1).is_none(),"old-page source image retained");
+                SendMessageW(popup,WM_MOUSEWHEEL,((120u16 as usize)<<16) as usize,0); // first page, then close while extraction may be pending
+                close_for(owner);assert_eq!(IsWindow(popup),0);
+                assert!(!super::super::shelf_previews::receive(popup,tag));assert!(super::super::shelf_previews::image(1).is_none());
+                assert_eq!(IsWindow(owner),1);
+            }
+            let started=std::time::Instant::now();while !super::super::shelf_previews::idle(){
+                assert!(started.elapsed()<std::time::Duration::from_secs(20));std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            DestroyWindow(owner);std::fs::remove_file(path).unwrap();
+            println!("FLUIDWIN_SHELF_GRID actual_Shell_image=PASS six_visible=PASS all_200_paged=PASS keyboard=PASS source_focus_preserved=PASS late_closed_result=REFUSED memory_released=PASS real_drag=NOT_INJECTED");
+        }
+    }
     #[test]
     #[ignore = "native layered popup presentation; run individually in CI"]
     fn native_popup_has_its_first_layer_before_pumping_input(){

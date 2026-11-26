@@ -295,6 +295,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
           cargo test --release dock::shelf::native::tests::native_shelf_holds_references_and_releases_drop_registration -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::control_center::tests::native_shelf_grid_pages_all_references_and_releases_images -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify on-demand notification history without dismissing notifications
         if: ${{ !cancelled() }}

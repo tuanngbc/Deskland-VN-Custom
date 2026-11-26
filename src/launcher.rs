@@ -642,6 +642,16 @@ unsafe fn extract_icon(path: &Path, size: i32, allow_extract:bool) -> Option<Arc
 /// Preserve the shell bitmap dimensions. IconPixels are premultiplied BGRA
 /// (the order used by both Win32 renderers); resize only at the destination.
 pub(crate) unsafe fn shell_icon(path: &Path, source_size: i32) -> Option<IconPixels> {
+    shell_image(path,source_size,true)
+}
+
+/// The File Shelf uses the same Shell bitmap/alpha conversion as app icons,
+/// but permits the Shell thumbnail when one is available. Call off the UI thread.
+pub(crate) unsafe fn shell_thumbnail(path:&Path,source_size:i32)->Option<IconPixels>{
+    shell_image(path,source_size,false)
+}
+
+unsafe fn shell_image(path:&Path,source_size:i32,icon_only:bool)->Option<IconPixels>{
     use windows::Win32::UI::Shell::{SHCreateItemFromParsingName, IShellItemImageFactory, SIIGBF_ICONONLY, SIIGBF_BIGGERSIZEOK};
     let name = path.to_string_lossy();
     let factory_for = |name: &str| {
@@ -651,7 +661,8 @@ pub(crate) unsafe fn shell_icon(path: &Path, source_size: i32) -> Option<IconPix
     let factory = factory_for(&name).or_else(|error| {
         if let Some(alternate)=apps_folder_parsing_name(&name){factory_for(&alternate)}else{Err(error)}
     }).ok()?;
-    let bitmap = factory.GetImage(windows::Win32::Foundation::SIZE { cx: source_size, cy: source_size }, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK).ok()?;
+    let flags=if icon_only{SIIGBF_ICONONLY|SIIGBF_BIGGERSIZEOK}else{SIIGBF_BIGGERSIZEOK};
+    let bitmap = factory.GetImage(windows::Win32::Foundation::SIZE { cx: source_size, cy: source_size }, flags).ok()?;
     let bitmap = bitmap.0;
     let mut object: BITMAP = std::mem::zeroed();
     if GetObjectW(bitmap, std::mem::size_of::<BITMAP>() as i32, &mut object as *mut _ as *mut _) == 0 { DeleteObject(bitmap); return None; }
