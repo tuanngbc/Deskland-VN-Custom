@@ -843,6 +843,13 @@ fn native_guarded_geometry_commands(){guarded_motion_fixture(true,Some("geometry
 fn native_guarded_jelly_native_restore(){guarded_motion_fixture(true,Some("jelly"));}
 #[cfg(all(test,target_env="msvc"))]
 #[test]
+#[ignore="hosted actual minimize/restore first-to-final compositor and mesh evidence with both Guardian roles"]
+fn native_minimize_restore_handoff_exports_source_mesh_and_screen(){
+    guarded_motion_fixture(false,Some("minimize-handoff"));
+    guarded_motion_fixture(true,Some("minimize-handoff"));
+}
+#[cfg(all(test,target_env="msvc"))]
+#[test]
 #[ignore="original Snap picker keyboard selection and guarded/native geometry on hosted foreign HWND"]
 fn native_original_snap_layout(){guarded_motion_fixture(true,Some("snap-layout"));}
 #[cfg(all(test,target_env="msvc"))]

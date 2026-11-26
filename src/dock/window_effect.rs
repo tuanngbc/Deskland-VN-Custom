@@ -35,6 +35,8 @@ thread_local!{
     #[cfg(test)] static FIXTURE_NORMAL:std::cell::Cell<Option<RECT>>=const{std::cell::Cell::new(None)};
 }
 static LAST:Mutex<Option<Value>>=Mutex::new(None);
+#[cfg(all(test,target_env="msvc"))]
+#[path="window_effect_handoff_lab.rs"]mod handoff_lab;
 
 #[derive(Clone,Copy)]
 struct Policy{motion:motion::Settings,client_animation:Option<bool>,native_minimize:Option<i32>}
@@ -109,6 +111,10 @@ impl Attempt{
             }
         }
         let t=Instant::now();let proxy=Proxy::new_motion_for(frame,req.area,req.icon,req.side,req.effect,req.dpi);
+        #[cfg(all(test,target_env="msvc"))]
+        if std::env::var("TUANPC_MOTION_FIXTURE_SCOPE").as_deref()==Ok("minimize-handoff"){
+            assert!(proxy.as_ref().is_some_and(|p|p.enable_evidence()),"handoff fixture requires actual first-frame GPU evidence");
+        }
         self.values["proxyPreparationMs"]=json!(t.elapsed().as_millis() as u64);
         self.values["proxyCreated"]=json!(proxy.is_some());proxy.ok_or("proxy-create-failed")
     }
@@ -998,6 +1004,7 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
         Ok("snap-layout")=>{super::snap_layout::probe(bar,ids[0]);return;},
         Ok("topmost")=>{super::topmost::probe(bar,ids[0]);return;},
         Ok("jelly")=>{super::window_motion::probe_drag(ids[0]);return;},
+        Ok("minimize-handoff")=>{handoff_lab::probe(bar,path,ids[0],policy);return;},
         _=>{},
     }
     let mut pixel_matches=0usize;

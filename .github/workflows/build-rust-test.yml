@@ -205,6 +205,27 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+      - name: Capture actual minimize and restore handoffs with both Guardian roles
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
+        run: |
+          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
+          New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
+          git rev-parse HEAD | Set-Content (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'early-handoff-source.txt')
+          cargo test --release dock::stage_capture_lab::native_minimize_restore_handoff_exports_source_mesh_and_screen -- --ignored --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'early-handoff.log')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload first-to-final minimize and restore evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-handoff-early
+          path: |
+            ${{ runner.temp }}/stage-fixture-evidence/early-handoff-source.txt
+            ${{ runner.temp }}/stage-fixture-evidence/early-handoff.log
+            ${{ runner.temp }}/stage-fixture-evidence/handoff-*.png
+          retention-days: 14
+          if-no-files-found: warn
+
       - name: Build Rust native app
         if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
