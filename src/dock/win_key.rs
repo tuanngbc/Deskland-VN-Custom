@@ -343,6 +343,7 @@ mod tests{
         assert!(!hook.finished());
         drop(hook);
         let hook=Hook::install_features(null_mut(),3,false,false,false,true).expect("Snap-only shared hook");assert!(!hook.finished());drop(hook);
+        let hook=Hook::install_all_features(null_mut(),4,false,false,false,false,true).expect("Volume-only shared hook; TEST backend cannot write audio");assert!(!hook.finished());assert!(hook.volume_enabled);drop(hook);
         let hook=Hook::install(null_mut(),2).expect("hook can be restarted after cleanup");
         assert!(!hook.finished());
         drop(hook);

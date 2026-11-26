@@ -30,7 +30,7 @@ impl Edges{
     }
 }
 #[derive(Clone,Copy)]struct Request{key:Key,at:u64}
-#[derive(Default)]struct Queue{keys:VecDeque<Request>,running:bool,answer:Option<super::utilities::Audio>}
+#[derive(Default)]struct Queue{keys:VecDeque<Request>,running:bool,answer:Option<(super::utilities::Audio,u64)>}
 pub(super) struct Input{
     controller:usize,ticket:usize,pulse:AtomicU64,closed:AtomicBool,failed:AtomicBool,queue:Mutex<Queue>,
     #[cfg(test)]fixture:Option<Arc<Fixture>>,
@@ -42,7 +42,10 @@ impl Input{
     fn fresh(&self,request:Request)->bool{!self.closed.load(Ordering::Acquire)&&unsafe{GetTickCount64()}.saturating_sub(request.at)<1000}
     pub(super) fn device_changed(&self){if !self.closed.load(Ordering::Acquire){self.failed.store(false,Ordering::Release);}}
     pub(super) fn close(&self){self.closed.store(true,Ordering::Release);if let Ok(mut q)=self.queue.lock(){q.keys.clear();q.answer=None;}}
-    pub(super) fn take(&self)->Option<super::utilities::Audio>{self.queue.lock().ok()?.answer.take()}
+    pub(super) fn take(&self)->Option<super::utilities::Audio>{
+        let (audio,at)=self.queue.lock().ok()?.answer.take()?;
+        (!self.closed.load(Ordering::Acquire)&&unsafe{GetTickCount64()}.saturating_sub(at)<1000).then_some(audio)
+    }
     pub(super) fn enqueue(self:&Arc<Self>,key:Key)->bool{
         if !self.live()||crate::trial::active(){return false;}
         #[cfg(test)]if self.fixture.is_none(){return false;}
@@ -78,8 +81,8 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut c_void){
         #[cfg(not(test))]let (audio,fallback)=super::utilities::key_audio(key,||input.live()&&input.fresh(request));
         if let Some(audio)=audio{
             if !input.closed.load(Ordering::Acquire){
-                if let Ok(mut q)=input.queue.lock(){q.answer=Some(audio);}
-                PostMessageW(input.controller as HWND,READY,input.ticket,0);
+                if let Ok(mut q)=input.queue.lock(){q.answer=Some((audio,GetTickCount64()));}
+                if input.controller!=0{PostMessageW(input.controller as HWND,READY,input.ticket,0);}
             }
         }else{
             // A preflight failure never entered a setter. Replay only that
@@ -101,6 +104,9 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut c_void){
     }
 }
 #[cfg(not(test))]unsafe fn replay(key:Key){
+    // Do not turn a previously plain system key into a new app shortcut if
+    // the owner has since pressed a modifier while a device read was pending.
+    if [VK_SHIFT,VK_CONTROL,VK_MENU,VK_LWIN,VK_RWIN].into_iter().any(|vk|GetAsyncKeyState(i32::from(vk))<0){return;}
     let down=INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{ki:KEYBDINPUT{wVk:key.vk(),wScan:0,dwFlags:KEYEVENTF_EXTENDEDKEY,time:0,dwExtraInfo:0x544c564b}}};
     let mut up=down;up.Anonymous.ki.dwFlags|=KEYEVENTF_KEYUP;
     let keys=[down,up];if SendInput(2,keys.as_ptr(),std::mem::size_of::<INPUT>() as i32)==1{SendInput(1,&up,std::mem::size_of::<INPUT>() as i32);}
@@ -163,10 +169,12 @@ pub(super) fn device_changed(){super::WIN_KEY.with(|s|{if let Some(hook)=s.borro
         // Admission failure must leave the physical command for Windows.
         let permit=super::super::utilities::try_permit().unwrap();assert!(!i.enqueue(Key::Up));drop(permit);
         i.pulse.store(1,Ordering::Release);assert!(!i.enqueue(Key::Up));i.pulse();
+        i.queue.lock().unwrap().answer=Some((super::super::utilities::Audio::fixture(15,false),1));assert!(i.take().is_none(),"delayed OSD feedback cannot display a stale reading after a UI hang");
         // Hold an actual admitted callback through closure/replacement.
         f.entered.store(false,Ordering::Release);f.hold.store(true,Ordering::Release);assert!(i.enqueue(Key::Up));until(||f.entered.load(Ordering::Acquire));assert!(i.enqueue(Key::Mute));i.close();until(||idle(&i));assert_eq!(f.commands.lock().unwrap().len(),5);assert!(i.take().is_none());assert!(!i.enqueue(Key::Up));
         let (bounded,b)=input();b.hold.store(true,Ordering::Release);assert!(bounded.enqueue(Key::Up));until(||b.entered.load(Ordering::Acquire));for _ in 0..CAPACITY{assert!(bounded.enqueue(Key::Down));}assert!(!bounded.enqueue(Key::Mute));bounded.close();until(||idle(&bounded));
-        for attempted in [false,true]{let (failed,f)=input();f.hold.store(true,Ordering::Release);f.fail.store(true,Ordering::Release);f.attempted.store(attempted,Ordering::Release);assert!(failed.enqueue(Key::Up));until(||f.entered.load(Ordering::Acquire));assert!(failed.enqueue(Key::Mute));f.hold.store(false,Ordering::Release);until(||idle(&failed));assert_eq!(f.fallbacks.load(Ordering::Acquire),if attempted{1}else{2});assert!(failed.take().is_none());assert!(!failed.enqueue(Key::Down));failed.close();}
+        let (expired,f)=input();f.hold.store(true,Ordering::Release);assert!(expired.enqueue(Key::Up));until(||f.entered.load(Ordering::Acquire));assert!(expired.enqueue(Key::Mute));expired.queue.lock().unwrap().keys.back_mut().unwrap().at=1;f.hold.store(false,Ordering::Release);until(||idle(&expired));assert_eq!(*f.commands.lock().unwrap(),vec![Key::Up],"old queued commands must never burst after a slow callback");expired.close();
+        for attempted in [false,true]{let (failed,f)=input();f.hold.store(true,Ordering::Release);f.fail.store(true,Ordering::Release);f.attempted.store(attempted,Ordering::Release);assert!(failed.enqueue(Key::Up));until(||f.entered.load(Ordering::Acquire));assert!(failed.enqueue(Key::Mute));f.hold.store(false,Ordering::Release);until(||idle(&failed));assert_eq!(f.fallbacks.load(Ordering::Acquire),if attempted{1}else{2});assert!(failed.take().is_none());assert!(!failed.enqueue(Key::Down));f.fail.store(false,Ordering::Release);failed.device_changed();failed.pulse();assert!(failed.enqueue(Key::Down));until(||idle(&failed));assert_eq!(*f.commands.lock().unwrap(),vec![Key::Down]);failed.close();}
         assert!(super::super::utilities::try_permit().is_some());
         let mut prefs=super::super::Options::default();assert!(!prefs.volume_keys);prefs.volume_keys=true;assert!(super::super::Options::from_json(&prefs.json()).volume_keys);
         println!("FLUIDWIN_VOLUME_KEYS actual_hook_callback=PASS injected_events=PASS ordered_repeat_mute=PASS shared_pool_permit=PASS queue_bound=64 native_admission_fallback=PASS stale_heartbeat=REFUSED closed_callback=CANCELLED uncertain_write=NEVER_REPLAYED preflight_failure=NATIVE_FALLBACK actual_audio=NOT_INVOKED SendInput=NOT_INVOKED");

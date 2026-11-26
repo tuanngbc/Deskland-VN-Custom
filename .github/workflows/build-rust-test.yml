@@ -155,12 +155,16 @@ jobs:
       - name: Verify private animated cursor backups without system cursor writes
         if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
+          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
+          New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
           cargo test --release dock::cursor_recovery_lab::native_animated_cursor_copy_keeps_frames_hotspot_and_private_lifetime -- --ignored --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'cursor-recovery-lab.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify original volume-key routing without audio or input changes
         if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
+          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
+          New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
           cargo test --release dock::volume_keys::tests::native_volume_key_queue_serializes_repeats_cancellation_failure_and_teardown -- --ignored --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'volume-keys.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

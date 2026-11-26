@@ -5,6 +5,13 @@
   "note": "Section adaptations, not claims that these full headers were imported. Original CRLF worktree byte hashes and canonical Git blobs are recorded; existing notices and original license are preserved.",
   "sections": [
     {
+      "source": "fluidwin.cpp::suTasto volume route and UI heartbeat; dock.h::cambiaVolume; centro.h::volumeTasto",
+      "source_git_blobs": {"fluidwin.cpp":"17519dee3f8d60b3599b427cbb33a297dd9129cf","dock.h":"f786a3cbe2fef19e5861c8a9c51f78e14b9c981b","centro.h":"942c4ae64c59c5763801d541d70da4172f46a4a3"},
+      "source_worktree_sha256": {"fluidwin.cpp":"e635f67fcce5978aca9d2f79da57529f4c18ff79fd59dee707c961e3b32350ef","dock.h":"6cb19c9d27daad834660fe4cad4b269ca10609d21dccc8bcfad6e4ca7cd13a72","centro.h":"da7eaf30d8b4911826b623b81ef41291c7a2e5b17368456364462f341c1c8d1d"},
+      "integration": ["../../src/dock/volume_keys.rs","../../src/dock/win_key.rs","../../src/dock/utilities.rs","../../src/dock/volume_osd.rs"],
+      "adaptation": "Physical volume Up/Down/Mute through the existing single shared input hook and original standalone OSD. Original 2% rounding, Up-only unmute and mute toggle; 250ms UI heartbeat with one-second refusal. Existing global utilities callback permit serializes all audio work without a new dedicated worker, device or audio session; 64-command bounded FIFO, one-second per-command expiry, current default endpoint and actual readback. Nonblocking hook admission and balanced native/repeated/consumed edges, untouched injected/modified keys. Pre-setter cancellation, no retry/replay after uncertain mutation, native replay only for fresh unattempted commands, endpoint-event rearm and ticket/closed result isolation. Opt-in existing profile/vi-en-zh Settings. TEST refuses native audio and input writes; hosted synthetic tests exercise actual callback and real Windows pool. Physical endpoint and Windows OSD replacement require later verification."
+    },
+    {
       "source": "centro.h::Motore::disegnaWidget weather card and simboloMeteo",
       "source_git_blob": "942c4ae64c59c5763801d541d70da4172f46a4a3",
       "source_worktree_sha256": "da7eaf30d8b4911826b623b81ef41291c7a2e5b17368456364462f341c1c8d1d",

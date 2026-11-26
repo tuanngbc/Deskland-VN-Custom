@@ -5,6 +5,7 @@
 #include <array>
 #include <string>
 #include <cstring>
+#include <cstdio>
 namespace {
 using Bytes=std::vector<BYTE>;
 void u16(Bytes& b,WORD n){b.push_back(BYTE(n));b.push_back(BYTE(n>>8));}
@@ -45,7 +46,10 @@ extern "C" int tlauncher_cursor_recovery_copy_fixture()noexcept{
         // reserved temporary file until the uniquely named ANI is closed.
         HANDLE out=CreateFileW(file.path.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_TEMPORARY,nullptr);if(out==INVALID_HANDLE_VALUE){file.path.clear();return 2;}
         DWORD written=0;const bool saved=WriteFile(out,bytes.data(),DWORD(bytes.size()),&written,nullptr)&&written==bytes.size();CloseHandle(out);if(!saved)return 3;
-        Cursor original;original.h=LoadCursorFromFileW(file.path.c_str());if(!original.h)return 4;
+        // LoadCursorFromFile returns a shared cursor according to
+        // DestroyCursor's contract. Explicitly omit LR_SHARED so this source
+        // has a private lifetime that the fixture is permitted to destroy.
+        Cursor original;original.h=static_cast<HCURSOR>(LoadImageW(nullptr,file.path.c_str(),IMAGE_CURSOR,0,0,LR_LOADFROMFILE));if(!original.h)return 4;
         // CopyCursor/CopyIcon is explicitly unsuitable for ANI. CopyImage with
         // no RETURNORG/FROMRESOURCE/DELETEORG flags must create a private copy.
         // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-copycursor
@@ -54,8 +58,9 @@ extern "C" int tlauncher_cursor_recovery_copy_fixture()noexcept{
         std::array<Bytes,2> before,after;
         for(UINT i=0;i<2;++i)if(!frame(original.h,i,before[i]))return 7;
         if(before[0]==before[1])return 8;
-        DestroyCursor(original.h);original.h=nullptr;
-        for(UINT i=0;i<2;++i)if(!frame(copy.h,i,after[i])||after[i]!=before[i])return 9;
+        for(UINT i=0;i<2;++i){if(!frame(copy.h,i,after[i]))return 14;if(after[i]!=before[i]){std::printf("CURSOR_COPY phase=before_source_destroy step=%u copied_frames_distinct=%d\n",i,int(after[0]!=after[1]));return 15;}}
+        if(!DestroyCursor(original.h))return 13;original.h=nullptr;
+        for(UINT i=0;i<2;++i)if(!frame(copy.h,i,after[i])||after[i]!=before[i]){std::printf("CURSOR_COPY phase=after_private_source_destroy step=%u\n",i);return 9;}
         // Standard cursor handles stay shared and untouched; only independent
         // copies and the bitmaps returned by GetIconInfo are destroyed.
         for(WORD id:{WORD(32512),WORD(32514),WORD(32650),WORD(32513),WORD(32649)}){
