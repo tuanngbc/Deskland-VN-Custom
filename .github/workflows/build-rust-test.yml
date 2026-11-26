@@ -463,6 +463,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::notification_access::tests::native_access_preflight_retains_exact_status_without_consent -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::capture_access::tests::native_reentrant_completion_preserves_new_request_and_poll_timer -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify own UI corners and refuse foreign DWM changes
         if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
