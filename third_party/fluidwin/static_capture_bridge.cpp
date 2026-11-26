@@ -5,6 +5,7 @@
 #include <dwmapi.h>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <vector>
 #include "upstream/stampa.h"
 
@@ -44,14 +45,16 @@ bool rectangular(const Identity& id){
     if(IsZoomed(id.h)||!(id.style&(WS_CAPTION|WS_THICKFRAME)))return true;
     return known&&corner==DWMWCP_DONOTROUND;
 }
-bool uncovered(const Identity& id){
-    if(!permitted(id))return false;
-    struct Coverage {RECT area;long long sum=0;} coverage{id.visible};
+bool on_monitors(const RECT& visible){
+    struct Coverage {RECT area;long long sum=0;} coverage{visible};
     if(!EnumDisplayMonitors(nullptr,nullptr,[](HMONITOR,HDC,LPRECT r,LPARAM p)->BOOL{
         auto& c=*reinterpret_cast<Coverage*>(p);RECT x{};
         if(IntersectRect(&x,&c.area,r))c.sum+=static_cast<long long>(x.right-x.left)*(x.bottom-x.top);return TRUE;
     },reinterpret_cast<LPARAM>(&coverage)))return false;
-    if(coverage.sum!=static_cast<long long>(id.visible.right-id.visible.left)*(id.visible.bottom-id.visible.top))return false;
+    return coverage.sum==static_cast<long long>(visible.right-visible.left)*(visible.bottom-visible.top);
+}
+bool uncovered(const Identity& id){
+    if(!permitted(id)||!on_monitors(id.visible))return false;
     unsigned count=0;
     for(HWND w=GetWindow(id.h,GW_HWNDPREV);w;w=GetWindow(w,GW_HWNDPREV)){
         if(++count>4096)return false;
@@ -88,6 +91,13 @@ bool screen_photo(const Identity& id,Photo& photo){
     photo.w=w;photo.h=h;photo.backend=1;return true;
 }
 struct Print {stampa::Lavoro* work;Identity id;};
+struct FixtureGate {
+    HWND target=nullptr;HANDLE entered=nullptr,resume=nullptr;
+    ~FixtureGate(){if(entered)CloseHandle(entered);if(resume)CloseHandle(resume);}
+};
+struct FixtureRegistry {std::mutex mutex;std::shared_ptr<FixtureGate> gate;};
+std::atomic<bool> fixtureEnabled{false};
+FixtureRegistry& fixture_registry(){static auto* value=new FixtureRegistry;return *value;}
 bool reserve_print(HWND h){
     // Original reservation, with exception-safe CS release if vector growth
     // fails. The original header/callback stays unchanged.
@@ -99,6 +109,14 @@ bool reserve_print(HWND h){
 void CALLBACK print_callback(PTP_CALLBACK_INSTANCE instance,void* context){
     CallbackMayRunLong(instance);std::unique_ptr<Print> print(static_cast<Print*>(context));
     auto* work=print->work;
+    std::shared_ptr<FixtureGate> gate;
+    if(fixtureEnabled.load(std::memory_order_acquire)){
+        auto& registry=fixture_registry();std::lock_guard<std::mutex> lock(registry.mutex);
+        if(registry.gate&&registry.gate->target==work->h)gate=registry.gate;
+    }
+    // Hosted fixture barrier, not a claim that DWM's PrintWindow fast path
+    // called WM_PRINTCLIENT or hung. Ownership remains live until callback exit.
+    if(gate){SetEvent(gate->entered);WaitForSingleObject(gate->resume,5000);}
     if(permitted(print->id))stampa::thread(work);
     else{stampa::libera(work->h);SetEvent(work->fatto);stampa::lascia(work);}
     printBusy.store(false,std::memory_order_release);
@@ -106,7 +124,7 @@ void CALLBACK print_callback(PTP_CALLBACK_INSTANCE instance,void* context){
 // 0=ready, 1=unsupported shape (WGC allowed), 2=policy/identity denied,
 // 3=capture failed, 4=print busy. Failed supported photos use native fallback.
 int capture(const Identity& id,Photo& photo,bool allowPrint){
-    if(!permitted(id))return 2;if(!rectangular(id))return 1;
+    if(!permitted(id))return 2;if(!rectangular(id)||!on_monitors(id.visible))return 1;
     if(screen_photo(id,photo))return 0;
     if(!allowPrint)return 3;
     if(!permitted(id))return 2;
@@ -157,3 +175,16 @@ extern "C" const UINT* tlauncher_fluidwin_static_pixels(void* value,int* w,int* 
     *w=photo.w;*h=photo.h;*backend=photo.backend;return photo.pixels.data();
 }
 extern "C" void tlauncher_fluidwin_static_free(void* value)noexcept{delete static_cast<Photo*>(value);}
+extern "C" bool tlauncher_static_fixture_pause(HWND target,HANDLE entered,HANDLE resume)noexcept{
+    wchar_t hosted[8]{};if(!GetEnvironmentVariableW(L"GITHUB_ACTIONS",hosted,8)||wcscmp(hosted,L"true"))return false;
+    try{
+        auto& registry=fixture_registry();std::lock_guard<std::mutex> lock(registry.mutex);
+        if(!target){fixtureEnabled.store(false,std::memory_order_release);registry.gate.reset();return true;}
+        DWORD pid=0;wchar_t name[80]{};GetWindowThreadProcessId(target,&pid);GetClassNameW(target,name,80);
+        if(pid!=GetCurrentProcessId()||wcscmp(name,L"DesklandOwnedStageWgcFixture"))return false;
+        auto gate=std::make_shared<FixtureGate>();gate->target=target;
+        if(!DuplicateHandle(GetCurrentProcess(),entered,GetCurrentProcess(),&gate->entered,0,FALSE,DUPLICATE_SAME_ACCESS)||
+            !DuplicateHandle(GetCurrentProcess(),resume,GetCurrentProcess(),&gate->resume,0,FALSE,DUPLICATE_SAME_ACCESS))return false;
+        registry.gate=std::move(gate);fixtureEnabled.store(true,std::memory_order_release);return true;
+    }catch(...){return false;}
+}

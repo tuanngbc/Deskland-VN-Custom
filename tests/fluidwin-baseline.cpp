@@ -10,6 +10,7 @@
 #include <cstring>
 #include <thread>
 #include <future>
+#include <cstdio>
 #include <utility>
 #include "genio.h"
 #include "viva.h"
@@ -44,6 +45,47 @@ static LRESULT CALLBACK source_proc(HWND h,UINT message,WPARAM w,LPARAM l){
 static LRESULT CALLBACK static_source_proc(HWND h,UINT message,WPARAM w,LPARAM l){
     if(message==WM_DESTROY){PostQuitMessage(0);return 0;}
     return source_proc(h,message,w,l);
+}
+// Verbatim application callback from fluidwin.cpp at the pinned reference.
+// MIT, Copyright (c) 2026 Clooudy. Probe logging is disabled; no app hooks run.
+static FILE* gLog = nullptr;
+static void logf(const char*, ...) {}
+static const wchar_t* PROP_NASCOSTA = L"FluidWin.Nascosta";
+static bool scopertaSulloSchermo(HWND h, const RECT& v) {
+    auto no = [h](const char* perche) { logf("foto %p non dallo schermo: %s", h, perche); return false; };
+    if (!IsWindowVisible(h) || IsIconic(h) || GetPropW(h, PROP_NASCOSTA)) return no("nascosta o trasparente");
+    if (GetWindowLongPtrW(h, GWL_EXSTYLE) & WS_EX_LAYERED) {
+        BYTE alfa = 255; DWORD fl = 0;
+        if (!GetLayeredWindowAttributes(h, nullptr, &alfa, &fl) || ((fl & LWA_ALPHA) && alfa < 255)) return no("layered");
+    }
+    // Tutta dentro gli schermi, anche a cavallo di due (lo schermo intero del desktop li contiene tutti): le parti che
+    // cadono sui monitor, che non si sovrappongono, sommate devono fare tutto il rettangolo. Prima si chiedeva un solo
+    // monitor e una finestra fra due schermi affiancati perdeva la foto di ripiego (R20261121-121040-S1)
+    if (IsRectEmpty(&v)) return no("vuota");
+    struct Somma { RECT v; long long area = 0; } sm{v};
+    EnumDisplayMonitors(nullptr, nullptr, [](HMONITOR, HDC, LPRECT r, LPARAM p) -> BOOL {
+        Somma* s = (Somma*)p; RECT y;
+        if (IntersectRect(&y, &s->v, r)) s->area += (long long)(y.right - y.left) * (y.bottom - y.top);
+        return TRUE;
+    }, (LPARAM)&sm);
+    if (sm.area != (long long)(v.right - v.left) * (v.bottom - v.top)) return no("in parte fuori dagli schermi");
+    RECT x;
+    for (HWND w = GetWindow(h, GW_HWNDPREV); w; w = GetWindow(w, GW_HWNDPREV)) {
+        if (!IsWindowVisible(w)) continue;
+        BOOL nascosta = FALSE; DwmGetWindowAttribute(w, DWMWA_CLOAKED, &nascosta, sizeof(nascosta));
+        RECT r; if (nascosta || !GetWindowRect(w, &r)) continue;
+        // finestre con una regione (il dock: larga quanto lo schermo, ma si vede solo dove sono dock e isola, e da
+        // nascosto la regione e' vuota): conta solo la regione
+        RECT rg; const int tipo = GetWindowRgnBox(w, &rg);
+        if (tipo == NULLREGION) continue;
+        if (tipo == SIMPLEREGION || tipo == COMPLEXREGION) { OffsetRect(&rg, r.left, r.top); r = rg; }
+        if (!IntersectRect(&x, &r, &v)) continue;
+        wchar_t k[64] = L""; GetClassNameW(w, k, 64);
+        if (!wcscmp(k, L"FluidWin.Capsula") || !wcscmp(k, L"FluidWin.Angolo")) continue;
+        if (gLog) { char b[120]; snprintf(b, 120, "coperta da %ls", k); return no(b); }
+        return false;
+    }
+    return true;
 }
 static void pump(){MSG message{};while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}DwmFlush();}
 static bool gpu_pixels(const genio::Immagine& image,std::vector<UINT>& pixels){
@@ -103,9 +145,11 @@ static int original_static_capture(genio::Motore& engine,const std::filesystem::
         engine.svuota();engine.mostra(false);image.libera();
     }
     SetWindowPos(source,nullptr,20,20,2110,980,SWP_NOACTIVATE|SWP_NOZORDER);SetWindowLongPtrW(source,GWLP_USERDATA,RGB(255,255,255));InvalidateRect(source,nullptr,FALSE);UpdateWindow(source);pump();
-    RECT large{};GetWindowRect(source,&large);genio::Immagine image;
+    RECT large{};GetWindowRect(source,&large);genio::Immagine image;engine.fotoDaSchermo=false;
     if(!engine.cattura(source,large,image,false)){report<<"static_large=BLOCKED original snapshot unavailable\n";return 0;}
     std::vector<UINT> pixels;const bool largeOK=image.w==2110&&image.h==980&&gpu_pixels(image,pixels)&&image_file(dir/"static-large-native-texture.bmp",pixels,image.w,image.h);image.libera();if(!largeOK)return 38;
+    const auto bad=std::count_if(pixels.begin(),pixels.end(),[](UINT pixel){return pixel!=0xffffffffu;});
+    report<<"static_large_pixels="<<pixels.size()<<" non_white="<<bad<<" content="<<(bad?"UNRELIABLE":"VERIFIED")<<" source_backend="<<(engine.fotoDaSchermo?"BitBlt-fallback":"PrintWindow")<<"\n";
     report<<"static_capture=ORIGINAL_GENIO_CATTURA_EXECUTED source=PrintWindow_or_documented_screen_fallback texture_perimeter=VERIFIED large_native=2110x980 WGC_session=NOT_STARTED CPU_snapshot_GPU_upload=YES\n";
     std::cout<<"FLUIDWIN_BASELINE_STATIC original_genio_cattura=PASS texture_perimeters=PASS large_native=2110x980 WGC_session=NOT_STARTED owner_border=UNRESOLVED\n";return 0;
 }
@@ -206,7 +250,8 @@ int main(int argc,char** argv) {
         report << "renderer=BLOCKED hardware D3D11 or composition unavailable\n";
         std::cout << "FLUIDWIN_BASELINE renderer=BLOCKED\n"; return 0;
     }
-    report << "renderer=IMPLEMENTATION_EXECUTED\npresent=upstream Present(1,0)\n";
+    engine.scoperta = scopertaSulloSchermo;
+    report << "renderer=IMPLEMENTATION_EXECUTED\npresent=upstream Present(1,0)\nstatic_uncovered_guard=ORIGINAL_APPLICATION_CALLBACK\n";
     const UINT colors[]={0xffffffff,0xff000000,0xffff0000,0xff00ff00,0xff0000ff,0x80800000};
     const RECT window{80,80,560,400},icon{340,600,388,648};
     const double progress[]={0,.05,.25,.5,.85,.97,1,.85,.5,.05,0};
