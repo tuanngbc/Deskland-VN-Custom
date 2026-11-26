@@ -10,6 +10,7 @@ struct Forecast {int code,count,ready,focused;wchar_t city[128],temperature[32],
 struct Canvas {
     unsigned phase=0;
     ComPtr<ID2D1DCRenderTarget> dc;ComPtr<ID2D1SolidColorBrush> pen;
+    ComPtr<ID2D1StrokeStyle> stroke;
     ComPtr<ID2D1Bitmap> background;UINT width=0,height=0;
     ComPtr<IDWriteTextFormat> city,big,detail,day;float scale=0;
     bool prepare(float d){
@@ -19,13 +20,18 @@ struct Canvas {
             if(FAILED(f->CreateDCRenderTarget(&props,&dc)))return false;
         }
         if(!pen&&FAILED(dc->CreateSolidColorBrush(D2D1::ColorF(1,1,1,1),&pen)))return false;
+        if(!stroke&&FAILED(f->CreateStrokeStyle(D2D1::StrokeStyleProperties(D2D1_CAP_STYLE_ROUND,D2D1_CAP_STYLE_ROUND,D2D1_CAP_STYLE_ROUND,D2D1_LINE_JOIN_ROUND),nullptr,0,&stroke)))return false;
         if(scale!=d){
             city.Reset();big.Reset();detail.Reset();day.Reset();
-            auto format=[&](float size,DWRITE_FONT_WEIGHT weight,ComPtr<IDWriteTextFormat>& out){
-                if(FAILED(text->CreateTextFormat(vetro::famiglia(text),nullptr,weight,DWRITE_FONT_STYLE_NORMAL,DWRITE_FONT_STRETCH_NORMAL,size*d,L"",&out)))return false;
-                out->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);return true;
+            const auto family=vetro::famiglia(text);const wchar_t* display=wcscmp(family,L"Segoe UI Variable Text")?family:L"Segoe UI Variable Display";
+            ComPtr<IDWriteFontCollection> fonts;if(SUCCEEDED(text->GetSystemFontCollection(&fonts,FALSE))){for(const auto candidate:{L"Inter Variable Display",L"Inter Display"}){UINT32 index=0;BOOL exists=FALSE;if(SUCCEEDED(fonts->FindFamilyName(candidate,&index,&exists))&&exists){display=candidate;break;}}}
+            auto format=[&](const wchar_t* font,float size,DWRITE_FONT_WEIGHT weight,ComPtr<IDWriteTextFormat>& out){
+                if(FAILED(text->CreateTextFormat(font,nullptr,weight,DWRITE_FONT_STYLE_NORMAL,DWRITE_FONT_STRETCH_NORMAL,size*d,L"",&out))&&FAILED(text->CreateTextFormat(L"Segoe UI",nullptr,weight,DWRITE_FONT_STYLE_NORMAL,DWRITE_FONT_STRETCH_NORMAL,size*d,L"",&out)))return false;
+                out->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);out->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);return true;
             };
-            if(!format(14,DWRITE_FONT_WEIGHT_MEDIUM,city)||!format(36,DWRITE_FONT_WEIGHT_LIGHT,big)||!format(11.5f,DWRITE_FONT_WEIGHT_NORMAL,detail)||!format(10.5f,DWRITE_FONT_WEIGHT_NORMAL,day))return false;
+            if(!format(family,13,DWRITE_FONT_WEIGHT_SEMI_BOLD,city)||!format(display,34,DWRITE_FONT_WEIGHT_SEMI_BOLD,big)||!format(family,11.5f,DWRITE_FONT_WEIGHT_NORMAL,detail)||!format(family,11,DWRITE_FONT_WEIGHT_NORMAL,day))return false;
+            const DWRITE_TRIMMING trim{DWRITE_TRIMMING_GRANULARITY_CHARACTER,0,0};
+            for(auto format:{city.Get(),detail.Get(),day.Get()}){ComPtr<IDWriteInlineObject> ellipsis;if(SUCCEEDED(text->CreateEllipsisTrimmingSign(format,&ellipsis)))format->SetTrimming(&trim,ellipsis.Get());}
             day->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);scale=d;
         }
         return true;
@@ -37,7 +43,7 @@ struct Canvas {
         const float d=scale*s;
         auto sun=[&](float x,float y,float r){
             dc->FillEllipse({{x,y},r*d,r*d},pen.Get());
-            for(int i=0;i<8;++i){const float a=i*3.14159265358979323846f/4;dc->DrawLine({x+std::cos(a)*(r+2.5f)*d,y+std::sin(a)*(r+2.5f)*d},{x+std::cos(a)*(r+5)*d,y+std::sin(a)*(r+5)*d},pen.Get(),1.6f*d);}
+            for(int i=0;i<8;++i){const float a=i*3.14159265358979323846f/4;dc->DrawLine({x+std::cos(a)*(r+2.5f)*d,y+std::sin(a)*(r+2.5f)*d},{x+std::cos(a)*(r+5)*d,y+std::sin(a)*(r+5)*d},pen.Get(),1.6f*d,stroke.Get());}
         };
         auto cloud=[&](float x,float y){
             dc->FillEllipse({{x-5*d,y+2*d},6*d,5*d},pen.Get());dc->FillEllipse({{x+d,y-2*d},7*d,7*d},pen.Get());dc->FillEllipse({{x+7*d,y+2*d},5.5f*d,5*d},pen.Get());
@@ -46,10 +52,10 @@ struct Canvas {
         if(c==0){sun(cx,cy,6);return;}
         if(c<=2){sun(cx-4*d,cy-4*d,4.5f);cloud(cx+2*d,cy+3*d);return;}
         cloud(cx,cy-2*d);
-        if(c==45||c==48){for(int i=0;i<2;++i)dc->DrawLine({cx-9*d,cy+(9+i*4)*d},{cx+9*d,cy+(9+i*4)*d},pen.Get(),1.6f*d);return;}
-        if((c>=51&&c<=67)||(c>=80&&c<=82)){for(int i=-1;i<=1;++i)dc->DrawLine({cx+i*5*d,cy+8*d},{cx+i*5*d-2*d,cy+13*d},pen.Get(),1.6f*d);return;}
+        if(c==45||c==48){for(int i=0;i<2;++i)dc->DrawLine({cx-9*d,cy+(9+i*4)*d},{cx+9*d,cy+(9+i*4)*d},pen.Get(),1.6f*d,stroke.Get());return;}
+        if((c>=51&&c<=67)||(c>=80&&c<=82)){for(int i=-1;i<=1;++i)dc->DrawLine({cx+i*5*d,cy+8*d},{cx+i*5*d-2*d,cy+13*d},pen.Get(),1.6f*d,stroke.Get());return;}
         if((c>=71&&c<=77)||c==85||c==86){for(int i=-1;i<=1;++i)dc->FillEllipse({{cx+i*5*d,cy+11*d},1.5f*d,1.5f*d},pen.Get());return;}
-        if(c>=95){dc->DrawLine({cx+d,cy+6*d},{cx-2*d,cy+11*d},pen.Get(),1.8f*d);dc->DrawLine({cx-2*d,cy+11*d},{cx+2*d,cy+11*d},pen.Get(),1.8f*d);dc->DrawLine({cx+2*d,cy+11*d},{cx-d,cy+16*d},pen.Get(),1.8f*d);}
+        if(c>=95){dc->DrawLine({cx+d,cy+6*d},{cx-2*d,cy+11*d},pen.Get(),1.8f*d,stroke.Get());dc->DrawLine({cx-2*d,cy+11*d},{cx+2*d,cy+11*d},pen.Get(),1.8f*d,stroke.Get());dc->DrawLine({cx+2*d,cy+11*d},{cx-d,cy+16*d},pen.Get(),1.8f*d,stroke.Get());}
     }
 };
 }
@@ -81,11 +87,11 @@ extern "C" bool tlauncher_forecast_canvas_draw(void* raw,HDC target,const RECT* 
         if(SUCCEEDED(c.dc->CreateGradientStopCollection(gs,2,&stops))&&SUCCEEDED(c.dc->CreateLinearGradientBrush({{0,0},{0,h}},stops.Get(),&gradient)))c.dc->FillRoundedRectangle({{0,0,w,h},14*d,14*d},gradient.Get());
         else {c.dc->EndDraw();return false;}
         if(forecast->focused){c.pen->SetColor(D2D1::ColorF(1,1,1,.18f));c.dc->FillRoundedRectangle({{8*d,7*d,w-8*d,34*d},8*d,8*d},c.pen.Get());}
-        c.write(forecast->city,c.city.Get(),{16*d,10*d,w-34*d,32*d});
-        c.pen->SetColor(D2D1::ColorF(1,1,1,.8f));c.dc->DrawLine({w-25*d,19*d},{w-21.5f*d,22.5f*d},c.pen.Get(),1.6f*d);c.dc->DrawLine({w-21.5f*d,22.5f*d},{w-18*d,19*d},c.pen.Get(),1.6f*d);
+        c.write(forecast->city,c.city.Get(),{16*d,12*d,w-34*d,32*d});
+        c.pen->SetColor(D2D1::ColorF(1,1,1,.8f));c.dc->DrawLine({w-25*d,19*d},{w-21.5f*d,22.5f*d},c.pen.Get(),1.6f*d,c.stroke.Get());c.dc->DrawLine({w-21.5f*d,22.5f*d},{w-18*d,19*d},c.pen.Get(),1.6f*d,c.stroke.Get());
         if(forecast->ready){
-            c.write(forecast->temperature,c.big.Get(),{16*d,30*d,w-80*d,76*d});c.pen->SetColor(D2D1::ColorF(1,1,1,1));c.symbol(forecast->code,w-40*d,44*d,1.4f);
-            c.write(forecast->detail,c.detail.Get(),{16*d,78*d,w-12*d,99*d},.8f);
+            c.write(forecast->temperature,c.big.Get(),{16*d,30*d,w-80*d,74*d});c.pen->SetColor(D2D1::ColorF(1,1,1,1));c.symbol(forecast->code,w-40*d,44*d,1.4f);
+            c.write(forecast->detail,c.detail.Get(),{16*d,76*d,w-12*d,94*d},.8f);
             for(int i=0;i<forecast->count;++i){const float cw=(w-16*d)/5,cx=8*d+cw*(i+.5f),y=104*d;
                 c.write(forecast->days[i].label,c.day.Get(),{cx-cw/2,y,cx+cw/2,y+15*d},.8f);c.pen->SetColor(D2D1::ColorF(1,1,1,1));c.symbol(forecast->days[i].code,cx,y+27*d,.8f);
                 c.write(forecast->days[i].temperature,c.day.Get(),{cx-cw/2,y+40*d,cx+cw/2,y+57*d});
