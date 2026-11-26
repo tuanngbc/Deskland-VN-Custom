@@ -9,6 +9,7 @@
 #include <iostream>
 #include <cstring>
 #include <thread>
+#include <utility>
 #include "genio.h"
 #include "viva.h"
 
@@ -49,6 +50,34 @@ static bool gpu_pixels(const genio::Immagine& image,std::vector<UINT>& pixels){
     if(ok){pixels.resize(size_t(description.Width)*description.Height);for(UINT y=0;y<description.Height;y++)std::memcpy(pixels.data()+size_t(y)*description.Width,static_cast<const BYTE*>(mapped.pData)+size_t(y)*mapped.RowPitch,size_t(description.Width)*4);gpu.ctx->Unmap(staging,0);}
     staging->Release();return ok;
 }
+template<class T>struct Interface{T* p=nullptr;~Interface(){if(p)p->Release();}};
+static void diagnose_capture(HWND source,std::ofstream& report){
+    // Run the same documented API sequence only to identify a startup blocker;
+    // no upstream implementation or permission/policy setting is patched.
+    auto check=[&](const char* name,HRESULT result){report<<"capture_startup_step="<<name<<" hr=0x"<<std::hex<<static_cast<unsigned long>(result)<<std::dec<<"\n";return SUCCEEDED(result);};
+    Interface<viva::WGC::IGraphicsCaptureSessionStatics> support;
+    if(!check("session_factory",viva::fabbrica(L"Windows.Graphics.Capture.GraphicsCaptureSession",__uuidof(viva::WGC::IGraphicsCaptureSessionStatics),reinterpret_cast<void**>(&support.p))))return;
+    boolean available=false;if(!check("IsSupported",support.p->IsSupported(&available)))return;report<<"capture_supported="<<int(available)<<"\n";if(!available)return;
+    Interface<IDXGIDevice> dxgi;if(!check("DXGI_device",gpu::condivisa().dev->QueryInterface(__uuidof(IDXGIDevice),reinterpret_cast<void**>(&dxgi.p))))return;
+    Interface<IInspectable> inspect;if(!check("CreateDirect3D11DeviceFromDXGIDevice",CreateDirect3D11DeviceFromDXGIDevice(dxgi.p,&inspect.p)))return;
+    Interface<viva::WD3D::IDirect3DDevice> device;if(!check("IDirect3DDevice",inspect.p->QueryInterface(__uuidof(viva::WD3D::IDirect3DDevice),reinterpret_cast<void**>(&device.p))))return;
+    Interface<IGraphicsCaptureItemInterop> interop;if(!check("item_factory",viva::fabbrica(L"Windows.Graphics.Capture.GraphicsCaptureItem",__uuidof(IGraphicsCaptureItemInterop),reinterpret_cast<void**>(&interop.p))))return;
+    Interface<viva::WGC::IGraphicsCaptureItem> item;if(!check("CreateForWindow",interop.p->CreateForWindow(source,__uuidof(viva::WGC::IGraphicsCaptureItem),reinterpret_cast<void**>(&item.p))))return;
+    ABI::Windows::Graphics::SizeInt32 size{};if(!check("item_Size",item.p->get_Size(&size)))return;
+    Interface<viva::WGC::IDirect3D11CaptureFramePoolStatics2> factory;
+    if(!check("pool_factory",viva::fabbrica(L"Windows.Graphics.Capture.Direct3D11CaptureFramePool",__uuidof(viva::WGC::IDirect3D11CaptureFramePoolStatics2),reinterpret_cast<void**>(&factory.p))))return;
+    Interface<viva::WGC::IDirect3D11CaptureFramePool> pool;
+    if(!check("CreateFreeThreaded",factory.p->CreateFreeThreaded(device.p,ABI::Windows::Graphics::DirectX::DirectXPixelFormat_B8G8R8A8UIntNormalized,2,size,&pool.p)))return;
+    struct ClosePool{IUnknown* p;~ClosePool(){viva::chiudi(p);}}closePool{pool.p};
+    Interface<viva::WGC::IGraphicsCaptureSession> session;if(!check("CreateCaptureSession",pool.p->CreateCaptureSession(item.p,&session.p)))return;
+    struct CloseSession{IUnknown* p;~CloseSession(){viva::chiudi(p);}}closeSession{session.p};
+    Interface<viva::WGC::IGraphicsCaptureSession2> cursor;if(check("cursor_interface",session.p->QueryInterface(__uuidof(viva::WGC::IGraphicsCaptureSession2),reinterpret_cast<void**>(&cursor.p))))check("cursor_off",cursor.p->put_IsCursorCaptureEnabled(false));
+    Interface<viva::WGC::IGraphicsCaptureSession3> border;if(check("border_interface",session.p->QueryInterface(__uuidof(viva::WGC::IGraphicsCaptureSession3),reinterpret_cast<void**>(&border.p))))check("border_off",border.p->put_IsBorderRequired(false));
+    if(!check("StartCapture",session.p->StartCapture()))return;
+    for(const auto& pair:{std::pair<const char*,IUnknown*>{"pool_agile",pool.p},{"session_agile",session.p},{"device_agile",device.p}}){
+        Interface<IAgileObject> agile;if(!check(pair.first,pair.second->QueryInterface(__uuidof(IAgileObject),reinterpret_cast<void**>(&agile.p))))return;
+    }
+}
 static int original_live_capture(genio::Motore& engine,const std::filesystem::path& dir,std::ofstream& report){
     const auto instance=GetModuleHandleW(nullptr);WNDCLASSW type{};type.hInstance=instance;type.lpfnWndProc=source_proc;type.lpszClassName=L"FluidWin.Baseline.OwnedCapture";
     if(!RegisterClassW(&type))return 20;
@@ -61,7 +90,7 @@ static int original_live_capture(genio::Motore& engine,const std::filesystem::pa
     genio::Immagine image;struct Image{genio::Immagine& value;~Image(){value.libera();}}release{image};
     if(!engine.cattura(source,area,image)){report<<"capture=BLOCKED original initial PrintWindow capture unavailable\n";return 0;}
     viva::Cattura capture;
-    if(!capture.avvia(gpu::condivisa().dev,source)){report<<"capture=BLOCKED original viva::Cattura startup denied or unsupported\n";return 0;}
+    if(!capture.avvia(gpu::condivisa().dev,source)){report<<"capture=BLOCKED original viva::Cattura startup denied or unsupported\n";diagnose_capture(source,report);return 0;}
     const auto start=std::chrono::steady_clock::now();bool copied=false;
     while(std::chrono::steady_clock::now()-start<std::chrono::seconds(4)){
         pump();copied=capture.copia(gpu::condivisa().ctx,image.tex,0,0,RECT{0,0,image.w,image.h});
@@ -108,9 +137,10 @@ int main(int argc,char** argv) {
     const std::filesystem::path dir=argc>1?argv[1]:"baseline-evidence";
     std::ofstream report(dir/"baseline.txt");
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    RoInitialize(RO_INIT_MULTITHREADED);
+    const auto apartment=RoInitialize(RO_INIT_MULTITHREADED);
     report << "reference=2f773a8733b84c7dbee88fff6628d14e9ac802b9\n"
            << "original_application=COMPILED_NOT_STARTED\nowner_quality=NOT_VERIFIED\n";
+    report<<"RoInitialize_hr=0x"<<std::hex<<static_cast<unsigned long>(apartment)<<std::dec<<"\n";
     genio::Motore engine;
     if (!engine.inizializza(GetModuleHandleW(nullptr))) {
         report << "renderer=BLOCKED hardware D3D11 or composition unavailable\n";

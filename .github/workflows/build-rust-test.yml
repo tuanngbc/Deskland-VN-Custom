@@ -40,7 +40,8 @@ jobs:
           libs='-ld3d11 -ldxgi -ldcomp -ld3dcompiler -ld2d1 -ldwrite -ldwmapi -luser32 -lgdi32 -lshell32 -lole32 -loleaut32 -lversion -lpropsys -luuid -liphlpapi -lwindowscodecs -lruntimeobject -lpowrprof -lshlwapi -lshcore -lsetupapi -lwinmm -ldxva2 -lwinhttp -lcomdlg32 -lbcrypt'
           g++ -O2 -std=gnu++20 -Wall -municode -mwindows fluidwin.cpp ../baseline-evidence/icona.o -o ../baseline-evidence/FluidWin-reference.exe $libs -static
           cd ..
-          g++ -O2 -std=gnu++20 -DNOMINMAX -Iupstream-fluidwin tests/fluidwin-baseline.cpp -o baseline-evidence/baseline-probe.exe $libs -static
+          windres -I tests tests/fluidwin-baseline.rc -O coff -o baseline-evidence/probe-manifest.o
+          g++ -O2 -std=gnu++20 -DNOMINMAX -Iupstream-fluidwin tests/fluidwin-baseline.cpp baseline-evidence/probe-manifest.o -o baseline-evidence/baseline-probe.exe $libs -static
           ./baseline-evidence/baseline-probe.exe baseline-evidence
           git -C upstream-fluidwin diff --exit-code
           git -C upstream-fluidwin rev-parse HEAD > baseline-evidence/UPSTREAM-COMMIT.txt

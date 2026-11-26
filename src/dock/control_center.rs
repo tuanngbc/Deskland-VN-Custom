@@ -512,7 +512,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 match msg{
                     WM_MOUSEMOVE=>{
                         p.index=p.hit(x,y);
-                        if let Some(point)=p.pressed_point{
+                        if let Some(point)=p.pressed_point.filter(|_|w&1!=0){ // MK_LBUTTON is still physically held
                             if (x-point.x).abs()>=windows_sys::Win32::UI::HiDpi::GetSystemMetricsForDpi(SM_CXDRAG,p.dpi).max(4)||(y-point.y).abs()>=windows_sys::Win32::UI::HiDpi::GetSystemMetricsForDpi(SM_CYDRAG,p.dpi).max(4){
                                 action=p.pressed.and_then(|i|p.cards().get(i)).and_then(|c|c.action.as_ref()).and_then(super::shelf::drag_command);
                                 if action.is_some(){p.pressed=None;p.pressed_point=None;}
