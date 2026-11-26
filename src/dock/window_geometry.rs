@@ -207,6 +207,7 @@ pub(super) unsafe fn probe(id:WindowIdentity){
         ShowWindowAsync(h,if restore{SW_MAXIMIZE}else{SW_RESTORE});wait(&||(IsZoomed(h)!=0)==restore&&IsIconic(h)==0);
         if !restore{SetWindowPos(h,ptr::null_mut(),original.left,original.top,original.right-original.left,original.bottom-original.top,SWP_NOACTIVATE|SWP_NOZORDER|SWP_ASYNCWINDOWPOS);
             wait(&||{let mut r:RECT=mem::zeroed();GetWindowRect(h,&mut r)!=0&&super::same_rect(r,original)});}
+        super::window_effect::fixture_settle_source(h);
     };
     let monitor=MonitorFromWindow(h,MONITOR_DEFAULTTONEAREST);let mut mi:MONITORINFO=mem::zeroed();mi.cbSize=mem::size_of::<MONITORINFO>() as u32;assert_ne!(GetMonitorInfoW(monitor,&mut mi),0);
     let mut left=mi.rcWork;left.right=(left.left+left.right)/2;let mut right=mi.rcWork;right.left=left.right;
@@ -242,4 +243,5 @@ pub(super) unsafe fn probe(id:WindowIdentity){
         println!("FLUIDWIN_GEOMETRY_FIXTURE recovery={failure} original_style=RESTORED journal=CLEARED");
     }
     drop(reset);wait(&||{let mut r:RECT=mem::zeroed();GetWindowRect(h,&mut r)!=0&&super::same_rect(r,original)});
+    super::window_effect::fixture_settle_source(h);
 }

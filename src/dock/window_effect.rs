@@ -512,7 +512,7 @@ impl Transition{
         }
         self.attempt.finish(Some(reason));false
     }
-    unsafe fn stable(&self)->Result<(),Reason>{
+    unsafe fn stable(&mut self)->Result<(),Reason>{
         let h=self.req.source.hwnd as HWND;
         let policy=Policy::read();policy.gate()?;permitted(self.req.source)?;
         if !self.req.guarded&&policy.native_minimize!=Some(0){return Err("native-policy-changed");}
@@ -523,7 +523,12 @@ impl Transition{
         // rcNormalPosition below detects an actual user move. A transient
         // MonitorFromWindow(NULL) must not cancel a journaled reversal.
         if MonitorFromRect(&self.req.area,MONITOR_DEFAULTTONULL) as usize!=self.req.monitor{return Err("monitor-changed");}
-        if !placement(h).is_some_and(|p|super::same_rect(p.rcNormalPosition,self.req.normal)){return Err("window-placement-changed");}
+        let observed=placement(h).map(|p|p.rcNormalPosition);
+        if !observed.is_some_and(|r|super::same_rect(r,self.req.normal)){
+            let r=self.req.normal;self.attempt.values["expectedNormalBounds"]=json!([r.left,r.top,r.right,r.bottom]);
+            self.attempt.values["observedNormalBounds"]=json!(observed.map(|r|[r.left,r.top,r.right,r.bottom]));
+            return Err("window-placement-changed");
+        }
         Ok(())
     }
     unsafe fn tick(&mut self)->bool{
@@ -535,6 +540,8 @@ impl Transition{
         self.phase=Some(match phase{
             Phase::Capture{job,started}=>{
                 if IsIconic(h)!=0||visible_area(h).is_none_or(|r|!super::same_rect(r,self.req.area)){
+                    let r=self.req.area;self.attempt.values["expectedVisibleBounds"]=json!([r.left,r.top,r.right,r.bottom]);
+                    self.attempt.values["observedVisibleBounds"]=json!(visible_area(h).map(|r|[r.left,r.top,r.right,r.bottom]));
                     return self.fallback("window-placement-changed");
                 }
                 let result=job.receiver.try_recv();
@@ -753,6 +760,25 @@ pub(super) unsafe fn reset(){
     cancel();release_factory();RECENT.with(|r|r.borrow_mut().clear());
 }
 
+#[cfg(test)]
+pub(super) unsafe fn fixture_settle_source(h:HWND){
+    // IsIconic/GetWindowRect can report the final state before DWM consumes
+    // the restored style. Wait for actual stable bounds on the hosted fixture,
+    // without weakening the production placement/capture guards.
+    let started=Instant::now();let mut previous=None;let mut stable=0;
+    loop{
+        fixture_guard_pulse();let mut msg:MSG=mem::zeroed();
+        for _ in 0..64{if PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)==0{break;}TranslateMessage(&msg);DispatchMessageW(&msg);}
+        let _=DwmFlush();let mut outer:RECT=mem::zeroed();
+        assert!(GetWindowRect(h,&mut outer)!=0&&IsIconic(h)==0,"live restored fixture source");
+        let visible=visible_area(h).unwrap();let normal=placement(h).unwrap().rcNormalPosition;
+        let value=([outer.left,outer.top,outer.right,outer.bottom],[visible.left,visible.top,visible.right,visible.bottom],
+            [normal.left,normal.top,normal.right,normal.bottom],GetWindowLongPtrW(h,GWL_EXSTYLE));
+        if previous==Some(value){stable+=1;}else{stable=0;previous=Some(value);}
+        if stable>=3{return;}
+        assert!(started.elapsed()<Duration::from_secs(2),"native fixture bounds never settled: {value:?}");std::thread::sleep(Duration::from_millis(8));
+    }
+}
 #[cfg(test)]
 pub(super) unsafe fn probe_owned_window(source:HWND,frame:&stage_snapshot::Frame){
     use windows_sys::Win32::System::Threading::*;
@@ -1032,8 +1058,10 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
         ids.len(),if pixel_matches>0{"MATCH"}else{"NOT_VERIFIED"},crate::private_mb());
     if cfg!(target_env="msvc"){
         let id=ids[0];
+        fixture_settle_source(source);
         let original=placement(source).unwrap().rcNormalPosition;
         for effect in [motion::WindowEffect::Genie,motion::WindowEffect::Drop]{
+            fixture_settle_source(source);
             motion::configure(motion::Settings{window_effect:effect,..policy});
             let start=||super::finish_double_click(AppClick{owner:bar as usize,key:ClickKey::Dock(path.into()),
                 window:Some(id),was_open:true,at:Instant::now()});
@@ -1083,6 +1111,7 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
             for failure in ["cancel","injected-device-removed","injected-monitor-change"]{
                 motion::configure(motion::Settings{window_effect:motion::WindowEffect::Genie,..policy});
                 for attempt in 0..3{
+                    fixture_settle_source(source);
                     assert!(minimize(bar,path,id));
                     let start=Instant::now();
                     while active()&&!ACTIVE.with(|a|a.borrow().as_ref().is_some_and(|t|t.last_progress>0.18)){

@@ -156,6 +156,7 @@ pub(super) unsafe fn probe_drag(id:WindowIdentity){
         'setup:for attempt in 0..3{
         ShowWindowAsync(h,SW_RESTORE);SetWindowPos(h,ptr::null_mut(),original.left,original.top,original.right-original.left,original.bottom-original.top,SWP_NOACTIVATE|SWP_NOZORDER|SWP_ASYNCWINDOWPOS);
         PostMessageW(h,WM_APP+171,0x00ff0000,0);std::thread::sleep(Duration::from_millis(100));
+        super::window_effect::fixture_settle_source(h);
         let area=super::window_effect::visible_area(h).unwrap();SetCursorPos(area.left+100,area.top+12);HELD.set(Some(true));event(EVENT_SYSTEM_MOVESIZESTART,h);
         assert!(active(),"global move start must create a real stream request");
         let start=Instant::now();let mut evidence=false;
