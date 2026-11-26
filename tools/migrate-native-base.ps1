@@ -1,4 +1,5 @@
-# Source-only, reproducible migration from the pinned checkout. Never builds/runs an app.
+# Source-only initial import recipe from the pinned checkout. Subsequent audited
+# patches are preserved in this branch's Git history. Never builds/runs an app.
 param([string]$Reference='E:\FluidWin-reference-v1.3.1')
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot

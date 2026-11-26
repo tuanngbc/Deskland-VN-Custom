@@ -8,10 +8,10 @@ public static class NativeSmoke {
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
 }
 '@
-function Wait-Until([scriptblock]$Condition,[int]$Seconds=25){
+function Wait-Until([scriptblock]$Condition,[int]$Seconds=25,[string]$Label='runtime condition'){
     $until=[DateTime]::UtcNow.AddSeconds($Seconds)
     do{if(& $Condition){return};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow -lt  $until)
-    throw 'Hosted native runtime condition timed out'
+    throw "Hosted native timeout: $Label"
 }
 function Snapshot([string]$Name){
     Add-Type -AssemblyName System.Windows.Forms,System.Drawing
@@ -29,16 +29,27 @@ New-Item -Path $key -Force | Out-Null
 New-ItemProperty -Path $key -Name Lingua -PropertyType DWord -Value 1 -Force | Out-Null
 function Start-Candidate {
     $p=Start-Process -FilePath $Exe -ArgumentList @('--trial-dir',('"'+$profile+'"'),'--log') -PassThru
-    Wait-Until { [NativeSmoke]::FindWindow('TLauncher.Native.Messaggi',$null)  -ne  [IntPtr]::Zero }
-    Wait-Until {@(Get-CimInstance Win32_Process -Filter "Name='TLauncher.exe'" | Where-Object {$_.ExecutablePath  -ieq  $Exe  -and  $_.CommandLine  -match  '\s--guardiano\s'}).Count  -eq  1}
+    $script:currentCandidate=$p
+    Write-Host "Waiting for native message window (PID $($p.Id))"
+    Wait-Until { [NativeSmoke]::FindWindow('TLauncher.Native.Messaggi',$null)  -ne  [IntPtr]::Zero } -Label 'main message window'
+    Write-Host 'Waiting for detached native Guardian'
+    Wait-Until {@(Get-CimInstance Win32_Process -Filter "Name='TLauncher.exe'" | Where-Object {$_.ExecutablePath  -ieq  $Exe  -and  $_.CommandLine  -match  '\s--guardiano\s'}).Count  -eq  1} -Label 'detached Guardian'
     if([NativeSmoke]::FindWindow('TLauncher.Native.DockIcone',$null) -eq [IntPtr]::Zero){throw 'Original Dock not created'}
     return $p
 }
 $report=Join-Path $Evidence 'native-runtime.txt'
-$p=Start-Candidate
+$p=$null;$script:currentCandidate=$null
 try {
+    $p=Start-Candidate
     if([NativeSmoke]::FindWindow('TLauncher.Native.Notch',$null) -eq [IntPtr]::Zero){throw 'Notch not enabled by default'}
     Snapshot 'native-startup.png'
+    $main=[NativeSmoke]::FindWindow('TLauncher.Native.Messaggi',$null)
+    [void][NativeSmoke]::PostMessage($main,0x8005,[IntPtr]::Zero,[IntPtr]::Zero)
+    Wait-Until {[NativeSmoke]::IsWindowVisible([NativeSmoke]::FindWindow('TLauncher.Native.Launcher',$null))}
+    Snapshot 'native-launcher.png'
+    [void][NativeSmoke]::PostMessage($main,0x8009,[IntPtr]::Zero,[IntPtr]::Zero)
+    Wait-Until {[NativeSmoke]::IsWindowVisible([NativeSmoke]::FindWindow('TLauncher.Native.Impostazioni',$null))}
+    Snapshot 'native-settings.png'
     Copy-Item tools/native-resource-diagnostics.ps1 (Join-Path (Split-Path -Parent $Exe) 'native-resource-diagnostics.ps1')
     git rev-parse HEAD | Set-Content (Join-Path (Split-Path -Parent $Exe) 'BUILD-COMMIT.txt')
     & (Join-Path (Split-Path -Parent $Exe) 'native-resource-diagnostics.ps1') -Scenario ci_smoke -Seconds 10
@@ -52,7 +63,7 @@ try {
     [void][NativeSmoke]::PostMessage([NativeSmoke]::FindWindow('TLauncher.Native.Messaggi',$null),0x10,[IntPtr]::Zero,[IntPtr]::Zero)
     if(!$p.WaitForExit(30000)){throw 'Normal native exit did not finish'}
     Wait-Until {@(Get-CimInstance Win32_Process -Filter "Name='TLauncher.exe'"|Where-Object ExecutablePath -IEQ $Exe).Count -eq  0}
-    'NATIVE_STARTUP=PASS','DOCK_WINDOW=PASS','NOTCH_DEFAULT_ON=PASS','NATIVE_NORMAL_EXIT_AND_GUARDIAN_EXIT=PASS'|Set-Content $report
+    'NATIVE_STARTUP=PASS','DOCK_WINDOW=PASS','ORIGINAL_LAUNCHER_OPEN=PASS','NATIVE_SETTINGS_OPEN=PASS','NOTCH_DEFAULT_ON=PASS','NATIVE_NORMAL_EXIT_AND_GUARDIAN_EXIT=PASS'|Set-Content $report
     # Saved true-disable survives a real process restart, no transient Notch.
     New-ItemProperty -Path $key -Name NotchEnabled -PropertyType DWord -Value 0 -Force|Out-Null
     $p=Start-Candidate
@@ -64,6 +75,8 @@ try {
     if($bar -ne [IntPtr]::Zero -and  ![NativeSmoke]::IsWindowVisible($bar)){throw 'Guardian did not restore taskbar'}
     'NOTCH_DISABLED_STARTUP=PASS','CRASH_GUARDIAN_EXIT=PASS','TASKBAR_RECOVERY=PASS','OWNER_VISUAL_ACCEPTANCE=PENDING','OWNER_PERFORMANCE_ACCEPTANCE=PENDING'|Add-Content $report
 }finally{
+    Get-CimInstance Win32_Process -Filter "Name='TLauncher.exe'"|Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine|ConvertTo-Json|Set-Content (Join-Path $Evidence 'native-processes.json')
+    if(!$p){$p=$script:currentCandidate}
     if($p -and  !$p.HasExited){[void][NativeSmoke]::PostMessage([NativeSmoke]::FindWindow('TLauncher.Native.Messaggi',$null),0x10,[IntPtr]::Zero,[IntPtr]::Zero);$null=$p.WaitForExit(30000)}
     if(Test-Path "$env:TEMP\tlauncher-native.log"){Copy-Item "$env:TEMP\tlauncher-native.log" (Join-Path $Evidence 'native-runtime.log')}
 }

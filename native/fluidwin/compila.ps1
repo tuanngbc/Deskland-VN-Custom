@@ -2,6 +2,7 @@
 # Serve MSYS2 (https://www.msys2.org) con il compilatore UCRT64:  pacman -S mingw-w64-ucrt-x86_64-gcc
 # Uso:  powershell -ExecutionPolicy Bypass -File compila.ps1  [-msys C:\msys64]
 param([string]$msys = 'C:\msys64')
+if ($env:GITHUB_ACTIONS -ne 'true') { throw 'TLauncher owner policy: builds run only on GitHub-hosted Actions using .github/workflows/build-rust-test.yml.' }
 $bin = Join-Path $msys 'ucrt64\bin'
 if (-not (Test-Path "$bin\g++.exe")) { Write-Error "g++ non trovato in ${bin}: installa MSYS2 e il pacchetto mingw-w64-ucrt-x86_64-gcc"; exit 1 }
 $env:Path = "$bin;$env:Path"

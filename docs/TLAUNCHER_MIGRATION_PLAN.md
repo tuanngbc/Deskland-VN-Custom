@@ -4,6 +4,10 @@ Baseline before migration: old development branch
 `codex/fluidwin-integration-v1.0.3` at `e887c52` (tested code `3f4197c`), main
 `fa234a03a71807c86fb2587df3e6d1cd74708803`, tag `v1.0.2` object
 `8bff471ae3729aa22b355a7058ef6a0a31fd191c`. No histories/tags/releases rewritten.
+Remote owner main observed before handoff is
+`e9fa8ff52e773a2d5ff9b383af6973ca7281103a`; the `v1.0.2` tag resolves to
+`4652e7f5b0d76fc4a1c73328cf18547a410305f4`. Local main above is a stale local ref,
+not the owner remote's current main. Neither ref is changed by the migration.
 The third integration candidate is rejected per the new directive. Old evidence,
 profiles and owner rejection records remain authoritative and preserved.
 

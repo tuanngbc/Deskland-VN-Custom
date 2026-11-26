@@ -28,7 +28,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: baseline-evidence
-          key: fluidwin-phase0-2f773a8-v1-${{ hashFiles('tests/fluidwin-baseline.cpp','tests/fluidwin-baseline.rc') }}
+          key: fluidwin-phase0-2f773a8-v2-${{ hashFiles('tests/fluidwin-baseline.cpp','tests/fluidwin-baseline.rc','tests/upstream-runtime-smoke.ps1') }}
       - name: Install upstream toolchain on hosted runner
         if: steps.baseline-cache.outputs.cache-hit != 'true'
         uses: msys2/setup-msys2@v2
@@ -54,6 +54,10 @@ jobs:
           git -C upstream-fluidwin diff --exit-code
           git -C upstream-fluidwin rev-parse HEAD > baseline-evidence/UPSTREAM-COMMIT.txt
           sha256sum baseline-evidence/FluidWin-reference.exe > baseline-evidence/FluidWin-reference.exe.sha256
+      - name: Exercise untouched upstream startup, Launcher, Settings and Guardian
+        if: steps.baseline-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: ./tests/upstream-runtime-smoke.ps1 -Exe ./baseline-evidence/FluidWin-reference.exe -Evidence ./baseline-evidence
       - name: Upload internal upstream baseline (never owner TEST)
         if: always()
         uses: actions/upload-artifact@v4
