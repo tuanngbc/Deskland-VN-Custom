@@ -51,6 +51,49 @@ static bool gpu_pixels(const genio::Immagine& image,std::vector<UINT>& pixels){
     staging->Release();return ok;
 }
 template<class T>struct Interface{T* p=nullptr;~Interface(){if(p)p->Release();}};
+static bool image_file(const std::filesystem::path& path,const std::vector<UINT>& pixels,int w,int h){
+    if(pixels.size()!=size_t(w)*h)return false;BITMAPFILEHEADER file{};file.bfType=0x4d42;
+    BITMAPINFOHEADER header{};header.biSize=sizeof(header);header.biWidth=w;header.biHeight=-h;header.biPlanes=1;header.biBitCount=32;
+    file.bfOffBits=sizeof(file)+sizeof(header);file.bfSize=file.bfOffBits+DWORD(pixels.size()*4);
+    std::ofstream out(path,std::ios::binary);out.write(reinterpret_cast<const char*>(&file),sizeof(file));out.write(reinterpret_cast<const char*>(&header),sizeof(header));out.write(reinterpret_cast<const char*>(pixels.data()),pixels.size()*4);return out.good();
+}
+static int original_static_capture(genio::Motore& engine,const std::filesystem::path& dir,std::ofstream& report){
+    const auto instance=GetModuleHandleW(nullptr);WNDCLASSW type{};type.hInstance=instance;type.lpfnWndProc=source_proc;type.lpszClassName=L"FluidWin.Baseline.StaticCapture";
+    if(!RegisterClassW(&type))return 30;
+    HWND source=CreateWindowExW(0,type.lpszClassName,L"Synthetic original static capture",WS_POPUP,80,80,480,320,nullptr,nullptr,instance,nullptr);
+    if(!source)return 31;struct Window{HWND h;~Window(){DestroyWindow(h);}}window{source};
+    ShowWindow(source,SW_SHOWNOACTIVATE);
+    const RECT area{80,80,560,400},expanded{64,64,576,416},icon{340,600,388,648};
+    const COLORREF colors[]={RGB(255,255,255),RGB(255,0,0),RGB(0,255,0),RGB(0,0,255),RGB(0,0,0)};
+    const char* names[]={"white","red","green","blue","black"};
+    const double progress[]={0,.05,.25,.5,.85,.97,1,.85,.5,.05,0};
+    for(unsigned c=0;c<5;c++){
+        SetWindowLongPtrW(source,GWLP_USERDATA,colors[c]);InvalidateRect(source,nullptr,FALSE);UpdateWindow(source);pump();
+        if(!screenshot(dir/(std::string("static-source-")+names[c]+".bmp"),expanded))return 32;
+        genio::Immagine image;engine.fotoDaSchermo=false;
+        const auto start=std::chrono::steady_clock::now();const bool accepted=engine.cattura(source,area,image,false);
+        report<<"static_capture="<<names[c]<<" accepted="<<accepted<<" source_backend="<<(engine.fotoDaSchermo?"BitBlt-fallback":"PrintWindow")
+              <<" capture_us="<<std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-start).count()<<" WGC_session=NOT_STARTED\n";
+        if(!accepted){image.libera();if(c==4){report<<"static_black=ORIGINAL_CARICA_REJECTS_NEAR_BLACK\n";continue;}return 33;}
+        std::vector<UINT> pixels;if(!gpu_pixels(image,pixels)){image.libera();return 34;}
+        const UINT expected=(c==0?0x00ffffff:c==1?0x00ff0000:c==2?0x0000ff00:c==3?0x000000ff:0);
+        for(int y=0;y<image.h;y++)for(int x=0;x<image.w;x++){
+            const UINT pixel=pixels[size_t(y)*image.w+x];if(pixel!=0xff000000u+expected){image.libera();return 35;}
+        }
+        if(!image_file(dir/(std::string("static-texture-")+names[c]+".bmp"),pixels,image.w,image.h)){image.libera();return 36;}
+        for(unsigned f=0;f<11;f++){
+            genio::Elemento element{&image,area,icon,progress[f],1};engine.mostra(true);engine.disegna({element});DwmFlush();
+            if(!screenshot(dir/(std::string("static-genie-")+names[c]+"-"+std::to_string(f)+".bmp"),RECT{60,60,600,680})){image.libera();return 37;}
+        }
+        engine.svuota();engine.mostra(false);image.libera();
+    }
+    SetWindowPos(source,nullptr,20,20,2110,980,SWP_NOACTIVATE|SWP_NOZORDER);SetWindowLongPtrW(source,GWLP_USERDATA,RGB(255,255,255));InvalidateRect(source,nullptr,FALSE);UpdateWindow(source);pump();
+    RECT large{};GetWindowRect(source,&large);genio::Immagine image;
+    if(!engine.cattura(source,large,image,false)){report<<"static_large=BLOCKED original snapshot unavailable\n";return 0;}
+    std::vector<UINT> pixels;const bool largeOK=image.w==2110&&image.h==980&&gpu_pixels(image,pixels)&&image_file(dir/"static-large-native-texture.bmp",pixels,image.w,image.h);image.libera();if(!largeOK)return 38;
+    report<<"static_capture=ORIGINAL_GENIO_CATTURA_EXECUTED source=PrintWindow_or_documented_screen_fallback texture_perimeter=VERIFIED large_native=2110x980 WGC_session=NOT_STARTED CPU_snapshot_GPU_upload=YES\n";
+    std::cout<<"FLUIDWIN_BASELINE_STATIC original_genio_cattura=PASS texture_perimeters=PASS large_native=2110x980 WGC_session=NOT_STARTED owner_border=UNRESOLVED\n";return 0;
+}
 static void diagnose_capture(HWND source,std::ofstream& report){
     // Run the same documented API sequence only to identify a startup blocker;
     // no upstream implementation or permission/policy setting is patched.
@@ -171,6 +214,7 @@ int main(int argc,char** argv) {
     engine.svuota(); engine.mostra(false);
     report << "tint_screenshots=66 complete_canvas_including_perimeter\n"
            << "drop_jelly_guardian_input_hooks=NOT_EXERCISED\n";
+    const auto photo=original_static_capture(engine,dir,report);if(photo)return photo;
     const auto capture=original_live_capture(engine,dir,report);if(capture)return capture;
     std::cout << "FLUIDWIN_BASELINE renderer=EXECUTED screenshots=66 owner_quality=NOT_VERIFIED\n";
     return engine.gpuPersa()?5:0;
