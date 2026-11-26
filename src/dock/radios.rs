@@ -112,6 +112,7 @@ pub(super) fn error_text(error:i32)->String{
     #[test]#[ignore="hosted read-only WinRT radio discovery; never requests consent or writes hardware"]
     fn native_read_only_radios_release_without_an_assumed_adapter(){
         if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+        #[cfg(target_env="msvc")]unsafe{extern "C"{fn tlauncher_fixture_native_diagnostics();}tlauncher_fixture_native_diagnostics();}
         for _ in 0..3{for kind in [Kind::Wifi,Kind::Bluetooth]{let view=read(kind,None);assert!(view.rows.iter().all(|r|r.request.is_none()));
             println!("FLUIDWIN_RADIOS_READ kind={} rows={} status={:?} writes=NONE",if kind==Kind::Wifi{"wifi"}else{"bluetooth"},view.rows.len(),view.error);}}
     }

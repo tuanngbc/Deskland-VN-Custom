@@ -258,6 +258,8 @@ jobs:
       - name: Verify read-only radio provider and mutation refusal boundaries
         if: ${{ !cancelled() }}
         run: |
+          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
+          New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
           cargo test --release dock::radios::tests::native_read_only_radios_release_without_an_assumed_adapter -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::brightness::tests::native_brightness_read_releases_physical_handles -- --ignored --exact --nocapture --test-threads=1
