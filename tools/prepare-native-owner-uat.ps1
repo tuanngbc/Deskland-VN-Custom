@@ -41,8 +41,8 @@ $name="TLauncher-Native-1.0.3-$Commit-win-x64"
 $zip=Join-Path $download ($name+'.zip')
 $container=[IO.Compression.ZipFile]::OpenRead($outer)
 try{
- $image=@($container.Entries|Where-Object {$_.FullName -cin @($name+'.zip','dist/'+$name+'.zip')})
- $sum=@($container.Entries|Where-Object {$_.FullName -cin @($name+'.zip.sha256','dist/'+$name+'.zip.sha256')})
+ $image=@($container.Entries|Where-Object {$_.FullName -cin @(($name+'.zip'),('dist/'+$name+'.zip'))})
+ $sum=@($container.Entries|Where-Object {$_.FullName -cin @(($name+'.zip.sha256'),('dist/'+$name+'.zip.sha256'))})
  if($image.Count -ne  1 -or  $sum.Count -ne  1 -or  $sum[0].Length -gt  256 -or  $image[0].Length -gt  150MB){throw 'Unexpected archive layout'}
  $reader=[IO.StreamReader]::new($sum[0].Open());try{$wanted=($reader.ReadToEnd().Trim()-split '\s+')[0]}finally{$reader.Dispose()}
  if($wanted -cnotmatch  '^[a-f0-9]{64}$'){throw 'Invalid checksum'}
