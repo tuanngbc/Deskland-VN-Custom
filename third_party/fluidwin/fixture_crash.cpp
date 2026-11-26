@@ -36,7 +36,7 @@ LONG CALLBACK capture_fault(EXCEPTION_POINTERS* fault) {
     frame.AddrPC.Offset=context.Rip;frame.AddrStack.Offset=context.Rsp;frame.AddrFrame.Offset=context.Rbp;
     frame.AddrPC.Mode=frame.AddrStack.Mode=frame.AddrFrame.Mode=AddrModeFlat;
     for(unsigned i=0;i<48 && frame.AddrPC.Offset;i++){
-        DWORD64 displacement=0;char buffer[sizeof(SYMBOL_INFO)+MAX_SYM_NAME]{};
+        DWORD64 displacement=0;alignas(SYMBOL_INFO) char buffer[sizeof(SYMBOL_INFO)+MAX_SYM_NAME]{};
         auto symbol=reinterpret_cast<SYMBOL_INFO*>(buffer);symbol->SizeOfStruct=sizeof(SYMBOL_INFO);symbol->MaxNameLen=MAX_SYM_NAME;
         const bool named=SymFromAddr(process,frame.AddrPC.Offset,&displacement,symbol)!=FALSE;
         HMODULE module=nullptr;wchar_t modulePath[MAX_PATH]{};

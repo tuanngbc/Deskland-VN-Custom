@@ -304,6 +304,7 @@ fn native_gpu_color_perimeters_across_first_reverse_and_cancel_poses(){
         for (name,color,axis,contrast) in [("white",0x00ffffff,None,false),("black",0,None,false),
             ("red",0x000000ff,Some(2),false),("green",0x0000ff00,Some(1),false),("blue",0x00ff0000,Some(0),false),
             ("high-contrast-rounded",0x00ffffff,None,true)]{
+            eprintln!("WGC_COLOR begin={name}");
             SetPropW(source.0,wide("TLauncher.Fixture.Solid").as_ptr(),(color as usize+1) as HANDLE);
             if contrast{
                 SetPropW(source.0,wide("TLauncher.Fixture.HighContrast").as_ptr(),1usize as HANDLE);
@@ -311,6 +312,7 @@ fn native_gpu_color_perimeters_across_first_reverse_and_cancel_poses(){
             }
             InvalidateRect(source.0,std::ptr::null(),0);UpdateWindow(source.0);DwmFlush();
             let frame=pump_gpu_fixture(&source).expect("actual synthetic WGC color capture");
+            eprintln!("WGC_COLOR captured={name}");
             let mut area:RECT=std::mem::zeroed();
             assert!(windows_sys::Win32::Graphics::Dwm::DwmGetWindowAttribute(source.0,windows_sys::Win32::Graphics::Dwm::DWMWA_EXTENDED_FRAME_BOUNDS as u32,
                 (&mut area as *mut RECT).cast(),std::mem::size_of::<RECT>() as u32)>=0);
@@ -318,6 +320,7 @@ fn native_gpu_color_perimeters_across_first_reverse_and_cancel_poses(){
             let pipeline=super::fluidwin_mesh::Pipeline::new(&frame.gpu.context()).unwrap();
             for effect in [super::motion::WindowEffect::Genie,super::motion::WindowEffect::Drop,super::motion::WindowEffect::Scale]{
                 let layer={let _batch=frame.gpu.context();super::fluidwin_mesh::Layer::from_gpu(pipeline.clone(),&frame,area,icon,super::DockSide::Bottom,effect,96).unwrap()};
+                eprintln!("WGC_COLOR layer={name}/{}",effect.name());
                 assert!({let _batch=frame.gpu.context();layer.enable_evidence()});
                 for (index,progress) in poses.into_iter().enumerate(){
                     let start=Instant::now();

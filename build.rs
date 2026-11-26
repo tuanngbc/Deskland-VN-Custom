@@ -77,6 +77,9 @@ fn main() {
 
         let rc_exe = find_rc_exe().expect("Không tìm thấy rc.exe của Windows SDK để nhúng assets/app.ico");
         let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+        if std::env::var("GITHUB_ACTIONS").as_deref()==Ok("true"){
+            println!("cargo:rustc-link-arg=/MAP:{}",out_dir.join("native-symbols.map").display());
+        }
         let res_out = out_dir.join("app.res");
         let rc_in = manifest_dir.join("app.rc");
         let status = Command::new(&rc_exe)

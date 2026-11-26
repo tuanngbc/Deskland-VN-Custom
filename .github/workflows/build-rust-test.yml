@@ -314,6 +314,14 @@ jobs:
             Cargo.lock
           retention-days: 14
 
+      - name: Upload hosted native crash symbols
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-crash-symbols
+          path: target/release/build/**/out/native-symbols.map
+          retention-days: 14
+          if-no-files-found: warn
       - name: Upload native visual fixture evidence
         if: always()
         uses: actions/upload-artifact@v4
