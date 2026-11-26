@@ -1,5 +1,9 @@
 # Owner test — TLauncher 1.0.3
 
+## Superseding owner rejection — 2026-11-26
+
+Both `442861d` and `f3bf1f5` were tested and **REJECTED** by the owner. Motion is still insufficiently smooth, colored window borders persist, and the full effects, Desktop/Explorer menus and utilities are missing. `OWNER_VISUAL_ACCEPTANCE=FAIL`; neither CI success nor this historical suggested-check list constitutes acceptance. See `FLUIDWIN_CORRECTION_EXECUTION.md`. The existing TEST shortcut is historical and is not a recommendation to repeat the rejected trial. A new comprehensive candidate must meet the correction gates first.
+
 This branch has intermediate changes; it is not the release or a claim of FluidWin feature parity. Stable production v1.0.2 remains available. See the feature parity ledger for the scope still open.
 
 Delivered intermediate build: `442861d7ac77beaf247c7df3123bc92cef17ef70`, [Actions run 45524299059](https://github.com/tuanngbc/TLauncher/actions/runs/45524299059). The Windows x64 package SHA-256 is `7b972b2988cc7221a250fe397d78ef5d12ed22db25043474224d21864b12abc8`. The Desktop shortcut and separate profile were staged without running the candidate.

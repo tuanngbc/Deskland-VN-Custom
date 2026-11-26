@@ -10,6 +10,49 @@ permissions:
   contents: read
 
 jobs:
+  fluidwin-baseline:
+    if: github.ref_type != 'tag'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout exact unmodified FluidWin reference
+        uses: actions/checkout@v4
+        with:
+          repository: clooudfn/FluidWin
+          ref: 2f773a8733b84c7dbee88fff6628d14e9ac802b9
+          path: upstream-fluidwin
+          persist-credentials: false
+      - name: Install upstream toolchain on hosted runner
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: mingw-w64-ucrt-x86_64-gcc
+      - name: Build original application and exercise original renderer
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          test "$(git -C upstream-fluidwin rev-parse HEAD)" = '2f773a8733b84c7dbee88fff6628d14e9ac802b9'
+          mkdir -p baseline-evidence
+          cd upstream-fluidwin
+          windres icona.rc -O coff -o ../baseline-evidence/icona.o
+          libs='-ld3d11 -ldxgi -ldcomp -ld3dcompiler -ld2d1 -ldwrite -ldwmapi -luser32 -lgdi32 -lshell32 -lole32 -loleaut32 -lversion -lpropsys -luuid -liphlpapi -lwindowscodecs -lruntimeobject -lpowrprof -lshlwapi -lshcore -lsetupapi -lwinmm -ldxva2 -lwinhttp -lcomdlg32 -lbcrypt'
+          g++ -O2 -std=gnu++20 -Wall -municode -mwindows fluidwin.cpp ../baseline-evidence/icona.o -o ../baseline-evidence/FluidWin-reference.exe $libs -static
+          cd ..
+          g++ -O2 -std=gnu++20 -DNOMINMAX -Iupstream-fluidwin tests/fluidwin-baseline.cpp -o baseline-evidence/baseline-probe.exe $libs -static
+          ./baseline-evidence/baseline-probe.exe baseline-evidence
+          git -C upstream-fluidwin diff --exit-code
+          git -C upstream-fluidwin rev-parse HEAD > baseline-evidence/UPSTREAM-COMMIT.txt
+          sha256sum baseline-evidence/FluidWin-reference.exe > baseline-evidence/FluidWin-reference.exe.sha256
+      - name: Upload internal upstream baseline (never owner TEST)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidwin-reference-baseline
+          path: baseline-evidence/
+          retention-days: 14
+          if-no-files-found: error
   build-rust:
     runs-on: windows-latest
     timeout-minutes: 20
