@@ -76,6 +76,7 @@ enum BluetoothState { Unknown, Adapter(Vec<ClassicDevice>) }
 enum BatteryState { Unknown, Absent, Present{level:Option<u8>,ac:Option<bool>,charging:bool} }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub(super) struct Audio { level:u32, muted:bool }
+impl Audio{pub(super) fn osd_value(self)->(u32,bool){(self.level,self.muted)}}
 pub(super) struct Snapshot { pub status:Status, wlan:Option<wifi::View>, bluetooth:BluetoothState, battery:BatteryState, radios:Option<super::radios::View>, brightness:Option<super::brightness::View> }
 #[derive(Clone)]pub(super) enum Change{Network(wifi::Change),Radio(super::radios::Change),Brightness(super::brightness::Query)}
 
@@ -96,7 +97,7 @@ fn fixture_audio(value:&mut Audio, kind:JobKind)->Audio {
 #[derive(Default)]
 struct State {
     pending:AtomicBool, result:Mutex<Option<Snapshot>>, status_result:Mutex<Option<Status>>,
-    audio_result:Mutex<Option<(usize,Option<Audio>)>>, closed:AtomicBool,
+    audio_result:Mutex<Option<(usize,Option<Audio>,bool)>>, closed:AtomicBool,
 }
 static WORK_ACTIVE:AtomicBool=AtomicBool::new(false);
 struct Permit;
@@ -131,7 +132,7 @@ impl Provider {
     }
     pub fn take_status(&self)->Option<Status>{self.state.status_result.lock().ok()?.take()}
     pub fn take(&self)->Option<Snapshot>{self.state.result.lock().ok()?.take()}
-    pub fn take_audio_result(&self)->Option<(usize,Option<Audio>)>{self.state.audio_result.lock().ok()?.take()}
+    pub fn take_audio_result(&self)->Option<(usize,Option<Audio>,bool)>{self.state.audio_result.lock().ok()?.take()}
     pub fn apply(&self,owner:HWND,panel:HWND,action:Option<Action>)->bool{
         let kind=match action{None=>JobKind::AudioRead,Some(Action::SetVolume(p))=>JobKind::Volume(p),
             Some(Action::Mute)=>JobKind::Mute,_=>return false};
@@ -162,7 +163,7 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut std::ffi::c_vo
         }else if matches!(job.kind,JobKind::ReadStatus){
             if let Ok(mut result)=state.status_result.lock(){*result=Some(Status::read(audio));}
         }else if let Ok(mut result)=state.audio_result.lock(){
-            *result=Some((job.panel,audio));
+            *result=Some((job.panel,audio,matches!(job.kind,JobKind::Volume(_)|JobKind::Mute)));
         }
     }
     drop(job.permit);
@@ -805,8 +806,9 @@ unsafe fn flush_volume(hwnd:HWND){
         }
     }
 }
-pub(super) unsafe fn reflect_audio(hwnd:HWND,result:Option<Audio>){
+pub(super) unsafe fn reflect_audio(hwnd:HWND,result:Option<Audio>,changed:bool){
     if hwnd.is_null()||AUDIO_WINDOW.with(Cell::get)!=hwnd||!AUDIO_PENDING.with(|s|s.replace(false)){return;}
+    if changed{if let Some(audio)=result{super::volume_osd::show(hwnd,audio);}else{super::volume_osd::close(0);}}
     if !audio_read_only(){EnableWindow(GetDlgItem(hwnd,MUTE as i32),1);}
     let label=GetDlgItem(hwnd,LABEL as i32);
     if let Some(audio)=result{

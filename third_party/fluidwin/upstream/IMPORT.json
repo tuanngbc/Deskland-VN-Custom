@@ -5,6 +5,12 @@
   "hash_note": "Git blob IDs identify canonical original source; worktree SHA-256 records the original CRLF checkout bytes.",
   "files": [
     {
+      "path": "osd.h",
+      "source_git_blob": "dee1ff8ed0946061e0ce5c515a83937ea7b4c7cd",
+      "source_worktree_sha256": "ed363d9629e8a567e3f5ebe3180150770881684ba6b38e680906173ef02bdc9b",
+      "local_changes": "Original glass/speaker/bar/mute rendering and 180/220ms entry/exit/1400ms dwell. Scoped UI owner, explicit target monitor, owner 0.70 speed/reduced motion, localized mute label with measured width, transparent hit test, ticketed close notification. Frame timer stops when settled, one-shot timer expires dwell, HWND/font/D2D freed after hide/close. Called only after confirmed existing master-volume UI actions; no audio or input hook code. Global volume keys and battery/headphone notices remain incomplete."
+    },
+    {
       "path": "stampa.h",
       "source_git_blob": "14a2a476aa4f51046fd1ac4f9d957bcfc639c3b2",
       "source_worktree_sha256": "290f9e18a7b2581551e6c8ae955832d62a85ff8310c0685c735217f3b132d4ca",

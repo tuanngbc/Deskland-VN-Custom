@@ -57,6 +57,7 @@ pub(crate) fn motion_diagnostics()->serde_json::Value{let mut value=window_effec
 mod stage_capture_lab;
 pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>{stage_capture_lab::inspect(path,true)}
 mod utilities;
+mod volume_osd;
 mod audio_mixer;
 mod media;
 mod notifications;
@@ -1687,9 +1688,9 @@ unsafe fn show_utilities(){
     let status=UTILITIES.with(|u|u.borrow().as_ref().and_then(utilities::Provider::take_status));
     if status.is_some_and(utilities::replace_status){status_changed();}
     let result=UTILITIES.with(|u|u.borrow().as_ref().and_then(utilities::Provider::take_audio_result));
-    if let Some((panel,result))=result{
+    if let Some((panel,result,changed))=result{
         if utilities::replace_audio(result){status_changed();}
-        utilities::reflect_audio(panel as HWND,result);
+        utilities::reflect_audio(panel as HWND,result,changed);
     }
     let Some(snapshot)=UTILITIES.with(|u|u.borrow().as_ref().and_then(utilities::Provider::take)) else{return;};
     if utilities::replace_status(snapshot.status.clone()){status_changed();}
@@ -3183,6 +3184,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_INTERNAL_APP if hwnd==CONTROL.with(Cell::get)=>{queue_refresh();0},
         WM_TICK=>{SetTimer(hwnd,2,60,None);0},
         WM_UTILITY_READY=>{show_utilities();0},
+        volume_osd::CLOSED=>{volume_osd::close(w);0},
         WM_TIMER if w==jump_list::TIMER&&hwnd==CONTROL.get()=>{jump_list::poll();0},
         WM_TIMER if w==follow_display::TIMER&&hwnd==CONTROL.get()=>{follow_display::poll();0},
         WM_TIMER if w==folder_stack::TIMER&&hwnd==CONTROL.get()=>{folder_stack::poll();0},
@@ -3459,6 +3461,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}else{refresh_dock_clock();sync_win_key();request_dock_status();topmost::poll();motion_guard::sync();}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
         WM_TIMECHANGE=>{refresh_dock_clock();0},
         WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_THEMECHANGED|WM_DPICHANGED=>{
+            volume_osd::close(0);
             snap_layout::close_for(ptr::null_mut());
             window_geometry::cancel();
             show_desktop::pause();
@@ -3859,6 +3862,7 @@ unsafe fn drain_commands() {
     for command in commands {
         match command {
             Command::Configure(options)=>{
+                volume_osd::close(0);
                 shell_menu::configure_menu();
                 if !options.enabled{topmost::reset();}
                 if !options.enabled{capture_access::reset();}
@@ -3896,6 +3900,7 @@ unsafe fn drain_commands() {
                 if enable_default&&!cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active(){start_saved_taskbar_mode();}
             },
             Command::Suspend(on)=>{
+                if on{volume_osd::close(0);}
                 if on{topmost::reset();}
                 if on{capture_access::reset();}
                 if on{shelf::reset();}
@@ -4068,7 +4073,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
         update_state(|s|{s.appbars.clear();s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){destroy_stage(&mut b);}});
         SURFACES.with(|s|s.borrow_mut().clear());STAGE_SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
-        capture_access::reset();shelf::reset();news::reset();weather_panel::reset();comfort::reset();utilities::close_panels();UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));
+        volume_osd::close(0);capture_access::reset();shelf::reset();news::reset();weather_panel::reset();comfort::reset();utilities::close_panels();UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));
         if ATTENTION_MSG.with(|id|id.replace(0))!=0{DeregisterShellHookWindow(control);}
         ATTENTION.with(|queue|queue.borrow_mut().clear());
         internal_app::unlisten(control);
