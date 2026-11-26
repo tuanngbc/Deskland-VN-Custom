@@ -7,7 +7,7 @@ use windows_sys::Win32::{Foundation::HWND,UI::WindowsAndMessaging::{WM_APP,PostM
 use windows::{
     core::{factory, Interface},
     Foundation::TypedEventHandler,
-    Graphics::{Capture::{Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession},
+    Graphics::{Capture::{Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession,IGraphicsCaptureSessionStatics,IDirect3D11CaptureFramePoolStatics2},
         DirectX::{Direct3D11::IDirect3DDevice, DirectXPixelFormat}},
     Win32::{Foundation::HWND as OwnedWindow, Graphics::{
         Direct3D11::*,
@@ -45,7 +45,14 @@ struct CaptureDevice {
 }
 impl CaptureDevice {
     unsafe fn new()->Result<Self,String>{
-        if !step("WGC support",GraphicsCaptureSession::IsSupported())?{
+        // Generated static WinRT calls cache factory pointers process-wide.
+        // This worker deliberately releases its apartment and may be restarted;
+        // never reuse a factory from an apartment that RoUninitialize unloaded.
+        // Keep each activation factory scoped to the initialized caller instead.
+        let support=step("WGC support factory",factory::<GraphicsCaptureSession,IGraphicsCaptureSessionStatics>())?;
+        let mut supported=false;
+        step("WGC support",(support.vtable().IsSupported)(support.as_raw(),&mut supported).ok())?;
+        if !supported{
             return Err("WGC not supported on this session".into());
         }
         let gpu=step("D3D11 shell device",crate::shell_gpu::ShellGpu::acquire())?;
@@ -68,8 +75,12 @@ impl CaptureDevice {
         let item:GraphicsCaptureItem=step("CreateForWindow",interop.CreateForWindow(OwnedWindow(hwnd)))?;
         let size=step("WGC item size",item.Size())?;
         if size.Width<1||size.Height<1||!(if gpu_only{gpu_capture_budget(gpu,size.Width,size.Height)}else{budget(size.Width,size.Height)}){return Err("window exceeds capture budget".into());}
-        let pool=step("frame pool",Direct3D11CaptureFramePool::CreateFreeThreaded(
-            winrt,DirectXPixelFormat::B8G8R8A8UIntNormalized,1,size))?;
+        let pool_factory=step("frame pool factory",factory::<Direct3D11CaptureFramePool,IDirect3D11CaptureFramePoolStatics2>())?;
+        let mut raw=std::ptr::null_mut();
+        step("frame pool",(pool_factory.vtable().CreateFreeThreaded)(pool_factory.as_raw(),
+            winrt.as_raw(),DirectXPixelFormat::B8G8R8A8UIntNormalized,1,size,&mut raw).ok())?;
+        if raw.is_null(){return Err("missing WGC frame pool".into());}
+        let pool=Direct3D11CaptureFramePool::from_raw(raw);
         let result=(||{
             let session=step("capture session",pool.CreateCaptureSession(&item))?;
             let result=(||{
