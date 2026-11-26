@@ -283,6 +283,10 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
                     assert!(consent_pending(popup));SendMessageW(popup,WM_ACTIVATE,WA_INACTIVE as usize,0);
                     let mut close:MSG=std::mem::zeroed();assert_eq!(PeekMessageW(&mut close,popup,WM_CLOSE,WM_CLOSE,PM_REMOVE),0,"Windows consent activation cannot close its originating panel");
                 });assert!(!consent_pending(popup));
+                super::super::capture_access::during_request(||{
+                    assert!(super::super::capture_access::pending());SendMessageW(popup,WM_ACTIVATE,WA_INACTIVE as usize,0);
+                    let mut close:MSG=std::mem::zeroed();assert_eq!(PeekMessageW(&mut close,popup,WM_CLOSE,WM_CLOSE,PM_REMOVE),0,"capture permission activation must preserve its originating panel before the async operation exists");
+                });assert!(!super::super::capture_access::pending());
                 // The saved panel contains only synthetic rows, even on a runner
                 // that has granted access to unrelated notifications.
                 PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().unwrap();p.view=Snapshot{status:1,items:vec![item(7,123)],command_failed:false,..Default::default()};});

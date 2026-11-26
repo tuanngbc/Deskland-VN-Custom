@@ -1,13 +1,14 @@
 //! Borderless capture consent belongs to Windows, never a guessed session flag.
 //! No startup request, registry override, package emulation or permanent worker.
-use std::{cell::RefCell,sync::atomic::{AtomicI32,Ordering},time::{Duration,Instant}};
+use std::{cell::RefCell,sync::atomic::{AtomicI32,Ordering},time::Instant};
+use super::permission_result::{outcome,TIMEOUT};
 use windows::{core::{factory,Interface},Graphics::Capture::{GraphicsCaptureAccess,GraphicsCaptureAccessKind,IGraphicsCaptureAccessStatics},
     Security::Authorization::AppCapabilityAccess::AppCapabilityAccessStatus};
 use windows_future::IAsyncOperation;
 use windows_sys::Win32::{Foundation::*,UI::{Shell::ShellExecuteW,WindowsAndMessaging::*}};
 use super::{CONTROL,STATE,control_center::{self,Card,View,Command}};
 pub(super) const TIMER:usize=34;
-const UNKNOWN:i32=-1;const PENDING:i32=-2;const READ_ONLY:i32=-3;const TIMEOUT:i32=0x800705b4u32 as i32;
+const UNKNOWN:i32=-1;const PENDING:i32=-2;const READ_ONLY:i32=-3;
 static STATUS:AtomicI32=AtomicI32::new(UNKNOWN);
 #[derive(Clone,Copy)]pub(super) enum Action{Open,Request,WindowsSettings}
 struct Pending{op:IAsyncOperation<AppCapabilityAccessStatus>,owner:usize,ticket:usize,started:Instant}
@@ -15,6 +16,14 @@ thread_local!{static WAIT:RefCell<Option<Pending>>=const{RefCell::new(None)};}
 fn text(vi:&str,en:&str,zh:&str)->String{crate::launcher::localized(vi,en,zh).into()}
 fn read_only()->bool{crate::trial::active()||cfg!(test)}
 fn request_if<T>(read_only:bool,start:impl FnOnce()->Result<T,i32>)->Result<T,i32>{if read_only{Err(READ_ONLY)}else{start()}}
+fn start_request<T>(read_only:bool,start:impl FnOnce()->Result<T,i32>)->Result<T,i32>{
+    request_if(read_only,||{STATUS.store(PENDING,Ordering::Release);start()})
+}
+#[cfg(test)]pub(super) fn during_request(probe:impl FnOnce()){
+    struct Restore(i32);impl Drop for Restore{fn drop(&mut self){STATUS.store(self.0,Ordering::Release);}}
+    let _restore=Restore(STATUS.load(Ordering::Acquire));
+    start_request(false,||{probe();Ok(())}).unwrap();
+}
 fn operation()->Result<IAsyncOperation<AppCapabilityAccessStatus>,i32>{unsafe{
     let factory=factory::<GraphicsCaptureAccess,IGraphicsCaptureAccessStatics>().map_err(|e|e.code().0)?;let mut raw=std::ptr::null_mut();
     (factory.vtable().RequestAccessAsync)(factory.as_raw(),GraphicsCaptureAccessKind::Borderless,&mut raw).ok().map_err(|e|e.code().0)?;
@@ -55,17 +64,24 @@ pub(super) unsafe fn perform(owner:HWND,action:Action){
     }
     if WAIT.with(|s|s.borrow().is_some()){return;}
     if matches!(action,Action::Request){
-        let result=request_if(read_only(),operation);
+        let Some(ticket)=control_center::ticket(owner)else{return;};
+        let Some(popup)=control_center::window(owner)else{return;};
+        if GetWindowThreadProcessId(popup,std::ptr::null_mut())!=windows_sys::Win32::System::Threading::GetCurrentThreadId(){return;}
+        // RequestAccessAsync can synchronously reenter activation handlers.
+        // Protect this existing panel before calling Windows, not afterward.
+        let result=start_request(read_only(),operation);
+        if control_center::ticket(owner)!=Some(ticket)||!STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&!s.suspended}){
+            if let Ok(op)=result{let _=op.Cancel();}STATUS.store(UNKNOWN,Ordering::Release);return;
+        }
         match result{
             Err(error)=>STATUS.store(error,Ordering::Release),
             Ok(op)=>{
-                STATUS.store(PENDING,Ordering::Release);control_center::show(owner,super::dock_app_anchor(owner,None),view());
-                let Some(ticket)=control_center::ticket(owner)else{let _=op.Cancel();STATUS.store(UNKNOWN,Ordering::Release);return;};
                 if SetTimer(CONTROL.get(),TIMER,80,None)==0{let _=op.Cancel();STATUS.store(0x80004005u32 as i32,Ordering::Release);}else{
-                    WAIT.with(|s|s.replace(Some(Pending{op,owner:owner as usize,ticket,started:Instant::now()})));return;
+                    WAIT.with(|s|s.replace(Some(Pending{op,owner:owner as usize,ticket,started:Instant::now()})));
                 }
             }
         }
+        control_center::update(owner,ticket,view());return;
     }
     control_center::show(owner,super::dock_app_anchor(owner,None),view());
 }
@@ -75,11 +91,10 @@ pub(super) unsafe fn poll(){
     if control_center::ticket(owner)!=Some(pending.ticket)||!STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&!s.suspended}){
         let _=pending.op.Cancel();KillTimer(CONTROL.get(),TIMER);STATUS.store(UNKNOWN,Ordering::Release);return;
     }
-    let result=match pending.op.Status(){
-        Ok(status) if status.0==0&&pending.started.elapsed()<Duration::from_secs(30)=>{WAIT.with(|s|s.replace(Some(pending)));return;},
-        Ok(status) if status.0==0=>{let _=pending.op.Cancel();Err(TIMEOUT)},
-        Ok(_)=>pending.op.GetResults().map(|value|value.0).map_err(|e|e.code().0),Err(error)=>Err(error.code().0),
-    };
+    let result=outcome(pending.op.Status().map(|s|s.0).map_err(|e|e.code().0),pending.started.elapsed(),
+        ||pending.op.GetResults().map(|value|value.0).map_err(|e|e.code().0),||pending.op.ErrorCode().map(|code|code.0).map_err(|e|e.code().0));
+    let Some(result)=result else{WAIT.with(|s|s.replace(Some(pending)));return;};
+    if result==Err(TIMEOUT){let _=pending.op.Cancel();}
     let status=result.unwrap_or_else(|e|e);STATUS.store(status,Ordering::Release);KillTimer(CONTROL.get(),TIMER);
     crate::log!("CAPTURE_ACCESS completed status={status}");control_center::update(owner,pending.ticket,view());
 }

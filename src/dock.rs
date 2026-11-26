@@ -65,6 +65,7 @@ mod audio_mixer;
 mod media;
 mod notifications;
 mod notification_access;
+mod permission_result;
 mod news;
 mod news_card;
 mod weather_panel;

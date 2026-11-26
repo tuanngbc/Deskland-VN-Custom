@@ -1,11 +1,11 @@
 //! Explicit UI-thread Windows notification consent. No startup request,
 //! identity registration, permission bypass, background reader or policy write.
-use std::{cell::Cell,time::{Duration,Instant}};
+use std::{cell::Cell,time::Instant};
+use super::permission_result::{outcome,TIMEOUT};
 use windows::{core::{factory,Interface},UI::Notifications::Management::{UserNotificationListener,IUserNotificationListenerStatics,UserNotificationListenerAccessStatus}};
 use windows_future::IAsyncOperation;
 pub(super) const TIMER:usize=37;
 const READ_ONLY:i32=0x80070005u32 as i32;
-const TIMEOUT:i32=0x800705b4u32 as i32;
 thread_local!{static STARTING:Cell<usize>=const{Cell::new(0)};}
 pub(super) fn starting(popup:usize)->bool{STARTING.get()==popup&&popup!=0}
 pub(super) fn read_only()->bool{crate::trial::active()||cfg!(test)}
@@ -17,19 +17,6 @@ fn listener()->Result<UserNotificationListener,i32>{unsafe{
     if raw.is_null(){return Err(0x80004003u32 as i32);}Ok(UserNotificationListener::from_raw(raw))
 }}
 pub(super) struct Consent{operation:IAsyncOperation<UserNotificationListenerAccessStatus>,_listener:UserNotificationListener,started:Instant,finished:bool}
-fn outcome(status:Result<i32,i32>,elapsed:Duration,results:impl FnOnce()->Result<i32,i32>,error:impl FnOnce()->Result<i32,i32>)->Option<Result<i32,i32>>{
-    match status{
-        Ok(0) if elapsed<Duration::from_secs(30)=>None,
-        Ok(0)=>Some(Err(TIMEOUT)),
-        Ok(1)=>Some(results()),
-        Ok(2)=>Some(Err(0x80004004u32 as i32)),
-        // Error is distinct from Canceled. Preserve the async operation's
-        // actual HRESULT, including a failure while reading ErrorCode.
-        Ok(3)=>Some(Err(match error(){Ok(code)|Err(code)=>if code<0{code}else{0x8000ffffu32 as i32}})),
-        Ok(_)=>Some(Err(0x8000ffffu32 as i32)),
-        Err(error)=>Some(Err(error)),
-    }
-}
 impl Consent{
     pub(super) fn begin(popup:usize)->Result<Self,i32>{
         request_if(read_only(),||{
@@ -58,19 +45,6 @@ impl Drop for Consent{fn drop(&mut self){if !self.finished{let _=self.operation.
         assert_eq!(request_if::<()>(true,||panic!("read-only must refuse before activation/request")),Err(READ_ONLY));
         assert!(Consent::begin(7).is_err());assert!(!starting(7));
         for result in [Ok(0),Ok(1),Ok(2),Err(TIMEOUT)]{assert_eq!(request_if(false,||result),result);}
-        let no_results=||panic!("only Completed may call GetResults");
-        let no_error=||panic!("only Error may call ErrorCode");
-        assert_eq!(outcome(Ok(0),Duration::from_secs(2),no_results,no_error),None);
-        assert_eq!(outcome(Ok(0),Duration::from_secs(30),no_results,no_error),Some(Err(TIMEOUT)));
-        for result in [Ok(0),Ok(1),Ok(2),Err(0x80073d54u32 as i32)]{assert_eq!(outcome(Ok(1),Duration::ZERO,||result,no_error),Some(result));}
-        assert_eq!(outcome(Ok(2),Duration::ZERO,no_results,no_error),Some(Err(0x80004004u32 as i32)));
-        for code in [0x80070005u32 as i32,0x80073d54u32 as i32]{
-            assert_eq!(outcome(Ok(3),Duration::ZERO,no_results,||Ok(code)),Some(Err(code)));
-            assert_eq!(outcome(Ok(3),Duration::ZERO,no_results,||Err(code)),Some(Err(code)));
-        }
-        assert_eq!(outcome(Ok(3),Duration::ZERO,no_results,||Ok(0)),Some(Err(0x8000ffffu32 as i32)));
-        assert_eq!(outcome(Ok(99),Duration::ZERO,no_results,no_error),Some(Err(0x8000ffffu32 as i32)));
-        assert_eq!(outcome(Err(0x80004005u32 as i32),Duration::ZERO,no_results,no_error),Some(Err(0x80004005u32 as i32)));
     }
     #[test]#[ignore="hosted read-only scoped notification listener status, no RequestAccessAsync or notification content"]
     fn native_access_preflight_retains_exact_status_without_consent(){
