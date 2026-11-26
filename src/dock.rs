@@ -2215,7 +2215,7 @@ fn publish_taskbar(desired:bool,effective:TaskbarMode,actual:taskbar_state::Obse
 fn stopping_watch_done()->bool{
     TASKBAR_STOPPING.with(|slot|{
         let mut child=slot.borrow_mut();
-        match child.as_mut().map(std::process::Child::try_wait){
+        match child.as_mut().map(taskbar_guard::GuardProcess::try_wait){
             None=>true,
             Some(Ok(Some(_)))=>{child.take();true},
             _=>false,
