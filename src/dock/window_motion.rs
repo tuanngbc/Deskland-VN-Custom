@@ -36,6 +36,9 @@ unsafe fn start(h:HWND){
     #[cfg(test)]PREPARE_TIMEOUT.set(false);
     let enabled=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.jelly_drag&&!s.suspended});
     if !enabled||!super::motion::allowed()||super::motion_guard::session().is_none()||!held(){return;}
+    // The source can still be layered by our own settling drag. Re-grab that
+    // exact live session before the general already-layered refusal below.
+    if resume(h){return;}
     super::window_geometry::cancel();
     if super::window_effect::active()||IsIconic(h)!=0||IsZoomed(h)!=0||GetWindowLongW(h,GWL_EXSTYLE) as u32&WS_EX_LAYERED!=0{return;}
     let Some(id)=WindowIdentity::read(h).filter(|id|super::previews::permitted_pid(h).is_ok()&&super::window_effect::elevation(id.pid)==Some(false))else{return;};
@@ -50,6 +53,20 @@ unsafe fn start(h:HWND){
     ACTIVE.with(|s|s.replace(Some(Drag{id,outer,borders,area,monitor:monitor as usize,dpi:GetDpiForWindow(h),capture,
         proxy:None,jelly:Jelly::new(area,point),lease:None,started:now,last:now,released:None,revealed:None,frames:0})));
     if SetTimer(CONTROL.get(),TIMER,20,None)==0{cancel();}
+}
+unsafe fn resume(h:HWND)->bool{
+    ACTIVE.with(|s|{
+        let mut s=s.borrow_mut();let Some(d)=s.as_mut().filter(|d|d.id.hwnd==h as usize&&d.id.matches(h))else{return false;};
+        if IsIconic(h)!=0||IsZoomed(h)!=0||GetDpiForWindow(h)!=d.dpi||MonitorFromWindow(h,MONITOR_DEFAULTTONULL) as usize!=d.monitor{return false;}
+        if d.revealed.is_some()&&d.lease.as_ref().is_some_and(|l|l.status()!=2){return false;}
+        let mut outer:RECT=mem::zeroed();let mut point:POINT=mem::zeroed();
+        let Some(area)=super::window_effect::visible_area(h)else{return false;};
+        if GetWindowRect(h,&mut outer)==0||GetCursorPos(&mut point)==0||PtInRect(&area,point)==0
+            ||area.right-area.left!=d.area.right-d.area.left||area.bottom-area.top!=d.area.bottom-d.area.top{return false;}
+        if d.revealed.take().is_some(){d.lease=None;d.frames=0;}
+        d.area=area;d.outer=outer;d.released=None;d.started=Instant::now();d.last=d.started;d.jelly.regrab(area,point);
+        true
+    })
 }
 impl Drag{
     unsafe fn step(&mut self)->bool{
@@ -135,7 +152,7 @@ pub(super) unsafe fn probe_drag(id:WindowIdentity){
         let mut msg:MSG=mem::zeroed();for _ in 0..64{if PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)==0{break;}TranslateMessage(&msg);DispatchMessageW(&msg);}
         tick();std::thread::sleep(Duration::from_millis(12));
     };
-    for mode in ["release","cancel","resize","monitor"]{
+    for mode in ["release","regrab","cancel","resize","monitor"]{
         'setup:for attempt in 0..3{
         ShowWindowAsync(h,SW_RESTORE);SetWindowPos(h,ptr::null_mut(),original.left,original.top,original.right-original.left,original.bottom-original.top,SWP_NOACTIVATE|SWP_NOZORDER|SWP_ASYNCWINDOWPOS);
         PostMessageW(h,WM_APP+171,0x00ff0000,0);std::thread::sleep(Duration::from_millis(100));
@@ -216,6 +233,18 @@ pub(super) unsafe fn probe_drag(id:WindowIdentity){
                 }
                 sample(name,channel);
             }
+        }
+        if mode=="regrab"{
+            let timing=ACTIVE.with(|s|s.borrow().as_ref().unwrap().capture.timing.clone());
+            let clock=frame_ready();HELD.set(Some(false));event(EVENT_SYSTEM_MOVESIZEEND,h);pump();
+            let area=super::window_effect::visible_area(h).unwrap();SetCursorPos(area.left+100,area.top+12);
+            HELD.set(Some(true));event(EVENT_SYSTEM_MOVESIZESTART,h);
+            ACTIVE.with(|s|{let s=s.borrow();let d=s.as_ref().unwrap();assert!(d.released.is_none());
+                assert!(std::sync::Arc::ptr_eq(&timing,&d.capture.timing),"re-grab keeps the same WGC session and texture");
+                assert_eq!(d.proxy.as_ref().unwrap().frame_clock(),clock);assert_eq!(d.lease.as_ref().unwrap().status(),1);
+            });
+            SetWindowPos(h,ptr::null_mut(),original.left+180,original.top+80,0,0,SWP_NOSIZE|SWP_NOACTIVATE|SWP_NOZORDER|SWP_ASYNCWINDOWPOS);
+            for _ in 0..4{pump();}
         }
         match mode{
             "cancel"=>cancel(),

@@ -2662,8 +2662,9 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
         },
         MENU_MINIMIZE|MENU_MAXIMIZE|MENU_RESTORE|MENU_SNAP_LEFT|MENU_SNAP_RIGHT|MENU_EXPAND=>if let Some(item)=selected{
             if owner.is_some()&&window_owner(item.hwnd)==owner {
+                show_desktop::pause();window_geometry::cancel();window_motion::cancel();
                 match cmd {
-                    MENU_MINIMIZE=>{let ok=ShowWindowAsync(item.hwnd,SW_MINIMIZE)!=0;show_feedback(hwnd,&item,if ok{FeedbackKind::Minimize}else{FeedbackKind::Failed});}
+                    MENU_MINIMIZE=>{let ok=WindowIdentity::read(item.hwnd).is_some_and(|id|window_effect::minimize(hwnd,&item.path,id))||ShowWindowAsync(item.hwnd,SW_MINIMIZE)!=0;show_feedback(hwnd,&item,if ok{FeedbackKind::Minimize}else{FeedbackKind::Failed});}
                     MENU_MAXIMIZE=>{if !WindowIdentity::read(item.hwnd).is_some_and(|id|window_geometry::apply(id,window_geometry::Action::Maximize)){ShowWindowAsync(item.hwnd,SW_MAXIMIZE);}}
                     MENU_RESTORE=>{let ok=WindowIdentity::read(item.hwnd).is_some_and(|id|window_geometry::apply(id,window_geometry::Action::Restore))||ShowWindowAsync(item.hwnd,SW_RESTORE)!=0;show_feedback(hwnd,&item,if ok{FeedbackKind::Restore}else{FeedbackKind::Failed});}
                     MENU_SNAP_LEFT|MENU_SNAP_RIGHT|MENU_EXPAND=>{

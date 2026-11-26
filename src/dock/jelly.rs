@@ -33,6 +33,10 @@ impl Jelly{
         }}
         settled&&self.lift<=0.0
     }
+    pub fn regrab(&mut self,rect:RECT,point:POINT){
+        self.u=(f64::from(point.x-rect.left)/f64::from(rect.right-rect.left)).clamp(0.0,1.0);
+        self.v=(f64::from(point.y-rect.top)/f64::from(rect.bottom-rect.top)).clamp(0.0,1.0);
+    }
     pub fn vertices(&self)->[Vertex;N]{std::array::from_fn(|k|Vertex{x:self.x[k] as f32,y:self.y[k] as f32,u:(k%C) as f32/(C-1) as f32,v:(k/C) as f32/(R-1) as f32})}
 }
 #[cfg(test)]
