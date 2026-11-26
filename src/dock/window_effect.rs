@@ -190,7 +190,7 @@ unsafe fn title(hwnd:HWND)->String{
     let mut buf=[0u16;256];let n=GetWindowTextW(hwnd,buf.as_mut_ptr(),buf.len() as i32).max(0) as usize;
     String::from_utf16_lossy(&buf[..n])
 }
-unsafe fn visible_area(hwnd:HWND)->Option<RECT>{
+pub(super) unsafe fn visible_area(hwnd:HWND)->Option<RECT>{
     let mut r:RECT=mem::zeroed();
     (DwmGetWindowAttribute(hwnd,DWMWA_EXTENDED_FRAME_BOUNDS as u32,(&mut r as *mut RECT).cast(),mem::size_of::<RECT>() as u32)>=0).then_some(r)
 }
@@ -298,7 +298,7 @@ impl Drop for ProxyFactory{
         }
     }
 }
-struct Proxy{
+pub(super) struct Proxy{
     hwnd:HWND,comp:IDCompositionDevice,target:IDCompositionTarget,visual:IDCompositionVisual,
     render:Render,gpu:Arc<crate::shell_gpu::ShellGpu>,
     #[cfg(test)] marker:[u8;3],
@@ -325,6 +325,12 @@ impl Proxy{
         Self::new_motion_for(&stage_snapshot::MotionFrame::Cpu(frame.clone()),area,icon,side,effect,dpi)
     }
     unsafe fn new_motion_for(frame:&stage_snapshot::MotionFrame,area:RECT,icon:RECT,side:DockSide,effect:motion::WindowEffect,dpi:u32)->Option<Self>{
+        Self::new_motion_in(frame,area,icon,side,effect,dpi,None)
+    }
+    pub(super) unsafe fn global(frame:&stage_snapshot::MotionFrame,area:RECT,canvas:RECT,dpi:u32)->Option<Self>{
+        Self::new_motion_in(frame,area,area,DockSide::Bottom,motion::WindowEffect::Scale,dpi,Some(canvas))
+    }
+    unsafe fn new_motion_in(frame:&stage_snapshot::MotionFrame,area:RECT,icon:RECT,side:DockSide,effect:motion::WindowEffect,dpi:u32,canvas:Option<RECT>)->Option<Self>{
         let (data,w,h)=match frame{
             stage_snapshot::MotionFrame::Cpu(cpu)=>{if !valid_pixels(cpu,area){return None;}(&cpu.0[..],&cpu.1,&cpu.2)},
             stage_snapshot::MotionFrame::Gpu(gpu)=>(&[][..],&gpu.width,&gpu.height),
@@ -341,7 +347,7 @@ impl Proxy{
             let _batch=gpu.context();
             Some(match frame{
                 stage_snapshot::MotionFrame::Cpu(frame)=>fluidwin_mesh::Layer::new(mesh?,frame,area,icon,side,effect==motion::WindowEffect::Drop,dpi)?,
-                stage_snapshot::MotionFrame::Gpu(frame)=>fluidwin_mesh::Layer::from_gpu(mesh?,frame,area,icon,side,effect,dpi)?,
+                stage_snapshot::MotionFrame::Gpu(frame)=>fluidwin_mesh::Layer::from_gpu_canvas(mesh?,frame,area,icon,side,effect,dpi,canvas)?,
             })
         }else{None};
         let class=wide("TLauncherScaleProxy");
@@ -388,6 +394,22 @@ impl Proxy{
     }
     #[cfg(test)]
     unsafe fn present(&self,r:RECT,opacity:u8)->bool{self.paint(r,0.0,opacity)==1}
+    pub(super) unsafe fn frame_clock(&self)->HANDLE{match &self.render{Render::Mesh(mesh)=>mesh.frame_ready(),_=>ptr::null_mut()}}
+    #[cfg(all(test,target_env="msvc"))]
+    pub(super) unsafe fn evidence(&self)->Option<(Vec<u8>,u32,u32,RECT)>{
+        let Render::Mesh(mesh)=&self.render else{return None;};let _batch=self.gpu.context();
+        mesh.rendered_pixels().map(|(pixels,w,h)|(pixels,w,h,mesh.canvas))
+    }
+    #[cfg(all(test,target_env="msvc"))]
+    pub(super) unsafe fn enable_evidence(&self)->bool{let Render::Mesh(mesh)=&self.render else{return false;};let _batch=self.gpu.context();mesh.enable_evidence()}
+    pub(super) unsafe fn custom(&self,rect:RECT,vertices:&[fluidwin_mesh::Vertex],lift:f32,opacity:u8)->i32{
+        let Render::Mesh(mesh)=&self.render else{return 0;};
+        let status={let _batch=self.gpu.context();mesh.custom(rect,vertices,lift,opacity)};if status!=1{return status;}
+        if IsWindowVisible(self.hwnd)!=0{return 1;}
+        if self.comp.WaitForCommitCompletion().is_err(){return 0;}
+        let r=mesh.canvas;let shown=SetWindowPos(self.hwnd,HWND_TOPMOST,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_SHOWWINDOW)!=0;
+        if shown{let _=DwmFlush();}i32::from(shown)
+    }
     unsafe fn paint(&self,mut r:RECT,progress:f64,opacity:u8)->i32{
         let first=IsWindowVisible(self.hwnd)==0;
         match &self.render{
@@ -677,16 +699,16 @@ unsafe fn reverse(owner:HWND,id:WindowIdentity,action:Action)->bool{
         true
     })
 }
-pub(super) unsafe fn minimize(owner:HWND,path:&str,id:WindowIdentity)->bool{super::overview::close_for(ptr::null_mut());begin(owner,path,id,Action::Minimize)}
-pub(super) unsafe fn restore(owner:HWND,path:&str,id:WindowIdentity)->bool{super::overview::close_for(ptr::null_mut());begin(owner,path,id,Action::Restore)}
-unsafe fn schedule_release(){
+pub(super) unsafe fn minimize(owner:HWND,path:&str,id:WindowIdentity)->bool{super::window_motion::cancel();super::overview::close_for(ptr::null_mut());begin(owner,path,id,Action::Minimize)}
+pub(super) unsafe fn restore(owner:HWND,path:&str,id:WindowIdentity)->bool{super::window_motion::cancel();super::overview::close_for(ptr::null_mut());begin(owner,path,id,Action::Restore)}
+pub(super) unsafe fn schedule_release(){
     let controller=CONTROL.with(|c|c.get());
     KillTimer(controller,TIMER);
     if FACTORY.with(|f|f.borrow().is_some())&&SetTimer(controller,RELEASE_TIMER,3000,None)==0{release_factory();}
 }
 pub(super) unsafe fn release_factory(){
     KillTimer(CONTROL.with(|c|c.get()),RELEASE_TIMER);
-    if ACTIVE.with(|a|a.borrow().is_none()){FACTORY.with(|f|{f.borrow_mut().take();});}
+    if ACTIVE.with(|a|a.borrow().is_none())&&!super::window_motion::active(){FACTORY.with(|f|{f.borrow_mut().take();});}
 }
 pub(super) unsafe fn timer(){
     #[cfg(test)] fixture_guard_pulse();
@@ -726,6 +748,7 @@ pub(super) fn invalidate_recent(hwnd:HWND){
     RECENT.with(|r|r.borrow_mut().retain(|id,_|id.hwnd!=hwnd as usize));
 }
 pub(super) unsafe fn reset(){
+    super::window_motion::cancel();
     cancel();release_factory();RECENT.with(|r|r.borrow_mut().clear());
 }
 
@@ -1041,6 +1064,8 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
             println!("FLUIDWIN_DOCK_PRODUCTION {} minimize=PASS restore=PASS reversal=PASS placement=PASS",effect.name());
         }
         if actual_policy.native_minimize!=Some(0)&&guardian_ready(){
+            #[cfg(target_env="msvc")]
+            super::window_motion::probe_drag(ids[0]);
             let id=ids[0];let before=GetWindowLongPtrW(source,GWL_EXSTYLE);
             let (_,marker)=super::motion_guard::session().unwrap();
             let marker=wide(&marker);

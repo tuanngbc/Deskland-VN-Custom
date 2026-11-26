@@ -3,6 +3,9 @@ use super::DockSide;
 use std::{ffi::c_void, ptr::NonNull, rc::Rc};
 use windows::{core::Interface, Win32::Graphics::{Direct3D11::ID3D11DeviceContext, Dxgi::IDXGISwapChain1}};
 use windows_sys::Win32::Foundation::RECT;
+#[repr(C)]
+#[derive(Clone,Copy,Default)]
+pub(super) struct Vertex{pub x:f32,pub y:f32,pub u:f32,pub v:f32}
 
 #[cfg(target_env = "msvc")]
 extern "C" {
@@ -25,6 +28,7 @@ extern "C" {
         side: i32, progress: f64, opacity: f32, drop: i32, dark: i32, scale: f64) -> i32;
     fn tlauncher_fluidwin_progress(t: f64, restore: i32, drop: i32) -> f64;
     fn tlauncher_fluidwin_invert(progress: f64, restore: i32, drop: i32) -> f64;
+    fn tlauncher_fluidwin_custom(pipeline:*mut c_void,layer:*mut c_void,rect:*const RECT,canvas:*const RECT,vertices:*const Vertex,count:u32,lift:f32,alpha:f32,scale:f64)->i32;
 }
 
 pub(super) struct Pipeline(NonNull<c_void>);
@@ -104,14 +108,18 @@ impl Layer {
     }
     pub(super) unsafe fn from_gpu(pipeline:Rc<Pipeline>,frame:&super::stage_snapshot::GpuFrame,
         window:RECT,icon:RECT,side:DockSide,effect:super::motion::WindowEffect,dpi:u32)->Option<Self>{
+        Self::from_gpu_canvas(pipeline,frame,window,icon,side,effect,dpi,None)
+    }
+    pub(super) unsafe fn from_gpu_canvas(pipeline:Rc<Pipeline>,frame:&super::stage_snapshot::GpuFrame,
+        window:RECT,icon:RECT,side:DockSide,effect:super::motion::WindowEffect,dpi:u32,canvas:Option<RECT>)->Option<Self>{
         #[cfg(target_env="msvc")]
         {
             let icon=if effect==super::motion::WindowEffect::Scale{super::window_effect::icon_fit(window,icon)}else{icon};
             let side=match side{DockSide::Bottom=>0,DockSide::Left=>2,DockSide::Right=>3};
             let scale=(f64::from(dpi)/96.0).clamp(0.75,4.0);
             let margin=if effect==super::motion::WindowEffect::Drop{5*(icon.right-icon.left)+16}else{2};
-            let canvas=RECT{left:window.left.min(icon.left).checked_sub(margin)?,top:window.top.min(icon.top).checked_sub(margin)?,
-                right:window.right.max(icon.right).checked_add(margin)?,bottom:window.bottom.max(icon.bottom).checked_add(margin)?};
+            let canvas=canvas.unwrap_or(RECT{left:window.left.min(icon.left).checked_sub(margin)?,top:window.top.min(icon.top).checked_sub(margin)?,
+                right:window.right.max(icon.right).checked_add(margin)?,bottom:window.bottom.max(icon.bottom).checked_add(margin)?});
             let raw=NonNull::new(tlauncher_fluidwin_gpu_layer(pipeline.0.as_ptr(),
                 u32::try_from(canvas.right.checked_sub(canvas.left)?).ok()?,u32::try_from(canvas.bottom.checked_sub(canvas.top)?).ok()?,frame.texture.as_raw()))?;
             Some(Self{raw,pipeline,canvas,window,icon,side,drop_effect:effect==super::motion::WindowEffect::Drop,
@@ -136,6 +144,10 @@ impl Layer {
             if self.scale_effect{2}else{i32::from(self.drop_effect)},i32::from(self.dark),self.scale) }
         #[cfg(not(target_env = "msvc"))]
         { let _ = (progress, opacity); 0 }
+    }
+    pub(super) unsafe fn custom(&self,rect:RECT,vertices:&[Vertex],lift:f32,opacity:u8)->i32{
+        #[cfg(target_env="msvc")]{tlauncher_fluidwin_custom(self.pipeline.0.as_ptr(),self.raw.as_ptr(),&rect,&self.canvas,vertices.as_ptr(),vertices.len() as u32,lift,f32::from(opacity)/255.0,self.scale)}
+        #[cfg(not(target_env="msvc"))]{let _=(rect,vertices,lift,opacity);0}
     }
 }
 impl Drop for Layer {

@@ -54,6 +54,7 @@ bool restore(HWND h,const std::wstring& key){
 }
 struct Lease {
     HWND hwnd=nullptr;std::wstring key;Handle guardian;
+    BYTE alpha=0;
     std::atomic<int> state{0};std::atomic<bool> cancel{false},cleanup{false};
     std::mutex operation;
     bool alive(){return guardian.value&&WaitForSingleObject(guardian.value,0)==WAIT_TIMEOUT;}
@@ -77,7 +78,7 @@ DWORD WINAPI begin_worker(void* raw){
     if(l.cancel.load()||!l.alive()||!marked(l.hwnd,l.key)||!risponde(l.hwnd,200)){l.state.store(-1);release(*ref);return 0;}
     if(!set_layered(l.hwnd,true)){l.state.store(-1);release(*ref);return 0;}
     if(l.cancel.load()||!l.alive()||!marked(l.hwnd,l.key)||get(l.hwnd,l.key,L".state")!=1){release(*ref);return 0;}
-    const BOOL hidden=SetLayeredWindowAttributes(l.hwnd,0,0,LWA_ALPHA);
+    const BOOL hidden=SetLayeredWindowAttributes(l.hwnd,0,l.alpha,LWA_ALPHA);
     if(!hidden||l.cancel.load()||!l.alive()||get(l.hwnd,l.key,L".state")!=1){release(*ref);return 0;}
     l.state.store(1);return 0;
 }
@@ -122,7 +123,8 @@ unsigned recover_items(const std::vector<Recovery>& items){
 }
 
 extern "C" {
-void* tlauncher_window_lease(HWND hwnd,HANDLE guardian,const wchar_t* marker) try {
+void* tlauncher_window_lease_alpha(HWND hwnd,HANDLE guardian,const wchar_t* marker,BYTE alpha) try {
+    if(alpha>1)return nullptr;
     if(!hwnd||!guardian||!marker||!IsWindow(hwnd)||WaitForSingleObject(guardian,0)!=WAIT_TIMEOUT)return nullptr;
     // Existing per-pixel/scalar layered windows stay on the native path until
     // their full alpha/color-key restoration has independent evidence.
@@ -131,7 +133,7 @@ void* tlauncher_window_lease(HWND hwnd,HANDLE guardian,const wchar_t* marker) tr
     Handle source{OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,pid)};
     const auto created=source.value?birth(source.value):0;const auto owner=birth(GetCurrentProcess());
     if(!created||!owner||!tid)return nullptr;
-    auto l=std::make_shared<Lease>();l->hwnd=hwnd;l->key=marker;
+    auto l=std::make_shared<Lease>();l->hwnd=hwnd;l->key=marker;l->alpha=alpha;
     if(GetPropW(hwnd,marker))return nullptr;
     if(!DuplicateHandle(GetCurrentProcess(),guardian,GetCurrentProcess(),&l->guardian.value,SYNCHRONIZE,FALSE,0))return nullptr;
     if(!put(hwnd,l->key,L".pid",uintptr_t(pid)+1)||!put(hwnd,l->key,L".tid",uintptr_t(tid)+1)||
@@ -142,6 +144,7 @@ void* tlauncher_window_lease(HWND hwnd,HANDLE guardian,const wchar_t* marker) tr
     if(!handle||!work||!pool::lancia(begin_worker,work,THREAD_PRIORITY_NORMAL,true)){delete work;delete handle;erase(hwnd,l->key);return nullptr;}
     return handle;
 } catch(...){return nullptr;}
+void* tlauncher_window_lease(HWND hwnd,HANDLE guardian,const wchar_t* marker){return tlauncher_window_lease_alpha(hwnd,guardian,marker,0);}
 int tlauncher_window_lease_poll(void* raw){
     if(!raw)return -1;const auto& ref=*static_cast<Ref*>(raw);
     const auto state=ref->state.load();

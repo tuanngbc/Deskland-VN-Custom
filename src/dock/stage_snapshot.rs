@@ -35,10 +35,26 @@ fn step<T>(s:&str,r:windows::core::Result<T>)->Result<T,String>{
 struct Apartment;
 impl Apartment {
     unsafe fn enter()->Result<Self,String>{
+        retain_capture_code()?;
         step("RoInitialize",RoInitialize(RO_INIT_MULTITHREADED)).map(|_|Self)
     }
 }
 impl Drop for Apartment { fn drop(&mut self){unsafe{RoUninitialize();}} }
+
+fn retain_capture_code()->Result<(),String>{
+    // WGC Close() can leave internal DComp callbacks draining after the last
+    // apartment exits. A verified hosted dump reached unloaded callback code
+    // in dcomp.dll despite scoped factories and closed session/pool. Retain
+    // only the trusted OS module for process lifetime, never a capture session,
+    // device, apartment, worker or texture. Do not guess a safe unload delay.
+    static CODE:std::sync::OnceLock<Result<(),String>>=std::sync::OnceLock::new();
+    CODE.get_or_init(||unsafe{
+        use windows_sys::Win32::System::LibraryLoader::{LoadLibraryExW,LOAD_LIBRARY_SEARCH_SYSTEM32};
+        let module=LoadLibraryExW(crate::desktop::wide("GraphicsCapture.dll").as_ptr(),std::ptr::null_mut(),LOAD_LIBRARY_SEARCH_SYSTEM32);
+        if module.is_null(){Err(format!("Windows capture runtime unavailable: {}",windows_sys::Win32::Foundation::GetLastError()))}
+        else{Ok(())} // Intentional process-lifetime OS code reference, released by process exit.
+    }).clone()
+}
 
 struct CaptureDevice {
     winrt:IDirect3DDevice, gpu:Arc<crate::shell_gpu::ShellGpu>,
@@ -62,11 +78,12 @@ impl CaptureDevice {
         Ok(Self{gpu,winrt})
     }
     unsafe fn frame(&self,hwnd:HWND,valid:impl Fn()->bool,limit:usize,wait:Duration,timing:Option<&CaptureTimingHandle>)->Result<Frame,String>{
-        match self.capture(hwnd,valid,limit,wait,timing,false)?{
+        match self.capture(hwnd,valid,limit,wait,timing,false,None)?{
             MotionFrame::Cpu(frame)=>Ok(frame),_=>Err("unexpected GPU capture reply".into())
         }
     }
-    unsafe fn capture(&self,hwnd:HWND,valid:impl Fn()->bool,limit:usize,wait:Duration,timing:Option<&CaptureTimingHandle>,gpu_only:bool)->Result<MotionFrame,String>{
+    unsafe fn capture(&self,hwnd:HWND,valid:impl Fn()->bool,limit:usize,wait:Duration,timing:Option<&CaptureTimingHandle>,gpu_only:bool,
+        stream:Option<(&mpsc::SyncSender<Result<MotionFrame,String>>,usize)>)->Result<MotionFrame,String>{
         if !valid(){return Err("window identity, visibility or affinity denied".into());}
         use windows_sys::Win32::UI::WindowsAndMessaging::{GetAncestor,GA_ROOT};
         if GetAncestor(hwnd,GA_ROOT)!=hwnd{return Err("WGC requires a top-level HWND".into());}
@@ -95,9 +112,11 @@ impl CaptureDevice {
                 let token=step("frame event",pool.FrameArrived(&notify))?;
                 let result=(||{
                     step("StartCapture",session.StartCapture())?;
+                    let mut delivered=false;let mut retained:Option<GpuFrame>=None;let mut saved_crop=None;
+                    loop{
                     record(timing,|t|t.capture_init_ms=elapsed(init)); let mut arrived=false;
                     let started=Instant::now();
-                    while started.elapsed()<wait{
+                    while started.elapsed()<wait||(stream.is_some()&&delivered){
                         if !valid(){return Err("capture cancelled".into());}
                         let interval=25;
                         match rx.recv_timeout(Duration::from_millis(interval)){
@@ -130,7 +149,7 @@ impl CaptureDevice {
                             if GetWindowRect(hwnd,&mut wr)==0 || DwmGetWindowAttribute(hwnd,DWMWA_EXTENDED_FRAME_BOUNDS as u32,(&mut visible as *mut RECT).cast(),std::mem::size_of::<RECT>() as u32)<0{return Err("capture bounds unavailable".into());}
                             // Crop only documented invisible resize margins when
                             // WGC includes them. Never trim application pixels.
-                            let (left,top,right,bottom)=if w as i32==wr.right-wr.left&&h as i32==wr.bottom-wr.top {
+                            let (left,top,right,bottom)=if let Some(crop)=saved_crop{crop}else if w as i32==wr.right-wr.left&&h as i32==wr.bottom-wr.top {
                                 (visible.left-wr.left,visible.top-wr.top,visible.right-wr.left,visible.bottom-wr.top)
                             }else if w as i32==visible.right-visible.left&&h as i32==visible.bottom-visible.top {
                                 (0,0,w as i32,h as i32)
@@ -141,14 +160,21 @@ impl CaptureDevice {
                             output.Usage=D3D11_USAGE_DEFAULT;output.CPUAccessFlags=0;
                             output.BindFlags=(D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET).0 as u32;
                             output.MiscFlags=D3D11_RESOURCE_MISC_GENERATE_MIPS.0 as u32;output.MipLevels=0;output.ArraySize=1;
-                            let mut copied=None;
-                            step("native-resolution GPU texture",gpu.device.CreateTexture2D(&output,None,Some(&mut copied)))?;
-                            let copied=copied.ok_or("missing native-resolution texture")?;
+                            if let Some(previous)=&retained{
+                                if previous.width!=right-left||previous.height!=bottom-top{return Err("live source resized".into());}
+                            }
+                            let copied=if let Some(previous)=&retained{previous.texture.clone()}else{
+                                let mut copied=None;step("native-resolution GPU texture",gpu.device.CreateTexture2D(&output,None,Some(&mut copied)))?;
+                                copied.ok_or("missing native-resolution texture")?
+                            };
                             let region=D3D11_BOX{left:left as u32,top:top as u32,front:0,right:right as u32,bottom:bottom as u32,back:1};
                             gpu.context().CopySubresourceRegion(&copied,0,0,0,0,&texture,0,Some(&region));
                             if !valid(){return Err("capture cancelled before GPU handoff".into());}
                             record(timing,|t|t.gpu_to_gpu=true);
-                            return Ok(MotionFrame::Gpu(GpuFrame{texture:copied,width:right-left,height:bottom-top,gpu:gpu.clone()}));
+                            let frame=GpuFrame{texture:copied,width:right-left,height:bottom-top,gpu:gpu.clone()};
+                            if stream.is_some(){retained=Some(frame.clone());saved_crop=Some((left,top,right,bottom));}
+                            record(timing,|t|t.live_frames+=u64::from(stream.is_some()));
+                            return Ok(MotionFrame::Gpu(frame));
                         }
                         desc.Width=w;desc.Height=h;desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;
                         desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ.0 as _;desc.MiscFlags=0;
@@ -190,7 +216,14 @@ impl CaptureDevice {
                         Ok(MotionFrame::Cpu((bytes,dw as i32,dh as i32)))
                     })();
                     let _=frame.Close();
-                    result
+                    if let Some((sink,controller))=stream{
+                        let frame=result?;
+                        if !delivered{
+                            sink.send(Ok(frame)).map_err(|_|"live consumer closed".to_string())?;delivered=true;
+                            PostMessageW(controller as HWND,READY,0,0);
+                        }
+                    }else{return result;}
+                    }
                 })();
                 let _=pool.RemoveFrameArrived(token);
                 result
@@ -211,7 +244,7 @@ pub(super) unsafe fn frame(hwnd:HWND,valid:impl Fn()->bool)->Result<Frame,String
 #[cfg(test)]
 pub(super) unsafe fn gpu_frame(hwnd:HWND,valid:impl Fn()->bool)->Result<MotionFrame,String>{
     let _apartment=Apartment::enter()?;
-    CaptureDevice::new()?.capture(hwnd,valid,MOTION_EDGE,Duration::from_secs(2),None,true)
+    CaptureDevice::new()?.capture(hwnd,valid,MOTION_EDGE,Duration::from_secs(2),None,true,None)
 }
 
 pub(super) const READY:u32=WM_APP+58;
@@ -452,6 +485,7 @@ pub(super) struct CaptureTiming{
     pub queue_ms:u64,pub device_ms:u64,pub capture_init_ms:u64,pub first_frame_ms:u64,
     pub readback_ms:u64,pub downsample_ms:u64,
     pub gpu_to_gpu:bool,pub borderless_request:bool,pub border_required:Option<bool>,
+    pub live_frames:u64,
 }
 pub(super) type CaptureTimingHandle=Arc<Mutex<CaptureTiming>>;
 #[cfg(test)]
@@ -464,6 +498,7 @@ struct Request{
     source:WindowIdentity, stamp:Stamp, live:Arc<AtomicBool>,
     reply:mpsc::SyncSender<Result<Frame,String>>,
     gpu_reply:Option<mpsc::SyncSender<Result<MotionFrame,String>>>,
+    stream:bool,
     limit:usize,wait:Duration,queued:Instant,timing:Option<CaptureTimingHandle>,
 }
 struct Worker{sender:mpsc::SyncSender<Request>,thread:JoinHandle<()>}
@@ -487,7 +522,8 @@ impl Worker{
                     let delay=FIXTURE_TRANSITION_DELAY_MS.load(Ordering::Relaxed);
                     if delay!=0{std::thread::sleep(Duration::from_millis(delay));}
                 }
-                let valid=||req.live.load(Ordering::Relaxed)&&stamp(req.source).as_ref()==Some(&req.stamp);
+                let valid=||req.live.load(Ordering::Relaxed)&&stamp(req.source).is_some_and(|s|
+                    if req.stream{s.i==req.stamp.i&&s.j==req.stamp.j}else{s==req.stamp});
                 let result=(||{
                     if let Err(reason)=&apartment{return Err(reason.clone());}
                     if !valid(){return Err("capture cancelled".into());}
@@ -495,10 +531,11 @@ impl Worker{
                         let start=Instant::now();let result=CaptureDevice::new();
                         record(req.timing.as_ref(),|t|t.device_ms=elapsed(start));device=Some(result?);
                     }
-                    device.as_ref().unwrap().capture(req.source.hwnd as HWND,valid,req.limit,req.wait,req.timing.as_ref(),req.gpu_reply.is_some())
+                    device.as_ref().unwrap().capture(req.source.hwnd as HWND,valid,req.limit,req.wait,req.timing.as_ref(),req.gpu_reply.is_some(),
+                        if req.stream{req.gpu_reply.as_ref().map(|sender|(sender,controller))}else{None})
                 })();
                 if result.is_err()&&req.live.load(Ordering::Relaxed){device=None;}
-                if let Some(reply)=req.gpu_reply{let _=reply.send(result);}
+                if let Some(reply)=req.gpu_reply{if req.stream{let _=reply.try_send(result);}else{let _=reply.send(result);}}
                 else{let _=req.reply.send(result.and_then(|frame|match frame{MotionFrame::Cpu(f)=>Ok(f),_=>Err("unexpected GPU reply".into())}));}
                 PostMessageW(controller as HWND,READY,0,0);
             }
@@ -662,7 +699,7 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
                 let live=Arc::new(AtomicBool::new(true));
                 let (reply,receiver)=mpsc::sync_channel(1);
                 if state.worker.is_none(){state.worker=Worker::new(controller as usize).ok();}
-                let req=Request{source:id,stamp:stamp.clone(),live:live.clone(),reply,gpu_reply:None,limit:CARD_EDGE,wait:Duration::from_secs(2),queued:Instant::now(),timing:None};
+                let req=Request{source:id,stamp:stamp.clone(),live:live.clone(),reply,gpu_reply:None,stream:false,limit:CARD_EDGE,wait:Duration::from_secs(2),queued:Instant::now(),timing:None};
                 if state.worker.as_ref().is_some_and(|w|w.sender.try_send(req).is_ok()){
                     state.job=Some(Job{source:id,stamp,live,receiver});
                 }
@@ -705,6 +742,12 @@ pub(super) struct TransitionCapture{
 }
 impl Drop for TransitionCapture{fn drop(&mut self){self.live.store(false,Ordering::Relaxed);}}
 pub(super) fn transition_capture(source:WindowIdentity,controller:HWND)->Result<TransitionCapture,&'static str>{
+    request_capture(source,controller,false)
+}
+pub(super) fn live_capture(source:WindowIdentity,controller:HWND)->Result<TransitionCapture,&'static str>{
+    request_capture(source,controller,true)
+}
+fn request_capture(source:WindowIdentity,controller:HWND,stream:bool)->Result<TransitionCapture,&'static str>{
     let stamp=unsafe{stamp(source)}.ok_or("source-unavailable")?;
     CURRENT.with(|cell|{
         let mut state=cell.borrow_mut();
@@ -718,7 +761,7 @@ pub(super) fn transition_capture(source:WindowIdentity,controller:HWND)->Result<
         if state.worker.is_none(){state.worker=Worker::new(controller as usize).ok();}
         let (unused,_)=mpsc::sync_channel(1);
         state.worker.as_ref().ok_or("capture-worker-busy")?.sender.try_send(Request{
-            source,stamp,live:live.clone(),reply:unused,gpu_reply:Some(reply),limit:MOTION_EDGE,wait:Duration::from_millis(350),
+            source,stamp,live:live.clone(),reply:unused,gpu_reply:Some(reply),stream,limit:MOTION_EDGE,wait:Duration::from_millis(350),
             queued:Instant::now(),timing:Some(timing.clone())
         }).map_err(|_|"capture-worker-busy")?;
         state.transition_capture=Some(live.clone());

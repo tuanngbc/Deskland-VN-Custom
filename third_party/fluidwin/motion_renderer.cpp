@@ -197,14 +197,14 @@ struct Layer {
 
     bool element(Pipeline& q, const RECT& canvas, const Vertice* vertices, UINT count,
                  ID3D11ShaderResourceView* tex, UINT imageW, UINT imageH, float radiusX,
-                 float radiusY, float extentV, float opacity) {
+                 float radiusY, float extentV, float opacity,float shadow=0,float lift=0) {
         auto ctx = q.context.Get();
         D3D11_MAPPED_SUBRESOURCE map{};
         if (FAILED(ctx->Map(q.vb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map))) return false;
         std::memcpy(map.pData, vertices, count * sizeof(Vertice));
         ctx->Unmap(q.vb.Get(), 0);
         const Constants constants{{float(canvas.left), float(canvas.top)}, {float(w), float(h)},
-            opacity, radiusX, {float(imageW), float(imageH)}, 0, 0, radiusY, 0, {1, extentV}, {0, 0}};
+            opacity, radiusX, {float(imageW), float(imageH)}, shadow, lift, radiusY, 0, {1, extentV}, {0, 0}};
         ctx->UpdateSubresource(q.cb.Get(), 0, nullptr, &constants, 0, 0);
         ctx->PSSetShaderResources(0, 1, &tex);
         ctx->Draw(count, 0);
@@ -212,7 +212,8 @@ struct Layer {
     }
 
     int draw(Pipeline& q, const RECT& window, const RECT& icon, const RECT& canvas,
-             int side, double progress, float alpha, int effect, bool dark, double scale) {
+             int side, double progress, float alpha, int effect, bool dark, double scale,
+             const Vertice* mesh=nullptr,int columns=0,int rows=0,float lift=0) {
         const bool drop=effect==1;
         if (drop && !q.chip_theme(dark)) return 0;
         auto ctx = q.context.Get();
@@ -242,7 +243,25 @@ struct Layer {
         auto s = q.sampler.Get();
         ctx->PSSetSamplers(0, 1, &s);
         bool painted = true;
-        if (effect==2) {
+        if(effect==3){
+            if(!mesh||columns!=14||rows!=11)return 0;
+            q.context->GenerateMips(texture.Get());
+            // Original fluidwin.cpp GEL_C/GEL_R mesh and expanded shadow ring.
+            Vertice shadow[16*13];const float margin=float(80*scale);
+            for(int r=0;r<13;r++)for(int c=0;c<16;c++){
+                const int ci=std::clamp(c-1,0,13),ri=std::clamp(r-1,0,10);
+                const float sx=c==0?-1.f:c==15?1.f:0.f,sy=r==0?-1.f:r==12?1.f:0.f;
+                const auto& v=mesh[ri*14+ci];shadow[r*16+c]={v.x+sx*margin,v.y+sy*margin,v.u+sx*margin/tw,v.v+sy*margin/th};
+            }
+            const auto grid=[&](const Vertice* vertices,int cols,int rs,bool isShadow){
+                bool ok=true;Vertice strip[26];
+                for(int c=0;c<cols-1;c++){
+                    for(int r=0;r<rs;r++){strip[2*r]=vertices[r*cols+c];strip[2*r+1]=vertices[r*cols+c+1];}
+                    ok=element(q,canvas,strip,UINT(rs*2),texture.Get(),tw,th,float(8*scale),float(8*scale),1,alpha,isShadow?1.f:0.f,lift)&&ok;
+                }return ok;
+            };
+            painted=grid(shadow,16,13,true)&&grid(mesh,14,11,false);
+        }else if (effect==2) {
             const auto mix=[&](LONG a,LONG b){return float(a+(b-a)*std::clamp(progress,0.0,1.0));};
             const float l=mix(window.left,icon.left),t=mix(window.top,icon.top),r=mix(window.right,icon.right),b=mix(window.bottom,icon.bottom);
             const Vertice quad[]={{l,t,0,0},{r,t,1,0},{l,b,0,1},{r,b,1,1}};
@@ -373,6 +392,10 @@ int tlauncher_fluidwin_draw(void* p, void* layer, const RECT* window, const RECT
                           int drop, int dark, double scale) {
     return static_cast<Layer*>(layer)->draw(*static_cast<Pipeline*>(p), *window, *icon, *canvas, side,
                                           progress, opacity, drop, dark != 0, scale);
+}
+int tlauncher_fluidwin_custom(void* p,void* layer,const RECT* rect,const RECT* canvas,const Vertice* vertices,unsigned count,float lift,float alpha,double scale){
+    if(!p||!layer||!rect||!canvas||(count!=0&&count!=154))return 0;
+    return static_cast<Layer*>(layer)->draw(*static_cast<Pipeline*>(p),*rect,*rect,*canvas,0,0,alpha,count?3:2,false,scale,vertices,14,11,lift);
 }
 double tlauncher_fluidwin_progress(double t, int restore, int drop) {
     if (drop) return restore ? cadutaApre(t) : cadutaChiude(t);

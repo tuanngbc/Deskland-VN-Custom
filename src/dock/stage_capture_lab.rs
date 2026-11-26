@@ -18,6 +18,10 @@ impl Drop for Fixture {
 }
 
 unsafe extern "system" fn fixture_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    #[cfg(test)]
+    if msg==WM_APP+171&&std::env::var("GITHUB_ACTIONS").as_deref()==Ok("true"){
+        SetPropW(hwnd,wide("TLauncher.Fixture.Solid").as_ptr(),(w+1) as HANDLE);InvalidateRect(hwnd,std::ptr::null(),0);return 0;
+    }
     if msg != WM_PAINT { return DefWindowProcW(hwnd,msg,w,l); }
     let mut ps: PAINTSTRUCT = std::mem::zeroed();
     let dc = BeginPaint(hwnd,&mut ps);
@@ -300,11 +304,14 @@ fn native_gpu_color_perimeters_across_first_reverse_and_cancel_poses(){
         let source=window(true).unwrap();
         SetWindowLongPtrW(source.0,GWL_STYLE,(WS_POPUP|WS_VISIBLE) as isize);
         SetWindowPos(source.0,null_mut(),32,32,640,420,SWP_NOACTIVATE|SWP_NOZORDER|SWP_FRAMECHANGED);
+        for repeat in 0..3{
+        SetWindowRgn(source.0,ptr::null_mut(),1);RemovePropW(source.0,wide("TLauncher.Fixture.HighContrast").as_ptr());
+        SetWindowLongPtrW(source.0,GWL_EXSTYLE,GetWindowLongPtrW(source.0,GWL_EXSTYLE)&!(WS_EX_LAYERED as isize));
         let poses=[0.0,0.05,0.25,0.5,0.85,0.97,1.0,0.85,0.5,0.0];
         for (name,color,axis,contrast) in [("white",0x00ffffff,None,false),("black",0,None,false),
             ("red",0x000000ff,Some(2),false),("green",0x0000ff00,Some(1),false),("blue",0x00ff0000,Some(0),false),
             ("high-contrast-rounded",0x00ffffff,None,true),("transparent-white",0x00ffffff,None,false)]{
-            eprintln!("WGC_COLOR begin={name}");
+            eprintln!("WGC_COLOR repeat={repeat} begin={name}");
             SetPropW(source.0,wide("TLauncher.Fixture.Solid").as_ptr(),(color as usize+1) as HANDLE);
             if contrast{
                 SetPropW(source.0,wide("TLauncher.Fixture.HighContrast").as_ptr(),1usize as HANDLE);
@@ -368,10 +375,11 @@ fn native_gpu_color_perimeters_across_first_reverse_and_cancel_poses(){
                     }
                     if let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
                         let rgba=pixels.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],p[3]]).collect::<Vec<_>>();
-                        image::save_buffer(std::path::PathBuf::from(dir).join(format!("motion-colors-{name}-{}-{index}.png",effect.name())),&rgba,w,h,image::ColorType::Rgba8).unwrap();
+                        if repeat==0{image::save_buffer(std::path::PathBuf::from(dir).join(format!("motion-colors-{name}-{}-{index}.png",effect.name())),&rgba,w,h,image::ColorType::Rgba8).unwrap();}
                     }
                 }
             }
+        }
         }
     }
     println!("FLUIDWIN_COLOR_PERIMETERS actual_wgc=YES full_canvas=CHECKED white_black_rgb_high_contrast_rounded=EXERCISED source_transparency=EXERCISED owner_border_acceptance=FAIL");

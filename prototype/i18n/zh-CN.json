@@ -5,6 +5,8 @@
     "utilityItem_recycleBin": "回收站",
     "shellContextMenu": "桌面与资源管理器右键菜单",
     "altTabOverview": "使用 Alt+Tab 打开窗口概览",
+    "jellyDrag": "拖动窗口时使用果冻效果",
+    "jellyDragHint": "拖动普通窗口时显示实时内容。不兼容的窗口保持 Windows 行为。",
     "altTabOverviewHint": "显示当前显示器上打开的窗口。松开 Alt 选择，按 Esc 取消。",
     "shellContextMenuHint": "启用 Dock 时使用 FluidWin 风格的系统菜单。按住 Shift 并右键单击可使用 Windows 菜单。",
     "dockAutoHide": "窗口最大化时隐藏 Dock",

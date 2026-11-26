@@ -3,6 +3,8 @@
   "ui": {
     "shellContextMenu": "Desktop and Explorer context menus",
     "altTabOverview": "Window overview with Alt+Tab",
+    "jellyDrag": "Jelly effect while dragging windows",
+    "jellyDragHint": "Use live content while dragging normal windows. Incompatible windows keep Windows behavior.",
     "altTabOverviewHint": "Show open windows on the current display. Release Alt to select; Esc to cancel.",
     "shellContextMenuHint": "Use FluidWin-style system menus while Dock is enabled. Hold Shift and right-click for the Windows menu.",
     "dockAutoHide": "Hide Dock when a window is maximized",

@@ -4,6 +4,7 @@ use windows_sys::Win32::{Foundation::*,System::Threading::*};
 #[cfg(target_env="msvc")]
 extern "C" {
     fn tlauncher_window_lease(hwnd:HWND,guardian:HANDLE,marker:*const u16)->*mut c_void;
+    fn tlauncher_window_lease_alpha(hwnd:HWND,guardian:HANDLE,marker:*const u16,alpha:u8)->*mut c_void;
     fn tlauncher_window_lease_poll(lease:*mut c_void)->i32;
     fn tlauncher_window_lease_restore(lease:*mut c_void);
     fn tlauncher_window_lease_free(lease:*mut c_void);
@@ -13,12 +14,16 @@ extern "C" {
 pub(super) struct Lease(NonNull<c_void>);
 impl Lease{
     pub(super) unsafe fn begin(hwnd:HWND)->Option<Self>{
+        Self::begin_alpha(hwnd,0)
+    }
+    pub(super) unsafe fn begin_interactive(hwnd:HWND)->Option<Self>{Self::begin_alpha(hwnd,1)}
+    unsafe fn begin_alpha(hwnd:HWND,alpha:u8)->Option<Self>{
         #[cfg(target_env="msvc")]
         {
             let (pid,marker)=super::motion_guard::session()?;
             let process=OpenProcess(0x0010_0000,0,pid);
             if process.is_null(){return None;}
-            let lease=tlauncher_window_lease(hwnd,process,crate::desktop::wide(&marker).as_ptr());
+            let lease=tlauncher_window_lease_alpha(hwnd,process,crate::desktop::wide(&marker).as_ptr(),alpha);
             CloseHandle(process);NonNull::new(lease).map(Self)
         }
         #[cfg(not(target_env="msvc"))]{let _=hwnd;None}

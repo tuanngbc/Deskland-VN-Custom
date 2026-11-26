@@ -3,6 +3,8 @@
   "ui": {
     "shellContextMenu": "Menu chuột phải Desktop và Explorer",
     "altTabOverview": "Tổng quan cửa sổ bằng Alt+Tab",
+    "jellyDrag": "Hiệu ứng Jelly khi kéo cửa sổ",
+    "jellyDragHint": "Dùng nội dung sống khi kéo cửa sổ thường. Cửa sổ không tương thích tiếp tục dùng Windows.",
     "altTabOverviewHint": "Hiện cửa sổ đang mở trên màn hình hiện tại. Nhả Alt để chọn, Esc để hủy.",
     "shellContextMenuHint": "Dùng menu hệ thống kiểu FluidWin khi bật Dock. Giữ Shift khi nhấp chuột phải để dùng menu Windows.",
     "dockAutoHide": "Ẩn Dock khi cửa sổ phóng tối đa",

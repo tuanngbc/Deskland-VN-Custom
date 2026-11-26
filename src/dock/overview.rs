@@ -92,6 +92,7 @@ pub(super) unsafe fn show(owner:HWND,alt:bool,steps:i32){
     if active(){key(99);return;}
     let enabled=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&!s.suspended&&(!alt||s.prefs.alt_tab_overview)});
     if !enabled||super::window_effect::active(){return;}
+    super::window_motion::cancel();
     let monitor=if alt{MonitorFromWindow(GetForegroundWindow(),MONITOR_DEFAULTTONEAREST)}
         else{MonitorFromWindow(owner,MONITOR_DEFAULTTONEAREST)};
     let Some(area)=super::monitor_bounds(monitor)else{return;};

@@ -196,6 +196,8 @@
     <p class="monitor-detail" data-i18n="shellContextMenuHint">Dùng menu hệ thống kiểu FluidWin khi bật Dock. Giữ Shift khi nhấp chuột phải để dùng menu Windows.</p>
     <label class="setting-row switch-row"><b data-i18n="altTabOverview">Tổng quan cửa sổ bằng Alt+Tab</b><input type="checkbox" id="altTabOverview" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <p class="monitor-detail" data-i18n="altTabOverviewHint">Hiện cửa sổ đang mở trên màn hình hiện tại. Nhả Alt để chọn, Esc để hủy.</p>
+    <label class="setting-row switch-row"><b data-i18n="jellyDrag">Hiệu ứng Jelly khi kéo cửa sổ</b><input type="checkbox" id="jellyDrag" role="switch"><i class="switch" aria-hidden="true"></i></label>
+    <p class="monitor-detail" data-i18n="jellyDragHint">Dùng nội dung sống khi kéo cửa sổ thường. Cửa sổ không tương thích tiếp tục dùng Windows.</p>
     <p id="dockRuntimeStatus" class="monitor-detail" role="status" aria-live="polite"></p>
   </section>
   <section class="setting-card">
@@ -1323,6 +1325,7 @@ function syncDockSettings(m) {
   $('stagePeek').checked=!!dockOptions.stagePeek;
   $('shellContextMenu').checked=!!dockOptions.shellContextMenu;
   $('altTabOverview').checked=!!dockOptions.altTabOverview;
+  $('jellyDrag').checked=!!dockOptions.jellyDrag;
   $('stagePeekDelay').value=String(dockOptions.stagePeekDelay??350);
   $('stagePeekDelay').disabled=!dockOptions.stagePeek;
   $('stagePeekDelayValue').textContent=$('stagePeekDelay').value;
@@ -1354,6 +1357,9 @@ $('shellContextMenu').addEventListener('change',()=>{
 });
 $('altTabOverview').addEventListener('change',()=>{
   dockOptions.altTabOverview=$('altTabOverview').checked;send({t:'dock',altTabOverview:dockOptions.altTabOverview});
+});
+$('jellyDrag').addEventListener('change',()=>{
+  dockOptions.jellyDrag=$('jellyDrag').checked;send({t:'dock',jellyDrag:dockOptions.jellyDrag});
 });
 $('stagePeekDelay').addEventListener('input',()=>{$('stagePeekDelayValue').textContent=$('stagePeekDelay').value;});
 $('stagePeekDelay').addEventListener('change',()=>{

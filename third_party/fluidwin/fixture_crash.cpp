@@ -19,7 +19,7 @@ LONG CALLBACK capture_fault(EXCEPTION_POINTERS* fault) {
     if(file!=INVALID_HANDLE_VALUE){
         MINIDUMP_EXCEPTION_INFORMATION info{GetCurrentThreadId(),fault,FALSE};
         MiniDumpWriteDump(GetCurrentProcess(),GetCurrentProcessId(),file,
-            MiniDumpWithThreadInfo,&info,nullptr,nullptr);
+            MINIDUMP_TYPE(MiniDumpWithThreadInfo|MiniDumpWithUnloadedModules),&info,nullptr,nullptr);
         CloseHandle(file);
     }
     swprintf_s(path,L"%s\\native-fault-%lu.txt",root,GetCurrentProcessId());
