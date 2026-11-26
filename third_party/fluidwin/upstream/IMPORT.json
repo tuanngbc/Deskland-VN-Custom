@@ -5,6 +5,12 @@
   "hash_note": "Git blob IDs identify canonical original source; worktree SHA-256 records the original CRLF checkout bytes.",
   "files": [
     {
+      "path": "widget.h",
+      "source_git_blob": "5a1628bdb1006b73c822f47332f7477fc47d27f3",
+      "source_worktree_sha256": "9c541a24e2cb54ed4c1036496e8ba4d22e602c33dfb1086905e60c045c542df5",
+      "local_changes": "Friend adapter and extraction of the original pure RSS loop into notizieDaXml, retaining CDATA/entity/Unicode and native publication-time conversion. News bridge bounds strings; existing Rust HTTPS library owns scoped transport. Dati is never constructed: no FluidWin registry, weather fetch, permanent worker or polling owner is started. Original weather and geocoding remain separate incomplete integrations."
+    },
+    {
       "path": "notifiche.h",
       "source_git_blob": "9d57c5b3856e02ec4f8cc5830f3a013593e9d278",
       "source_worktree_sha256": "b0490f426055b9ebc136ffde91b7fc30b798d06921cb4b9ddc8c5146dfeda6ca",

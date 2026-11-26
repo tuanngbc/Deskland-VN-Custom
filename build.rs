@@ -50,6 +50,7 @@ fn main() {
         println!("cargo:rerun-if-changed=third_party/fluidwin/wave_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/calendar_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/notifications_bridge.cpp");
+        println!("cargo:rerun-if-changed=third_party/fluidwin/news_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/recycle_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/media_bridge.cpp");
         cc::Build::new()
@@ -72,6 +73,7 @@ fn main() {
             .file("third_party/fluidwin/wave_bridge.cpp")
             .file("third_party/fluidwin/calendar_bridge.cpp")
             .file("third_party/fluidwin/notifications_bridge.cpp")
+            .file("third_party/fluidwin/news_bridge.cpp")
             .file("third_party/fluidwin/recycle_bridge.cpp")
             .file("third_party/fluidwin/media_bridge.cpp")
             .compile("tlauncher_fluidwin_motion");
