@@ -243,6 +243,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::audio_mixer::native_panel_reads_devices_and_releases_worker_without_audio_writes -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify independent desktop cascade and geometry commands
+        if: ${{ !cancelled() }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
+          $fixtureFailed = $false
+          foreach ($fixture in 'native_guarded_desktop_cascade','native_guarded_geometry_commands') {
+            cargo test --release "dock::stage_capture_lab::$fixture" -- --ignored --exact --nocapture --test-threads=1
+            if ($LASTEXITCODE -ne 0) { $fixtureFailed = $true }
+          }
+          if ($fixtureFailed) { exit 1 }
+
       - name: Package Rust native build
         run: |
           $short = '${{ github.sha }}'.Substring(0, 7)

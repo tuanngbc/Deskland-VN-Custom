@@ -938,6 +938,12 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
         panic!("WINDOW_SCALE_PRODUCTION=NOT_VERIFIED runner eligibility={reason} policy={}",actual_policy.json());
         return;
     }
+    #[cfg(target_env="msvc")]
+    match std::env::var("TUANPC_MOTION_FIXTURE_SCOPE").as_deref(){
+        Ok("desktop")=>{super::show_desktop::probe(bar,ids);return;},
+        Ok("geometry")=>{super::window_geometry::probe(ids[0]);return;},
+        _=>{},
+    }
     let mut pixel_matches=0usize;
     let mut peak=crate::private_mb();
     let before=peak;

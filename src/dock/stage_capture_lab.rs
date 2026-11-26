@@ -603,16 +603,24 @@ fn native_scale_production_owned_external_windows(){
 #[test]
 #[ignore="real hosted native-animation policy with detached Guardian and foreign motion handoff; restores runner policy afterwards"]
 fn native_guarded_motion_with_windows_animations_enabled(){
-    guarded_motion_fixture(false);
+    guarded_motion_fixture(false,None);
 }
 #[cfg(all(test,target_env="msvc"))]
 #[test]
 #[ignore="same detached Guardian in compatibility mode, native Windows animation enabled; no taskbar mutation"]
 fn native_guarded_motion_in_compatibility_mode(){
-    guarded_motion_fixture(true);
+    guarded_motion_fixture(true,None);
 }
 #[cfg(all(test,target_env="msvc"))]
-fn guarded_motion_fixture(compatibility:bool){
+#[test]
+#[ignore="independent hosted Show Desktop cascade through the real foreign-window controller"]
+fn native_guarded_desktop_cascade(){guarded_motion_fixture(false,Some("desktop"));}
+#[cfg(all(test,target_env="msvc"))]
+#[test]
+#[ignore="independent hosted prepared maximize/restore/Snap through the real foreign-window controller"]
+fn native_guarded_geometry_commands(){guarded_motion_fixture(true,Some("geometry"));}
+#[cfg(all(test,target_env="msvc"))]
+fn guarded_motion_fixture(compatibility:bool,scope:Option<&str>){
     if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
     use std::ffi::OsString;
     struct Restore{animation:ANIMATIONINFO,env:Vec<(&'static str,Option<OsString>)>,compatibility:bool}
@@ -633,7 +641,8 @@ fn guarded_motion_fixture(compatibility:bool){
         let mut original:ANIMATIONINFO=std::mem::zeroed();original.cbSize=std::mem::size_of::<ANIMATIONINFO>() as u32;
         assert_ne!(SystemParametersInfoW(SPI_GETANIMATION,original.cbSize,(&mut original as *mut ANIMATIONINFO).cast(),0),0);
         let before=original.iMinAnimate;
-        let restore=Restore{animation:original,compatibility,env:["TUANPC_GUARD_FIXTURE","TUANPC_GUARDED_MOTION_FIXTURE"].into_iter().map(|k|(k,std::env::var_os(k))).collect()};
+        let restore=Restore{animation:original,compatibility,env:["TUANPC_GUARD_FIXTURE","TUANPC_GUARDED_MOTION_FIXTURE","TUANPC_MOTION_FIXTURE_SCOPE"].into_iter().map(|k|(k,std::env::var_os(k))).collect()};
+        if let Some(scope)=scope{std::env::set_var("TUANPC_MOTION_FIXTURE_SCOPE",scope);}else{std::env::remove_var("TUANPC_MOTION_FIXTURE_SCOPE");}
         let mut enabled=ANIMATIONINFO{cbSize:std::mem::size_of::<ANIMATIONINFO>() as u32,iMinAnimate:1};
         assert_ne!(SystemParametersInfoW(SPI_SETANIMATION,enabled.cbSize,(&mut enabled as *mut ANIMATIONINFO).cast(),0),0);
         let mut observed:ANIMATIONINFO=std::mem::zeroed();observed.cbSize=enabled.cbSize;
@@ -648,5 +657,5 @@ fn guarded_motion_fixture(compatibility:bool){
         drop(restore);
         assert_ne!(SystemParametersInfoW(SPI_GETANIMATION,observed.cbSize,(&mut observed as *mut ANIMATIONINFO).cast(),0),0);assert_eq!(observed.iMinAnimate,before);
     }
-    println!("FLUIDWIN_GUARDED_MOTION mode={} windows_native_animation=ENABLED scale_genie_drop=EXERCISED reversal=EXERCISED runner_policy=RESTORED owner_quality=NOT_VERIFIED",if compatibility{"compatibility"}else{"taskbar"});
+    println!("FLUIDWIN_GUARDED_MOTION mode={} scope={} windows_native_animation=ENABLED runner_policy=RESTORED owner_quality=NOT_VERIFIED",if compatibility{"compatibility"}else{"taskbar"},scope.unwrap_or("all"));
 }
