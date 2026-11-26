@@ -274,6 +274,8 @@ jobs:
       - name: Verify File Shelf Shell references without performing file operations
         if: ${{ !cancelled() }}
         run: |
+          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
+          New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
           cargo test --release dock::shelf::native::tests::native_shelf_holds_references_and_releases_drop_registration -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

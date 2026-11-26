@@ -71,7 +71,7 @@ pub(super) const CHANGED:u32=windows_sys::Win32::UI::WindowsAndMessaging::WM_APP
     }
     unsafe fn open(owner:HWND){
         if !enabled()||IsWindow(owner)==0{return;}
-        if raw().is_null(){MODEL.with(|s|s.replace(NonNull::new(tlauncher_shelf_create()).map(Native)));}
+        if raw().is_null(){MODEL.with(|s|s.replace(NonNull::new(tlauncher_shelf_create()).map(Native)));if raw().is_null(){ERROR.set(Some(-101));}}
         control_center::show_list(owner,super::super::dock_app_anchor(owner,None),view());
         if let Some(popup)=control_center::window(owner){
             if let Some(raw)=NonNull::new(tlauncher_shelf_register(raw(),popup,CHANGED)){
@@ -140,9 +140,10 @@ pub(super) const CHANGED:u32=windows_sys::Win32::UI::WindowsAndMessaging::WM_APP
             unsafe{
                 use windows::Win32::System::Ole::{OleInitialize,OleUninitialize};
                 OleInitialize(None).unwrap();
+                let old_enabled=STATE.with(|s|{let mut s=s.borrow_mut();let old=s.prefs.enabled;s.prefs.enabled=true;old});
                 let path=PathBuf::from(std::env::var_os("RUNNER_TEMP").unwrap()).join(format!("shelf-fixture-tệp-{}.txt",std::process::id()));
                 std::fs::write(&path,"File Shelf fixture; never opened or copied").unwrap();
-                for _ in 0..4{
+                for pass in 0..4{
                     let window=CreateWindowExW(WS_EX_TOOLWINDOW,wide("STATIC").as_ptr(),wide("Shelf fixture").as_ptr(),WS_POPUP,100,100,320,200,ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),ptr::null());assert!(!window.is_null());ShowWindow(window,SW_SHOWNOACTIVATE);
                     let model=Native(NonNull::new(tlauncher_shelf_create()).unwrap());let target=NonNull::new(tlauncher_shelf_register(model.0.as_ptr(),window,CHANGED)).unwrap();
                     assert_eq!(tlauncher_shelf_fixture(model.0.as_ptr(),target.as_ptr(),wide(&path.to_string_lossy()).as_ptr()),0);
@@ -150,11 +151,27 @@ pub(super) const CHANGED:u32=windows_sys::Win32::UI::WindowsAndMessaging::WM_APP
                     let mut stored=vec![0u16;32768];assert_ne!(tlauncher_shelf_item(model.0.as_ptr(),0,stored.as_mut_ptr(),stored.len() as u32),0);
                     assert_eq!(String::from_utf16_lossy(&stored[..stored.iter().position(|c|*c==0).unwrap()]),path.to_string_lossy());
                     assert_eq!(std::fs::read_to_string(&path).unwrap(),"File Shelf fixture; never opened or copied");
-                    drop(model); // outstanding target becomes inert before revoke
+                    MODEL.with(|s|s.replace(Some(model)));open(window);
+                    let popup=control_center::window(window).expect("real Shelf popup");assert_ne!(IsWindowVisible(popup),0);
+                    assert!(view().cards.iter().any(|c|c.title==path.file_name().unwrap().to_string_lossy()));
+                    assert!(TARGET.with(|s|s.borrow().as_ref().is_some_and(|t|t.popup==popup)));
+                    if pass==0{
+                        use windows_sys::Win32::Graphics::{Dwm::DwmFlush,Gdi::*};
+                        let started=std::time::Instant::now();while started.elapsed()<std::time::Duration::from_millis(400){
+                            let mut message:MSG=std::mem::zeroed();while PeekMessageW(&mut message,ptr::null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&message);DispatchMessageW(&message);}std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        DwmFlush();let mut bounds:RECT=std::mem::zeroed();assert_ne!(GetWindowRect(popup,&mut bounds),0);
+                        let (width,height)=(bounds.right-bounds.left,bounds.bottom-bounds.top);let mut layer=super::super::super::glass_probe::Layer::new(width,height).unwrap();
+                        let dc=GetDC(ptr::null_mut());assert_ne!(BitBlt(layer.dc(),0,0,width,height,dc,bounds.left,bounds.top,SRCCOPY|CAPTUREBLT),0);ReleaseDC(ptr::null_mut(),dc);GdiFlush();
+                        let rgba=layer.pixels().chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],255]).collect::<Vec<_>>();assert!(rgba.chunks_exact(4).any(|p|p[..3]!=rgba[..3]));
+                        if let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){image::save_buffer(PathBuf::from(dir).join("file-shelf-panel.png"),&rgba,width as u32,height as u32,image::ColorType::Rgba8).unwrap();}
+                    }
+                    control_center::close_for(window);assert_eq!(IsWindow(popup),0);assert!(TARGET.with(|s|s.borrow().is_none()));
+                    reset(); // outstanding synthetic target becomes inert before revoke
                     assert_eq!(tlauncher_shelf_disconnected_fixture(target.as_ptr(),wide(&path.to_string_lossy()).as_ptr()),0);
                     tlauncher_shelf_unregister(target.as_ptr());DestroyWindow(window);
                 }
-                std::fs::remove_file(path).unwrap();OleUninitialize();
+                STATE.with(|s|s.borrow_mut().prefs.enabled=old_enabled);std::fs::remove_file(path).unwrap();OleUninitialize();
             }
             println!("FLUIDWIN_SHELF real_Shell_data=PASS reference_only=PASS duplicate_and_capacity=PASS cancel_preserves=PASS accepted_drop_removes=PASS self_drop=REFUSED read_only=PASS repeated_revoke=PASS real_drag=NOT_INJECTED");
         }

@@ -5,6 +5,11 @@
   "note": "Section adaptations, not claims that these full headers were imported. Original CRLF worktree byte hashes and canonical Git blobs are recorded; existing notices and original license are preserved.",
   "sections": [
     {
+      "source": "notch.h::scaffale / Bersaglio / appoggia / trascinaFuori",
+      "integration": ["shelf_bridge.cpp", "../../src/dock/shelf.rs", "../../src/dock/control_center.rs"],
+      "adaptation": "Reference-only unlocked-session shelf in existing native Control Center, not Dynamic Notch. Original CF_HDROP/HDROP handling, case-insensitive deduplication, atomic maximum-200 admission, Shell IDataObject and copy/move/link drag completion semantics. Real drag starts only after a row crosses Windows drag thresholds; keyboard can copy Shell references. RAII OLE/drop registration, disconnected targets and session clear; no new thread/poll loop. Original six-item thumbnail layout remains a fidelity gap."
+    },
+    {
       "source": "launcher.h::Motore::menuApp",
       "source_git_blob": "48c76c5d1a72cb8e1990afa37ac5d380b1a5be8c",
       "source_worktree_sha256": "a8edbd83a2dc1d1cd32461097eee9892ddcd628a1374608f159f2f7de05353fc",
