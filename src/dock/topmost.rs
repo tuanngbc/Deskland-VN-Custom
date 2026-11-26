@@ -58,7 +58,10 @@ pub(super) unsafe fn choose(owner:HWND){
         let id=WindowIdentity::read(w.hwnd)?;if !owned(id)&&(!eligible(id)||GetWindowLongW(w.hwnd,GWL_EXSTYLE) as u32&WS_EX_TOPMOST!=0){return None;}
         Some(Card{icon:None,title:w.title.clone(),hint:if owned(id){text("Đang ghim · chọn để bỏ ghim","Pinned · choose to unpin","已置顶 · 选择以取消")}else{String::new()},action:Some(Command::Topmost(Some(id)))})
     }).take(48).collect::<Vec<_>>());
-    let hint=if cards.is_empty(){text("Không có cửa sổ phù hợp","No eligible windows","没有可用窗口")}else{text("Chọn cửa sổ để ghim hoặc bỏ ghim","Choose a window to pin or unpin","选择窗口以置顶或取消置顶")};
+    let mut hint=if cards.is_empty(){text("Không có cửa sổ phù hợp","No eligible windows","没有可用窗口")}else{text("Chọn cửa sổ để ghim hoặc bỏ ghim","Choose a window to pin or unpin","选择窗口以置顶或取消置顶")};
+    if HOTKEY_ERROR.load(Ordering::Acquire)!=0{
+        hint.push_str(&text(" · Phím tắt không khả dụng; chọn cửa sổ tại đây"," · Shortcut unavailable; choose a window here"," · 快捷键不可用，请在此选择窗口"));
+    }
     super::utilities::close_panels();control_center::show_list(owner,super::dock_app_anchor(owner,None),View{title:text("Luôn ở trên cùng","Always on top","窗口置顶"),hint,cards,metrics:None});
 }
 pub(super) unsafe fn toggle(owner:HWND,id:WindowIdentity){
@@ -127,16 +130,20 @@ pub(super) unsafe fn probe(owner:HWND,id:WindowIdentity){
         let mut msg:MSG=mem::zeroed();for _ in 0..64{if PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)==0{break;}TranslateMessage(&msg);DispatchMessageW(&msg);}poll();
         if condition(){break;}assert!(start.elapsed()<Duration::from_secs(6));std::thread::sleep(Duration::from_millis(10));
     }};
-    // Actual native hotkey registration, then the real receive handler. No
-    // physical-key/display-quality claim is made from direct dispatch.
-    sync_hotkey();assert!(BOUND.get(),"runner Ctrl+Win+T registration: {}",HOTKEY_ERROR.load(Ordering::Acquire));
+    // Registration can legitimately collide with another runner application.
+    // Verify refusal in that case without unregistering somebody else's key.
+    sync_hotkey();let registered=BOUND.get();
+    if !registered{assert_eq!(HOTKEY_ERROR.load(Ordering::Acquire),1409,"unexpected native hotkey error");assert!(BIND_TRIED.get());}
     assert_ne!(SetForegroundWindow(h),0);pump_until(&||GetForegroundWindow()==h);
-    hotkey();pump_until(&||owned(id));assert_ne!(GetWindowLongPtrW(h,GWL_EXSTYLE)&WS_EX_TOPMOST as isize,0);
+    hotkey();
+    if !registered{assert!(!wanted(),"an unregistered shortcut must not pin");super::perform_control(owner,Command::Topmost(Some(id)));}
+    pump_until(&||owned(id));assert_ne!(GetWindowLongPtrW(h,GWL_EXSTYLE)&WS_EX_TOPMOST as isize,0);
     super::perform_control(owner,Command::Topmost(Some(id)));pump_until(&||!wanted()&&GetPropW(h,key.as_ptr()).is_null());
     assert_eq!(GetWindowLongPtrW(h,GWL_EXSTYLE),original);
     super::perform_control(owner,Command::Topmost(Some(id)));pump_until(&||owned(id));
     reset();pump_until(&||GetPropW(h,key.as_ptr()).is_null());assert_eq!(GetWindowLongPtrW(h,GWL_EXSTYLE),original);
     let mut after:RECT=mem::zeroed();GetWindowRect(h,&mut after);assert!(super::same_rect(rect,after));
     STATE.with(|s|s.borrow_mut().prefs.always_on_top=false);sync_hotkey();assert!(!BOUND.get());
-    println!("FLUIDWIN_TOPMOST native_hotkey_registration=PASS receive_handler=PASS control_command=PASS motion_disabled=SUPPORTED reset=RESTORED geometry=PRESERVED journal=CLEARED physical_keys=NOT_VERIFIED");
+    println!("FLUIDWIN_TOPMOST native_hotkey_registration={} receive_handler={} control_command=PASS motion_disabled=SUPPORTED reset=RESTORED geometry=PRESERVED journal=CLEARED physical_keys=NOT_VERIFIED",
+        if registered{"PASS"}else{"COLLISION_1409_PRESERVED"},if registered{"PASS"}else{"UNBOUND_REFUSED"});
 }
