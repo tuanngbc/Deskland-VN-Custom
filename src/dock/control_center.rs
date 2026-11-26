@@ -255,7 +255,7 @@ impl Panel{
         let (w,h)=self.layer.size;
         let g=self.ink.as_ref().unwrap_or(&self.layer).dc();
         let p=Palette::new(self.anchor.dark);
-        let px=|n|chrome::scale(self.dpi,n);
+        let dpi=self.dpi;let px=|n|chrome::scale(dpi,n);
         if !self.glass.draw(g,w,h){super::fill(g,RECT{left:0,top:0,right:w,bottom:h},chrome::color(p.panel));}
         let old=SelectObject(g,self.fonts[0]);
         chrome::text(g,RECT{left:px(18),top:px(13),right:w-px(18),bottom:px(41)},&self.view.title,p.ink,SINGLE_LINE);
@@ -558,7 +558,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_ERASEBKGND=>1,
         WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{
             let shelf=PANE.with(|s|s.borrow().as_ref().is_some_and(|p|p.hwnd==hwnd&&p.shelf));
-            if !shelf&&!super::shelf::modal()&&!super::capture_access::pending(){PostMessageW(hwnd,WM_CLOSE,0,0);}0
+            if !shelf&&!super::shelf::modal()&&!super::capture_access::pending()&&!super::notifications::consent_pending(hwnd){PostMessageW(hwnd,WM_CLOSE,0,0);}0
         },
         super::shelf::CHANGED=>{super::shelf::changed(hwnd);0},
         super::shelf_previews::READY=>{

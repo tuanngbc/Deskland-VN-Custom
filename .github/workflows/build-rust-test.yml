@@ -439,6 +439,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
           cargo test --release dock::notifications::tests::native_notification_history_reads_on_demand_and_rejects_stale_actions -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::notification_access::tests::native_access_preflight_retains_exact_status_without_consent -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify own UI corners and refuse foreign DWM changes
         if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}

@@ -5,13 +5,13 @@ use crate::desktop::wide;
 use std::{cell::RefCell,ffi::c_void,ptr,sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}}};
 use windows_sys::Win32::{Foundation::*,System::Threading::{TrySubmitThreadpoolCallback,PTP_CALLBACK_INSTANCE},UI::{Shell::ShellExecuteW,WindowsAndMessaging::*}};
 pub(super) const READY:u32=WM_APP+149;
-#[derive(Clone)]pub(super) enum Action{Open,Refresh(u64),Details(u64,u32),Dismiss(u64,u32),Clear(u64),Back(u64),WindowsSettings}
+#[derive(Clone)]pub(super) enum Action{Open,Refresh(u64),Request(u64),Details(u64,u32),Dismiss(u64,u32),Clear(u64),Back(u64),WindowsSettings}
 #[derive(Clone,Debug,PartialEq,Eq)]struct Item{id:u32,time:i64,app:String,aumid:String,title:String,body:String}
 #[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]struct AccessDiagnostic{operation:i32,result:i32,access:i32}
 #[derive(Default)]struct Snapshot{status:i32,items:Vec<Item>,command_failed:bool,diagnostic:Option<AccessDiagnostic>}
 #[derive(Default)]struct Shared{closed:AtomicBool,answer:Mutex<Option<Snapshot>>}
-struct Panel{owner:usize,popup:usize,ticket:usize,generation:u64,view:Snapshot,selected:Option<u32>,pending:bool,work:Arc<Shared>}
-impl Drop for Panel{fn drop(&mut self){self.work.closed.store(true,Ordering::Release);}}
+struct Panel{owner:usize,popup:usize,ticket:usize,generation:u64,view:Snapshot,selected:Option<u32>,pending:bool,work:Arc<Shared>,consent:Option<super::notification_access::Consent>}
+impl Drop for Panel{fn drop(&mut self){self.work.closed.store(true,Ordering::Release);if self.consent.is_some(){unsafe{KillTimer(super::CONTROL.get(),super::notification_access::TIMER);}}}}
 thread_local!{static PANEL:RefCell<Option<Panel>>=const{RefCell::new(None)};}
 static WORKER:AtomicBool=AtomicBool::new(false);
 #[cfg(target_env="msvc")]
@@ -104,7 +104,8 @@ impl Panel{
         }
     }
     fn view(&self)->View{
-        let hint=if self.pending{text("Đang đọc…","Reading…","正在读取…")}
+        let hint=if self.consent.is_some(){text("Đang chờ quyền từ Windows…","Waiting for Windows permission…","正在等待 Windows 授权…")}
+            else if self.pending{text("Đang đọc…","Reading…","正在读取…")}
             else if self.view.command_failed{text("Chưa bỏ được một số thông báo. Hãy làm mới danh sách.","Some notifications could not be dismissed. Refresh the list.","部分通知无法清除，请刷新列表。")}
             else{match self.view.status{
                 0=>access_hint(self.view.diagnostic),
@@ -133,12 +134,31 @@ impl Panel{
                 action:removal_plan(&self.view,None,crate::trial::active()||cfg!(test)).and_then(|_|action(Action::Clear(self.generation)))});}
         }
         cards.push(Card{icon:None,title:text("Làm mới","Refresh","刷新"),hint:String::new(),action:action(Action::Refresh(self.generation))});
+        if self.view.status==0{
+            cards.push(Card{icon:None,title:text("Yêu cầu quyền từ Windows","Request permission from Windows","向 Windows 请求权限"),
+                hint:if super::notification_access::read_only(){text("Bản TEST không thay đổi quyền","TEST does not change permissions","TEST 不更改权限")}
+                    else{text("Cho phép đọc thông báo để hiển thị trong TLauncher","Allow notification reading for display in TLauncher","允许读取通知以在 TLauncher 中显示")},
+                action:(!super::notification_access::read_only()&&self.consent.is_none()).then(||action(Action::Request(self.generation))).flatten()});
+        }
         cards.push(Card{icon:None,title:text("Quyền thông báo trong Windows","Windows notification permissions","Windows 通知权限"),hint:String::new(),action:action(Action::WindowsSettings)});
         View{title:title(),hint,cards,metrics:None}
     }
 }
 pub(super) fn detach(popup:HWND){
     PANEL.with(|s|{let mut s=s.borrow_mut();if s.as_ref().is_some_and(|p|p.popup==popup as usize){s.take();}});
+}
+pub(super) fn consent_pending(popup:HWND)->bool{
+    super::notification_access::starting(popup as usize)||PANEL.with(|s|s.try_borrow().is_ok_and(|s|s.as_ref().is_some_and(|p|p.popup==popup as usize&&p.consent.is_some())))
+}
+pub(super) unsafe fn poll_consent(){
+    let update=PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut()?;let result=p.consent.as_mut()?.poll()?;
+        p.consent.take();p.pending=false;p.generation=p.generation.wrapping_add(1);p.view.items.clear();p.selected=None;
+        p.view.status=0;p.view.diagnostic=Some(match result{Ok(access)=>AccessDiagnostic{operation:8,result:0,access},Err(result)=>AccessDiagnostic{operation:8,result,access:-1}});
+        if result==Ok(1)&&enabled(){p.submit(None);}
+        Some((p.owner,p.ticket,p.view()))
+    });
+    if let Some((owner,ticket,view))=update{KillTimer(super::CONTROL.get(),super::notification_access::TIMER);if enabled(){control_center::update(owner as HWND,ticket,view);}}
+    else if !PANEL.with(|s|s.borrow().as_ref().is_some_and(|p|p.consent.is_some())){KillTimer(super::CONTROL.get(),super::notification_access::TIMER);}
 }
 pub(super) unsafe fn receive(popup:HWND,ticket:usize){
     let update=PANEL.with(|s|{
@@ -153,11 +173,26 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
     if matches!(action,Action::WindowsSettings){
         if !cfg!(test){ShellExecuteW(owner,wide("open").as_ptr(),wide("ms-settings:privacy-notifications").as_ptr(),ptr::null(),ptr::null(),SW_SHOWNORMAL);}return;
     }
+    if let Action::Request(generation)=action{
+        let current=PANEL.with(|s|s.borrow().as_ref().is_some_and(|p|p.owner==owner as usize&&p.popup==popup as usize&&p.generation==generation&&!p.pending&&p.consent.is_none()));
+        if !current||super::notification_access::read_only(){return;}
+        // Never hold PANEL across a Windows consent API call: Windows can
+        // synchronously reenter activation/focus handlers on this UI thread.
+        let operation=super::notification_access::Consent::begin(popup as usize);
+        let update=PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().filter(|p|p.owner==owner as usize&&p.popup==popup as usize&&p.generation==generation)?;
+            match operation{
+                Ok(consent)=>{if SetTimer(super::CONTROL.get(),super::notification_access::TIMER,80,None)!=0{p.consent=Some(consent);p.pending=true;}else{p.view.diagnostic=Some(AccessDiagnostic{operation:8,result:0x80004005u32 as i32,access:-1});}},
+                Err(result)=>p.view.diagnostic=Some(AccessDiagnostic{operation:8,result,access:-1}),
+            }
+            p.generation=p.generation.wrapping_add(1);Some((p.ticket,p.view()))
+        });
+        if let Some((ticket,view))=update{control_center::update(owner,ticket,view);}return;
+    }
     if matches!(action,Action::Open){
         super::utilities::close_panels();
         control_center::show_list_capacity(owner,super::dock_app_anchor(owner,None),View{title:title(),hint:text("Đang đọc…","Reading…","正在读取…"),cards:Vec::new(),metrics:None},67);
         let (Some(window),Some(ticket))=(control_center::window(owner),control_center::ticket(owner))else{return;};
-        let mut panel=Panel{owner:owner as usize,popup:window as usize,ticket,generation:1,view:Snapshot::default(),selected:None,pending:false,work:Arc::default()};
+        let mut panel=Panel{owner:owner as usize,popup:window as usize,ticket,generation:1,view:Snapshot::default(),selected:None,pending:false,work:Arc::default(),consent:None};
         panel.submit(None);let view=panel.view();PANEL.with(|s|s.replace(Some(panel)));control_center::update(owner,ticket,view);return;
     }
     let update=PANEL.with(|s|{
@@ -241,6 +276,13 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
                     println!("FLUIDWIN_NOTIFICATIONS read_status={} access_diagnostic={:?} content_exported=NONE",p.view.status,p.view.diagnostic);
                     (p.generation,p.ticket,p.work.clone())
                 });
+                perform(owner,popup,Action::Request(generation.wrapping_sub(1)));perform(owner,popup,Action::Request(generation));
+                assert_eq!(PANEL.with(|s|s.borrow().as_ref().unwrap().generation),generation,"TEST must not start consent or change its generation");
+                assert!(!consent_pending(popup));assert!(PANEL.with(|s|s.borrow().as_ref().unwrap().consent.is_none()));
+                super::super::notification_access::during_request(popup as usize,||{
+                    assert!(consent_pending(popup));SendMessageW(popup,WM_ACTIVATE,WA_INACTIVE as usize,0);
+                    let mut close:MSG=std::mem::zeroed();assert_eq!(PeekMessageW(&mut close,popup,WM_CLOSE,WM_CLOSE,PM_REMOVE),0,"Windows consent activation cannot close its originating panel");
+                });assert!(!consent_pending(popup));
                 // The saved panel contains only synthetic rows, even on a runner
                 // that has granted access to unrelated notifications.
                 PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().unwrap();p.view=Snapshot{status:1,items:vec![item(7,123)],command_failed:false,..Default::default()};});

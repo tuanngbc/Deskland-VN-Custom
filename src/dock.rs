@@ -64,6 +64,7 @@ mod headphone_notices;
 mod audio_mixer;
 mod media;
 mod notifications;
+mod notification_access;
 mod news;
 mod news_card;
 mod weather_panel;
@@ -3194,6 +3195,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_UTILITY_READY=>{show_utilities();0},
         volume_osd::CLOSED=>{volume_osd::close(w);0},
         volume_keys::READY if hwnd==CONTROL.get()=>{volume_keys::receive(w);0},
+        WM_TIMER if w==notification_access::TIMER&&hwnd==CONTROL.get()=>{notifications::poll_consent();0},
         WM_TIMER if w==volume_keys::TIMER&&hwnd==CONTROL.get()=>{WIN_KEY.with(|s|{if let Some(hook)=s.borrow().as_ref(){if hook.volume_enabled{hook.volume.pulse();}}});0},
         WM_POWERBROADCAST if hwnd==CONTROL.get()=>{if w==0x8013{battery_notices::changed();}1},
         headphone_notices::CHANGED if hwnd==CONTROL.get()=>{headphone_notices::changed(w);0},
