@@ -10,6 +10,39 @@ extern "C" {
     fn tlauncher_window_lease_free(lease:*mut c_void);
     fn tlauncher_window_restore_session(marker:*const u16)->u32;
     fn tlauncher_window_restore_orphans()->u32;
+    #[cfg(test)]fn tlauncher_window_lease_fixture_pause(reached:HANDLE,resume:HANDLE);
+}
+
+#[cfg(all(test,target_env="msvc"))]
+#[test]
+#[ignore="hosted pending foreign-style cancellation and journal reservation; synthetic HWND only"]
+fn native_pending_style_begin_keeps_journal_until_worker_acknowledges(){
+    if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    use std::{ptr,time::{Duration,Instant}};
+    unsafe{
+        let h=CreateWindowExW(WS_EX_TOOLWINDOW,crate::desktop::wide("STATIC").as_ptr(),crate::desktop::wide("Synthetic pending lease").as_ptr(),
+            WS_POPUP,20,20,180,100,ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),ptr::null());assert!(!h.is_null());ShowWindow(h,SW_SHOWNOACTIVATE);
+        struct Window(HWND);impl Drop for Window{fn drop(&mut self){unsafe{DestroyWindow(self.0);}}}let _window=Window(h);
+        let reached=CreateEventW(ptr::null(),1,0,ptr::null());let resume=CreateEventW(ptr::null(),1,0,ptr::null());assert!(!reached.is_null()&&!resume.is_null());
+        struct Pause(HANDLE,HANDLE);impl Drop for Pause{fn drop(&mut self){unsafe{SetEvent(self.1);tlauncher_window_lease_fixture_pause(ptr::null_mut(),ptr::null_mut());CloseHandle(self.0);CloseHandle(self.1);}}}
+        let pause=Pause(reached,resume);tlauncher_window_lease_fixture_pause(reached,resume);
+        let key=format!("TLauncher.Motion.Fixture.Pending.{}",std::process::id());let marker=crate::desktop::wide(&key);let original=GetWindowLongPtrW(h,GWL_EXSTYLE);
+        let lease=Lease(NonNull::new(tlauncher_window_lease(h,GetCurrentProcess(),marker.as_ptr())).unwrap());
+        let pump=||{let mut msg:MSG=std::mem::zeroed();for _ in 0..64{if PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)==0{break;}TranslateMessage(&msg);DispatchMessageW(&msg);}std::thread::sleep(Duration::from_millis(5));};
+        let started=Instant::now();while WaitForSingleObject(reached,0)!=WAIT_OBJECT_0{pump();assert!(started.elapsed()<Duration::from_secs(3),"worker must reach the controlled pre-style boundary");}
+        let marker_key=key.clone();let recovery=std::thread::spawn(move||recover(&marker_key));let started=Instant::now();
+        while !recovery.is_finished(){pump();assert!(started.elapsed()<Duration::from_secs(4));}
+        assert_eq!(recovery.join().unwrap(),1,"live pending worker must retain an unresolved reserved journal");
+        assert_eq!(GetWindowLongPtrW(h,GWL_EXSTYLE),original);
+        assert!(!GetPropW(h,marker.as_ptr()).is_null(),"recovery cannot erase a live pending begin");
+        let new=tlauncher_window_lease(h,GetCurrentProcess(),marker.as_ptr());assert!(new.is_null(),"a new lease must not share an old pending operation's identity");
+        SetEvent(resume);let started=Instant::now();
+        while lease.status()!=2||!GetPropW(h,marker.as_ptr()).is_null(){pump();assert!(started.elapsed()<Duration::from_secs(4),"cancelled begin must acknowledge and finish cleanup");}
+        assert_eq!(GetWindowLongPtrW(h,GWL_EXSTYLE),original);assert!(GetPropW(h,crate::desktop::wide(&(key+".pending")).as_ptr()).is_null());
+        drop(lease);drop(pause);
+    }
+    println!("WINDOW_PENDING_STYLE guardian_revoke=PASS journal_held_until_ack=PASS new_lease=REFUSED late_begin=CANCELLED original_style=RESTORED journal=CLEARED");
 }
 pub(super) struct Lease(NonNull<c_void>);
 impl Lease{

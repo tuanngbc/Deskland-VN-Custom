@@ -7,6 +7,7 @@
 #include <atomic>
 #include <mutex>
 #include <algorithm>
+#include <cwchar>
 #include "upstream/altrui.h"
 #include "upstream/pool.h"
 
@@ -15,7 +16,9 @@ struct Handle { HANDLE value=nullptr; ~Handle(){if(value) CloseHandle(value);} }
 uint64_t birth(HANDLE p){FILETIME a{},b{},c{},d{};return GetProcessTimes(p,&a,&b,&c,&d)?(uint64_t(a.dwHighDateTime)<<32)|a.dwLowDateTime:0;}
 uintptr_t get(HWND h,const std::wstring& key,const wchar_t* suffix){return reinterpret_cast<uintptr_t>(GetPropW(h,(key+suffix).c_str()));}
 bool put(HWND h,const std::wstring& key,const wchar_t* suffix,uintptr_t value){return SetPropW(h,(key+suffix).c_str(),reinterpret_cast<HANDLE>(value))!=FALSE;}
-const wchar_t* fields[]={L".pid",L".tid",L".birthLo",L".birthHi",L".ownerLo",L".ownerHi",L".state"};
+const wchar_t* fields[]={L".pid",L".tid",L".birthLo",L".birthHi",L".ownerLo",L".ownerHi",L".state",L".pending"};
+bool orphan(HWND h,const std::wstring& key);
+std::atomic<HANDLE> fixtureReached{nullptr},fixtureResume{nullptr};
 bool identity(HWND h,const std::wstring& key){
     DWORD pid=0;const DWORD tid=GetWindowThreadProcessId(h,&pid);
     if(!pid||get(h,key,L".pid")!=uintptr_t(pid)+1||get(h,key,L".tid")!=uintptr_t(tid)+1)return false;
@@ -45,6 +48,11 @@ bool restore(HWND h,const std::wstring& key){
     // Style changes can block inside another process. Only call in a pool
     // worker; keep the marker until the change really completes.
     if(!set_layered(h,false))return false;
+    // A live owner's already-entered foreign call can finish after this
+    // recovery pass. Keep its identity/journal reserved until that worker
+    // acknowledges completion; otherwise a late write can outlive the marker
+    // or be confused with a new lease using the same session key.
+    if(get(h,key,L".pending")&&!orphan(h,key))return false;
     if(marked(h,key)&&!(GetWindowLongPtrW(h,GWL_EXSTYLE)&WS_EX_LAYERED)){
         erase(h,key);
         RedrawWindow(h,nullptr,nullptr,RDW_INVALIDATE|RDW_FRAME|RDW_ALLCHILDREN);
@@ -75,7 +83,13 @@ void release(const Ref& ref){
 DWORD WINAPI begin_worker(void* raw){
     std::unique_ptr<Ref> ref(static_cast<Ref*>(raw));auto& l=**ref;
     std::lock_guard<std::mutex> lock(l.operation);
-    if(l.cancel.load()||!l.alive()||!marked(l.hwnd,l.key)||!risponde(l.hwnd,200)){l.state.store(-1);release(*ref);return 0;}
+    struct Pending{Lease& lease;~Pending(){if(marked(lease.hwnd,lease.key))put(lease.hwnd,lease.key,L".pending",0);}}pending{l};
+    if(l.cancel.load()||!l.alive()||!marked(l.hwnd,l.key)||get(l.hwnd,l.key,L".state")!=1||!risponde(l.hwnd,200)){l.state.store(-1);release(*ref);return 0;}
+    if(const auto resume=fixtureResume.load()){
+        if(const auto reached=fixtureReached.load())SetEvent(reached);
+        WaitForSingleObject(resume,10000);
+    }
+    if(l.cancel.load()||!l.alive()||!marked(l.hwnd,l.key)||get(l.hwnd,l.key,L".state")!=1){l.state.store(-1);release(*ref);return 0;}
     if(!set_layered(l.hwnd,true)){l.state.store(-1);release(*ref);return 0;}
     if(l.cancel.load()||!l.alive()||!marked(l.hwnd,l.key)||get(l.hwnd,l.key,L".state")!=1){release(*ref);return 0;}
     const BOOL hidden=SetLayeredWindowAttributes(l.hwnd,0,l.alpha,LWA_ALPHA);
@@ -139,7 +153,7 @@ void* tlauncher_window_lease_alpha(HWND hwnd,HANDLE guardian,const wchar_t* mark
     if(!put(hwnd,l->key,L".pid",uintptr_t(pid)+1)||!put(hwnd,l->key,L".tid",uintptr_t(tid)+1)||
        !put(hwnd,l->key,L".birthLo",uintptr_t(uint32_t(created))+1)||!put(hwnd,l->key,L".birthHi",uintptr_t(uint32_t(created>>32))+1)||
        !put(hwnd,l->key,L".ownerLo",uintptr_t(uint32_t(owner))+1)||!put(hwnd,l->key,L".ownerHi",uintptr_t(uint32_t(owner>>32))+1)||
-       !put(hwnd,l->key,L".state",1)||!SetPropW(hwnd,marker,reinterpret_cast<HANDLE>(uintptr_t(GetCurrentProcessId())+1))){erase(hwnd,l->key);return nullptr;}
+       !put(hwnd,l->key,L".state",1)||!put(hwnd,l->key,L".pending",1)||!SetPropW(hwnd,marker,reinterpret_cast<HANDLE>(uintptr_t(GetCurrentProcessId())+1))){erase(hwnd,l->key);return nullptr;}
     auto handle=new(std::nothrow) Ref(l);auto work=new(std::nothrow) Ref(l);
     if(!handle||!work||!pool::lancia(begin_worker,work,THREAD_PRIORITY_NORMAL,true)){delete work;delete handle;erase(hwnd,l->key);return nullptr;}
     return handle;
@@ -163,5 +177,9 @@ unsigned tlauncher_window_restore_session(const wchar_t* marker){
 unsigned tlauncher_window_restore_orphans(){
     std::vector<Recovery> items;EnumWindows(collect_orphan,reinterpret_cast<LPARAM>(&items));
     return recover_items(items);
+}
+void tlauncher_window_lease_fixture_pause(HANDLE reached,HANDLE resume){
+    wchar_t hosted[8]{};if(GetEnvironmentVariableW(L"GITHUB_ACTIONS",hosted,8)!=4||wcscmp(hosted,L"true"))return;
+    fixtureReached.store(reached);fixtureResume.store(resume);
 }
 }

@@ -288,6 +288,12 @@ jobs:
           cargo test --release dock::stage_capture_lab::native_live_capture_texture_and_screen_perimeters -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Verify Guardian cancellation while a foreign style begin is pending
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test --release dock::window_lease::native_pending_style_begin_keeps_journal_until_worker_acknowledges -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Package Rust native build
         run: |
           $short = '${{ github.sha }}'.Substring(0, 7)
