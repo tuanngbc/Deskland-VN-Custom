@@ -80,7 +80,8 @@ struct Job{location:Location,generation:u64}
 unsafe fn submit(job:Job){
     let generation=job.generation;let raw=Box::into_raw(Box::new(job));
     if TrySubmitThreadpoolCallback(Some(worker),raw.cast(),ptr::null())==0{
-        drop(Box::from_raw(raw));let subscribers={let mut s=lock();s.publish(generation,None);s.subscribers.clone()};notify(subscribers);
+        drop(Box::from_raw(raw));let (next,subscribers)={let mut s=lock();s.publish(generation,None);let next=if s.requested{s.job(true)}else{None};(next,s.subscribers.clone())};
+        notify(subscribers);if let Some(next)=next{submit(next);}
     }
 }
 unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut c_void){
@@ -106,6 +107,11 @@ pub(crate) fn unsubscribe(hwnd:HWND){lock().subscribers.retain(|(h,_)|*h!=hwnd a
         let r=sample();assert_eq!(r.days[0].date,"2026-11-27");assert_eq!(r.days[0].low,20.0);assert_eq!(r.cloud,0.9);assert_eq!(r.rain,0.75);
         assert!(Location::read(&serde_json::json!({"latitude":91,"longitude":106})).is_none());
         assert!(parse(&serde_json::json!({"current":{"temperature_2m":25}})).is_none());
+        let mut value=serde_json::json!({"current":{"temperature_2m":25,"weather_code":0,"wind_speed_10m":10,"relative_humidity_2m":40},"daily":{
+            "time":["2026-11-27","2026-11-28","2026-11-29","2026-11-30","2026-12-01","2026-12-02"],
+            "weather_code":[0,1,2,3,61,63],"temperature_2m_max":[26,27,28,29,30,31],"temperature_2m_min":[20,20,20,20,20,20]}});
+        assert_eq!(parse(&value).unwrap().days.len(),5);
+        value["daily"]["temperature_2m_min"][2]=Value::from(80);assert_eq!(parse(&value).unwrap().days.len(),2);
     }
     #[cfg(test)]pub(crate) fn synthetic()->Reading{sample()}
 }
