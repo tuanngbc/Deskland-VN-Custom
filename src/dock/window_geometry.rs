@@ -20,11 +20,11 @@ impl Action{
         },
     }}
 }
-enum Phase{Capture,Prime,Conceal,RestoreBeforeSnap,Observe,Travel(motion::Span),Release,NativeRestoreSnap}
+enum Phase{Capture,Prime,Conceal,RestoreBeforeSnap,Observe,Travel(motion::Span),Release,Reveal(motion::Span),NativeRestoreSnap}
 struct Transition{
     id:WindowIdentity,action:Action,area:RECT,target:RECT,monitor:usize,dpi:u32,phase:Phase,
     capture:Option<stage_snapshot::TransitionCapture>,proxy:Option<Proxy>,lease:Option<Lease>,
-    started:Instant,phase_at:Instant,last_present:Instant,frames:u32,stable:u32,commanded:bool,done:bool,native_reason:Option<String>,
+    started:Instant,phase_at:Instant,last_present:Instant,frames:u32,reveal_frames:u32,stable:u32,commanded:bool,done:bool,native_reason:Option<String>,
 }
 thread_local!{static ACTIVE:RefCell<Option<Transition>>=const{RefCell::new(None)};}
 #[cfg(test)]thread_local!{static FAIL_PRESENT:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
@@ -39,7 +39,7 @@ impl Transition{
     fn finish(&mut self,reason:Option<&str>){
         if self.done{return;}self.done=true;
         let value=json!({"action":self.action.name(),"requestedEffect":"fluidwin-geometry","actualEffect":if reason.is_none(){"fluidwin-geometry"}else{"windows"},
-            "fallbackReason":reason,"preparedFrames":self.frames,"commandIssued":self.commanded,"elapsedMs":self.started.elapsed().as_millis() as u64});
+            "fallbackReason":reason,"preparedFrames":self.frames,"revealFrames":self.reveal_frames,"commandIssued":self.commanded,"elapsedMs":self.started.elapsed().as_millis() as u64});
         if cfg!(test)||crate::trial::active(){eprintln!("FLUIDWIN_GEOMETRY {value}");}
         if let Ok(mut last)=LAST.lock(){*last=Some(value);}
     }
@@ -162,8 +162,20 @@ impl Transition{
                 if progress>=1.0&&self.frames>before{self.lease.as_ref().unwrap().restore();self.phase(Phase::Release);}
             },
             Phase::Release=>{
-                if self.lease.as_ref().unwrap().status()==2{SetForegroundWindow(h);self.finish(None);super::queue_refresh();return false;}
+                if self.lease.as_ref().unwrap().status()==2{self.phase(Phase::Reveal(motion::Span::new(150)));return true;}
                 if self.phase_at.elapsed()>Duration::from_millis(550){return self.fallback("native-reveal-pending");}
+            },
+            Phase::Reveal(span)=>{
+                if super::window_effect::visible_area(h).is_none_or(|r|!super::same_rect(r,self.target)){return self.fallback("native-placement-changed");}
+                // Original rileggiFotoZoom fades the old layout in 150ms after
+                // settling. Here the fully restored real source supplies the
+                // new layout underneath the same click-through proxy. Never
+                // fade before Guardian confirms native opacity/style recovery.
+                let progress=span.progress();let k=progress*progress*(3.0-2.0*progress);
+                let before=self.frames;if !self.present(self.target,((1.0-k)*255.0).round() as u8){return self.fallback("reveal-present-failed");}
+                if self.frames>before{self.reveal_frames+=1;
+                    if progress>=1.0{SetForegroundWindow(h);self.finish(None);super::queue_refresh();return false;}
+                }
             },
             Phase::NativeRestoreSnap=>unreachable!(),
         }
@@ -199,7 +211,7 @@ pub(super) unsafe fn apply(id:WindowIdentity,action:Action)->bool{
     let Ok(capture)=stage_snapshot::transition_capture(id,CONTROL.get())else{return false;};
     let now=Instant::now();
     ACTIVE.with(|s|s.replace(Some(Transition{id,action,area,target:area,monitor:monitor as usize,dpi:GetDpiForWindow(h),phase:Phase::Capture,
-        capture:Some(capture),proxy:None,lease:None,started:now,phase_at:now,last_present:now,frames:0,stable:0,commanded:false,done:false,native_reason:None})));
+        capture:Some(capture),proxy:None,lease:None,started:now,phase_at:now,last_present:now,frames:0,reveal_frames:0,stable:0,commanded:false,done:false,native_reason:None})));
     if SetTimer(CONTROL.get(),TIMER,20,None)==0{cancel();return false;}true
 }
 
@@ -217,7 +229,7 @@ pub(super) unsafe fn command(id:WindowIdentity,action:Action)->bool{
     let Some(area)=super::window_effect::visible_area(h)else{return false;};let now=Instant::now();
     if ShowWindowAsync(h,SW_RESTORE)==0{return false;}
     ACTIVE.with(|s|s.replace(Some(Transition{id,action,area,target:area,monitor:MonitorFromWindow(h,MONITOR_DEFAULTTONULL) as usize,dpi:GetDpiForWindow(h),phase:Phase::NativeRestoreSnap,
-        capture:None,proxy:None,lease:None,started:now,phase_at:now,last_present:now,frames:0,stable:0,commanded:false,done:false,native_reason:Some("native-motion-policy-or-capture".into())})));
+        capture:None,proxy:None,lease:None,started:now,phase_at:now,last_present:now,frames:0,reveal_frames:0,stable:0,commanded:false,done:false,native_reason:Some("native-motion-policy-or-capture".into())})));
     if SetTimer(CONTROL.get(),TIMER,20,None)==0{cancel();return false;}true
 }
 
@@ -237,13 +249,14 @@ pub(super) unsafe fn probe(id:WindowIdentity){
         ShowWindowAsync(h,if restore{SW_MAXIMIZE}else{SW_RESTORE});wait(&||(IsZoomed(h)!=0)==restore&&IsIconic(h)==0);
         if !restore{SetWindowPos(h,ptr::null_mut(),original.left,original.top,original.right-original.left,original.bottom-original.top,SWP_NOACTIVATE|SWP_NOZORDER|SWP_ASYNCWINDOWPOS);
             wait(&||{let mut r:RECT=mem::zeroed();GetWindowRect(h,&mut r)!=0&&super::same_rect(r,original)});}
+        assert_ne!(PostMessageW(h,WM_APP+171,0x00ff0000,0),0); // synthetic blue source
         super::window_effect::fixture_settle_source(h);
     };
     let monitor=MonitorFromWindow(h,MONITOR_DEFAULTTONEAREST);let mut mi:MONITORINFO=mem::zeroed();mi.cbSize=mem::size_of::<MONITORINFO>() as u32;assert_ne!(GetMonitorInfoW(monitor,&mut mi),0);
     let mut left=mi.rcWork;left.right=(left.left+left.right)/2;let mut right=mi.rcWork;right.left=left.right;
     for action in [Action::Maximize,Action::Restore,Action::Snap(left),Action::Snap(right)]{
         for attempt in 0..3{
-            prepare(matches!(action,Action::Restore));assert!(apply(id,action));let mut sampled=false;let started=Instant::now();
+            prepare(matches!(action,Action::Restore));assert!(apply(id,action));let mut sampled=false;let mut native_red=false;let mut reveal_sampled=false;let started=Instant::now();
             while active(){
                 ACTIVE.with(|s|if let Some(t)=s.borrow().as_ref(){if let Some(p)=&t.proxy{p.enable_evidence();}});pump();
                 ACTIVE.with(|s|if let Some(t)=s.borrow().as_ref(){if matches!(t.phase,Phase::Travel(span) if span.progress()>0.15&&span.progress()<0.85)&&!sampled{
@@ -253,23 +266,56 @@ pub(super) unsafe fn probe(id:WindowIdentity){
                         let rgba=pixels.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],p[3]]).collect::<Vec<_>>();
                         image::save_buffer(std::path::PathBuf::from(dir).join(format!("geometry-{}-{}.png",action.name(),if matches!(action,Action::Snap(r) if r.left==left.left){"left"}else{"right"})),&rgba,w,height,image::ColorType::Rgba8).unwrap();
                     }sampled=true;
-                }});
+                }
+                if let Phase::Reveal(span)=t.phase{
+                    assert_eq!(t.lease.as_ref().unwrap().status(),2,"native must be restored before fading its proxy");
+                    assert_eq!(GetWindowLongPtrW(h,GWL_EXSTYLE),style);assert!(GetPropW(h,marker.as_ptr()).is_null());
+                    if !native_red{assert_ne!(PostMessageW(h,WM_APP+171,0x000000ff,0),0);native_red=true;}
+                    if span.progress()>0.25&&span.progress()<0.75&&t.reveal_frames>0&&!reveal_sampled{
+                        let (pixels,w,height,canvas)=t.proxy.as_ref().unwrap().evidence().unwrap();
+                        let max=pixels.chunks_exact(4).map(|p|p[3]).max().unwrap();
+                        assert!(max>8&&max<245,"actual intermediate proxy alpha during reveal: {max}");
+                        for p in pixels.chunks_exact(4){assert!(p[..3].iter().all(|c|*c<=p[3]));}
+                        windows_sys::Win32::Graphics::Dwm::DwmFlush();
+                        let x=(t.target.left+t.target.right)/2;let y=(t.target.top+t.target.bottom)/2;
+                        let dc=GetDC(ptr::null_mut());let screen=GetPixel(dc,x,y);ReleaseDC(ptr::null_mut(),dc);
+                        let (red,green,blue)=(screen&255,(screen>>8)&255,(screen>>16)&255);
+                        assert!(red>20&&blue>20&&green<65,"screen must blend old blue proxy with restored red content: {red},{green},{blue}");
+                        if let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
+                            let rgba=pixels.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],p[3]]).collect::<Vec<_>>();
+                            image::save_buffer(std::path::PathBuf::from(&dir).join(format!("geometry-reveal-{}-proxy.png",action.name())),&rgba,w,height,image::ColorType::Rgba8).unwrap();
+                            let mut layer=super::glass_probe::Layer::new(w as i32,height as i32).unwrap();let dc=GetDC(ptr::null_mut());
+                            assert_ne!(BitBlt(layer.dc(),0,0,w as i32,height as i32,dc,canvas.left,canvas.top,SRCCOPY|CAPTUREBLT),0);ReleaseDC(ptr::null_mut(),dc);GdiFlush();
+                            let rgba=layer.pixels().chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],255]).collect::<Vec<_>>();
+                            image::save_buffer(std::path::PathBuf::from(dir).join(format!("geometry-reveal-{}-screen.png",action.name())),&rgba,w,height,image::ColorType::Rgba8).unwrap();
+                        }
+                        reveal_sampled=true;
+                    }
+                }
+                });
                 assert!(started.elapsed()<Duration::from_secs(6));
             }
             wait(&||GetWindowLongPtrW(h,GWL_EXSTYLE)==style&&GetPropW(h,marker.as_ptr()).is_null());
             let result=diagnostics();if result["actualEffect"]=="fluidwin-geometry"{
-                assert!(sampled,"real intermediate geometry pixels");assert!(result["preparedFrames"].as_u64().unwrap()>5);break;
+                assert!(sampled,"real intermediate geometry pixels");assert!(reveal_sampled,"real restored-source blended handoff");assert!(result["revealFrames"].as_u64().unwrap()>1);assert!(result["preparedFrames"].as_u64().unwrap()>5);break;
             }
             assert_eq!(result["fallbackReason"],"capture-unavailable","unexpected geometry failure: {result}");assert!(attempt<2,"geometry never reached a prepared capture: {result}");
         }
         assert_eq!(IsZoomed(h)!=0,matches!(action,Action::Maximize));
         if let Action::Snap(r)=action{let actual=super::window_effect::visible_area(h).unwrap();assert!([actual.left-r.left,actual.top-r.top,actual.right-r.right,actual.bottom-r.bottom].iter().all(|v|v.abs()<=6));}
-        println!("FLUIDWIN_GEOMETRY_FIXTURE action={} rendered_midpoint=PASS original_style=RESTORED journal=CLEARED",action.name());
+        println!("FLUIDWIN_GEOMETRY_FIXTURE action={} rendered_midpoint=PASS reveal_proxy_alpha=PASS actual_blue_to_red_screen_blend=PASS native_restored_before_fade=PASS original_style=RESTORED journal=CLEARED",action.name());
     }
     for failure in ["cancel","injected-present-failure","injected-monitor-change"]{
         prepare(false);assert!(apply(id,Action::Maximize));wait(&||!active()||!GetPropW(h,marker.as_ptr()).is_null());assert!(active(),"geometry recovery requires a journaled proxy");
         match failure{"cancel"=>cancel(),"injected-present-failure"=>{FAIL_PRESENT.set(true);tick();},_=>{ACTIVE.with(|s|s.borrow_mut().as_mut().unwrap().monitor=0);tick();}}
         assert!(!active());wait(&||GetWindowLongPtrW(h,GWL_EXSTYLE)==style&&GetPropW(h,marker.as_ptr()).is_null());assert_ne!(IsWindowVisible(h),0);assert_eq!(IsIconic(h),0);
+        println!("FLUIDWIN_GEOMETRY_FIXTURE recovery={failure} original_style=RESTORED journal=CLEARED");
+    }
+    for failure in ["reveal-cancel","reveal-present-failure"]{
+        prepare(false);assert!(apply(id,Action::Maximize));wait(&||!active()||ACTIVE.with(|s|s.borrow().as_ref().is_some_and(|t|matches!(t.phase,Phase::Reveal(_)))));
+        assert!(active(),"reveal recovery requires a prepared handoff");
+        match failure{"reveal-cancel"=>cancel(),_=>{FAIL_PRESENT.set(true);tick();}}
+        assert!(!active());wait(&||GetWindowLongPtrW(h,GWL_EXSTYLE)==style&&GetPropW(h,marker.as_ptr()).is_null());assert_ne!(IsWindowVisible(h),0);
         println!("FLUIDWIN_GEOMETRY_FIXTURE recovery={failure} original_style=RESTORED journal=CLEARED");
     }
     drop(reset);wait(&||{let mut r:RECT=mem::zeroed();GetWindowRect(h,&mut r)!=0&&super::same_rect(r,original)});

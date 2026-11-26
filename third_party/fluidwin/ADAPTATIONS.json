@@ -5,6 +5,13 @@
   "note": "Section adaptations, not claims that these full headers were imported. Original CRLF worktree byte hashes and canonical Git blobs are recorded; existing notices and original license are preserved.",
   "sections": [
     {
+      "source": "fluidwin.cpp::rileggiFotoZoom alfaPrima / morbido 150ms settled-layout handoff",
+      "source_git_blob": "17519dee3f8d60b3599b427cbb33a297dd9129cf",
+      "source_worktree_sha256": "e635f67fcce5978aca9d2f79da57529f4c18ff79fd59dee707c961e3b32350ef",
+      "integration": ["../../src/dock/window_geometry.rs"],
+      "adaptation": "After the existing prepared geometry reaches its native target, wait for exact Guardian restoration, then fade the old layout's same click-through proxy using original 150ms smoothstep through existing owner speed/frame clock. The restored real HWND supplies the updated layout underneath; no duplicate capture/device or foreign policy. This is the final native-content handoff only: original timed PrintWindow reread/signature stabilization and pre-command titlebar input remain incomplete."
+    },
+    {
       "source": "sensori.h::microfono / webcam / inUso / nomeProcesso",
       "source_git_blob": "3e330904e648a8098f3821b42ce7a5808317cbbc",
       "source_worktree_sha256": "1b19e147a17c3e545dec6d2af7ecaf8fc6c5b9107a3af8999c0437b7a267aed4",
