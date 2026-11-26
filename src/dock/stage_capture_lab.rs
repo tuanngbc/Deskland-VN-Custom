@@ -2,7 +2,7 @@
 //! windows are eligible, and only this content can be exported.
 use super::{stage_surface::Box2,stage_projection::Card,glass_probe::Layer};
 use crate::desktop::wide;
-use std::{path::Path,ptr::null_mut,sync::mpsc,time::{Duration,Instant}};
+use std::{path::Path,ptr::{self,null_mut},sync::mpsc,time::{Duration,Instant}};
 use windows_sys::Win32::{Foundation::*, Graphics::{Dwm::{DwmFlush,DwmGetWindowAttribute,DWMWA_CLOAKED}, Gdi::*},
     System::LibraryLoader::GetModuleHandleW, UI::WindowsAndMessaging::*};
 
@@ -303,7 +303,7 @@ fn native_gpu_color_perimeters_across_first_reverse_and_cancel_poses(){
         let poses=[0.0,0.05,0.25,0.5,0.85,0.97,1.0,0.85,0.5,0.0];
         for (name,color,axis,contrast) in [("white",0x00ffffff,None,false),("black",0,None,false),
             ("red",0x000000ff,Some(2),false),("green",0x0000ff00,Some(1),false),("blue",0x00ff0000,Some(0),false),
-            ("high-contrast-rounded",0x00ffffff,None,true)]{
+            ("high-contrast-rounded",0x00ffffff,None,true),("transparent-white",0x00ffffff,None,false)]{
             eprintln!("WGC_COLOR begin={name}");
             SetPropW(source.0,wide("TLauncher.Fixture.Solid").as_ptr(),(color as usize+1) as HANDLE);
             if contrast{
@@ -311,6 +311,28 @@ fn native_gpu_color_perimeters_across_first_reverse_and_cancel_poses(){
                 let region=CreateRoundRectRgn(0,0,640,420,24,24);assert!(!region.is_null());assert_ne!(SetWindowRgn(source.0,region,1),0);
             }
             InvalidateRect(source.0,std::ptr::null(),0);UpdateWindow(source.0);DwmFlush();
+            if name=="transparent-white"{
+                // Real premultiplied layered HWND, with a broad checker of
+                // transparent/partly transparent pixels rather than merely a
+                // renderer tint. This does not enable foreign layered leases.
+                SetWindowRgn(source.0,ptr::null_mut(),1);
+                SetWindowLongPtrW(source.0,GWL_EXSTYLE,GetWindowLongPtrW(source.0,GWL_EXSTYLE)|WS_EX_LAYERED as isize);
+                let screen=GetDC(ptr::null_mut());let dc=CreateCompatibleDC(screen);
+                assert!(!dc.is_null());
+                let mut info:BITMAPINFO=std::mem::zeroed();info.bmiHeader.biSize=std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+                info.bmiHeader.biWidth=640;info.bmiHeader.biHeight=-420;info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;
+                let mut data=ptr::null_mut();let bitmap=CreateDIBSection(screen,&info,DIB_RGB_COLORS,&mut data,ptr::null_mut(),0);
+                assert!(!bitmap.is_null()&&!data.is_null());let old=SelectObject(dc,bitmap);
+                for y in 0..420{for x in 0..640{
+                    let alpha:u32=if x<12||x>=628||y<12||y>=408{0}else if (x/32+y/32)%2==0{64}else{192};
+                    data.cast::<u32>().add(y*640+x).write((alpha<<24)|alpha*0x00010101);
+                }}
+                let size=SIZE{cx:640,cy:420};let origin=POINT{x:0,y:0};let position=POINT{x:32,y:32};
+                let blend=BLENDFUNCTION{BlendOp:AC_SRC_OVER as u8,BlendFlags:0,SourceConstantAlpha:255,AlphaFormat:AC_SRC_ALPHA as u8};
+                let updated=UpdateLayeredWindow(source.0,screen,&position,&size,dc,&origin,0,&blend,ULW_ALPHA);
+                SelectObject(dc,old);DeleteObject(bitmap);DeleteDC(dc);ReleaseDC(ptr::null_mut(),screen);
+                assert_ne!(updated,0);DwmFlush();
+            }
             let frame=pump_gpu_fixture(&source).expect("actual synthetic WGC color capture");
             eprintln!("WGC_COLOR captured={name}");
             let mut area:RECT=std::mem::zeroed();
@@ -329,6 +351,10 @@ fn native_gpu_color_perimeters_across_first_reverse_and_cancel_poses(){
                         if status==1{break;}assert!(status==2&&start.elapsed()<Duration::from_secs(1));std::thread::sleep(Duration::from_millis(8));
                     }
                     let (pixels,w,h)={let _batch=frame.gpu.context();layer.rendered_pixels().unwrap()};
+                    if name=="transparent-white"&&index==0{
+                        let partial=pixels.chunks_exact(4).filter(|p|p[3]>16&&p[3]<240).count();
+                        assert!(partial>640*420/4,"actual WGC layered transparency must survive the first pose: {partial}");
+                    }
                     if progress<0.85{assert!(pixels.chunks_exact(4).filter(|p|p[3]>16).count()>256,"blank {name} {} pose {index}",effect.name());}
                     for pixel in pixels.chunks_exact(4){
                         assert!(pixel[..3].iter().all(|&c|c<=pixel[3]),"premultiplied alpha across entire canvas");
@@ -348,7 +374,7 @@ fn native_gpu_color_perimeters_across_first_reverse_and_cancel_poses(){
             }
         }
     }
-    println!("FLUIDWIN_COLOR_PERIMETERS actual_wgc=YES full_canvas=CHECKED white_black_rgb_high_contrast_rounded=EXERCISED source_transparency=NOT_COVERED owner_border_acceptance=FAIL");
+    println!("FLUIDWIN_COLOR_PERIMETERS actual_wgc=YES full_canvas=CHECKED white_black_rgb_high_contrast_rounded=EXERCISED source_transparency=EXERCISED owner_border_acceptance=FAIL");
 }
 
 // Explicit proof of the DWM thumbnail API on owned synthetic windows only.
