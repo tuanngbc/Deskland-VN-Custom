@@ -44,6 +44,7 @@ fn main() {
             .cpp(true)
             .flag("/std:c++17")
             .flag("/utf-8")
+            .flag("/EHsc")
             .define("NOMINMAX", None)
             .define("WIN32_LEAN_AND_MEAN", None)
             .file("third_party/fluidwin/motion_renderer.cpp")

@@ -1,5 +1,6 @@
 // TLauncher adapter. Imported implementation and provenance are in upstream/.
 #include <windows.h>
+#include <shellapi.h>
 #include <cstdio>
 #include <cstdint>
 #include "upstream/destro.h"
