@@ -1717,7 +1717,7 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::AddApp=>pin_from_file(owner),
         Command::BackgroundApps=>show_background_apps(owner),
         Command::Clipboard=>show_clipboard_history(owner),
-        Command::AudioMixer=>{let mut point=POINT::default();GetCursorPos(&mut point);audio_mixer::open(owner,point);},
+        Command::AudioMixer=>{let mut point=POINT{x:0,y:0};GetCursorPos(&mut point);audio_mixer::open(owner,point);},
         Command::ClipboardCopy(id)=>{
             if clipboard_history::active()&&!clipboard_history::copy(owner,id){show_clipboard_history(owner);}
         }

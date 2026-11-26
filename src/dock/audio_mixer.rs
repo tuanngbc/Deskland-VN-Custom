@@ -124,7 +124,7 @@ impl Panel{
         for (slot,row) in self.view.rows.iter().skip(start).take(PAGE).enumerate(){
             let id=ROW_BASE+slot as i32*3;let y=104+slot as i32*76;
             let label=if row.flags&1!=0{format!("{} · {}%",row.label,row.level)}else{format!("    {} · {}%",row.label,row.level)};
-            self.control("STATIC",&label,id,SS_LEFT as u32,16,y,364,21);
+            self.control("STATIC",&label,id,0 /* SS_LEFT */,16,y,364,21);
             let slider=self.control("msctls_trackbar32",&row.label,id+1,WS_TABSTOP|TBS_NOTICKS,16,y+25,262,32);
             SendMessageW(slider,TBM_SETRANGEMAX,1,100);SendMessageW(slider,TBM_SETPOS,1,row.level as isize);
             let label=if row.flags&2!=0{text("Bật tiếng","Unmute","取消静音")}else{text("Tắt tiếng","Mute","静音")};
