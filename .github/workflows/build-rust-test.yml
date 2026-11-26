@@ -177,6 +177,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::jump_list::native_original_parser_preserves_tasks_and_menu_dispatch -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::folder_stack::native_original_stack_reads_navigates_and_releases -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::command_pin::tests::native_shell_launch_passes_arguments_and_working_directory -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::utilities::tests::native_on_demand_provider_completes_without_an_assumed_device -- --ignored --exact --nocapture --test-threads=1

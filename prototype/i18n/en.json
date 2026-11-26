@@ -73,6 +73,8 @@
     "utilityItem_stage": "Stage Manager",
     "utilityItem_settings": "Settings",
     "utilityItem_windows": "Window switcher",
+    "utilityItem_downloads": "Downloads Stack",
+    "utilityItem_recycleBin": "Recycle Bin",
     "dockStageSide": "Stage Manager position",
     "dockLeft": "Left",
     "dockRight": "Right",

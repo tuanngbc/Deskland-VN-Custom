@@ -281,18 +281,18 @@ unsafe fn battery()->BatteryState{
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum Widget {
     Network, Sound, Bluetooth, Battery, Notifications, QuickSettings,
-    Spotlight, Explorer, Desktop, Capture, Record, Stats, Wallpaper, Stage, Settings, Windows, Metrics,
+    Spotlight, Explorer, Desktop, Capture, Record, Stats, Wallpaper, Stage, Settings, Windows, Metrics, Downloads, RecycleBin,
 }
 impl Widget {
-    pub const ALL:[Self;17]=[Self::Network,Self::Sound,Self::Bluetooth,Self::Battery,
+    pub const ALL:[Self;19]=[Self::Network,Self::Sound,Self::Bluetooth,Self::Battery,
         Self::Notifications,Self::QuickSettings,Self::Spotlight,Self::Explorer,Self::Desktop,
-        Self::Capture,Self::Record,Self::Stats,Self::Wallpaper,Self::Stage,Self::Settings,Self::Windows,Self::Metrics];
+        Self::Capture,Self::Record,Self::Stats,Self::Wallpaper,Self::Stage,Self::Settings,Self::Windows,Self::Metrics,Self::Downloads,Self::RecycleBin];
     pub fn key(self)->&'static str{
         use Widget::*;
         match self {Network=>"network",Sound=>"audio",Bluetooth=>"bluetooth",Battery=>"battery",
             Notifications=>"notifications",QuickSettings=>"quickSettings",Spotlight=>"spotlight",Explorer=>"explorer",
             Desktop=>"desktop",Capture=>"capture",Record=>"record",Stats=>"stats",Wallpaper=>"wallpaper",Stage=>"stage",
-            Settings=>"settings",Windows=>"windows",Metrics=>"metrics"}
+            Settings=>"settings",Windows=>"windows",Metrics=>"metrics",Downloads=>"downloads",RecycleBin=>"recycleBin"}
     }
     pub fn title(self)->&'static str{
         use Widget::*;
@@ -300,7 +300,8 @@ impl Widget {
             Notifications=>"Thông báo Windows",QuickSettings=>"Cài đặt nhanh",Spotlight=>"Spotlight",
             Explorer=>"File Explorer",Desktop=>"Hiện/ẩn desktop",Capture=>"Chụp màn hình",Record=>"Quay màn hình",
             Stats=>"Chỉ số taskbar",Wallpaper=>"Bật/tắt hình nền",Stage=>"Stage Manager",
-            Settings=>"Cài đặt TLauncher",Windows=>"Chuyển cửa sổ",Metrics=>"Chỉ số máy"}
+            Settings=>"Cài đặt TLauncher",Windows=>"Chuyển cửa sổ",Metrics=>"Chỉ số máy",
+            Downloads=>crate::launcher::localized("Tải xuống","Downloads","下载"),RecycleBin=>crate::launcher::localized("Thùng rác","Recycle Bin","回收站")}
     }
     pub(super) fn simple(self)->Option<Action>{
         use Widget::*;
@@ -310,6 +311,7 @@ impl Widget {
             Capture=>Action::Host(HostAction::Capture),Record=>Action::Host(HostAction::Record),
             Stats=>Action::Host(HostAction::SystemMonitor),Wallpaper=>Action::Host(HostAction::Wallpaper),
             Stage=>Action::Host(HostAction::Stage),Settings=>Action::Host(HostAction::Settings),Windows=>Action::Windows,
+            RecycleBin=>Action::RecycleBin,
             _=>return None,
         })
     }
@@ -323,7 +325,8 @@ impl Widget {
             Notifications=>&[(0.21,0.68,0.79,0.68),(0.24,0.65,0.34,0.51),(0.34,0.51,0.34,0.38),(0.34,0.38,0.50,0.27),(0.50,0.27,0.66,0.38),(0.66,0.38,0.66,0.51),(0.66,0.51,0.76,0.65),(0.44,0.77,0.56,0.77)],
             QuickSettings|Settings=>&[(0.22,0.35,0.78,0.35),(0.22,0.65,0.78,0.65),(0.40,0.28,0.40,0.42),(0.61,0.58,0.61,0.72)],
             Spotlight=>&[(0.30,0.38,0.40,0.28),(0.40,0.28,0.55,0.28),(0.55,0.28,0.65,0.38),(0.65,0.38,0.65,0.53),(0.65,0.53,0.55,0.63),(0.55,0.63,0.40,0.63),(0.40,0.63,0.30,0.53),(0.30,0.53,0.30,0.38),(0.61,0.59,0.77,0.76)],
-            Explorer=>&[(0.20,0.38,0.20,0.72),(0.20,0.72,0.80,0.72),(0.80,0.72,0.80,0.38),(0.80,0.38,0.48,0.38),(0.48,0.38,0.39,0.28),(0.39,0.28,0.20,0.28),(0.20,0.28,0.20,0.38),(0.20,0.45,0.80,0.45)],
+            Explorer|Downloads=>&[(0.20,0.38,0.20,0.72),(0.20,0.72,0.80,0.72),(0.80,0.72,0.80,0.38),(0.80,0.38,0.48,0.38),(0.48,0.38,0.39,0.28),(0.39,0.28,0.20,0.28),(0.20,0.28,0.20,0.38),(0.20,0.45,0.80,0.45)],
+            RecycleBin=>&[(0.23,0.30,0.77,0.30),(0.30,0.30,0.34,0.80),(0.34,0.80,0.66,0.80),(0.66,0.80,0.70,0.30),(0.40,0.30,0.40,0.20),(0.40,0.20,0.60,0.20),(0.60,0.20,0.60,0.30),(0.44,0.42,0.44,0.66),(0.56,0.42,0.56,0.66)],
             Desktop|Wallpaper=>&[(0.20,0.28,0.80,0.28),(0.80,0.28,0.80,0.68),(0.80,0.68,0.20,0.68),(0.20,0.68,0.20,0.28),(0.50,0.68,0.50,0.79),(0.36,0.79,0.64,0.79)],
             Capture=>&[(0.23,0.34,0.43,0.34),(0.23,0.34,0.23,0.70),(0.23,0.70,0.77,0.70),(0.77,0.70,0.77,0.34),(0.77,0.34,0.58,0.34),(0.43,0.34,0.49,0.26),(0.49,0.26,0.56,0.26),(0.56,0.26,0.58,0.34),(0.42,0.48,0.58,0.48),(0.42,0.48,0.42,0.60),(0.42,0.60,0.58,0.60),(0.58,0.60,0.58,0.48)],
             Record=>&[(0.33,0.32,0.66,0.32),(0.66,0.32,0.75,0.41),(0.75,0.41,0.75,0.66),(0.75,0.66,0.66,0.73),(0.66,0.73,0.33,0.73),(0.33,0.73,0.25,0.66),(0.25,0.66,0.25,0.41),(0.25,0.41,0.33,0.32),(0.44,0.49,0.56,0.49),(0.44,0.55,0.56,0.55)],
@@ -388,7 +391,7 @@ pub enum HostAction { Settings, Capture, Record, SystemMonitor, Wallpaper, Stage
 #[derive(Clone,Copy)]
 pub(super) enum Action {
     Host(HostAction), Network, Bluetooth, Sound, Battery, Notifications,
-    QuickSettings, Explorer, Desktop, Windows, SetVolume(u32), Mute, AudioPanel{level:u32,muted:bool},
+    QuickSettings, Explorer, Desktop, Windows, RecycleBin, SetVolume(u32), Mute, AudioPanel{level:u32,muted:bool},
 }
 fn network_label(state:Option<Link>)->String{
     match state {
@@ -540,6 +543,7 @@ pub(super) unsafe fn delegated(action:Action){
     match action{
         Network=>open("ms-settings:network-wifi"), Bluetooth=>open("ms-settings:bluetooth"),
         Sound=>open("ms-settings:sound"),Battery=>open("ms-settings:powersleep"), Explorer=>open("explorer.exe"),
+        RecycleBin=>open("shell:RecycleBinFolder"),
         Notifications=>super::shell_access::win_chord(b'N' as u16),QuickSettings=>super::shell_access::win_chord(b'A' as u16),
         Desktop=>super::shell_access::win_chord(b'D' as u16),Windows=>super::shell_access::win_chord(VK_TAB),
         _=>{}
@@ -564,7 +568,7 @@ thread_local! {
 }
 
 pub(super) unsafe fn panel_open_for(owner:HWND)->bool{
-    super::audio_mixer::open_for(owner)||super::calendar::open_for(owner)||control_center::open_for(owner)||[AUDIO_WINDOW.with(Cell::get)]
+    super::folder_stack::open_for(owner)||super::audio_mixer::open_for(owner)||super::calendar::open_for(owner)||control_center::open_for(owner)||[AUDIO_WINDOW.with(Cell::get)]
         .into_iter().any(|h|!h.is_null()&&GetWindow(h,GW_OWNER)==owner)
 }
 pub(super) unsafe fn paint_shell(hwnd:HWND,dark:bool,title:&str,hint:&str){
@@ -634,6 +638,7 @@ pub(super) unsafe fn paint_button(item:&DRAWITEMSTRUCT,dark:bool){
         if item.itemState&ODS_DISABLED!=0{p.muted}else{p.ink},DT_CENTER|DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);
 }
 pub(super) unsafe fn close_panels(){
+    super::folder_stack::close_for(ptr::null_mut());
     super::jump_list::close();
     super::audio_mixer::close_for(ptr::null_mut());
     for hwnd in [AUDIO_WINDOW.with(Cell::get)] {
@@ -695,6 +700,7 @@ pub(super) unsafe fn audio_panel(owner:HWND,point:POINT,level:u32,muted:bool){
 }
 
 pub(super) unsafe fn close_panels_for(owner:HWND){
+    super::folder_stack::close_for(owner);
     super::audio_mixer::close_for(owner);
     for hwnd in [AUDIO_WINDOW.with(Cell::get)] {
         if !hwnd.is_null()&&GetWindow(hwnd,GW_OWNER)==owner{DestroyWindow(hwnd);}

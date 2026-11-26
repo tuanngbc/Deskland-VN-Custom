@@ -48,6 +48,7 @@ pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>
 mod utilities;
 mod audio_mixer;
 mod jump_list;
+mod folder_stack;
 mod wifi;
 mod control_center;
 pub(crate) mod panel_chrome;
@@ -1580,6 +1581,7 @@ unsafe fn request_utilities_with_change(hwnd:HWND,widget:Option<UtilityWidget>,c
         }
         return;
     }
+    if widget==Some(UtilityWidget::Downloads){folder_stack::open(hwnd,panel_chrome::Anchor::for_owner(hwnd,point));return;}
     let Some(widget)=widget else{return;};
     let anchor=panel_chrome::Anchor::for_owner(hwnd,point);
     use control_center::{Card,View};
@@ -3070,6 +3072,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TICK=>{SetTimer(hwnd,2,60,None);0},
         WM_UTILITY_READY=>{show_utilities();0},
         WM_TIMER if w==jump_list::TIMER&&hwnd==CONTROL.get()=>{jump_list::poll();0},
+        WM_TIMER if w==folder_stack::TIMER&&hwnd==CONTROL.get()=>{folder_stack::poll();0},
         WM_SHELL_FALLBACK if hwnd==CONTROL.with(Cell::get)=>{
             let owner=w as HWND;
             if !local_shell_buttons()&&!control_center::open_for(owner){

@@ -73,6 +73,8 @@
     "utilityItem_stage": "Stage Manager",
     "utilityItem_settings": "Cài đặt",
     "utilityItem_windows": "Chuyển cửa sổ",
+    "utilityItem_downloads": "Chồng tệp tải xuống",
+    "utilityItem_recycleBin": "Thùng rác",
     "dockStageSide": "Vị trí Stage Manager",
     "dockLeft": "Bên trái",
     "dockRight": "Bên phải",

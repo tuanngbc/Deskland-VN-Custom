@@ -75,6 +75,18 @@
       "source_git_blob": "587961f986fe55053f20cca5d68f728d9a4546e3",
       "source_worktree_sha256": "551845c373e46a3b3cc507945667e45a491bd36b991eea715e179b659ced0037",
       "local_changes": "On-demand one-shot index read using the original parser/cache/matcher; no permanent watcher thread"
+    },
+    {
+      "path": "pila.h",
+      "source_git_blob": "217daf7db351273e3771ad8b6e126b2369cf0ea8",
+      "source_worktree_sha256": "29e79ee91f339e0f1c801354f07a509f1d5c9e6c1a0e174e263c606303910242",
+      "local_changes": "Deterministic cleanup, cancel stale thumbnail work, keyboard operation and localized labels; bounded local folder read"
+    },
+    {
+      "path": "vetro.h",
+      "source_git_blob": "cb5c830156bf30dab456e1d84975eafe9b8817b6",
+      "source_worktree_sha256": "0808bda50d5590efd16af7ebfafe2c3fcc87d4e7d95e246ca7a1ae569f0e82a9",
+      "local_changes": "Use existing UI timers without the upstream permanent heartbeat thread; owner motion-speed callback"
     }
   ]
 }
