@@ -24,8 +24,9 @@ class Accessible final:public IAccessible{
     HRESULT type(ITypeInfo** out){if(!out)return E_POINTER;*out=nullptr;ITypeLib* library=nullptr;
         HRESULT hr=LoadRegTypeLib(LIBID_Accessibility,1,1,LOCALE_SYSTEM_DEFAULT,&library);if(FAILED(hr))return hr;
         hr=library->GetTypeInfoOfGuid(IID_IAccessible,out);library->Release();return hr;}
-    HRESULT post(VARIANT value,UINT message){auto s=model->read();int index=child(value,s);if(index<=0)return E_INVALIDARG;
+    HRESULT post(VARIANT value,UINT message){auto s=model->read();
         if(!s.window||!IsWindowVisible(s.window))return CO_E_OBJNOTCONNECTED;
+        int index=child(value,s);if(index<=0)return E_INVALIDARG;
         if(size_t(index)<=s.states.size()&&(s.states[index-1]&(STATE_SYSTEM_UNAVAILABLE|STATE_SYSTEM_INVISIBLE)))return E_ACCESSDENIED;
         return PostMessageW(s.window,message,index-1,reinterpret_cast<LPARAM>(model.get()))?S_OK:E_FAIL;}
 public:

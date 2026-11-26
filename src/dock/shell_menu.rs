@@ -108,6 +108,13 @@ fn native_imported_menu_selects_nested_shell_command(){
         for language in 0..3{
         for speed in [0.25,0.5,0.7,0.75,1.0,1.5,2.0]{for reduced in [false,true]{assert!(tlauncher_fluidwin_menu_policy_fixture(language,speed,reduced));}}
         tlauncher_fluidwin_menu_policy(language,0.7,language==2);
+        let (stop_tx,stop_rx)=std::sync::mpsc::channel();
+        let deadline=std::thread::spawn(move||{
+            if stop_rx.recv_timeout(std::time::Duration::from_secs(8)).is_err(){
+                eprintln!("FLUIDWIN_MENU fixture deadline: closing only the fixture thread's menu");
+                PostThreadMessageW(tid,WM_KEYDOWN,VK_ESCAPE as usize,0);PostThreadMessageW(tid,WM_KEYDOWN,VK_ESCAPE as usize,0);
+            }
+        });
         let helper=std::thread::spawn(move||{
             // Send only to this fixture thread's message queue, never global input.
             CoInitializeEx(None,COINIT_APARTMENTTHREADED).ok().unwrap();
@@ -115,8 +122,10 @@ fn native_imported_menu_selects_nested_shell_command(){
             std::thread::sleep(std::time::Duration::from_millis(300));
             let hwnd=FindWindowW(crate::desktop::wide("FluidWin.Menu").as_ptr(),std::ptr::null());
             assert_eq!(GetWindowThreadProcessId(hwnd,std::ptr::null_mut()),tid);
+            eprintln!("FLUIDWIN_MENU accessibility acquire locale={language}");
             let accessible=tlauncher_fluidwin_menu_accessible(hwnd);assert!(!accessible.is_null());
             assert_eq!(tlauncher_fluidwin_menu_access_probe(accessible,false),0);
+            eprintln!("FLUIDWIN_MENU accessibility live probe passed locale={language}");
             if let Some(root)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
                 use windows_sys::Win32::Graphics::{Dwm::DwmFlush,Gdi::*};
                 let hwnd=FindWindowW(crate::desktop::wide("FluidWin.Menu").as_ptr(),std::ptr::null());
@@ -139,6 +148,18 @@ fn native_imported_menu_selects_nested_shell_command(){
             tlauncher_fluidwin_menu_access_free(accessible);
         });
         let selected=tlauncher_fluidwin_shell_menu_fixture(owner,language);
+        eprintln!("FLUIDWIN_MENU modal returned locale={language} selected={selected}");
+        // AccessibleObjectFromWindow marshals this STA's provider to the
+        // helper. Retained-provider checks still call this apartment after the
+        // modal menu is gone; a blocking join here would deadlock that RPC.
+        let until=std::time::Instant::now()+std::time::Duration::from_secs(5);
+        while !helper.is_finished(){
+            let mut message:MSG=std::mem::zeroed();
+            for _ in 0..64{if PeekMessageW(&mut message,std::ptr::null_mut(),0,0,PM_REMOVE)==0{break;}TranslateMessage(&message);DispatchMessageW(&message);}
+            assert!(std::time::Instant::now()<until,"retained provider call must finish while its owning STA pumps");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let _=stop_tx.send(());deadline.join().unwrap();
         helper.join().unwrap();
         assert_eq!(selected,73,"imported menu skips disabled row, opens submenu and dispatches its real command ID");
         }
