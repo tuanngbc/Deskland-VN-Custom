@@ -36,7 +36,7 @@ public:
             // (rifatto se la scala e' cambiata, per esempio il principale ora al 150%: R20261121-120306 su S18)
             if (fmt && fDpi != v.dpi) { fmt->Release(); fmt = nullptr; }
             if (!fmt) { fmt = v.formato(13.5f * v.dpi, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_TRAILING); fDpi = v.dpi; }
-            const int available=std::max(1,a.right-a.left-(int)std::lround(28*v.dpi));
+            const int available=std::max<int>(1,a.right-a.left-(int)std::lround(28*v.dpi));
             const int desired=(int)std::ceil(noticeText.empty()?300*v.dpi:std::max(372*v.dpi,v.larghezza(noticeText,fmt)+64*v.dpi));
             const int w=std::min(available,desired),h=(int)std::lround(52*v.dpi);
             x=(a.left+a.right-w)/2;y=a.top+(int)std::lround(14*v.dpi);
