@@ -24,6 +24,7 @@ unsafe extern "system" fn fixture_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARA
     }
     #[cfg(test)]
     if msg==WM_PRINTCLIENT{
+        let key=wide("TLauncher.Fixture.PrintCount");let count=GetPropW(hwnd,key.as_ptr()) as usize;SetPropW(hwnd,key.as_ptr(),(count+1) as HANDLE);
         let hold=GetPropW(hwnd,wide("TLauncher.Fixture.PrintHold").as_ptr());
         if !hold.is_null(){
             use windows_sys::Win32::System::Threading::{SetEvent,WaitForSingleObject};
@@ -427,7 +428,19 @@ fn native_static_photos_keep_original_pixels_and_reject_unsafe_sources(){
         SetWindowPos(source.0,HWND_TOPMOST,20,20,2110,980,SWP_NOACTIVATE);InvalidateRect(source.0,ptr::null(),0);UpdateWindow(source.0);pump();
         // PrintWindow also covers native resolution beyond the runner display.
         let (frame,timing)=pump_static_fixture(&source,true).unwrap().unwrap();assert_eq!((frame.width,frame.height),(2110,980));assert!(!timing.gpu_to_gpu);
-        let pixels=frame.fixture_pixels().unwrap();assert!(pixels.chunks_exact(4).all(|p|p==[0,0,255,255]));save("large-native-red",&pixels,frame.width,frame.height);
+        let pixels=frame.fixture_pixels().unwrap();save("large-native-red",&pixels,frame.width,frame.height);
+        let old_ok=pixels.chunks_exact(4).all(|p|p==[0,0,255,255]);
+        let describe=|label:&str,h:HWND,frame:&super::stage_snapshot::GpuFrame,pixels:&[u8],timing:&super::stage_snapshot::CaptureTiming|{
+            let mut client:RECT=std::mem::zeroed();GetClientRect(h,&mut client);
+            let first=pixels.chunks_exact(4).enumerate().find(|(_,p)|*p!=[0,0,255,255]).map(|(i,p)|(i%frame.width as usize,i/frame.width as usize,p.to_vec()));
+            eprintln!("STATIC_LARGE label={label} client={}x{} style={:#x} exstyle={:#x} prints={} bad={} first={first:?} timing={timing:?}",client.right,client.bottom,GetWindowLongPtrW(h,GWL_STYLE),GetWindowLongPtrW(h,GWL_EXSTYLE),GetPropW(h,wide("TLauncher.Fixture.PrintCount").as_ptr()) as usize,pixels.chunks_exact(4).filter(|p|*p!=[0,0,255,255]).count());
+        };
+        describe("after-layered-affinity",source.0,&frame,&pixels,&timing);
+        let fresh=window(false).unwrap();SetPropW(fresh.0,wide("TLauncher.Fixture.Solid").as_ptr(),0x100 as HANDLE);
+        SetWindowPos(fresh.0,HWND_TOPMOST,20,20,2110,980,SWP_NOACTIVATE);InvalidateRect(fresh.0,ptr::null(),0);UpdateWindow(fresh.0);pump();
+        let (fresh_frame,fresh_timing)=pump_static_fixture(&fresh,true).unwrap().unwrap();let fresh_pixels=fresh_frame.fixture_pixels().unwrap();save("large-fresh-native-red",&fresh_pixels,fresh_frame.width,fresh_frame.height);describe("fresh",fresh.0,&fresh_frame,&fresh_pixels,&fresh_timing);
+        assert!(fresh_pixels.chunks_exact(4).all(|p|p==[0,0,255,255]),"fresh full-resolution native source");
+        assert!(old_ok,"full-resolution source after layered/affinity state changes");
         println!("FLUIDWIN_STATIC_PHOTO screen_colors=VERIFIED occluded_print=VERIFIED full_native=2110x980 alpha_shape=DEFERRED_TO_WGC protected_cancel=REFUSED gpu_to_gpu=false edge_recolor=NONE owner_border=UNRESOLVED");
     }
 }
