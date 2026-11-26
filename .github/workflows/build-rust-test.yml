@@ -125,6 +125,33 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+      - name: Verify original illustrated weather and safe native fallback
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
+          New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
+          git rev-parse HEAD | Set-Content (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'early-weather-source.txt')
+          $weatherFailed = $false
+          foreach ($fixture in @('dock::forecast_card::tests::native_original_weather_card_keeps_background_and_renders_all_glyphs','dock::control_center::tests::native_forecast_failure_repaints_glass_and_revokes_old_access_actions','dock::weather_panel::tests::native_shared_forecast_panel_keeps_city_generation_and_releases_subscription','dock::weather_city::tests::native_city_picker_clears_stale_rows_routes_keyboard_and_cancels_delivery')) {
+            cargo test --release $fixture -- --ignored --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'early-weather.log') -Append
+            if ($LASTEXITCODE -ne 0) { $weatherFailed = $true }
+          }
+          if ($weatherFailed) { exit 1 }
+
+      - name: Upload illustrated weather evidence before full regression
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-weather-early
+          path: |
+            ${{ runner.temp }}/stage-fixture-evidence/early-weather*.log
+            ${{ runner.temp }}/stage-fixture-evidence/early-weather-source.txt
+            ${{ runner.temp }}/stage-fixture-evidence/forecast-card-*.png
+            ${{ runner.temp }}/stage-fixture-evidence/weather-*.png
+          retention-days: 14
+          if-no-files-found: error
+
       - name: Build Rust native app
         if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
@@ -368,19 +395,6 @@ jobs:
           cargo test --release dock::news::tests::native_news_panel_rejects_stale_actions_and_closed_results -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Verify shared native weather with synthetic forecasts
-        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
-        run: |
-          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
-          New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
-          cargo test --release dock::forecast_card::tests::native_original_weather_card_keeps_background_and_renders_all_glyphs -- --ignored --exact --nocapture --test-threads=1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --release dock::control_center::tests::native_forecast_failure_repaints_glass_and_revokes_old_access_actions -- --ignored --exact --nocapture --test-threads=1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --release dock::weather_panel::tests::native_shared_forecast_panel_keeps_city_generation_and_releases_subscription -- --ignored --exact --nocapture --test-threads=1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --release dock::weather_city::tests::native_city_picker_clears_stale_rows_routes_keyboard_and_cancels_delivery -- --ignored --exact --nocapture --test-threads=1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify own UI corners and refuse foreign DWM changes
         if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |

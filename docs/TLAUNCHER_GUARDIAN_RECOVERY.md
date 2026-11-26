@@ -1,5 +1,7 @@
 # Guardian and recovery status
 
+Full hosted regression run `45831194360` / `b9424e4` passed the existing foreign-state/Guardian/motion checks; exact package/source/version/checksums verified. Added headphone events and upcoming illustrated Weather UI do not mutate foreign visibility, cursor state, Windows audio settings or notification policy. Their own scoped callbacks/work/results/canvas must be revoked on close/suspend/disable; headphone native registration and held-worker re-enable cleanup passed. This does not close the still-missing bounded global titlebar input transaction, cursor Guardian or owner visual/recovery acceptance gates.
+
 ## Correction implementation
 
 Full run `45774638315` / `7c3694b` supersedes the ticket/topmost pending descriptions below: old-handle drop isolation passed for both lease kinds, as did the pending-begin cancellation barrier, actual guarded pin/unpin commands, original topmost-bit/layered-alpha/unrelated-style/geometry preservation, startup orphan and detached owner tree-exit/UI-hang recovery. Exact package and visual archives were retrieved and verified. Ctrl+Win+T registration on the runner returns conflict 1409, which is preserved; physical registered-key delivery and real app compatibility remain unverified. This is the named synthetic coverage, not full owner/hardware recovery acceptance.

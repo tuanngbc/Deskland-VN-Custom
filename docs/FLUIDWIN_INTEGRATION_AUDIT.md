@@ -1,5 +1,7 @@
 # FluidWin integration audit
 
+Internal continuation through `b9424e4`: original static/composition refusal, independent battery and event-driven Bluetooth headphone OSD scopes passed full hosted runs `45827021105`, `45830967493` and `45831194360`; exact source/package/PE 1.0.3 and checksums were retrieved. Strong headphone callback cancellation/admission and all three actual locale images are verified; runner had zero active render endpoints, so physical Bluetooth recognition/battery properties remain unverified. Notification access diagnosis observed successful GetAccessStatus with Denied (operation 7, HRESULT S_OK, access 2), not a package-identity error; no owner access conclusion follows. Original illustrated Weather card is implemented on the existing panel/data owner with hosted validation pending. These scopes do not resolve owner border/pacing, full titlebar/lifecycle, badges/banners/cursors or overall acceptance.
+
 Reference: [FluidWin v1.3.1](https://github.com/clooudfn/FluidWin/tree/2f773a8733b84c7dbee88fff6628d14e9ac802b9), peeled tag commit `2f773a8733b84c7dbee88fff6628d14e9ac802b9`. TLauncher baseline: `e9fa8ff52e773a2d5ff9b383af6973ca7281103a` (stable application code and updated showcase). The owner's successful run is evidence for the standalone upstream on this hardware; candidate evidence is collected separately.
 
 ## Source boundaries
