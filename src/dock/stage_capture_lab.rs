@@ -467,3 +467,43 @@ fn native_scale_production_owned_external_windows(){
     assert!(ids.iter().all(|id|id.pid==child.pid));
     unsafe{super::window_effect::probe_production_path(&ids);}
 }
+
+#[cfg(test)]
+#[test]
+#[ignore="real hosted native-animation policy with detached Guardian and foreign motion handoff; restores runner policy afterwards"]
+fn native_guarded_motion_with_windows_animations_enabled(){
+    if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+    use std::ffi::OsString;
+    struct Restore{animation:ANIMATIONINFO,env:Vec<(&'static str,Option<OsString>)>}
+    impl Drop for Restore{fn drop(&mut self){unsafe{
+        super::window_effect::reset();
+        let child=super::TASKBAR_WATCH.with(|w|w.borrow_mut().take().and_then(|w|w.stop()));
+        if let Some(mut child)=child{
+            let start=Instant::now();let mut msg:MSG=std::mem::zeroed();
+            while child.try_wait().ok().flatten().is_none()&&start.elapsed()<Duration::from_secs(5){
+                while PeekMessageW(&mut msg,null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        SystemParametersInfoW(SPI_SETANIMATION,self.animation.cbSize,(&mut self.animation as *mut ANIMATIONINFO).cast(),0);
+        for (key,value) in &self.env{if let Some(value)=value{std::env::set_var(key,value);}else{std::env::remove_var(key);}}
+    }}}
+    unsafe{
+        let mut original:ANIMATIONINFO=std::mem::zeroed();original.cbSize=std::mem::size_of::<ANIMATIONINFO>() as u32;
+        assert_ne!(SystemParametersInfoW(SPI_GETANIMATION,original.cbSize,(&mut original as *mut ANIMATIONINFO).cast(),0),0);
+        let before=original.iMinAnimate;
+        let restore=Restore{animation:original,env:["TUANPC_GUARD_FIXTURE","TUANPC_GUARDED_MOTION_FIXTURE"].into_iter().map(|k|(k,std::env::var_os(k))).collect()};
+        let mut enabled=ANIMATIONINFO{cbSize:std::mem::size_of::<ANIMATIONINFO>() as u32,iMinAnimate:1};
+        assert_ne!(SystemParametersInfoW(SPI_SETANIMATION,enabled.cbSize,(&mut enabled as *mut ANIMATIONINFO).cast(),0),0);
+        let mut observed:ANIMATIONINFO=std::mem::zeroed();observed.cbSize=enabled.cbSize;
+        assert_ne!(SystemParametersInfoW(SPI_GETANIMATION,observed.cbSize,(&mut observed as *mut ANIMATIONINFO).cast(),0),0);assert_eq!(observed.iMinAnimate,1);
+        std::env::set_var("TUANPC_GUARD_FIXTURE","{}");std::env::set_var("TUANPC_GUARDED_MOTION_FIXTURE","1");
+        let mut guard=super::taskbar_guard::Watch::start_motion_fixture().unwrap();let start=Instant::now();
+        while !guard.poll().unwrap()||guard.motion_session().is_none(){assert!(start.elapsed()<Duration::from_secs(8));std::thread::sleep(Duration::from_millis(20));}
+        super::TASKBAR_WATCH.with(|w|w.replace(Some(guard)));
+        native_scale_production_owned_external_windows();
+        drop(restore);
+        assert_ne!(SystemParametersInfoW(SPI_GETANIMATION,observed.cbSize,(&mut observed as *mut ANIMATIONINFO).cast(),0),0);assert_eq!(observed.iMinAnimate,before);
+    }
+    println!("FLUIDWIN_GUARDED_MOTION windows_native_animation=ENABLED scale_genie_drop=EXERCISED reversal=EXERCISED runner_policy=RESTORED owner_quality=NOT_VERIFIED");
+}

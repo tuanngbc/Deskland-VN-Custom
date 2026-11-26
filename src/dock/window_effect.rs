@@ -24,7 +24,7 @@ impl Action{fn name(self)->&'static str{match self{Self::Minimize=>"minimize",Se
 #[derive(Clone)]
 struct Request{
     source:WindowIdentity,area:RECT,normal:RECT,dpi:u32,monitor:usize,title:String,
-    action:Action,icon:RECT,side:DockSide,effect:motion::WindowEffect,dock:usize,
+    action:Action,icon:RECT,side:DockSide,effect:motion::WindowEffect,dock:usize,guarded:bool,
 }
 struct Recent{request:Request,revision:u64,stored:Instant}
 thread_local!{
@@ -48,7 +48,7 @@ impl Policy{
         if self.motion.window_effect==motion::WindowEffect::Windows{return Err("scale-not-selected");}
         if !self.motion.enabled{return Err("motion-disabled");}
         if self.motion.respect_system&&self.client_animation!=Some(true){return Err("system-reduced-motion");}
-        if self.native_minimize!=Some(0){return Err("native-animation-overlap");}
+        if self.native_minimize!=Some(0)&&!guardian_ready(){return Err("native-animation-overlap");}
         Ok(())
     }
     fn json(self)->Value{json!({
@@ -57,9 +57,11 @@ impl Policy{
         "respectSystemReducedMotion":self.motion.respect_system,
         "SPI_GETCLIENTAREAANIMATION":self.client_animation,
         "SPI_GETANIMATION":self.native_minimize.is_some(),"iMinAnimate":self.native_minimize,
+        "guardianReady":guardian_ready(),
         "availability":self.gate().err().unwrap_or("available")
     })}
 }
+fn guardian_ready()->bool{super::TASKBAR_WATCH.with(|w|w.borrow().as_ref().and_then(super::taskbar_guard::Watch::motion_session).is_some())}
 pub(super) fn diagnostics()->Value{
     let policy=unsafe{Policy::read()}.json();
     let last=if crate::trial::active(){LAST.lock().ok().and_then(|g|g.clone())}else{None};
@@ -246,6 +248,8 @@ unsafe fn request(owner:HWND,path:&str,id:WindowIdentity,action:Action,policy:Po
     // Read geometry even when policy fails, for a useful diagnostic.
     if id.matches(h)&&IsIconic(h)==0{if let Some(r)=visible_area(h){attempt.area(r);}}
     policy.gate()?;permitted(id)?;
+    let guarded=policy.native_minimize!=Some(0);
+    if guarded&&GetWindowLongPtrW(h,GWL_EXSTYLE)&WS_EX_LAYERED as isize!=0{return Err("existing-layered-window");}
     if elevation(id.pid)!=Some(false){return Err("elevated-window");}
     let p=placement(h).ok_or("source-unavailable")?;
     let monitor=MonitorFromWindow(h,MONITOR_DEFAULTTONULL);
@@ -268,7 +272,8 @@ unsafe fn request(owner:HWND,path:&str,id:WindowIdentity,action:Action,policy:Po
     attempt.area(area);
     if !valid_area(area){return Err("window-area-limit");}
     let (icon,side)=target(owner,path)?;attempt.values["dockTarget"]=json!(true);
-    Ok(Request{source:id,area,normal:p.rcNormalPosition,dpi,monitor:monitor as usize,title:name,action,icon,side,effect:policy.motion.window_effect,dock:owner as usize})
+    attempt.values["guardianHandoff"]=json!(guarded);
+    Ok(Request{source:id,area,normal:p.rcNormalPosition,dpi,monitor:monitor as usize,title:name,action,icon,side,effect:policy.motion.window_effect,dock:owner as usize,guarded})
 }
 
 // One small uploaded composition texture, no physical-size CPU DIB and
@@ -422,10 +427,14 @@ enum Phase{
     // Keep the real window in its current state until the proxy has a frame.
     Priming{proxy:Proxy,frame:Option<stage_snapshot::MotionFrame>,started:Instant},
     WaitingMinimize{proxy:Proxy,frame:stage_snapshot::MotionFrame,started:Instant},
+    WaitingGuardedRestore{proxy:Proxy,started:Instant},
+    Reversal{proxy:Proxy,elapsed:f64,base:u32,started:Instant},
     Animate{proxy:Proxy,span:motion::Span},
     WaitingRestore{_proxy:Proxy,started:Instant},
+    WaitingRelease{proxy:Proxy,started:Instant},
 }
-struct Transition{req:Request,phase:Option<Phase>,attempt:Attempt,last_progress:f64}
+struct Transition{req:Request,phase:Option<Phase>,attempt:Attempt,last_progress:f64,lease:Option<super::window_lease::Lease>}
+impl Drop for Transition{fn drop(&mut self){self.lease.take();self.phase.take();}}
 impl Transition{
     unsafe fn prime(&mut self,proxy:Proxy,frame:Option<stage_snapshot::MotionFrame>,started:Instant)->Result<Phase,Reason>{
         let h=self.req.source.hwnd as HWND;
@@ -442,17 +451,30 @@ impl Transition{
             if started.elapsed()>=PRESENT_TIMEOUT{return Err("proxy-present-timeout");}
             return Ok(Phase::Priming{proxy,frame,started});
         }
+        if self.req.guarded{
+            if self.lease.is_none(){self.lease=Some(super::window_lease::Lease::begin(h).ok_or("guardian-lease-unavailable")?);}
+            match self.lease.as_ref().unwrap().status(){
+                1=>{},
+                0 if started.elapsed()<PREPARE=>return Ok(Phase::Priming{proxy,frame,started}),
+                _=>return Err("guardian-lease-failed"),
+            }
+        }
         if let Some(frame)=frame{
             if ShowWindowAsync(h,if super::taskbar_hidden(){SW_SHOWMINNOACTIVE}else{SW_MINIMIZE})==0{
                 return Err("state-transition-timeout");
             }
             Ok(Phase::WaitingMinimize{proxy,frame,started:Instant::now()})
         }else{
+            if self.req.guarded{
+                if ShowWindowAsync(h,SW_RESTORE)==0{return Err("state-transition-timeout");}
+                return Ok(Phase::WaitingGuardedRestore{proxy,started:Instant::now()});
+            }
             self.attempt.animation=Some(Instant::now());
             Ok(Phase::Animate{proxy,span:motion::Span::new(if self.req.effect.mesh(){450}else{340})})
         }
     }
     unsafe fn fallback(&mut self,reason:Reason)->bool{
+        self.lease.take();
         self.phase.take();
         let id=self.req.source;let h=id.hwnd as HWND;
         if id.matches(h){
@@ -467,7 +489,9 @@ impl Transition{
     }
     unsafe fn stable(&self)->Result<(),Reason>{
         let h=self.req.source.hwnd as HWND;
-        Policy::read().gate()?;permitted(self.req.source)?;
+        let policy=Policy::read();policy.gate()?;permitted(self.req.source)?;
+        if !self.req.guarded&&policy.native_minimize!=Some(0){return Err("native-policy-changed");}
+        if self.lease.as_ref().is_some_and(|lease|lease.status()<0){return Err("guardian-lease-lost");}
         if windows_sys::Win32::UI::HiDpi::GetDpiForWindow(h)!=self.req.dpi{return Err("dpi-changed");}
         if MonitorFromWindow(h,MONITOR_DEFAULTTONULL) as usize!=self.req.monitor{return Err("monitor-changed");}
         if !placement(h).is_some_and(|p|super::same_rect(p.rcNormalPosition,self.req.normal)){return Err("window-placement-changed");}
@@ -521,11 +545,25 @@ impl Transition{
                     });}
                     self.attempt.animation=Some(Instant::now());queue_refresh();
                     Phase::Animate{proxy,span:motion::Span::new(if self.req.effect.mesh(){500}else{300})}
-                }else if started.elapsed()>SETTLE{drop(proxy);return self.fallback("state-transition-timeout");}
+                }else if started.elapsed()>SETTLE{self.lease.take();drop(proxy);return self.fallback("state-transition-timeout");}
                 else{Phase::WaitingMinimize{proxy,frame,started}}
             }
+            Phase::WaitingGuardedRestore{proxy,started}=>{
+                if IsIconic(h)==0{
+                    self.attempt.animation=Some(Instant::now());
+                    Phase::Animate{proxy,span:motion::Span::new(if self.req.effect.mesh(){450}else{340})}
+                }else if started.elapsed()>SETTLE{return self.fallback("state-transition-timeout");}
+                else{Phase::WaitingGuardedRestore{proxy,started}}
+            }
+            Phase::Reversal{proxy,elapsed,base,started}=>{
+                let expected=if action==Action::Minimize{true}else{!self.req.guarded};
+                if (IsIconic(h)!=0)==expected{Phase::Animate{proxy,span:motion::Span::resume(base,elapsed)}}
+                else if started.elapsed()>SETTLE{return self.fallback("state-transition-timeout");}
+                else{Phase::Reversal{proxy,elapsed,base,started}}
+            }
             Phase::Animate{proxy,span}=>{
-                if IsIconic(h)==0{self.attempt.finish(Some("transition-interrupted"));return false;}
+                let expected=if action==Action::Minimize{true}else{!self.req.guarded};
+                if (IsIconic(h)!=0)!=expected{return self.fallback("transition-interrupted");}
                 let t=span.progress();let k=motion::ease(t);
                 let (a,b,opacity)=match action{
                     Action::Minimize=>(self.req.area,icon,(255.0*(1.0-((t-0.82)/0.18).clamp(0.0,1.0))) as u8),
@@ -536,20 +574,32 @@ impl Transition{
                 }else{f64::from(if action==Action::Restore{1.0-k}else{k})};
                 let opacity=if self.req.effect.mesh(){255}else{opacity};
                 let submitted=self.attempt.frames;
-                if let Err(reason)=self.attempt.present(&proxy,interpolate(a,b,k),progress,opacity){drop(proxy);return self.fallback(reason);}
+                if let Err(reason)=self.attempt.present(&proxy,interpolate(a,b,k),progress,opacity){self.lease.take();drop(proxy);return self.fallback(reason);}
                 if self.attempt.frames!=submitted{self.last_progress=progress;}
                 // Do not restore/minimize over an old pose if DXGI declined
                 // the terminal frame. Retry within the bounded present timeout.
                 if t>=1.0&&self.attempt.frames!=submitted{
+                    if let Some(lease)=self.lease.as_ref(){
+                        lease.restore();Phase::WaitingRelease{proxy,started:Instant::now()}
+                    }else{
                     if action==Action::Minimize{self.attempt.finish(None);return false;}
                     if ShowWindowAsync(h,SW_RESTORE)==0{drop(proxy);return self.fallback("state-transition-timeout");}
                     Phase::WaitingRestore{_proxy:proxy,started:Instant::now()}
+                    }
                 }else{Phase::Animate{proxy,span}}
             }
             Phase::WaitingRestore{_proxy,started}=>{
                 if IsIconic(h)==0{SetForegroundWindow(h);queue_refresh();self.attempt.finish(None);return false;}
                 if started.elapsed()>SETTLE{drop(_proxy);return self.fallback("state-transition-timeout");}
                 Phase::WaitingRestore{_proxy,started}
+            }
+            Phase::WaitingRelease{proxy,started}=>{
+                if self.lease.as_ref().is_none_or(|lease|lease.status()==2){
+                    let _=DwmFlush();if action==Action::Restore{SetForegroundWindow(h);}
+                    queue_refresh();self.attempt.finish(None);return false;
+                }
+                if started.elapsed()>SETTLE{return self.fallback("foreign-state-restore-pending");}
+                Phase::WaitingRelease{proxy,started}
             }
         });
         true
@@ -589,7 +639,7 @@ unsafe fn begin(owner:HWND,path:&str,id:WindowIdentity,action:Action)->bool{
         Ok((req,phase))=>{
             let last_progress=if req.action==Action::Restore{1.0}else{0.0};
             let restoring=req.action==Action::Restore;
-            ACTIVE.with(|a|{a.replace(Some(Transition{req,phase:Some(phase),attempt,last_progress}));});
+            ACTIVE.with(|a|{a.replace(Some(Transition{req,phase:Some(phase),attempt,last_progress,lease:None}));});
             if restoring{timer();}
             true
         }
@@ -600,14 +650,20 @@ unsafe fn reverse(owner:HWND,id:WindowIdentity,action:Action)->bool{
     ACTIVE.with(|a|{
         let mut a=a.borrow_mut();
         let Some(t)=a.as_mut().filter(|t|t.req.source==id&&t.req.dock==owner as usize&&t.req.effect.mesh())else{return false;};
-        if !id.matches(id.hwnd as HWND)||IsIconic(id.hwnd as HWND)==0{return false;}
-        let Some(Phase::Animate{span,..})=t.phase.as_mut()else{return false;};
+        if !id.matches(id.hwnd as HWND)||(!t.req.guarded&&IsIconic(id.hwnd as HWND)==0){return false;}
+        if !matches!(t.phase.as_ref(),Some(Phase::Animate{..})){return false;}
         let policy=Policy::read();
         if policy.gate().is_err()||policy.motion.window_effect!=t.req.effect{return false;}
         if t.req.action==action{return true;}
         let restoring=action==Action::Restore;
         let elapsed=fluidwin_mesh::invert(t.last_progress,restoring,t.req.effect==motion::WindowEffect::Drop);
-        *span=motion::Span::resume(if restoring{450}else{500},elapsed);
+        let base=if restoring{450}else{500};
+        let Some(Phase::Animate{proxy,span})=t.phase.take()else{unreachable!()};
+        if t.req.guarded{
+            let show=if restoring{SW_RESTORE}else if super::taskbar_hidden(){SW_SHOWMINNOACTIVE}else{SW_MINIMIZE};
+            if ShowWindowAsync(id.hwnd as HWND,show)==0{t.phase=Some(Phase::Animate{proxy,span});return false;}
+            t.phase=Some(Phase::Reversal{proxy,elapsed,base,started:Instant::now()});
+        }else{t.phase=Some(Phase::Animate{proxy,span:motion::Span::resume(base,elapsed)});}
         t.req.action=action;
         t.attempt.values["action"]=json!(action.name());
         t.attempt.values["reversals"]=json!(t.attempt.values["reversals"].as_u64().unwrap_or(0)+1);
@@ -626,10 +682,17 @@ pub(super) unsafe fn release_factory(){
     if ACTIVE.with(|a|a.borrow().is_none()){FACTORY.with(|f|{f.borrow_mut().take();});}
 }
 pub(super) unsafe fn timer(){
+    #[cfg(test)] fixture_guard_pulse();
     let active=ACTIVE.with(|a|a.borrow_mut().take());
     let next=active.and_then(|mut t|if t.tick(){Some(t)}else{None});
     if next.is_none(){schedule_release();}
     ACTIVE.with(|a|{a.replace(next);});
+}
+#[cfg(test)]
+unsafe fn fixture_guard_pulse(){
+    if std::env::var_os("TUANPC_GUARDED_MOTION_FIXTURE").is_some(){
+        super::TASKBAR_WATCH.with(|w|if let Some(w)=w.borrow_mut().as_mut(){w.poll().expect("hosted motion Guardian stays healthy");});
+    }
 }
 pub(super) fn active()->bool{ACTIVE.with(|a|a.borrow().is_some())}
 pub(super) unsafe fn frame_ready()->HANDLE{
@@ -894,7 +957,7 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
     }
     // Cross the old 15s expiration boundary and allow the idle factory to
     // release. Restore the older of two windows sharing one Dock app icon.
-    std::thread::sleep(Duration::from_secs(16));
+    for _ in 0..80{fixture_guard_pulse();std::thread::sleep(Duration::from_millis(200));}
     release_factory();
     for (&id,original) in ids.iter().zip(placements){
         super::activate(bar,&item(id));
@@ -953,7 +1016,7 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
             assert_ne!(IsIconic(source),0);
             super::activate(bar,&item(id));
             assert!(ACTIVE.with(|a|matches!(a.borrow().as_ref().and_then(|t|t.phase.as_ref()),
-                Some(Phase::Animate{proxy:p,..}) if p.hwnd==proxy)));
+                Some(Phase::Animate{proxy:p,..}|Phase::Reversal{proxy:p,..}) if p.hwnd==proxy)));
             pump(false);
             let result=last();
             assert_eq!(result["actualEffect"],effect.name(),"{result}");

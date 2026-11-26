@@ -168,6 +168,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::stage_capture_lab::native_scale_production_owned_external_windows -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::stage_capture_lab::native_guarded_motion_with_windows_animations_enabled -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:TUANPC_DESK_TYPE_EVIDENCE = Join-Path $env:RUNNER_TEMP "typography-evidence"
           cargo test --release native_text::tests::grayscale_typography_sheet_at_96_120_144 -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
