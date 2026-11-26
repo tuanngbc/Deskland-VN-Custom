@@ -48,9 +48,13 @@ try {
     $main=[NativeSmoke]::Window('TLauncher.Native.Messaggi')
     [void][NativeSmoke]::PostMessage($main,0x8005,[IntPtr]::Zero,[IntPtr]::Zero)
     Wait-Until {[NativeSmoke]::IsWindowVisible([NativeSmoke]::Window('TLauncher.Native.Launcher'))}
+    # IsWindowVisible precedes the original morph and lazy first icon delivery.
+    # Settle only the evidence image; no application timing or pacing is changed.
+    Start-Sleep -Milliseconds 1000
     Snapshot 'native-launcher.png'
     [void][NativeSmoke]::PostMessage($main,0x8009,[IntPtr]::Zero,[IntPtr]::Zero)
     Wait-Until {[NativeSmoke]::IsWindowVisible([NativeSmoke]::Window('TLauncher.Native.Impostazioni'))}
+    Start-Sleep -Milliseconds 1000
     Snapshot 'native-settings.png'
     Copy-Item tools/native-resource-diagnostics.ps1 (Join-Path (Split-Path -Parent $Exe) 'native-resource-diagnostics.ps1')
     git rev-parse HEAD | Set-Content (Join-Path (Split-Path -Parent $Exe) 'BUILD-COMMIT.txt')
