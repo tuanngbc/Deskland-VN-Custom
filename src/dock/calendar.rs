@@ -25,8 +25,9 @@ fn month_name(month:Month)->String{match text("vi","en","zh"){
     "vi"=>format!("Tháng {} · {}",month.number,month.year),"zh"=>format!("{}年{}月",month.year,month.number),
     _=>format!("{} {}",["January","February","March","April","May","June","July","August","September","October","November","December"][(month.number-1) as usize],month.year)}}
 fn first_weekday()->usize{
-    use windows_sys::Win32::Globalization::{GetLocaleInfoEx,LOCALE_IFIRSTDAYOFWEEK,LOCALE_NAME_USER_DEFAULT};
-    let mut value=[0u16;8];let count=unsafe{GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT,LOCALE_IFIRSTDAYOFWEEK,value.as_mut_ptr(),8)};
+    use windows_sys::Win32::Globalization::{GetLocaleInfoEx,LOCALE_IFIRSTDAYOFWEEK};
+    // Win32 defines LOCALE_NAME_USER_DEFAULT as NULL, not an exported constant.
+    let mut value=[0u16;8];let count=unsafe{GetLocaleInfoEx(ptr::null(),LOCALE_IFIRSTDAYOFWEEK,value.as_mut_ptr(),8)};
     if count<=1{return 0;}String::from_utf16_lossy(&value[..count as usize-1]).parse::<usize>().ok().filter(|v|*v<=6).unwrap_or(0)
 }
 
