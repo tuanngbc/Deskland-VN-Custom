@@ -10,6 +10,7 @@ extern "C" {
     fn tlauncher_fluidwin_shell_menu_close();
     fn tlauncher_fluidwin_shell_menu_shutdown();
     #[cfg(test)] fn tlauncher_fluidwin_shell_menu_fixture(owner:HWND)->u32;
+    #[cfg(test)] fn tlauncher_fluidwin_owner_draw_fixture(owner:HWND)->u32;
 }
 
 #[derive(Clone,Copy)]
@@ -99,12 +100,16 @@ fn native_imported_menu_selects_nested_shell_command(){
                 unsafe{PostThreadMessageW(tid,WM_KEYDOWN,key as usize,0);}
             }
             std::thread::sleep(std::time::Duration::from_secs(2));
-            unsafe{PostThreadMessageW(tid,WM_KEYDOWN,VK_ESCAPE as usize,0);PostThreadMessageW(tid,WM_KEYDOWN,VK_ESCAPE as usize,0);}
+            unsafe{if !FindWindowW(crate::desktop::wide("FluidWin.Menu").as_ptr(),std::ptr::null()).is_null(){
+                PostThreadMessageW(tid,WM_KEYDOWN,VK_ESCAPE as usize,0);PostThreadMessageW(tid,WM_KEYDOWN,VK_ESCAPE as usize,0);
+            }}
         });
         let selected=tlauncher_fluidwin_shell_menu_fixture(owner);
         helper.join().unwrap();
+        let native_messages=tlauncher_fluidwin_owner_draw_fixture(owner);
         DestroyWindow(owner);shutdown();CoUninitialize();
         assert_eq!(selected,73,"imported menu skips disabled row, opens submenu and dispatches its real command ID");
+        assert_eq!(native_messages,3,"native extension fallback must route measurement and drawing messages");
         println!("FLUIDWIN_SHELL_MENU nested_keyboard=PASS owner_shell_commands=NOT_VERIFIED");
     }
 }

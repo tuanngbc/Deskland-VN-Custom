@@ -38,6 +38,21 @@ inline void (*passoAnimazioni)() = nullptr;
 inline int aperti = 0;
 inline bool chiudiTutti = false;
 inline void chiudi() { if (aperti > 0) chiudiTutti = true; }
+// TLauncher: native Shell-extension fallback with scoped message forwarding.
+inline thread_local std::function<bool(UINT,WPARAM,LPARAM,LRESULT&)> shellMessage;
+inline thread_local std::function<UINT(HMENU,POINT,HWND)> nativeShellMenu;
+struct ShellMessageScope {
+    decltype(shellMessage) previous;
+    explicit ShellMessageScope(decltype(shellMessage) route):previous(std::move(shellMessage)){shellMessage=std::move(route);}
+    ~ShellMessageScope(){shellMessage=std::move(previous);}
+};
+inline bool requiresNative(HMENU menu) {
+    for(int i=0;i<GetMenuItemCount(menu);i++){
+        MENUITEMINFOW item{};item.cbSize=sizeof(item);item.fMask=MIIM_FTYPE|MIIM_BITMAP;
+        if(GetMenuItemInfoW(menu,UINT(i),TRUE,&item)&&((item.fType&MFT_OWNERDRAW)||item.hbmpItem==HBMMENU_CALLBACK))return true;
+    }
+    return false;
+}
 inline bool animazioni() { return animazioniInCorso && passoAnimazioni && animazioniInCorso(); }
 // registro di FluidWin (solo con --log): alla chiusura di ogni menu, quanto arrivavano in ritardo i movimenti del mouse
 inline void (*registro)(const char*) = nullptr;
@@ -607,6 +622,13 @@ private:
     void apriSotto(int i) {
         HMENU hs = voci[i].sotto;
         if (prepara) prepara(hs);
+        if(nativeShellMenu&&requiresNative(hs)){
+            RECT r{};GetWindowRect(fin,&r);inSotto=true;ReleaseCapture();
+            const UINT id=nativeShellMenu(hs,POINT{r.right-LONG(4*dpi),r.top+LONG(rett[i].top-scorri)},fin);
+            inSotto=false;
+            if(id){scelta=id;fine=true;}else SetCapture(fin);
+            return;
+        }
         auto sv = daHmenu(hs);
         if (sv.empty()) return;
         aperto = i; disegna();

@@ -2,34 +2,61 @@
   "repository": "https://github.com/clooudfn/FluidWin",
   "commit": "2f773a8733b84c7dbee88fff6628d14e9ac802b9",
   "license": "MIT",
+  "hash_note": "Git blob IDs identify canonical original source; worktree SHA-256 records the original CRLF checkout bytes.",
   "files": [
     {
       "path": "destro.h",
-      "sha256": "6925576d52b55863d6eff5cd74ed7651ca55519c6b078a293d0f9745b7a7250e"
+      "source_git_blob": "a8402a8ccb271e445c3461db68ce5991a3a78f48",
+      "source_worktree_sha256": "6925576d52b55863d6eff5cd74ed7651ca55519c6b078a293d0f9745b7a7250e",
+      "local_changes": "Forward IContextMenu2/3 messages in the scoped fallback"
     },
     {
       "path": "menu.h",
-      "sha256": "3149d2aeec61586c37c6075ecbd532657d7a4b21127f23caf79ae24784d3bda1"
+      "source_git_blob": "a12409ee6996c890a554d8466a4d34f9da43d2f1",
+      "source_worktree_sha256": "3149d2aeec61586c37c6075ecbd532657d7a4b21127f23caf79ae24784d3bda1",
+      "local_changes": "Scoped Shell message route and native owner-draw/submenu fallback"
     },
     {
       "path": "condividi.h",
-      "sha256": "b03493049a8112948c3f91818698d464c3463996e634b043dc654c4e6c26d972"
+      "source_git_blob": "bf92dbecbc23b8571ff4c0e5c1a6b28194e628ae",
+      "source_worktree_sha256": "b03493049a8112948c3f91818698d464c3463996e634b043dc654c4e6c26d972",
+      "local_changes": "None beyond Git newline normalization"
     },
     {
       "path": "fabbriche.h",
-      "sha256": "3edfdb8eec66b45795f1ed51a60629437b895e1ca51472b1dd8b29646e5419a9"
+      "source_git_blob": "e240949dd83557cfd3fa45bf9933f38c918e609c",
+      "source_worktree_sha256": "3edfdb8eec66b45795f1ed51a60629437b895e1ca51472b1dd8b29646e5419a9",
+      "local_changes": "None beyond Git newline normalization"
     },
     {
       "path": "raggio.h",
-      "sha256": "a289088cf7e88b65edcf9d8a1114f1923946fe1430cf2ebe4e72e97babd4aefa"
+      "source_git_blob": "037ac1eb57705a9fecf7dc7d1f5fa22a5e50f7a1",
+      "source_worktree_sha256": "a289088cf7e88b65edcf9d8a1114f1923946fe1430cf2ebe4e72e97babd4aefa",
+      "local_changes": "None beyond Git newline normalization"
     },
     {
       "path": "testi.h",
-      "sha256": "d98f422ab6b82528a28b46e7d347bf5a91ebeb4e9813746a7293d3b26bd58364"
+      "source_git_blob": "87694b529e4e729da391d8ed7bccdba0f0658648",
+      "source_worktree_sha256": "d98f422ab6b82528a28b46e7d347bf5a91ebeb4e9813746a7293d3b26bd58364",
+      "local_changes": "None beyond Git newline normalization"
     },
     {
       "path": "traduzioni.h",
-      "sha256": "0efc1c13cc0565c00a1f02d591e4d8ed142fd2fb063ecb47fd5d49468745081f"
+      "source_git_blob": "36c25315b350ee6189a318b0a944563f46918500",
+      "source_worktree_sha256": "0efc1c13cc0565c00a1f02d591e4d8ed142fd2fb063ecb47fd5d49468745081f",
+      "local_changes": "None beyond Git newline normalization"
+    },
+    {
+      "path": "pool.h",
+      "source_git_blob": "378910e1ca7c423249aa34b2575059081e3abe32",
+      "source_worktree_sha256": "730568ff01ba6769f78ea969ec962d0e8853a0e1109153e5780f4901a135e2f2",
+      "local_changes": "None beyond Git newline normalization"
+    },
+    {
+      "path": "altrui.h",
+      "source_git_blob": "318efd29447319018fe8666785c2afa0850eec5d",
+      "source_worktree_sha256": "7a9544658e5d0259d6f7bc03d88aa5adfd015a9a29720dd276b48312a95966d6",
+      "local_changes": "None beyond Git newline normalization"
     }
   ]
 }

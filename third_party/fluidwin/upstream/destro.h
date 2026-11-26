@@ -349,6 +349,12 @@ inline bool mostra(POINT pt, HWND proprietario, const std::function<void(const c
             tShell = ms();
             IContextMenu2* cm2 = nullptr; IContextMenu3* cm3 = nullptr;
             cm->QueryInterface(IID_PPV_ARGS(&cm2)); cm->QueryInterface(IID_PPV_ARGS(&cm3));
+            menu::ShellMessageScope messageScope([cm2,cm3](UINT message,WPARAM w,LPARAM l,LRESULT& result){
+                if(message!=WM_INITMENUPOPUP&&message!=WM_DRAWITEM&&message!=WM_MEASUREITEM&&message!=WM_MENUCHAR&&message!=WM_MENUSELECT&&message!=WM_UNINITMENUPOPUP)return false;
+                if(cm3&&cm3->HandleMenuMsg2(message,w,l,&result)==S_OK)return true;
+                if(cm2&&cm2->HandleMenuMsg(message,w,l)==S_OK){result=0;return true;}
+                return false;
+            });
             // come il menu di Windows 11: pulsanti in cima, voci principali (Proprieta' per ultima), poi sotto la
             // freccia tutte le altre, nell'ordine di Windows (i sottomenu restano sottomenu)
             std::vector<menu::Voce> pulsanti, principali, proprieta, altre;
@@ -408,7 +414,8 @@ inline bool mostra(POINT pt, HWND proprietario, const std::function<void(const c
                     registro(b);
                 }
                 SetForegroundWindow(proprietario);
-                const UINT cmd = menu::mostra(voci, pt, proprietario, false, prepara);
+                const UINT cmd = menu::nativeShellMenu&&menu::requiresNative(m)
+                    ? menu::nativeShellMenu(m,pt,proprietario) : menu::mostra(voci, pt, proprietario, false, prepara);
                 // Rinomina e Condividi: comandi interni di Esplora file, che chiamati da un altro processo non fanno
                 // niente (provato: Rinomina E_NOTIMPL, Condividi nessuna finestra). Li fa FluidWin (vedi rinomina e
                 // condividi.h); se non riesce prova comunque il comando del menu
