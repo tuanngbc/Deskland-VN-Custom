@@ -15,7 +15,7 @@
 namespace tlauncher_snap_access {
 constexpr UINT SELECT=WM_APP+145,CHOOSE=WM_APP+146;
 struct Snapshot{HWND window=nullptr;std::wstring title,action;std::vector<std::wstring> labels;std::vector<RECT> regions;int selected=-1;
-    long role=ROLE_SYSTEM_PANE,childRole=ROLE_SYSTEM_PUSHBUTTON;std::vector<long> roles,states;std::vector<std::wstring> actions;bool menuFocus=false;};
+    long role=ROLE_SYSTEM_PANE,childRole=ROLE_SYSTEM_PUSHBUTTON;std::vector<long> roles,states;std::vector<std::wstring> actions;bool menuFocus=false;LPARAM actionToken=0;};
 struct Model{std::mutex mutex;Snapshot state;Snapshot read(){std::lock_guard<std::mutex> guard(mutex);return state;}};
 class Accessible final:public IAccessible{
     std::atomic<ULONG> refs{1};std::shared_ptr<Model> model;
@@ -28,7 +28,7 @@ class Accessible final:public IAccessible{
         if(!s.window||!IsWindowVisible(s.window))return CO_E_OBJNOTCONNECTED;
         int index=child(value,s);if(index<=0)return E_INVALIDARG;
         if(size_t(index)<=s.states.size()&&(s.states[index-1]&(STATE_SYSTEM_UNAVAILABLE|STATE_SYSTEM_INVISIBLE)))return E_ACCESSDENIED;
-        return PostMessageW(s.window,message,index-1,reinterpret_cast<LPARAM>(model.get()))?S_OK:E_FAIL;}
+        return PostMessageW(s.window,message,index-1,s.actionToken?s.actionToken:reinterpret_cast<LPARAM>(model.get()))?S_OK:E_FAIL;}
 public:
     explicit Accessible(std::shared_ptr<Model> value):model(std::move(value)){}
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id,void** out)override{if(!out)return E_POINTER;*out=nullptr;

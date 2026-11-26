@@ -97,6 +97,7 @@ struct Panel {
     hwnd:HWND,owner:HWND,tag:usize,anchor:chrome::Anchor,dpi:u32,layer:Layer,ink:Option<Layer>,
     glass:super::glass::Glass,fonts:[HFONT;4], view:View, metrics:Option<Metrics>, index:Option<usize>, pressed:Option<usize>, pressed_point:Option<POINT>, page:usize,
     cols:usize,per_page:usize, row_height:i32,list:bool,shelf:bool,rasters:surface::IconRasters,entrance:Option<super::motion::Tween>,shadow:Option<chrome::PanelShadow>,hub:bool,
+    access:Option<super::control_access::Provider>,access_token:usize,
 }
 impl Drop for Panel {
     fn drop(&mut self){unsafe{for &f in &self.fonts{if !f.is_null(){DeleteObject(f);}}}}
@@ -210,7 +211,26 @@ impl Panel{
     fn pages(&self)->usize{self.view.cards.len().saturating_sub(if self.shelf{3}else{0}).div_ceil(self.per_page).max(1)}
     fn page_delta(&mut self,delta:isize){
         self.page=self.page.saturating_add_signed(delta).min(self.pages()-1);
+        self.access_token=serial();
         self.index=self.cards().iter().position(|c|c.action.is_some());self.pressed=None;
+    }
+    unsafe fn update_access(&self){
+        let Some(access)=self.access.as_ref()else{return;};
+        if self.entrance.is_some_and(|t|t.to==0.0){access.close();return;}
+        let mut origin=POINT{x:0,y:0};if ClientToScreen(self.hwnd,&mut origin)==0{return;}
+        let mut rows=self.cards().iter().enumerate().map(|(i,c)|{
+            let mut r=self.rect(i);r.left+=origin.x;r.right+=origin.x;r.top+=origin.y;r.bottom+=origin.y;
+            super::control_access::Row{name:if c.hint.is_empty(){c.title.clone()}else{format!("{} · {}",c.title,c.hint)},rect:r,enabled:c.action.is_some(),button:c.action.is_some()||self.shelf&&i<3,
+                action:crate::launcher::localized("Mở","Open","打开").into()}
+        }).collect::<Vec<_>>();
+        if self.pages()>1{
+            let (w,h)=self.layer.size;let top=origin.y+h-chrome::scale(self.dpi,30);
+            for (left,right,name,enabled) in [(0,w/2,crate::launcher::localized("Trang trước","Previous page","上一页"),self.page>0),
+                (w/2,w,crate::launcher::localized("Trang sau","Next page","下一页"),self.page+1<self.pages())]{
+                rows.push(super::control_access::Row{name:name.into(),rect:RECT{left:origin.x+left,right:origin.x+right,top,bottom:origin.y+h},enabled,button:true,action:name.into()});
+            }
+        }
+        access.update(self.hwnd,&self.view.title,&rows,self.index,self.access_token);
     }
     unsafe fn paint(&mut self){
         let (w,h)=self.layer.size;
@@ -313,6 +333,7 @@ impl Panel{
             surface::status_on(data,w,h,slot,scale,p.accent,Some(icon));
         }
         if self.layered{chrome::mask_popup(self.layer.pixels(),w,h,px(16) as f32,if self.glass.is_ready(){255}else{self.anchor.alpha()});}
+        self.update_access();
     }
 }
 pub(super) fn wants_status()->bool{
@@ -334,7 +355,7 @@ pub(super) unsafe fn status_changed(){
         }
         if changed{p.dirty=true;Some(p.hwnd)}else{None}
     });
-    if let Some(hwnd)=hwnd{InvalidateRect(hwnd,ptr::null(),0);}
+    if let Some(hwnd)=hwnd{InvalidateRect(hwnd,ptr::null(),0);announce(hwnd);}
 }
 pub(super) fn ticket(owner:HWND)->Option<usize>{
     PANE.with(|s|s.borrow().as_ref().filter(|p|p.owner==owner).map(|p|p.tag))
@@ -345,12 +366,13 @@ pub(super) unsafe fn update(owner:HWND,ticket:usize,view:View){
         let mut slot=s.borrow_mut();
         let panel=slot.as_mut().filter(|p|p.owner==owner&&p.tag==ticket)?;
         panel.view=view;
+        panel.access_token=serial();
         panel.page=panel.page.min(panel.pages()-1);
         panel.index=None;panel.pressed=None;panel.pressed_point=None;
         panel.dirty=true;
         Some(panel.hwnd)
     });
-    if let Some(hwnd)=hwnd{InvalidateRect(hwnd,ptr::null(),0);}
+    if let Some(hwnd)=hwnd{InvalidateRect(hwnd,ptr::null(),0);announce(hwnd);}
 }
 pub(super) fn open_for(owner:HWND)->bool{
     PANE.with(|s|s.borrow().as_ref().is_some_and(|p|p.owner==owner))
@@ -424,7 +446,7 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bo
     let metrics=view.metrics.map(Metrics::new);
     let start=std::time::Instant::now();
     let animated=super::motion::native_allowed();
-    let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,glass,fonts,view,metrics,index:None,pressed:None,pressed_point:None,page:0,cols,per_page,row_height,list,shelf,rasters:surface::IconRasters::default(),entrance:None,shadow:None,hub};
+    let mut p=Panel{hwnd,owner,tag,anchor,dpi,layered:true,dirty:false,layer,ink,glass,fonts,view,metrics,index:None,pressed:None,pressed_point:None,page:0,cols,per_page,row_height,list,shelf,rasters:surface::IconRasters::default(),entrance:None,shadow:None,hub,access:None,access_token:serial()};
     // A hidden HWND can't be relied on to dispatch WM_PAINT. Submit the
     // completed bitmap directly, then show the window with content.
     p.paint();
@@ -459,6 +481,28 @@ unsafe fn show_inner(owner:HWND,anchor:chrome::Anchor,view:View,list:bool,hub:bo
 }
 unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     match msg{
+        WM_GETOBJECT if l as i32 == -4=>PANE.with(|s|{
+            let Ok(mut s)=s.try_borrow_mut()else{return 0;};
+            let Some(p)=s.as_mut().filter(|p|p.hwnd==hwnd&&!p.entrance.is_some_and(|t|t.to==0.0))else{return 0;};
+            if p.access.is_none(){p.access=super::control_access::Provider::new();}p.update_access();
+            p.access.as_ref().map_or(0,|a|a.object(w))
+        }),
+        super::control_access::SELECT|super::control_access::CHOOSE=>{
+            let (action,accepted)=PANE.with(|s|{
+                let Ok(mut s)=s.try_borrow_mut()else{return (None,false);};
+                let Some(p)=s.as_mut().filter(|p|p.hwnd==hwnd&&p.access.is_some()&&p.access_token==l as usize&&!p.entrance.is_some_and(|t|t.to==0.0))else{return (None,false);};
+                let n=p.cards().len();
+                if w>=n{
+                    if msg!=super::control_access::CHOOSE||p.pages()==1||w>n+1||w==n&&p.page==0||w==n+1&&p.page+1==p.pages(){return (None,false);}
+                    p.page_delta(if w==n{-1}else{1});p.dirty=true;p.update_access();return (None,true);
+                }
+                let Some(action)=p.card(w).and_then(|c|c.action.clone())else{return (None,false);};
+                p.index=Some(w);p.dirty=true;p.update_access();
+                (if msg==super::control_access::CHOOSE{Some((p.owner,action))}else{None},true)
+            });
+            if accepted{SetFocus(hwnd);shelf_page();InvalidateRect(hwnd,ptr::null(),0);announce(hwnd);}
+            if let Some((owner,action))=action{dispatch(owner,hwnd,action);}0
+        },
         WM_ERASEBKGND=>1,
         WM_ACTIVATE if w&0xffff==WA_INACTIVE as usize=>{
             let shelf=PANE.with(|s|s.borrow().as_ref().is_some_and(|p|p.hwnd==hwnd&&p.shelf));
@@ -474,6 +518,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         crate::weather::READY=>{super::weather_panel::receive(hwnd,w);0},
         WM_DPICHANGED=>{DestroyWindow(hwnd);0},
         WM_CLOSE=>{
+            PANE.with(|s|if let Some(p)=s.borrow().as_ref().filter(|p|p.hwnd==hwnd){if let Some(access)=&p.access{access.close();}});
             let animated=PANE.with(|s|{
                 let mut slot=s.borrow_mut();
                 let Some(p)=slot.as_mut().filter(|p|p.hwnd==hwnd&&p.layered)else{return false;};
@@ -622,38 +667,43 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 let mut event=TRACKMOUSEEVENT{cbSize:mem::size_of::<TRACKMOUSEEVENT>() as u32,dwFlags:TME_LEAVE,hwndTrack:hwnd,dwHoverTime:0};
                 TrackMouseEvent(&mut event);
             }
-            if repaint{shelf_page();}
+            if repaint{shelf_page();announce(hwnd);}
             if capture{SetCapture(hwnd);}
             if msg==WM_LBUTTONUP{ReleaseCapture();}
             if let Some((owner,action))=action{
-                if let Command::Shelf(action)=action{
-                    if GetCapture()==hwnd{ReleaseCapture();}
-                    super::shelf::perform(owner,hwnd,action);
-                }else if let Command::Notifications(action)=action{
-                    if GetCapture()==hwnd{ReleaseCapture();}
-                    super::notifications::perform(owner,hwnd,action);
-                }else if let Command::News(action)=action{
-                    if GetCapture()==hwnd{ReleaseCapture();}
-                    super::news::perform(owner,hwnd,action);
-                }else if let Command::Weather(action)=action{
-                    if GetCapture()==hwnd{ReleaseCapture();}
-                    super::weather_panel::perform(owner,hwnd,action);
-                }else{
-                    DestroyWindow(hwnd);
-                    super::perform_control(owner,action);
-                }
+                dispatch(owner,hwnd,action);
             }else if repaint{InvalidateRect(hwnd,ptr::null(),0);}
             0
         },
         _=>DefWindowProcW(hwnd,msg,w,l),
     }
 }
+unsafe fn dispatch(owner:HWND,hwnd:HWND,action:Command){
+    if GetCapture()==hwnd{ReleaseCapture();}
+    match action{
+        Command::Shelf(action)=>super::shelf::perform(owner,hwnd,action),
+        Command::Notifications(action)=>super::notifications::perform(owner,hwnd,action),
+        Command::News(action)=>super::news::perform(owner,hwnd,action),
+        Command::Weather(action)=>super::weather_panel::perform(owner,hwnd,action),
+        action=>{DestroyWindow(hwnd);super::perform_control(owner,action);}
+    }
+}
+unsafe fn announce(hwnd:HWND){
+    let index=PANE.with(|s|{let Ok(s)=s.try_borrow()else{return None;};
+        let p=s.as_ref().filter(|p|p.hwnd==hwnd&&p.access.is_some())?;p.update_access();Some(p.index)});
+    if let Some(index)=index{
+        windows_sys::Win32::UI::Accessibility::NotifyWinEvent(0x8004,hwnd,-4,0);
+        if let Some(i)=index{windows_sys::Win32::UI::Accessibility::NotifyWinEvent(0x8006,hwnd,-4,i as i32+1);windows_sys::Win32::UI::Accessibility::NotifyWinEvent(0x8005,hwnd,-4,i as i32+1);}
+    }
+}
 #[cfg(test)] mod tests{
     use super::*;
-    #[test]#[ignore="hosted File Shelf images/paging/lifetime; synthetic files only, no Shell file operations"]
+    #[cfg(target_env="msvc")]
+    #[test]#[ignore="hosted File Shelf images/paging/lifetime/accessibility; synthetic files only, no Shell file operations"]
     fn native_shelf_grid_pages_all_references_and_releases_images(){
         if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
         unsafe{
+            windows::Win32::System::Ole::OleInitialize(None).unwrap();
             let root=std::path::PathBuf::from(std::env::var_os("RUNNER_TEMP").unwrap());
             let path=root.join(format!("shelf-thumbnail-fixture-{}.png",std::process::id()));
             let pixels=image::RgbaImage::from_fn(240,160,|x,y|if x<120{image::Rgba([30,80,230,255])}else if y<80{image::Rgba([240,150,30,255])}else{image::Rgba([60,210,100,255])});
@@ -694,6 +744,13 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                     p.page=0;p.index=None;p.paint();p.present();
                 });
                 assert_eq!(observed.len(),200);
+                let accessible=super::super::control_access::get(popup);assert!(!accessible.is_null());
+                let expected=per_page as u32+5;
+                assert_eq!(super::super::control_access::probe(accessible,expected,0,0),0,"actual COM names, roles, bounds and hit tests");
+                assert_eq!(super::super::control_access::probe(accessible,expected,1,4),0,"disabled drag-all must reject accessibility action");
+                assert_eq!(super::super::control_access::probe(accessible,expected,3,1),0);
+                let mut selected_message:MSG=mem::zeroed();while PeekMessageW(&mut selected_message,popup,super::super::control_access::SELECT,super::super::control_access::CHOOSE,PM_REMOVE)!=0{DispatchMessageW(&selected_message);}
+                assert_eq!(super::super::control_access::probe(accessible,expected,3,5),0,"selection must reach owner and return through COM");
                 // Native focus can return to Explorer while this shelf remains
                 // available as an incoming IDropTarget.
                 SendMessageW(popup,WM_ACTIVATE,WA_INACTIVE as usize,0);
@@ -705,18 +762,26 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                     let rgba=layer.pixels().chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],255]).collect::<Vec<_>>();
                     image::save_buffer(std::path::PathBuf::from(dir).join(format!("file-shelf-grid-{pass}.png")),&rgba,w as u32,h as u32,image::ColorType::Rgba8).unwrap();
                 }
+                assert_eq!(super::super::control_access::probe(accessible,expected,3,1),0); // queue an old-page selection
                 SendMessageW(popup,WM_KEYDOWN,VK_END as usize,0);
                 let selected=PANE.with(|s|s.borrow().as_ref().unwrap().index.unwrap());assert_eq!(selected,per_page+2);
                 SendMessageW(popup,WM_KEYDOWN,VK_RIGHT as usize,0);
                 PANE.with(|s|assert_eq!(s.borrow().as_ref().unwrap().page,1));
+                while PeekMessageW(&mut selected_message,popup,super::super::control_access::SELECT,super::super::control_access::CHOOSE,PM_REMOVE)!=0{DispatchMessageW(&selected_message);}
+                PANE.with(|s|assert_eq!(s.borrow().as_ref().unwrap().index,Some(0),"queued old-page accessibility selection must be refused"));
                 let started=std::time::Instant::now();
                 while super::super::shelf_previews::image(1+per_page as u64).is_none(){
                     let mut msg:MSG=mem::zeroed();while PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}
                     assert!(started.elapsed()<std::time::Duration::from_secs(20));std::thread::sleep(std::time::Duration::from_millis(10));
                 }
                 assert!(super::super::shelf_previews::image(1).is_none(),"old-page source image retained");
+                assert_eq!(super::super::control_access::probe(accessible,expected,(per_page+3) as i32,2),0,"actual accessible previous-page action");
+                while PeekMessageW(&mut selected_message,popup,super::super::control_access::SELECT,super::super::control_access::CHOOSE,PM_REMOVE)!=0{DispatchMessageW(&selected_message);}
+                PANE.with(|s|assert_eq!(s.borrow().as_ref().unwrap().page,0));
                 SendMessageW(popup,WM_MOUSEWHEEL,((120u16 as usize)<<16) as usize,0); // first page, then close while extraction may be pending
                 close_for(owner);assert_eq!(IsWindow(popup),0);
+                assert_eq!(super::super::control_access::probe(accessible,0,0,3),0,"retained COM client must disconnect on close");
+                super::super::control_access::release(accessible);
                 assert!(!super::super::shelf_previews::receive(popup,tag));assert!(super::super::shelf_previews::image(1).is_none());
                 assert_eq!(IsWindow(owner),1);
             }
@@ -724,7 +789,8 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 assert!(started.elapsed()<std::time::Duration::from_secs(20));std::thread::sleep(std::time::Duration::from_millis(10));
             }
             DestroyWindow(owner);std::fs::remove_file(path).unwrap();
-            println!("FLUIDWIN_SHELF_GRID actual_Shell_image=PASS six_visible=PASS all_200_paged=PASS keyboard=PASS source_focus_preserved=PASS late_closed_result=REFUSED memory_released=PASS real_drag=NOT_INJECTED");
+            windows::Win32::System::Ole::OleUninitialize();
+            println!("FLUIDWIN_SHELF_GRID actual_Shell_image=PASS six_visible=PASS all_200_paged=PASS keyboard=PASS source_focus_preserved=PASS late_closed_result=REFUSED memory_released=PASS MSAA_names_roles_bounds_hit_selection=PASS MSAA_disabled_stale=REFUSED MSAA_page_action=PASS MSAA_disconnected=PASS real_drag=NOT_INJECTED");
         }
     }
     #[test]
