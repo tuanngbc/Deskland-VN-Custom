@@ -11,9 +11,12 @@ extern "C" {
     fn tlauncher_fluidwin_layer(pipeline: *mut c_void, width: u32, height: u32,
         bgra: *const u8, tw: u32, th: u32) -> *mut c_void;
     fn tlauncher_fluidwin_release_layer(layer: *mut c_void);
+    fn tlauncher_fluidwin_gpu_layer(pipeline:*mut c_void,width:u32,height:u32,texture:*mut c_void)->*mut c_void;
     fn tlauncher_fluidwin_content(layer: *mut c_void) -> *mut c_void;
     #[cfg(test)]
     fn tlauncher_fluidwin_source_mips(layer: *mut c_void) -> u32;
+    #[cfg(test)]
+    fn tlauncher_fluidwin_rendered_pixels(pipeline:*mut c_void,layer:*mut c_void,pixels:*mut u8,stride:u32)->i32;
     fn tlauncher_fluidwin_draw(pipeline: *mut c_void, layer: *mut c_void,
         window: *const RECT, icon: *const RECT, canvas: *const RECT,
         side: i32, progress: f64, opacity: f32, drop: i32, dark: i32, scale: f64) -> i32;
@@ -47,10 +50,18 @@ pub(super) struct Layer {
     drop_effect: bool,
     dark: bool,
     scale: f64,
+    scale_effect:bool,
 }
 impl Layer {
     #[cfg(all(test,target_env="msvc"))]
     pub(super) unsafe fn source_mips(&self)->u32{tlauncher_fluidwin_source_mips(self.raw.as_ptr())}
+    #[cfg(all(test,target_env="msvc"))]
+    pub(super) unsafe fn rendered_pixels(&self)->Option<(Vec<u8>,u32,u32)>{
+        let w=u32::try_from(self.canvas.right-self.canvas.left).ok()?;
+        let h=u32::try_from(self.canvas.bottom-self.canvas.top).ok()?;
+        let mut pixels=vec![0;w as usize*h as usize*4];
+        (tlauncher_fluidwin_rendered_pixels(self.pipeline.0.as_ptr(),self.raw.as_ptr(),pixels.as_mut_ptr(),w*4)!=0).then_some((pixels,w,h))
+    }
     pub(super) unsafe fn new(pipeline: Rc<Pipeline>, frame: &super::stage_snapshot::Frame,
         window: RECT, icon: RECT, side: DockSide, drop_effect: bool, dpi: u32) -> Option<Self> {
         #[cfg(target_env = "msvc")]
@@ -77,10 +88,26 @@ impl Layer {
             let height = u32::try_from(canvas.bottom.checked_sub(canvas.top)?).ok()?;
             let raw = NonNull::new(tlauncher_fluidwin_layer(pipeline.0.as_ptr(), width, height,
                 frame.0.as_ptr(), frame.1 as u32, frame.2 as u32))?;
-            Some(Self { raw, pipeline, canvas, window, icon, side, drop_effect, dark:super::material_dark(), scale })
+            Some(Self { raw, pipeline, canvas, window, icon, side, drop_effect, dark:super::material_dark(), scale,scale_effect:false })
         }
         #[cfg(not(target_env = "msvc"))]
         { let _ = (pipeline, frame, window, icon, side, drop_effect, dpi); None }
+    }
+    pub(super) unsafe fn from_gpu(pipeline:Rc<Pipeline>,frame:&super::stage_snapshot::GpuFrame,
+        window:RECT,icon:RECT,side:DockSide,effect:super::motion::WindowEffect,dpi:u32)->Option<Self>{
+        #[cfg(target_env="msvc")]
+        {
+            let side=match side{DockSide::Bottom=>0,DockSide::Left=>2,DockSide::Right=>3};
+            let scale=(f64::from(dpi)/96.0).clamp(0.75,4.0);
+            let margin=if effect==super::motion::WindowEffect::Drop{5*(icon.right-icon.left)+16}else{2};
+            let canvas=RECT{left:window.left.min(icon.left).checked_sub(margin)?,top:window.top.min(icon.top).checked_sub(margin)?,
+                right:window.right.max(icon.right).checked_add(margin)?,bottom:window.bottom.max(icon.bottom).checked_add(margin)?};
+            let raw=NonNull::new(tlauncher_fluidwin_gpu_layer(pipeline.0.as_ptr(),
+                u32::try_from(canvas.right.checked_sub(canvas.left)?).ok()?,u32::try_from(canvas.bottom.checked_sub(canvas.top)?).ok()?,frame.texture.as_raw()))?;
+            Some(Self{raw,pipeline,canvas,window,icon,side,drop_effect:effect==super::motion::WindowEffect::Drop,
+                scale_effect:effect==super::motion::WindowEffect::Scale,dark:super::material_dark(),scale})
+        }
+        #[cfg(not(target_env="msvc"))]{let _=(pipeline,frame,window,icon,side,effect,dpi);None}
     }
     pub(super) unsafe fn attach(&self, visual: &windows::Win32::Graphics::DirectComposition::IDCompositionVisual) -> windows::core::Result<()> {
         #[cfg(target_env = "msvc")]
@@ -96,7 +123,7 @@ impl Layer {
         #[cfg(target_env = "msvc")]
         { tlauncher_fluidwin_draw(self.pipeline.0.as_ptr(), self.raw.as_ptr(),
             &self.window, &self.icon, &self.canvas, self.side, progress, f32::from(opacity) / 255.0,
-            i32::from(self.drop_effect),i32::from(self.dark),self.scale) }
+            if self.scale_effect{2}else{i32::from(self.drop_effect)},i32::from(self.dark),self.scale) }
         #[cfg(not(target_env = "msvc"))]
         { let _ = (progress, opacity); 0 }
     }

@@ -55,6 +55,11 @@ impl CaptureDevice {
         Ok(Self{gpu,winrt})
     }
     unsafe fn frame(&self,hwnd:HWND,valid:impl Fn()->bool,limit:usize,wait:Duration,timing:Option<&CaptureTimingHandle>)->Result<Frame,String>{
+        match self.capture(hwnd,valid,limit,wait,timing,false)?{
+            MotionFrame::Cpu(frame)=>Ok(frame),_=>Err("unexpected GPU capture reply".into())
+        }
+    }
+    unsafe fn capture(&self,hwnd:HWND,valid:impl Fn()->bool,limit:usize,wait:Duration,timing:Option<&CaptureTimingHandle>,gpu_only:bool)->Result<MotionFrame,String>{
         if !valid(){return Err("window identity, visibility or affinity denied".into());}
         use windows_sys::Win32::UI::WindowsAndMessaging::{GetAncestor,GA_ROOT};
         if GetAncestor(hwnd,GA_ROOT)!=hwnd{return Err("WGC requires a top-level HWND".into());}
@@ -62,13 +67,18 @@ impl CaptureDevice {
         let init=Instant::now(); let interop=step("WGC item factory",factory::<GraphicsCaptureItem,IGraphicsCaptureItemInterop>())?;
         let item:GraphicsCaptureItem=step("CreateForWindow",interop.CreateForWindow(OwnedWindow(hwnd)))?;
         let size=step("WGC item size",item.Size())?;
-        if size.Width<1||size.Height<1||!budget(size.Width,size.Height){return Err("window exceeds capture budget".into());}
+        if size.Width<1||size.Height<1||!(if gpu_only{gpu_capture_budget(gpu,size.Width,size.Height)}else{budget(size.Width,size.Height)}){return Err("window exceeds capture budget".into());}
         let pool=step("frame pool",Direct3D11CaptureFramePool::CreateFreeThreaded(
             winrt,DirectXPixelFormat::B8G8R8A8UIntNormalized,1,size))?;
         let result=(||{
             let session=step("capture session",pool.CreateCaptureSession(&item))?;
             let result=(||{
                 step("omit cursor",session.SetIsCursorCaptureEnabled(false))?;
+                // Same request as FluidWin viva.h; API success alone does not
+                // prove Windows honored borderless capture. Keep it in evidence.
+                let border_request=session.SetIsBorderRequired(false).is_ok();
+                let border_reported=session.IsBorderRequired().ok();
+                record(timing,|t|{t.borderless_request=border_request;t.border_required=border_reported;});
                 let (tx,rx)=mpsc::sync_channel(1);
                 let notify=TypedEventHandler::new(move|_,_|{let _=tx.try_send(());Ok(())});
                 let token=step("frame event",pool.FrameArrived(&notify))?;
@@ -90,7 +100,7 @@ impl CaptureDevice {
                     let frame=step("read first frame",pool.TryGetNextFrame())?;
                     let result=(||{
                         let size=step("frame content size",frame.ContentSize())?;
-                        if size.Width<1||size.Height<1||!budget(size.Width,size.Height){
+                        if size.Width<1||size.Height<1||!(if gpu_only{gpu_capture_budget(gpu,size.Width,size.Height)}else{budget(size.Width,size.Height)}){
                             return Err("window resized beyond capture limit".into());
                         }
                         let surface=step("frame surface",frame.Surface())?;
@@ -100,8 +110,34 @@ impl CaptureDevice {
                         texture.GetDesc(&mut desc);
                         let (w,h)=(size.Width as u32,size.Height as u32);
                         if desc.Format!=DXGI_FORMAT_B8G8R8A8_UNORM||desc.Width<w||desc.Height<h||
-                            !budget(desc.Width as i32,desc.Height as i32)||desc.SampleDesc.Count!=1{
+                            desc.SampleDesc.Count!=1{
                             return Err("unexpected WGC texture format or size".into());
+                        }
+                        if gpu_only {
+                            use windows_sys::Win32::{Foundation::RECT, Graphics::Dwm::{DwmGetWindowAttribute,DWMWA_EXTENDED_FRAME_BOUNDS},UI::WindowsAndMessaging::GetWindowRect};
+                            let mut wr:RECT=std::mem::zeroed();let mut visible:RECT=std::mem::zeroed();
+                            if GetWindowRect(hwnd,&mut wr)==0 || DwmGetWindowAttribute(hwnd,DWMWA_EXTENDED_FRAME_BOUNDS as u32,(&mut visible as *mut RECT).cast(),std::mem::size_of::<RECT>() as u32)<0{return Err("capture bounds unavailable".into());}
+                            // Crop only documented invisible resize margins when
+                            // WGC includes them. Never trim application pixels.
+                            let (left,top,right,bottom)=if w as i32==wr.right-wr.left&&h as i32==wr.bottom-wr.top {
+                                (visible.left-wr.left,visible.top-wr.top,visible.right-wr.left,visible.bottom-wr.top)
+                            }else if w as i32==visible.right-visible.left&&h as i32==visible.bottom-visible.top {
+                                (0,0,w as i32,h as i32)
+                            }else{return Err("capture bounds do not match window frame".into());};
+                            if left<0||top<0||right<=left||bottom<=top||right>w as i32||bottom>h as i32{return Err("invalid capture crop".into());}
+                            let mut output=desc;
+                            output.Width=(right-left) as u32;output.Height=(bottom-top) as u32;
+                            output.Usage=D3D11_USAGE_DEFAULT;output.CPUAccessFlags=0;
+                            output.BindFlags=(D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET).0 as u32;
+                            output.MiscFlags=D3D11_RESOURCE_MISC_GENERATE_MIPS.0 as u32;output.MipLevels=0;output.ArraySize=1;
+                            let mut copied=None;
+                            step("native-resolution GPU texture",gpu.device.CreateTexture2D(&output,None,Some(&mut copied)))?;
+                            let copied=copied.ok_or("missing native-resolution texture")?;
+                            let region=D3D11_BOX{left:left as u32,top:top as u32,front:0,right:right as u32,bottom:bottom as u32,back:1};
+                            gpu.context().CopySubresourceRegion(&copied,0,0,0,0,&texture,0,Some(&region));
+                            if !valid(){return Err("capture cancelled before GPU handoff".into());}
+                            record(timing,|t|t.gpu_to_gpu=true);
+                            return Ok(MotionFrame::Gpu(GpuFrame{texture:copied,width:right-left,height:bottom-top,gpu:gpu.clone()}));
                         }
                         desc.Width=w;desc.Height=h;desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;
                         desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ.0 as _;desc.MiscFlags=0;
@@ -140,7 +176,7 @@ impl CaptureDevice {
                         gpu.context().Unmap(&staging,0);
                         if !valid(){return Err("window changed during capture".into());}
                         record(timing,|t|t.downsample_ms=elapsed(downsample)); if !bytes.chunks_exact(4).any(|p|p[0]|p[1]|p[2]!=0){return Err("capture was blank".into());}
-                        Ok((bytes,dw as i32,dh as i32))
+                        Ok(MotionFrame::Cpu((bytes,dw as i32,dh as i32)))
                     })();
                     let _=frame.Close();
                     result
@@ -160,6 +196,11 @@ pub(super) unsafe fn frame(hwnd:HWND,valid:impl Fn()->bool)->Result<Frame,String
     if !valid(){return Err("window identity, visibility or affinity denied".into());}
     let _apartment=Apartment::enter()?;
     CaptureDevice::new()?.frame(hwnd,valid,CARD_EDGE,Duration::from_secs(2),None)
+}
+#[cfg(test)]
+pub(super) unsafe fn gpu_frame(hwnd:HWND,valid:impl Fn()->bool)->Result<MotionFrame,String>{
+    let _apartment=Apartment::enter()?;
+    CaptureDevice::new()?.capture(hwnd,valid,MOTION_EDGE,Duration::from_secs(2),None,true)
 }
 
 pub(super) const READY:u32=WM_APP+58;
@@ -320,6 +361,23 @@ impl Preview{
     }
 }
 pub(super) type Frame=(Vec<u8>,i32,i32);
+#[derive(Clone)]
+pub(super) struct GpuFrame{
+    pub texture:ID3D11Texture2D,pub width:i32,pub height:i32,pub gpu:Arc<crate::shell_gpu::ShellGpu>,
+}
+#[derive(Clone)]
+pub(super) enum MotionFrame{Cpu(Frame),Gpu(GpuFrame)}
+impl MotionFrame {
+    pub fn size(&self)->(i32,i32){match self{Self::Cpu((_,w,h))=>(*w,*h),Self::Gpu(f)=>(f.width,f.height)}}
+}
+fn gpu_capture_budget(gpu:&crate::shell_gpu::ShellGpu,w:i32,h:i32)->bool{
+    #[cfg(target_env="msvc")]
+    unsafe{
+        extern "C" {fn tlauncher_fluidwin_capture_budget(device:*mut std::ffi::c_void)->u64;}
+        w>0&&h>0&&w<=16384&&h<=16384&&((w as u64)*(h as u64)*16/3)<=tlauncher_fluidwin_capture_budget(gpu.device.as_raw())
+    }
+    #[cfg(not(target_env="msvc"))] {let _=gpu;budget(w,h)}
+}
 pub(super) const MOTION_EDGE:usize=1024;
 const CARD_EDGE:usize=360;
 fn motion_size(w:i32,h:i32,stamp:&Stamp)->bool{
@@ -361,6 +419,7 @@ const MAX_AGE:Duration=Duration::from_secs(30*60);
 struct Stamp{i:i32,j:i32,title:String}
 #[derive(Default)]
 struct Source{
+    gpu_frame:Option<GpuFrame>,
     frame:Option<Frame>, revision:u64, transition_revision:Option<u64>, last_used:Option<Instant>,
     stamp:Option<Stamp>, dirty:bool, retry:Option<Instant>, captured_at:Option<Instant>,
 }
@@ -381,6 +440,7 @@ struct Job{
 pub(super) struct CaptureTiming{
     pub queue_ms:u64,pub device_ms:u64,pub capture_init_ms:u64,pub first_frame_ms:u64,
     pub readback_ms:u64,pub downsample_ms:u64,
+    pub gpu_to_gpu:bool,pub borderless_request:bool,pub border_required:Option<bool>,
 }
 pub(super) type CaptureTimingHandle=Arc<Mutex<CaptureTiming>>;
 #[cfg(test)]
@@ -392,6 +452,7 @@ fn record(timing:Option<&CaptureTimingHandle>,f:impl FnOnce(&mut CaptureTiming))
 struct Request{
     source:WindowIdentity, stamp:Stamp, live:Arc<AtomicBool>,
     reply:mpsc::SyncSender<Result<Frame,String>>,
+    gpu_reply:Option<mpsc::SyncSender<Result<MotionFrame,String>>>,
     limit:usize,wait:Duration,queued:Instant,timing:Option<CaptureTimingHandle>,
 }
 struct Worker{sender:mpsc::SyncSender<Request>,thread:JoinHandle<()>}
@@ -423,10 +484,11 @@ impl Worker{
                         let start=Instant::now();let result=CaptureDevice::new();
                         record(req.timing.as_ref(),|t|t.device_ms=elapsed(start));device=Some(result?);
                     }
-                    device.as_ref().unwrap().frame(req.source.hwnd as HWND,valid,req.limit,req.wait,req.timing.as_ref())
+                    device.as_ref().unwrap().capture(req.source.hwnd as HWND,valid,req.limit,req.wait,req.timing.as_ref(),req.gpu_reply.is_some())
                 })();
                 if result.is_err()&&req.live.load(Ordering::Relaxed){device=None;}
-                let _=req.reply.send(result);
+                if let Some(reply)=req.gpu_reply{let _=reply.send(result);}
+                else{let _=req.reply.send(result.and_then(|frame|match frame{MotionFrame::Cpu(f)=>Ok(f),_=>Err("unexpected GPU reply".into())}));}
                 PostMessageW(controller as HWND,READY,0,0);
             }
         })?;
@@ -471,13 +533,24 @@ unsafe fn stamp(source:WindowIdentity)->Option<Stamp>{
 impl State{
     fn evict(&mut self,now:Instant){
         self.sources.retain(|_,s|s.last_used.is_some_and(|t|now.duration_since(t)<=MAX_AGE));
+        let mut gpu_keys=self.sources.iter().filter_map(|(&id,s)|s.gpu_frame.as_ref().map(|f|
+            (id,s.last_used,f.width as u64*f.height as u64*16/3))).collect::<Vec<_>>();
+        gpu_keys.sort_unstable_by_key(|(_,t,_)|*t);
+        let mut gpu_bytes:u64=gpu_keys.iter().map(|(_,_,bytes)|*bytes).sum();
+        for (id,_,bytes) in gpu_keys{
+            let open=unsafe{windows_sys::Win32::UI::WindowsAndMessaging::IsIconic(id.hwnd as HWND)==0};
+            if open||gpu_bytes>64*1024*1024{
+                if let Some(entry)=self.sources.get_mut(&id){entry.gpu_frame=None;}
+                gpu_bytes-=bytes;
+            }
+        }
         for entry in self.sources.values_mut(){
             if entry.captured_at.is_some_and(|t|now.duration_since(t)>Duration::from_secs(15))
                 &&entry.frame.as_mut().is_some_and(shrink_transition_frame){
                 entry.revision^=1u64<<63;
             }
             if entry.captured_at.is_some_and(|t|now.duration_since(t)>MAX_AGE){
-                entry.frame=None;entry.captured_at=None;
+                entry.frame=None;entry.gpu_frame=None;entry.captured_at=None;
             }
         }
         let frame_bytes=|s:&Source|s.frame.as_ref().map_or(0,|f|f.0.len());
@@ -578,7 +651,7 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
                 let live=Arc::new(AtomicBool::new(true));
                 let (reply,receiver)=mpsc::sync_channel(1);
                 if state.worker.is_none(){state.worker=Worker::new(controller as usize).ok();}
-                let req=Request{source:id,stamp:stamp.clone(),live:live.clone(),reply,limit:CARD_EDGE,wait:Duration::from_secs(2),queued:Instant::now(),timing:None};
+                let req=Request{source:id,stamp:stamp.clone(),live:live.clone(),reply,gpu_reply:None,limit:CARD_EDGE,wait:Duration::from_secs(2),queued:Instant::now(),timing:None};
                 if state.worker.as_ref().is_some_and(|w|w.sender.try_send(req).is_ok()){
                     state.job=Some(Job{source:id,stamp,live,receiver});
                 }
@@ -614,7 +687,7 @@ pub(super) fn sync(targets:&[Target],controller:HWND,enabled:bool,foreground:usi
 // One on-demand frame from the existing worker. A click takes priority over
 // background Stage capture; cancellation releases its session before reuse.
 pub(super) struct TransitionCapture{
-    pub receiver:mpsc::Receiver<Result<Frame,String>>,
+    pub receiver:mpsc::Receiver<Result<MotionFrame,String>>,
     pub timing:CaptureTimingHandle,
     pub cached:bool,
     live:Arc<AtomicBool>,
@@ -628,16 +701,13 @@ pub(super) fn transition_capture(source:WindowIdentity,controller:HWND)->Result<
         let live=Arc::new(AtomicBool::new(true));
         let (reply,receiver)=mpsc::sync_channel(1);
         let timing=Arc::new(Mutex::new(CaptureTiming::default()));
-        if let Some(frame)=state.sources.get(&source).filter(|s|!s.dirty&&s.stamp.as_ref()==Some(&stamp)
-            &&s.captured_at.is_some_and(|t|t.elapsed()<=Duration::from_millis(800)))
-            .and_then(|s|s.frame.as_ref()).filter(|(_,w,h)| motion_size(*w,*h,&stamp)).cloned(){
-            let _=reply.send(Ok(frame));
-            return Ok(TransitionCapture{receiver,timing,cached:true,live});
-        }
+        // Motion always captures a fresh full-size GPU texture; Stage's small
+        // CPU card is never promoted into an animation source.
         if let Some(job)=state.job.take(){job.live.store(false,Ordering::Relaxed);}
         if state.worker.is_none(){state.worker=Worker::new(controller as usize).ok();}
+        let (unused,_)=mpsc::sync_channel(1);
         state.worker.as_ref().ok_or("capture-worker-busy")?.sender.try_send(Request{
-            source,stamp,live:live.clone(),reply,limit:MOTION_EDGE,wait:Duration::from_millis(350),
+            source,stamp,live:live.clone(),reply:unused,gpu_reply:Some(reply),limit:MOTION_EDGE,wait:Duration::from_millis(350),
             queued:Instant::now(),timing:Some(timing.clone())
         }).map_err(|_|"capture-worker-busy")?;
         state.transition_capture=Some(live.clone());
@@ -663,6 +733,31 @@ pub(super) fn remember_transition(source:WindowIdentity,frame:Frame)->Option<u64
         state.evict(now);
         state.sources.get(&source).filter(|e|e.transition_revision==Some(revision)&&e.frame.is_some()).map(|_|revision)
     })
+}
+pub(super) fn remember_motion(source:WindowIdentity,frame:MotionFrame)->Option<u64>{
+    let frame=match frame{MotionFrame::Gpu(frame)=>frame,MotionFrame::Cpu(frame)=>return remember_transition(source,frame)};
+    CURRENT.with(|cell|{
+        let mut state=cell.borrow_mut();
+        if !unsafe{retainable(source)}{return None;}
+        state.generation=state.generation.wrapping_add(1).max(1);let revision=state.generation;
+        let now=Instant::now();let entry=state.sources.entry(source).or_default();
+        entry.gpu_frame=Some(frame);entry.transition_revision=Some(revision);
+        entry.captured_at=Some(now);entry.last_used=Some(now);
+        state.evict(now);
+        state.sources.get(&source).filter(|s|s.gpu_frame.is_some()).map(|_|revision)
+    })
+}
+pub(super) fn recent_motion(source:WindowIdentity,revision:u64)->Result<MotionFrame,&'static str>{
+    let gpu=CURRENT.with(|cell|{
+        let mut state=cell.borrow_mut();
+        if !unsafe{retainable(source)}{return None;}
+        let entry=state.sources.get_mut(&source)?;
+        if entry.transition_revision!=Some(revision)||entry.captured_at.is_none_or(|t|t.elapsed()>MAX_AGE){return None;}
+        let frame=entry.gpu_frame.clone()?;
+        if unsafe{frame.gpu.device.GetDeviceRemovedReason().is_err()}{entry.gpu_frame=None;return None;}
+        entry.last_used=Some(Instant::now());Some(MotionFrame::Gpu(frame))
+    });
+    gpu.map_or_else(||recent_transition(source,revision).map(MotionFrame::Cpu),Ok)
 }
 pub(super) fn recent_transition(source:WindowIdentity,revision:u64)->Result<Frame,&'static str>{
     CURRENT.with(|cell|{

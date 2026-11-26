@@ -2,6 +2,7 @@
 #include "motion_upstream.h"
 #include <d3d11.h>
 #include <dxgi1_2.h>
+#include <dxgi1_4.h>
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 #include <new>
@@ -117,11 +118,10 @@ struct Layer {
     ComPtr<ID3D11ShaderResourceView> texture;
     UINT w = 0, h = 0, tw = 0, th = 0;
 
-    bool init(Pipeline& q, UINT width, UINT height, const void* bgra, UINT sourceW, UINT sourceH) {
-        if (!bgra || !width || !height || width > 8192 || height > 8192 ||
-            uint64_t(width) * height > 8400000 || !sourceW || !sourceH || sourceW > 1024 || sourceH > 1024)
+    bool surface(Pipeline& q, UINT width, UINT height) {
+        if (!width || !height || width > 16384 || height > 16384 || uint64_t(width)*height > 33554432)
             return false;
-        w = width; h = height; tw = sourceW; th = sourceH;
+        w = width; h = height;
         DXGI_SWAP_CHAIN_DESC1 sc{};
         sc.Width = w; sc.Height = h;
         sc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -135,6 +135,25 @@ struct Layer {
         ComPtr<ID3D11Texture2D> back;
         if (FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&back))) ||
             FAILED(q.device->CreateRenderTargetView(back.Get(), nullptr, &target))) return false;
+        return true;
+    }
+
+    bool init_gpu(Pipeline& q,UINT width,UINT height,ID3D11Texture2D* picture) {
+        if (!picture) return false;
+        ComPtr<ID3D11Device> device; picture->GetDevice(&device);
+        if (device.Get()!=q.device.Get()) return false;
+        D3D11_TEXTURE2D_DESC desc{};picture->GetDesc(&desc);
+        if (desc.Format!=DXGI_FORMAT_B8G8R8A8_UNORM || !(desc.BindFlags&D3D11_BIND_SHADER_RESOURCE) ||
+            desc.SampleDesc.Count!=1 || !surface(q,width,height)) return false;
+        tw=desc.Width;th=desc.Height;
+        if (FAILED(q.device->CreateShaderResourceView(picture,nullptr,&texture))) return false;
+        if (desc.MiscFlags&D3D11_RESOURCE_MISC_GENERATE_MIPS) q.context->GenerateMips(texture.Get());
+        return true;
+    }
+
+    bool init(Pipeline& q, UINT width, UINT height, const void* bgra, UINT sourceW, UINT sourceH) {
+        if (!bgra || !sourceW || !sourceH || sourceW > 1024 || sourceH > 1024 || !surface(q,width,height)) return false;
+        tw=sourceW;th=sourceH;
         D3D11_TEXTURE2D_DESC tx{};
         tx.Width = tw; tx.Height = th;
         // WGC returns premultiplied BGRA. Keep alpha at the window edge so the
@@ -181,7 +200,8 @@ struct Layer {
     }
 
     int draw(Pipeline& q, const RECT& window, const RECT& icon, const RECT& canvas,
-             int side, double progress, float alpha, bool drop, bool dark, double scale) {
+             int side, double progress, float alpha, int effect, bool dark, double scale) {
+        const bool drop=effect==1;
         if (drop && !q.chip_theme(dark)) return 0;
         auto ctx = q.context.Get();
         const D3D11_VIEWPORT viewport{0, 0, float(w), float(h), 0, 1};
@@ -210,7 +230,12 @@ struct Layer {
         auto s = q.sampler.Get();
         ctx->PSSetSamplers(0, 1, &s);
         bool painted = true;
-        if (drop && progress > 0) {
+        if (effect==2) {
+            const auto mix=[&](LONG a,LONG b){return float(a+(b-a)*std::clamp(progress,0.0,1.0));};
+            const float l=mix(window.left,icon.left),t=mix(window.top,icon.top),r=mix(window.right,icon.right),b=mix(window.bottom,icon.bottom);
+            const Vertice quad[]={{l,t,0,0},{r,t,1,0},{l,b,0,1},{r,b,1,1}};
+            painted=element(q,canvas,quad,4,texture.Get(),tw,th,0,0,1,alpha);
+        } else if (drop && progress > 0) {
             const auto chip = elementoCaduta(window, icon, side, progress, scale);
             const double radius = std::min(8.0 * scale, 0.22 * std::min(chip.r-chip.l,chip.b-chip.t));
             const double border = 2.0 * scale;
@@ -259,6 +284,18 @@ struct Layer {
 }
 
 extern "C" {
+uint64_t tlauncher_fluidwin_capture_budget(ID3D11Device* device) {
+    // A native-resolution texture budget from actual adapter headroom. Never
+    // scale down a full-window capture to fit a Stage thumbnail limit.
+    ComPtr<IDXGIDevice> dxgi;ComPtr<IDXGIAdapter> adapter;ComPtr<IDXGIAdapter3> memory;
+    if (device && SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&dxgi))) &&
+        SUCCEEDED(dxgi->GetAdapter(&adapter)) && SUCCEEDED(adapter.As(&memory))) {
+        DXGI_QUERY_VIDEO_MEMORY_INFO info{};
+        if (SUCCEEDED(memory->QueryVideoMemoryInfo(0,DXGI_MEMORY_SEGMENT_GROUP_LOCAL,&info)))
+            return std::min<uint64_t>(128ull<<20,info.Budget>info.CurrentUsage?(info.Budget-info.CurrentUsage)/8:0);
+    }
+    return 32ull<<20; // explicit native fallback if budget cannot hold the frame
+}
 void* tlauncher_fluidwin_pipeline(ID3D11DeviceContext* context) {
     auto p = new (std::nothrow) Pipeline;
     if (p && context && p->init(context)) return p;
@@ -274,6 +311,11 @@ void* tlauncher_fluidwin_layer(void* p, UINT w, UINT h, const void* bgra, UINT t
     return nullptr;
 }
 void tlauncher_fluidwin_release_layer(void* p) { delete static_cast<Layer*>(p); }
+void* tlauncher_fluidwin_gpu_layer(void* p,UINT w,UINT h,ID3D11Texture2D* texture) {
+    auto l=new(std::nothrow) Layer;
+    if(l&&p&&l->init_gpu(*static_cast<Pipeline*>(p),w,h,texture)) return l;
+    delete l;return nullptr;
+}
 
 // Borrowed COM pointer; DirectComposition AddRefs it when visual content is set.
 IDXGISwapChain1* tlauncher_fluidwin_content(void* p) { return static_cast<Layer*>(p)->chain.Get(); }
@@ -293,11 +335,29 @@ UINT tlauncher_fluidwin_source_mips(void* p) {
     return desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM ? desc.MipLevels : 0;
 }
 
+// Used by explicit hosted visual fixtures: read the entire rendered target,
+// including every border texel, after real shader/raster/blend execution.
+int tlauncher_fluidwin_rendered_pixels(void* p,void* layer,void* pixels,UINT stride) {
+    auto& q=*static_cast<Pipeline*>(p);auto& l=*static_cast<Layer*>(layer);
+    if(!pixels||stride<l.w*4) return 0;
+    ComPtr<ID3D11Resource> resource;l.target->GetResource(&resource);
+    ComPtr<ID3D11Texture2D> rendered;if(FAILED(resource.As(&rendered))) return 0;
+    D3D11_TEXTURE2D_DESC desc{};rendered->GetDesc(&desc);
+    desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.MiscFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+    ComPtr<ID3D11Texture2D> read;
+    if(FAILED(q.device->CreateTexture2D(&desc,nullptr,&read))) return 0;
+    q.context->CopyResource(read.Get(),rendered.Get());
+    D3D11_MAPPED_SUBRESOURCE map{};
+    if(FAILED(q.context->Map(read.Get(),0,D3D11_MAP_READ,0,&map))) return 0;
+    for(UINT y=0;y<l.h;y++) std::memcpy(static_cast<unsigned char*>(pixels)+y*stride,static_cast<const unsigned char*>(map.pData)+y*map.RowPitch,l.w*4);
+    q.context->Unmap(read.Get(),0);return 1;
+}
+
 int tlauncher_fluidwin_draw(void* p, void* layer, const RECT* window, const RECT* icon,
                           const RECT* canvas, int side, double progress, float opacity,
                           int drop, int dark, double scale) {
     return static_cast<Layer*>(layer)->draw(*static_cast<Pipeline*>(p), *window, *icon, *canvas, side,
-                                          progress, opacity, drop != 0, dark != 0, scale);
+                                          progress, opacity, drop, dark != 0, scale);
 }
 double tlauncher_fluidwin_progress(double t, int restore, int drop) {
     if (drop) return restore ? cadutaApre(t) : cadutaChiude(t);

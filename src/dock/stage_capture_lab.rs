@@ -196,6 +196,54 @@ fn native_fluidwin_genie_presented_pixels(){
     }
 }
 
+#[cfg(all(test,target_env="msvc"))]
+#[test]
+#[ignore="full-resolution GPU capture and actual rendered perimeter on hosted Windows"]
+fn native_fluidwin_gpu_capture_full_resolution(){
+    if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+    unsafe{
+        let source=window(false).unwrap();
+        SetWindowPos(source.0,null_mut(),16,16,2110,980,SWP_NOACTIVATE|SWP_NOZORDER);
+        UpdateWindow(source.0);
+        let handle=source.0 as usize;
+        let result=std::thread::scope(|scope|{
+            let (tx,rx)=mpsc::sync_channel(1);
+            scope.spawn(move||{let _=tx.send(super::stage_snapshot::gpu_frame(handle as HWND,||allowed(handle as HWND)));});
+            let mut msg=std::mem::zeroed();
+            loop{
+                while PeekMessageW(&mut msg,null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}
+                match rx.recv_timeout(Duration::from_millis(12)){
+                    Ok(frame)=>break frame,
+                    Err(mpsc::RecvTimeoutError::Disconnected)=>panic!("GPU fixture worker ended"),Err(mpsc::RecvTimeoutError::Timeout)=>{}
+                }
+            }
+        });
+        let super::stage_snapshot::MotionFrame::Gpu(frame)=result.expect("native resolution WGC GPU capture")else{panic!("motion source returned a CPU thumbnail")};
+        assert_eq!((frame.width,frame.height),(2110,980));
+        let area=RECT{left:16,top:16,right:2126,bottom:996};let icon=RECT{left:400,top:1040,right:448,bottom:1088};
+        let pipeline=super::fluidwin_mesh::Pipeline::new(&frame.gpu.context()).unwrap();
+        for effect in [super::motion::WindowEffect::Genie,super::motion::WindowEffect::Drop,super::motion::WindowEffect::Scale]{
+            let layer={let _batch=frame.gpu.context();super::fluidwin_mesh::Layer::from_gpu(pipeline.clone(),&frame,area,icon,super::DockSide::Bottom,effect,96).unwrap()};
+            for (index,progress) in [0.0,0.05,0.25,0.5,0.85,0.97,1.0,0.85,0.5,0.0].into_iter().enumerate(){
+                let start=Instant::now();
+                loop{
+                    let status={let _batch=frame.gpu.context();layer.paint(progress,255)};
+                    if status==1{break;}
+                    assert!(status==2&&start.elapsed()<Duration::from_secs(1),"GPU draw failed {status:#x}");
+                    std::thread::sleep(Duration::from_millis(8));
+                }
+                let (pixels,w,h)={let _batch=frame.gpu.context();layer.rendered_pixels().expect("complete GPU output readback")};
+                assert!(pixels.chunks_exact(4).all(|p|p[0]<=p[3]&&p[1]<=p[3]&&p[2]<=p[3]),"all rendered pixels, including full perimeter, must be premultiplied");
+                if let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
+                    let rgba=pixels.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],p[3]]).collect::<Vec<_>>();
+                    image::save_buffer(std::path::PathBuf::from(dir).join(format!("motion-gpu-{}-{index}.png",effect.name())),&rgba,w,h,image::ColorType::Rgba8).unwrap();
+                }
+            }
+        }
+        println!("FLUIDWIN_GPU_CAPTURE source=2110x980 cpu_readback_in_runtime=false rendered_perimeter=CHECKED owner_artifact_acceptance=FAIL");
+    }
+}
+
 // Explicit proof of the DWM thumbnail API on owned synthetic windows only.
 // This is not the product transition backend: source freshness and interaction
 // with native Windows animations still require owner-hardware acceptance.

@@ -93,9 +93,17 @@ impl Attempt{
         self.values["validationMs"]=json!(t.elapsed().as_millis() as u64);
         self.values["captureValid"]=json!(result.is_ok());result
     }
-    unsafe fn proxy(&mut self,frame:&stage_snapshot::Frame,req:&Request)->Result<Proxy,Reason>{
-        self.capture(frame,req.area)?;
-        let t=Instant::now();let proxy=Proxy::new_for(frame,req.area,req.icon,req.side,req.effect,req.dpi);
+    unsafe fn proxy(&mut self,frame:&stage_snapshot::MotionFrame,req:&Request)->Result<Proxy,Reason>{
+        match frame{
+            stage_snapshot::MotionFrame::Cpu(frame)=>self.capture(frame,req.area)?,
+            stage_snapshot::MotionFrame::Gpu(frame)=>{
+                self.values["captureWidth"]=json!(frame.width);self.values["captureHeight"]=json!(frame.height);
+                self.values["gpuToGpu"]=json!(true);
+                self.values["captureValid"]=json!(frame.width==req.area.right-req.area.left&&frame.height==req.area.bottom-req.area.top);
+                if self.values["captureValid"]!=true{return Err("capture-aspect-mismatch");}
+            }
+        }
+        let t=Instant::now();let proxy=Proxy::new_motion_for(frame,req.area,req.icon,req.side,req.effect,req.dpi);
         self.values["proxyPreparationMs"]=json!(t.elapsed().as_millis() as u64);
         self.values["proxyCreated"]=json!(proxy.is_some());proxy.ok_or("proxy-create-failed")
     }
@@ -306,18 +314,27 @@ impl Proxy{
         Self::new_for(frame,area,area,DockSide::Bottom,motion::WindowEffect::Scale,96)
     }
     unsafe fn new_for(frame:&stage_snapshot::Frame,area:RECT,icon:RECT,side:DockSide,effect:motion::WindowEffect,dpi:u32)->Option<Self>{
-        if !valid_pixels(frame,area){return None;}
-        let (data,w,h)=frame;
+        Self::new_motion_for(&stage_snapshot::MotionFrame::Cpu(frame.clone()),area,icon,side,effect,dpi)
+    }
+    unsafe fn new_motion_for(frame:&stage_snapshot::MotionFrame,area:RECT,icon:RECT,side:DockSide,effect:motion::WindowEffect,dpi:u32)->Option<Self>{
+        let (data,w,h)=match frame{
+            stage_snapshot::MotionFrame::Cpu(cpu)=>{if !valid_pixels(cpu,area){return None;}(&cpu.0[..],&cpu.1,&cpu.2)},
+            stage_snapshot::MotionFrame::Gpu(gpu)=>(&[][..],&gpu.width,&gpu.height),
+        };
+        let gpu_frame=matches!(frame,stage_snapshot::MotionFrame::Gpu(_));
         let (comp,gpu,mesh)=FACTORY.with(|f|->Option<_>{
             let mut f=f.borrow_mut();if f.is_none(){*f=ProxyFactory::new().ok();}
             let f=f.as_mut()?;
             if f.gpu.device.GetDeviceRemovedReason().is_err(){*f=ProxyFactory::new().ok()?;}
-            if effect.mesh()&&f.mesh.is_none(){f.mesh=fluidwin_mesh::Pipeline::new(&f.gpu.context());}
+            if (effect.mesh()||gpu_frame)&&f.mesh.is_none(){f.mesh=fluidwin_mesh::Pipeline::new(&f.gpu.context());}
             Some((f.comp.clone(),f.gpu.clone(),f.mesh.clone()))
         })?;
-        let mesh=if effect.mesh(){
+        let mesh=if effect.mesh()||gpu_frame{
             let _batch=gpu.context();
-            Some(fluidwin_mesh::Layer::new(mesh?,frame,area,icon,side,effect==motion::WindowEffect::Drop,dpi)?)
+            Some(match frame{
+                stage_snapshot::MotionFrame::Cpu(frame)=>fluidwin_mesh::Layer::new(mesh?,frame,area,icon,side,effect==motion::WindowEffect::Drop,dpi)?,
+                stage_snapshot::MotionFrame::Gpu(frame)=>fluidwin_mesh::Layer::from_gpu(mesh?,frame,area,icon,side,effect,dpi)?,
+            })
         }else{None};
         let class=wide("TLauncherScaleProxy");
         let instance=GetModuleHandleW(ptr::null());
@@ -353,7 +370,7 @@ impl Proxy{
             };
             target.SetRoot(&visual)?;comp.Commit()?;
             Ok(Self{hwnd,comp,target,visual,render,gpu,
-                #[cfg(test)] marker:{let i=((*h/2)* *w+*w/10) as usize*4;[data[i+2],data[i+1],data[i]]}})
+                #[cfg(test)] marker:if data.is_empty(){[0,0,0]}else{let i=((*h/2)* *w+*w/10) as usize*4;[data[i+2],data[i+1],data[i]]}})
         })();
         if result.is_err(){DestroyWindow(hwnd);}
         result.ok()
@@ -393,21 +410,21 @@ impl Proxy{
 enum Phase{
     Capture{job:stage_snapshot::TransitionCapture,started:Instant},
     // Keep the real window in its current state until the proxy has a frame.
-    Priming{proxy:Proxy,frame:Option<stage_snapshot::Frame>,started:Instant},
-    WaitingMinimize{proxy:Proxy,frame:stage_snapshot::Frame,started:Instant},
+    Priming{proxy:Proxy,frame:Option<stage_snapshot::MotionFrame>,started:Instant},
+    WaitingMinimize{proxy:Proxy,frame:stage_snapshot::MotionFrame,started:Instant},
     Animate{proxy:Proxy,span:motion::Span},
     WaitingRestore{_proxy:Proxy,started:Instant},
 }
 struct Transition{req:Request,phase:Option<Phase>,attempt:Attempt,last_progress:f64}
 impl Transition{
-    unsafe fn prime(&mut self,proxy:Proxy,frame:Option<stage_snapshot::Frame>,started:Instant)->Result<Phase,Reason>{
+    unsafe fn prime(&mut self,proxy:Proxy,frame:Option<stage_snapshot::MotionFrame>,started:Instant)->Result<Phase,Reason>{
         let h=self.req.source.hwnd as HWND;
         let restoring=self.req.action==Action::Restore;
         if restoring!=(IsIconic(h)!=0)||(!restoring&&visible_area(h).is_none_or(|r|!super::same_rect(r,self.req.area))){
             return Err("window-placement-changed");
         }
         let (r,progress,opacity)=if restoring{
-            (icon_fit(self.req.area,self.req.icon),f64::from(self.req.effect.mesh() as u8),if self.req.effect.mesh(){255}else{64})
+            (icon_fit(self.req.area,self.req.icon),1.0,if self.req.effect.mesh(){255}else{64})
         }else{(self.req.area,0.0,255)};
         let submitted=self.attempt.frames;
         self.attempt.present(&proxy,r,progress,opacity)?;
@@ -485,7 +502,7 @@ impl Transition{
             }
             Phase::WaitingMinimize{proxy,frame,started}=>{
                 if IsIconic(h)!=0{
-                    let revision=stage_snapshot::remember_transition(self.req.source,frame);
+                    let revision=stage_snapshot::remember_motion(self.req.source,frame);
                     if let Some(revision)=revision{RECENT.with(|r|{
                         let mut r=r.borrow_mut();
                         r.retain(|_,v|v.stored.elapsed()<=MAX_PREVIEW_AGE);
@@ -506,7 +523,7 @@ impl Transition{
                 };
                 let progress=if self.req.effect.mesh(){
                     fluidwin_mesh::progress(t,action==Action::Restore,self.req.effect==motion::WindowEffect::Drop)
-                }else{0.0};
+                }else{f64::from(if action==Action::Restore{1.0-k}else{k})};
                 let opacity=if self.req.effect.mesh(){255}else{opacity};
                 let submitted=self.attempt.frames;
                 if let Err(reason)=self.attempt.present(&proxy,interpolate(a,b,k),progress,opacity){drop(proxy);return self.fallback(reason);}
@@ -546,7 +563,7 @@ unsafe fn begin(owner:HWND,path:&str,id:WindowIdentity,action:Action)->bool{
             Action::Restore=>{
                 let revision=RECENT.with(|r|r.borrow().get(&id).map(|r|r.revision)).ok_or("restore-preview-missing")?;
                 let started=Instant::now();
-                let frame=stage_snapshot::recent_transition(id,revision)?;
+                let frame=stage_snapshot::recent_motion(id,revision)?;
                 attempt.values["cachedCapture"]=json!(true);
                 attempt.values["captureDurationMs"]=json!(started.elapsed().as_millis() as u64);
                 let proxy=attempt.proxy(&frame,&req)?;
