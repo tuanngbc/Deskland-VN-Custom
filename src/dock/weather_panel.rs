@@ -119,6 +119,10 @@ pub(super) fn reset(){PANEL.with(|s|s.take());}
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 UpdateWindow(popup);DwmFlush();let mut bounds:RECT=std::mem::zeroed();GetWindowRect(popup,&mut bounds);
+                #[cfg(target_env="msvc")]let accessible={
+                    let accessible=super::super::control_access::get(popup);assert!(!accessible.is_null());
+                    assert_eq!(super::super::control_access::probe(accessible,control_center::fixture_access_count(owner).unwrap(),0,0),0,"illustrated forecast needs actual MSAA names/roles/bounds/hit tests");accessible
+                };
                 let (w,h)=(bounds.right-bounds.left,bounds.bottom-bounds.top);let mut layer=super::super::glass_probe::Layer::new(w,h).unwrap();
                 let dc=GetDC(ptr::null_mut());assert_ne!(BitBlt(layer.dc(),0,0,w,h,dc,bounds.left,bounds.top,SRCCOPY|CAPTUREBLT),0);ReleaseDC(ptr::null_mut(),dc);GdiFlush();
                 let blue=layer.pixels().chunks_exact(4).filter(|p|p[0].saturating_sub(p[2])>40&&p[1].saturating_sub(p[2])>20).count();
@@ -133,6 +137,7 @@ pub(super) fn reset(){PANEL.with(|s|s.take());}
                 assert!(PANEL.with(|s|s.borrow().as_ref().unwrap().weather.reading.is_none()));
                 perform(owner,popup,Action::Refresh(generation));assert!(weather::current().is_none());
                 control_center::close_for(owner);assert!(PANEL.with(|s|s.borrow().is_none()));
+                #[cfg(target_env="msvc")]{assert_eq!(super::super::control_access::probe(accessible,0,0,3),0);super::super::control_access::release(accessible);}
                 assert_eq!(weather::fixture_subscribers(),0);
                 receive(popup,ticket);assert!(PANEL.with(|s|s.borrow().is_none()));assert_eq!(IsWindow(popup),0);
             }

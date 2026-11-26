@@ -179,8 +179,8 @@ impl Panel{
     }
     fn rect(&self,i:usize)->RECT{
         let pad=chrome::scale(self.dpi,14);
-        if let Some(forecast)=self.forecast.as_ref().filter(|f|i<f.rows()){
-            let _=forecast;let top=chrome::scale(self.dpi,67);
+        if self.forecast.as_ref().is_some_and(|f|i<f.rows()){
+            let top=chrome::scale(self.dpi,67);
             if i==0{return RECT{left:pad,top,right:self.layer.size.0-pad,bottom:top+chrome::scale(self.dpi,100)};}
             let width=(self.layer.size.0-2*pad-chrome::scale(self.dpi,16))/5;
             let left=pad+chrome::scale(self.dpi,8)+(i-1) as i32*width;
@@ -251,8 +251,10 @@ impl Panel{
         chrome::text(g,RECT{left:px(18),top:px(13),right:w-px(18),bottom:px(41)},&self.view.title,p.ink,SINGLE_LINE);
         SelectObject(g,self.fonts[2]);
         chrome::text(g,RECT{left:px(18),top:px(41),right:w-px(14),bottom:px(59)},&self.view.hint,p.muted,SINGLE_LINE);
-        let pinned=self.pinned();
+        let had_forecast=self.forecast.is_some();
         let forecast_drawn=self.forecast.as_mut().is_some_and(|f|f.draw(g,RECT{left:px(14),top:px(67),right:w-px(14),bottom:px(235)},self.dpi,self.index==Some(0)));
+        if had_forecast&&!forecast_drawn{self.forecast=None;}
+        let pinned=self.pinned();
         let cards=self.cards();
         let mut glyphs=Vec::with_capacity(cards.len());
         let mut thumbnails=Vec::new();
@@ -373,6 +375,7 @@ pub(super) fn ticket(owner:HWND)->Option<usize>{
     PANE.with(|s|s.borrow().as_ref().filter(|p|p.owner==owner).map(|p|p.tag))
 }
 pub(super) fn window(owner:HWND)->Option<HWND>{PANE.with(|s|s.borrow().as_ref().filter(|p|p.owner==owner).map(|p|p.hwnd))}
+#[cfg(test)]pub(super) fn fixture_access_count(owner:HWND)->Option<u32>{PANE.with(|s|s.borrow().as_ref().filter(|p|p.owner==owner).map(|p|(p.cards().len()+if p.pages()>1{2}else{0}) as u32))}
 pub(super) unsafe fn update(owner:HWND,ticket:usize,view:View){
     let hwnd=PANE.with(|s|{
         let mut slot=s.borrow_mut();
