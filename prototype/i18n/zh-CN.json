@@ -5,6 +5,8 @@
     "utilityItem_recycleBin": "回收站",
     "shellContextMenu": "桌面与资源管理器右键菜单",
     "altTabOverview": "使用 Alt+Tab 打开窗口概览",
+    "snapLayouts": "使用 Win+Z 打开窗口布局",
+    "snapLayoutsHint": "为当前窗口打开 FluidWin 布局。用 Tab 或方向键选择，按 Enter 应用，按 Esc 取消。",
     "jellyDrag": "拖动窗口时使用果冻效果",
     "jellyDragHint": "拖动普通窗口时显示实时内容。不兼容的窗口保持 Windows 行为。",
     "altTabOverviewHint": "显示当前显示器上打开的窗口。松开 Alt 选择，按 Esc 取消。",

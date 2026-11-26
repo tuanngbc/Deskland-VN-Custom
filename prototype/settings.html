@@ -196,6 +196,8 @@
     <p class="monitor-detail" data-i18n="shellContextMenuHint">Dùng menu hệ thống kiểu FluidWin khi bật Dock. Giữ Shift khi nhấp chuột phải để dùng menu Windows.</p>
     <label class="setting-row switch-row"><b data-i18n="altTabOverview">Tổng quan cửa sổ bằng Alt+Tab</b><input type="checkbox" id="altTabOverview" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <p class="monitor-detail" data-i18n="altTabOverviewHint">Hiện cửa sổ đang mở trên màn hình hiện tại. Nhả Alt để chọn, Esc để hủy.</p>
+    <label class="setting-row switch-row"><b data-i18n="snapLayouts">Bố cục cửa sổ bằng Win+Z</b><input type="checkbox" id="snapLayouts" role="switch"><i class="switch" aria-hidden="true"></i></label>
+    <p class="monitor-detail" data-i18n="snapLayoutsHint">Mở bố cục FluidWin cho cửa sổ đang dùng. Tab hoặc phím mũi tên để chọn, Enter để áp dụng, Esc để hủy.</p>
     <label class="setting-row switch-row"><b data-i18n="jellyDrag">Hiệu ứng Jelly khi kéo cửa sổ</b><input type="checkbox" id="jellyDrag" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <p class="monitor-detail" data-i18n="jellyDragHint">Dùng nội dung sống khi kéo cửa sổ thường. Cửa sổ không tương thích tiếp tục dùng Windows.</p>
     <p id="dockRuntimeStatus" class="monitor-detail" role="status" aria-live="polite"></p>
@@ -1326,6 +1328,7 @@ function syncDockSettings(m) {
   $('shellContextMenu').checked=!!dockOptions.shellContextMenu;
   $('altTabOverview').checked=!!dockOptions.altTabOverview;
   $('jellyDrag').checked=!!dockOptions.jellyDrag;
+  $('snapLayouts').checked=!!dockOptions.snapLayouts;
   $('stagePeekDelay').value=String(dockOptions.stagePeekDelay??350);
   $('stagePeekDelay').disabled=!dockOptions.stagePeek;
   $('stagePeekDelayValue').textContent=$('stagePeekDelay').value;
@@ -1360,6 +1363,9 @@ $('altTabOverview').addEventListener('change',()=>{
 });
 $('jellyDrag').addEventListener('change',()=>{
   dockOptions.jellyDrag=$('jellyDrag').checked;send({t:'dock',jellyDrag:dockOptions.jellyDrag});
+});
+$('snapLayouts').addEventListener('change',()=>{
+  dockOptions.snapLayouts=$('snapLayouts').checked;send({t:'dock',snapLayouts:dockOptions.snapLayouts});
 });
 $('stagePeekDelay').addEventListener('input',()=>{$('stagePeekDelayValue').textContent=$('stagePeekDelay').value;});
 $('stagePeekDelay').addEventListener('change',()=>{

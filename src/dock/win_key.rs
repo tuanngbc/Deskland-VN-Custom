@@ -84,21 +84,36 @@ thread_local! {
     static OVERVIEW:Cell<bool>=const{Cell::new(false)};
     static ALT_TAB:Cell<bool>=const{Cell::new(false)};
     static TAB_DOWN:Cell<bool>=const{Cell::new(false)};
+    static SNAP:Cell<bool>=const{Cell::new(false)};
+    static SNAP_CHORD:Cell<SnapChord>=const{Cell::new(SnapChord{held:false,mask:false})};
     static SHELL_CLICK:Cell<Option<super::shell_menu::Click>>=const{Cell::new(None)};
 }
 
 struct Quit(usize);
 impl Drop for Quit{fn drop(&mut self){unsafe{CloseHandle(self.0 as HANDLE);}}}
 
-pub(super) struct Hook { quit:Arc<Quit>, thread:Option<JoinHandle<()>>, pub ticket:usize, pub mode:(bool,bool,bool) }
+#[derive(Clone,Copy,Default)]struct SnapChord{held:bool,mask:bool}
+impl SnapChord{
+    fn edge(&mut self,vk:u16,down:bool,compatible:bool,queue:impl FnOnce()->bool)->bool{
+        if vk!=b'Z' as u16{return false;}
+        if !down{return std::mem::take(&mut self.held);}
+        if self.held{return true;}
+        if compatible&&queue(){self.held=true;self.mask=true;return true;}false
+    }
+}
+unsafe fn menu_mask(){
+    let mask=Stroke{vk:0xE8,scan:0,extended:false}.down();let mut release=mask;release.Anonymous.ki.dwFlags|=KEYEVENTF_KEYUP;
+    let inputs=[mask,release];if SendInput(2,inputs.as_ptr(),size_of::<INPUT>() as i32)==1{SendInput(1,&release,size_of::<INPUT>() as i32);}
+}
+pub(super) struct Hook { quit:Arc<Quit>, thread:Option<JoinHandle<()>>, pub ticket:usize, pub mode:(bool,bool,bool,bool) }
 impl Hook {
     pub fn install(target:HWND,ticket:usize)->Result<Self,String>{
         Self::install_mode(target,ticket,true,false)
     }
     pub fn install_mode(target:HWND,ticket:usize,win_tap:bool,shell_menu:bool)->Result<Self,String>{
-        Self::install_features(target,ticket,win_tap,shell_menu,false)
+        Self::install_features(target,ticket,win_tap,shell_menu,false,false)
     }
-    pub fn install_features(target:HWND,ticket:usize,win_tap:bool,shell_menu:bool,overview:bool)->Result<Self,String>{
+    pub fn install_features(target:HWND,ticket:usize,win_tap:bool,shell_menu:bool,overview:bool,snap:bool)->Result<Self,String>{
         let target=target as usize;
         let handle=unsafe{CreateEventW(std::ptr::null(),1,0,std::ptr::null())};
         if handle.is_null(){return Err(format!("CreateEventW: {}",unsafe{GetLastError()}));}
@@ -117,6 +132,7 @@ impl Hook {
             }
             KEYS.set(Keys::default());TARGET.set((target,ticket));MODE.set((win_tap,shell_menu));
             OVERVIEW.set(overview);ALT_TAB.set(false);TAB_DOWN.set(false);
+            SNAP.set(snap);SNAP_CHORD.set(SnapChord::default());
             REPLAY_FAILED.set(false);SHELL_CLICK.set(None);
             if ready.send(Ok(())).is_ok(){
                 let quit=thread_quit.0 as HANDLE;
@@ -129,10 +145,11 @@ impl Hook {
                     }
                 }
             }
+            if SNAP_CHORD.get().mask&&KEYS.get().blocked.iter().all(Option::is_none){menu_mask();}
             TARGET.set((0,0));UnhookWindowsHookEx(mouse);UnhookWindowsHookEx(keyboard);
         }).map_err(|e|e.to_string())?;
         match answer.recv(){
-            Ok(Ok(()))=>Ok(Self{quit,thread:Some(thread),ticket,mode:(win_tap,shell_menu,overview)}),
+            Ok(Ok(()))=>Ok(Self{quit,thread:Some(thread),ticket,mode:(win_tap,shell_menu,overview,snap)}),
             other=>{let _=thread.join();Err(other.ok().and_then(Result::err).unwrap_or_else(||"Luồng phím Win đã dừng.".into()))}
         }
     }
@@ -150,6 +167,17 @@ unsafe extern "system" fn keyboard(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
         let e=&*(l as *const KBDLLHOOKSTRUCT);
         let injected=e.flags&LLKHF_INJECTED!=0;
         let (target,ticket)=TARGET.get();
+        if !injected&&target!=0&&SNAP.get(){
+            let down=matches!(w as u32,WM_KEYDOWN|WM_SYSKEYDOWN);let vk=e.vkCode as u16;
+            let mut chord=SNAP_CHORD.get();
+            if !down&&matches!(vk,VK_LWIN|VK_RWIN)&&chord.mask{
+                chord.mask=false;if KEYS.get().blocked.iter().all(Option::is_none){menu_mask();}
+            }
+            let win=KEYS.get().blocked.iter().any(Option::is_some)||[VK_LWIN,VK_RWIN].into_iter().any(|v|GetAsyncKeyState(i32::from(v))<0);
+            let compatible=win&&e.flags&LLKHF_ALTDOWN==0&&[VK_SHIFT,VK_CONTROL,VK_MENU].into_iter().all(|v|GetAsyncKeyState(i32::from(v))>=0);
+            let consumed=chord.edge(vk,down,compatible,||super::snap_layout::queue_hotkey(target as HWND,ticket));SNAP_CHORD.set(chord);
+            if consumed{let mut keys=KEYS.get();keys.cancel();KEYS.set(keys);return 1;}
+        }
         if !injected&&target!=0&&OVERVIEW.get(){
             let down=matches!(w as u32,WM_KEYDOWN|WM_SYSKEYDOWN);
             let vk=e.vkCode as u16;
@@ -252,6 +280,22 @@ unsafe extern "system" fn mouse(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]fn snap_chord_consumes_only_after_enqueue_and_balances_repeats_release(){
+        let mut chord=SnapChord::default();
+        assert!(!chord.edge(b'Z'.into(),true,false,||panic!("modified/no-Win chord must pass")));
+        assert!(!chord.edge(b'Z'.into(),true,true,||false));assert!(!chord.mask);
+        assert!(!chord.edge(VK_LEFT,true,true,||panic!("Win+Arrow remains native")));
+        assert!(chord.edge(b'Z'.into(),true,true,||true));assert!(chord.mask);
+        assert!(chord.edge(b'Z'.into(),true,false,||panic!("autorepeat must not enqueue again")));
+        assert!(chord.edge(b'Z'.into(),false,false,||panic!("release must not enqueue")));
+        assert!(!chord.edge(b'Z'.into(),false,false,||false));
+        // A deferred physical Win down is not replayed for the consumed chord,
+        // and its release cannot produce a standalone Start tap.
+        let mut keys=Keys::default();assert_eq!(keys.edge(stroke(VK_LWIN),true,11,false,false),Edge::Hold);
+        keys.cancel();assert_eq!(keys.edge(stroke(VK_LWIN),false,11,false,false),Edge::Hold);
+        let old=super::super::Options::from_json(&serde_json::json!({"enabled":true}));assert!(!old.snap_layouts);
+        let mut on=old;on.snap_layouts=true;assert!(super::super::Options::from_json(&on.json()).snap_layouts);
+    }
     #[test] fn captured_pointer_keeps_signed_monitor_coordinates(){
         for point in [POINT{x:-815,y:400},POINT{x:2570,y:-1180},POINT{x:-1,y:-1},POINT{x:0,y:0}]{
             let got=decode_tap(encode_tap(Some(point))).unwrap().unwrap();
@@ -272,6 +316,7 @@ mod tests{
         let hook=Hook::install(null_mut(),1).expect("hook thread and message queue available");
         assert!(!hook.finished());
         drop(hook);
+        let hook=Hook::install_features(null_mut(),3,false,false,false,true).expect("Snap-only shared hook");assert!(!hook.finished());drop(hook);
         let hook=Hook::install(null_mut(),2).expect("hook can be restarted after cleanup");
         assert!(!hook.finished());
         drop(hook);

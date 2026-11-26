@@ -2184,11 +2184,13 @@ fn win_key_status(status:&'static str){
 }
 fn sync_win_key(){
     overview::refresh();
+    snap_layout::refresh_hotkey();
     let (requested,context)=STATE.with(|s|{let s=s.borrow();
         (s.prefs.enabled&&s.prefs.win_key_start&&!s.suspended,s.prefs.enabled&&s.prefs.shell_context_menu&&!s.suspended)});
     let on=requested&&taskbar_hidden();
     let overview=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.alt_tab_overview&&!s.suspended});
-    let allowed=(on||context||overview)&&!crate::trial::benchmark_active()&&!crate::trial::demo_active();
+    let snap=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.snap_layouts&&!s.suspended});
+    let allowed=(on||context||overview||snap)&&!crate::trial::benchmark_active()&&!crate::trial::demo_active();
     if !allowed{
         WIN_KEY.with(|s|drop(s.borrow_mut().take()));
         WIN_KEY_FAILED.set(false);
@@ -2200,12 +2202,12 @@ fn sync_win_key(){
         WIN_KEY_FAILED.set(true);
         win_key_status("failed");
     }
-    if WIN_KEY.with(|s|s.borrow().as_ref().is_some_and(|hook|hook.mode!=(on,context,overview))){
+    if WIN_KEY.with(|s|s.borrow().as_ref().is_some_and(|hook|hook.mode!=(on,context,overview,snap))){
         WIN_KEY.with(|s|drop(s.borrow_mut().take()));WIN_KEY_FAILED.set(false);
     }
     if WIN_KEY_FAILED.get()||WIN_KEY.with(|s|s.borrow().is_some()){return;}
     let generation=WIN_KEY_TOKEN.with(|n|{let next=n.get().wrapping_add(1).max(1);n.set(next);next});
-    match win_key::Hook::install_features(CONTROL.get(),generation,on,context,overview){
+    match win_key::Hook::install_features(CONTROL.get(),generation,on,context,overview,snap){
         Ok(hook)=>{WIN_KEY.with(|s|s.replace(Some(hook)));win_key_status(if on{"installed"}else if requested{"waiting"}else{"off"});}
         Err(reason)=>{
             crate::log!("DOCK_WIN_KEY install failed: {reason}");
@@ -3115,6 +3117,10 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 overview::receive(owner,l as i32);
             }0
         },
+        snap_layout::NOTICE if hwnd==CONTROL.get()=>{
+            let current=WIN_KEY.with(|s|s.borrow().as_ref().is_some_and(|hook|hook.ticket==w));
+            snap_layout::receive_hotkey(w,current);0
+        },
         shell_menu::NOTICE if hwnd==CONTROL.get()=>{
             let enabled=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.shell_context_menu&&!s.suspended});
             let current=WIN_KEY.with(|s|s.borrow().as_ref().is_some_and(|hook|hook.ticket==w));
@@ -3786,6 +3792,7 @@ fn queue_refresh() {
 }
 unsafe extern "system" fn window_event(_:HWINEVENTHOOK,event:u32,hwnd:HWND,object:i32,child:i32,_thread:u32,_time:u32) {
     if object==0 && child==0 {
+        if event==EVENT_SYSTEM_FOREGROUND{snap_layout::refresh_hotkey();}
         window_geometry::event(event,hwnd);
         window_motion::event(event,hwnd);
         if event==EVENT_OBJECT_DESTROY{show_desktop::forget(hwnd);stage_snapshot::forget(hwnd);}

@@ -1,8 +1,34 @@
 //! Original FluidWin layout picker; only the shared controller moves a source.
 use super::{WindowIdentity,STATE,CONTROL,control_center::{self,Card,Command,View}};
-use std::{cell::RefCell,ffi::c_void,mem,ptr::{self,NonNull}};
+use std::{cell::RefCell,ffi::c_void,mem,ptr::{self,NonNull},sync::Mutex};
 use windows_sys::Win32::{Foundation::*,Graphics::Gdi::*,UI::{HiDpi::GetDpiForWindow,WindowsAndMessaging::*}};
 pub(super) const TIMER:usize=33;
+pub(super) const NOTICE:u32=WM_APP+144;
+static ELIGIBLE:Mutex<Option<WindowIdentity>>=Mutex::new(None);
+static REQUEST:Mutex<Option<(usize,WindowIdentity)>>=Mutex::new(None);
+pub(super) fn refresh_hotkey(){
+    let enabled=STATE.with(|s|{let Ok(s)=s.try_borrow()else{return false;};s.prefs.enabled&&s.prefs.snap_layouts&&!s.suspended});
+    let id=if enabled{unsafe{WindowIdentity::read(GetForegroundWindow()).filter(|id|eligible(*id)&&GetWindowLongW(id.hwnd as HWND,GWL_STYLE) as u32&WS_POPUP==0)}}else{None};
+    if let Ok(mut slot)=ELIGIBLE.lock(){*slot=id;}
+    if !enabled{if let Ok(mut slot)=REQUEST.lock(){*slot=None;}}
+}
+/// The hook never performs COM, permission queries or foreign window calls.
+/// Only a bounded successful enqueue consumes a physical Win+Z chord.
+pub(super) unsafe fn queue_hotkey(control:HWND,ticket:usize)->bool{
+    let Some(id)=ELIGIBLE.try_lock().ok().and_then(|slot|*slot).filter(|id|id.hwnd==GetForegroundWindow() as usize)else{return false;};
+    let Ok(mut slot)=REQUEST.try_lock()else{return false;};if slot.is_some(){return false;}*slot=Some((ticket,id));
+    if PostMessageW(control,NOTICE,ticket,0)==0{*slot=None;return false;}true
+}
+pub(super) unsafe fn receive_hotkey(ticket:usize,current:bool){
+    let request=REQUEST.lock().ok().and_then(|mut slot|if slot.as_ref().is_some_and(|(generation,_)|*generation==ticket){slot.take()}else{None});
+    let Some((_,id))=request.filter(|_|current)else{return;};
+    let enabled=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.snap_layouts&&!s.suspended});
+    if !enabled||GetForegroundWindow() as usize!=id.hwnd||!eligible(id){return;}
+    let monitor=MonitorFromWindow(id.hwnd as HWND,MONITOR_DEFAULTTONULL);
+    let owner=STATE.with(|s|{let s=s.borrow();s.bars.iter().filter(|b|!b.hidden).find(|b|MonitorFromWindow(b.hwnd,MONITOR_DEFAULTTONULL)==monitor)
+        .or_else(||s.bars.iter().find(|b|!b.hidden)).map(|b|b.hwnd)});
+    if let Some(owner)=owner{open(owner,id);}
+}
 #[cfg(target_env="msvc")]
 extern "C"{
     fn tlauncher_snap_open(source:HWND,anchor:POINT,title:*const u16,labels:*const *const u16,count:u32,speed:f64,reduced:bool)->*mut c_void;
@@ -84,10 +110,11 @@ pub(super) unsafe fn probe(owner:HWND,id:WindowIdentity){
     let h=id.hwnd as HWND;let mut original:RECT=mem::zeroed();assert_ne!(GetWindowRect(h,&mut original),0);
     let style=GetWindowLongPtrW(h,GWL_EXSTYLE);let policy=super::motion::settings();
     let enabled=STATE.with(|s|{let mut s=s.borrow_mut();let old=s.prefs.enabled;s.prefs.enabled=true;old});
-    struct Reset{h:HWND,rect:RECT,policy:super::motion::Settings,enabled:bool}
-    impl Drop for Reset{fn drop(&mut self){unsafe{close_for(ptr::null_mut());super::window_geometry::cancel();super::motion::configure(self.policy);STATE.with(|s|s.borrow_mut().prefs.enabled=self.enabled);
+    let snap_enabled=STATE.with(|s|{let mut s=s.borrow_mut();let old=s.prefs.snap_layouts;s.prefs.snap_layouts=true;old});
+    struct Reset{h:HWND,rect:RECT,policy:super::motion::Settings,enabled:bool,snap_enabled:bool}
+    impl Drop for Reset{fn drop(&mut self){unsafe{close_for(ptr::null_mut());super::window_geometry::cancel();super::motion::configure(self.policy);STATE.with(|s|{let mut s=s.borrow_mut();s.prefs.enabled=self.enabled;s.prefs.snap_layouts=self.snap_enabled;});refresh_hotkey();
         ShowWindowAsync(self.h,SW_RESTORE);SetWindowPos(self.h,ptr::null_mut(),self.rect.left,self.rect.top,self.rect.right-self.rect.left,self.rect.bottom-self.rect.top,SWP_NOZORDER|SWP_NOACTIVATE|SWP_ASYNCWINDOWPOS);}}}
-    let reset=Reset{h,rect:original,policy,enabled};let marker=crate::desktop::wide(&super::motion_guard::session().unwrap().1);
+    let reset=Reset{h,rect:original,policy,enabled,snap_enabled};let marker=crate::desktop::wide(&super::motion_guard::session().unwrap().1);
     let pump=||{super::motion_guard::pulse_fixture();super::TASKBAR_WATCH.with(|w|if let Some(w)=w.borrow_mut().as_mut(){w.poll().unwrap();});
         let mut msg:MSG=mem::zeroed();for _ in 0..64{if PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)==0{break;}TranslateMessage(&msg);DispatchMessageW(&msg);}
         poll();super::window_geometry::tick();std::thread::sleep(Duration::from_millis(12));};
@@ -134,6 +161,13 @@ pub(super) unsafe fn probe(owner:HWND,id:WindowIdentity){
     assert_eq!(IsZoomed(h),0);wait(&||super::window_effect::visible_area(h).is_some_and(|actual|
         [actual.left-area.left,actual.top-area.top,actual.right-(area.left+(area.right-area.left)/2),actual.bottom-area.bottom].iter().all(|v|v.abs()<=6)));
     assert_eq!(GetWindowLongPtrW(h,GWL_EXSTYLE),style);assert!(GetPropW(h,marker.as_ptr()).is_null());
+    prepare();SetForegroundWindow(h);wait(&||GetForegroundWindow()==h);refresh_hotkey();
+    assert!(queue_hotkey(super::CONTROL.get(),401));assert!(!queue_hotkey(super::CONTROL.get(),401));
+    receive_hotkey(402,true);assert!(!open_for(owner)); // stale notice cannot take a newer request
+    receive_hotkey(401,true);assert!(open_for(owner));key(VK_ESCAPE);wait(&||!open_for(owner));
+    SetForegroundWindow(h);wait(&||GetForegroundWindow()==h);refresh_hotkey();assert!(queue_hotkey(super::CONTROL.get(),403));receive_hotkey(403,false);assert!(!open_for(owner));
+    SetForegroundWindow(h);refresh_hotkey();assert!(queue_hotkey(super::CONTROL.get(),404));SetForegroundWindow(owner);wait(&||GetForegroundWindow()!=h);receive_hotkey(404,true);assert!(!open_for(owner));
+    println!("FLUIDWIN_SNAP_HOTKEY_QUEUE valid=OPEN stale_ticket=PRESERVED invalid_generation=REJECTED changed_foreground=REJECTED physical_keys=NOT_INJECTED");
     drop(reset);wait(&||{let mut r:RECT=mem::zeroed();GetWindowRect(h,&mut r)!=0&&super::same_rect(r,original)});super::window_effect::fixture_settle_source(h);
     println!("FLUIDWIN_SNAP_LAYOUT_FIXTURE regions=11 keyboard=PASS no_premature_move=PASS screen=CAPTURED prepared={animated} cancel=PASS native_maximized=PASS source_style=RESTORED journal=CLEARED");
 }
