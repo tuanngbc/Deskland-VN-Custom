@@ -153,6 +153,7 @@
         <label><span data-i18n="spotlightGlassBlur">Độ mờ nền kính</span><input id="spotlightGlassBlur" type="range" min="24" max="64" step="2" value="48"></label>
         <label><span data-i18n="spotlightNames">Hiện tên ứng dụng</span><input id="spotlightNames" type="checkbox" checked></label>
         <label><span data-i18n="spotlightFavorites">Ưu tiên yêu thích</span><input id="spotlightFavorites" type="checkbox" checked></label>
+        <label><span data-i18n="spotlightEdgeWave">Sóng ánh sáng khi mở Spotlight</span><input id="spotlightEdgeWave" type="checkbox"></label>
       </div>
       <p class="launcher-note" data-i18n="spotlightAcrylicNote">Nền kính lấy mẫu và làm mờ một lần khi mở Spotlight. Khi Windows tắt độ trong suốt, sử dụng nền theo màu giao diện. Phím Spotlight vẫn mở chế độ thu gọn.</p>
       <div class="actions"><button type="button" id="spotlightHidden" data-i18n="spotlightHidden">Mục đã ẩn</button><button type="button" id="spotlightRefresh" data-i18n="spotlightRefresh">Làm mới thư viện</button><button type="button" id="spotlightReset" data-i18n="spotlightReset">Đặt lại bố cục</button><button type="button" id="spotlightGuide" data-i18n="spotlightGuide">Hướng dẫn Spotlight</button></div>
@@ -1489,13 +1490,13 @@ $('motionPreview').addEventListener('click',()=>{
   motionPreviewAnimation=card.animate([{opacity:0,transform:'scale(.90)'},{opacity:1,transform:'scale(1)'}],
     {duration:300/speed,easing:'cubic-bezier(.22,.61,.36,1)'});
 });
-const spotlightInputs=['spotlightEnabled','spotlightHotkeyMode','spotlightDockClick','spotlightFullTheme','spotlightIconSize','spotlightSpacing','spotlightGlassStrength','spotlightGlassBlur','spotlightNames','spotlightFavorites'];
+const spotlightInputs=['spotlightEnabled','spotlightHotkeyMode','spotlightDockClick','spotlightFullTheme','spotlightIconSize','spotlightSpacing','spotlightGlassStrength','spotlightGlassBlur','spotlightNames','spotlightFavorites','spotlightEdgeWave'];
 for(const id of spotlightInputs) $(id).addEventListener('change',()=>send({t:'spotlightPreferences',value:{
   enabled:$('spotlightEnabled').checked,dockFullscreen:$('spotlightDockClick').value!=='compact',
   dockFollowHotkey:$('spotlightDockClick').value==='follow',hotkeyFullscreen:$('spotlightHotkeyMode').value==='full',theme:$('spotlightFullTheme').value,
   iconSize:Number($('spotlightIconSize').value),spacing:Number($('spotlightSpacing').value),
   glassStrength:Number($('spotlightGlassStrength').value),glassBlur:Number($('spotlightGlassBlur').value),
-  showNames:$('spotlightNames').checked,favoritesFirst:$('spotlightFavorites').checked
+  showNames:$('spotlightNames').checked,favoritesFirst:$('spotlightFavorites').checked,edgeWave:$('spotlightEdgeWave').checked
 }}));
 for(const [id,action] of [['spotlightHidden','hidden'],['spotlightRefresh','refresh'],['spotlightReset','reset']])
   $(id).addEventListener('click',()=>send({t:'spotlightLibraryAction',action}));
@@ -1749,6 +1750,7 @@ function applyInitMessage(m) {
     $('spotlightGlassBlur').value=p.glassBlur??48;
     $('spotlightNames').checked=p.showNames;
     $('spotlightFavorites').checked=p.favoritesFirst;
+    $('spotlightEdgeWave').checked=!!p.edgeWave;
   }
   if (m.launcherAppearance) {
     $('launcherTheme').value = m.launcherAppearance.theme;

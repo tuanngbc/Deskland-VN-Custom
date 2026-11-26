@@ -5,6 +5,7 @@
     "altTabOverview": "Window overview with Alt+Tab",
     "snapLayouts": "FluidWin layouts with Windows keys",
     "alwaysOnTop": "Always on top shortcut",
+    "spotlightEdgeWave": "Light wave when opening Spotlight",
     "alwaysOnTopHint": "Ctrl+Win+T pins or unpins the active window. TLauncher restores windows it pinned on session lock or exit.",
     "snapLayoutsHint": "Win+Z opens layouts; Win+Left/Right snaps; Win+Up maximizes, Win+Down restores a maximized window. In the picker: Tab or arrows select, Enter applies, Esc cancels.",
     "jellyDrag": "Jelly effect while dragging windows",

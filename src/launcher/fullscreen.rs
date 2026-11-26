@@ -1809,6 +1809,7 @@ pub(super) fn dismiss(restore: bool) {
     let Some(mut p) = PANEL.with(|s| s.borrow_mut().take()) else {
         return;
     };
+    super::wave::close(p.hwnd);
     unsafe {
         if GetCapture() == p.hwnd {
             ReleaseCapture();
@@ -1853,6 +1854,7 @@ fn start_transition(hwnd:HWND,open:bool)->bool{
         Some(t)
     });
     if let Some(t)=transition{
+        if open{super::wave::resume(hwnd);}else{super::wave::close(hwnd);}
         if unsafe{SetTimer(hwnd,TRANSITION_TIMER,t.duration+20,None)}==0{settle_transition(hwnd);}
         true
     }else{false}
@@ -3117,6 +3119,9 @@ fn open_native(point: POINT, query: String, prior: HWND, manage: bool, activate:
             if !ready{let _=n.foreground.settle();n.backdrop.settle();}
             (ready,Some((n.backdrop.hwnd,p.bounds)))
         });
+        if activate{let mut area:RECT=std::mem::zeroed();if GetWindowRect(hwnd,&mut area)!=0{
+            super::wave::open(hwnd,point,POINT{x:area.left+(area.right-area.left)/2,y:area.top+px(66,windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd))});
+        }}
         if let Some((bg,r))=backdrop{
             SetWindowPos(bg,hwnd,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOACTIVATE|SWP_SHOWWINDOW);
         }

@@ -47,6 +47,7 @@ fn main() {
         println!("cargo:rerun-if-changed=third_party/fluidwin/snap_accessibility.h");
         println!("cargo:rerun-if-changed=third_party/fluidwin/app_menu_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/shelf_bridge.cpp");
+        println!("cargo:rerun-if-changed=third_party/fluidwin/wave_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/recycle_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/media_bridge.cpp");
         cc::Build::new()
@@ -66,6 +67,7 @@ fn main() {
             .file("third_party/fluidwin/stack_bridge.cpp")
             .file("third_party/fluidwin/app_menu_bridge.cpp")
             .file("third_party/fluidwin/shelf_bridge.cpp")
+            .file("third_party/fluidwin/wave_bridge.cpp")
             .file("third_party/fluidwin/recycle_bridge.cpp")
             .file("third_party/fluidwin/media_bridge.cpp")
             .compile("tlauncher_fluidwin_motion");

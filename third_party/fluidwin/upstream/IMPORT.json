@@ -5,6 +5,12 @@
   "hash_note": "Git blob IDs identify canonical original source; worktree SHA-256 records the original CRLF checkout bytes.",
   "files": [
     {
+      "path": "onda.h",
+      "source_git_blob": "7fee896cb950118ef1119ad71ece411d6d129af6",
+      "source_worktree_sha256": "d7d52d6eddf6b9abf4ec58918857a8c5b8413f2924c077525f4b8860bca4d18b",
+      "local_changes": "None beyond Git newline normalization; wave_bridge.cpp uses original shader/Costanti only. Original permanent thread/device class is never instantiated."
+    },
+    {
       "path": "destro.h",
       "source_git_blob": "a8402a8ccb271e445c3461db68ce5991a3a78f48",
       "source_worktree_sha256": "6925576d52b55863d6eff5cd74ed7651ca55519c6b078a293d0f9745b7a7250e",

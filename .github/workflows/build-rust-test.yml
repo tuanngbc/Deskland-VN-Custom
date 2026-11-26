@@ -306,6 +306,17 @@ jobs:
           cargo test --release dock::stage_capture_lab::native_guarded_topmost_commands -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Verify original Spotlight wave shader and scoped shared GPU lifetime
+        if: ${{ !cancelled() }}
+        # Original shader on synthetic content only; no personal screen export.
+        run: |
+          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
+          New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
+          cargo test --release launcher::wave::native_original_wave_renders_perimeters_and_releases_shared_resources -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release launcher::wave::native_wave_follows_both_spotlight_modes_and_stops_on_disable -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Package Rust native build
         run: |
           $short = '${{ github.sha }}'.Substring(0, 7)

@@ -19,6 +19,7 @@ pub(crate) mod library;
 mod calculator;
 mod index;
 mod app_menu;
+mod wave;
 
 /// Start and Spotlight share this UI thread. Carry the actual input method
 /// across the focus handoff, rather than reusing a layout left on our thread
@@ -338,6 +339,7 @@ fn remember_entry(path: &Path) {
 }
 
 fn dismiss(hwnd: HWND) {
+    wave::close(hwnd);
     let searched = STATE.with(|c| {
         let g = c.borrow(); let s = g.as_ref()?;
         if s.launching || s.query.trim().is_empty() { return None; }
@@ -382,6 +384,7 @@ fn start_compact_motion(hwnd:HWND,open:bool)->bool{
     let t=if open&&unsafe{IsWindowVisible(hwnd)}==0{t.prepared()}else{t};
     if unsafe{SetTimer(hwnd,COMPACT_TWEEN,15,None)}==0{return false;}
     COMPACT_MOTION.set(Some(t));
+    if open{wave::resume(hwnd);}else{wave::close(hwnd);}
     true
 }
 fn close_compact(hwnd:HWND,toggle:bool){
@@ -1078,6 +1081,7 @@ pub(crate) fn spotlight_locale(value:&str){fullscreen::locale(value);}
 pub(crate) fn localized<'a>(vi:&'a str,en:&'a str,zh:&'a str)->&'a str{fullscreen::words(vi,en,zh)}
 
 pub fn configure_spotlight(options: library::Preferences) {
+    wave::configure(options.edge_wave&&options.enabled&&options.animations);
     fullscreen::configure(options);
     if !fullscreen::enabled() { close_spotlight(); }
     if !fullscreen::motion_allowed(){
@@ -1090,6 +1094,7 @@ pub fn configure_spotlight(options: library::Preferences) {
 }
 pub fn initialize_spotlight(value: library::Library) { fullscreen::initialize(value); }
 pub fn close_spotlight(){
+    wave::stop();
     fullscreen::dismiss(false);
     fullscreen::reset_graphics_factories();
     if let Some((hwnd,_,_,_))=handles(){
@@ -1226,6 +1231,7 @@ fn toggle_at(at:Option<POINT>, query:Option<String>, prior:Option<HWND>) {
         paint(hwnd);
         SetTimer(hwnd,7,60,None);
         let input=InputHandoff::capture();
+        wave::open(hwnd,mouse,POINT{x:x+width/2,y:y+(42.0*scale) as i32});
         ShowWindow(hwnd, SW_SHOW); SetForegroundWindow(hwnd); SetFocus(hwnd);
         if let Some(t)=COMPACT_MOTION.get(){COMPACT_MOTION.set(Some(t.restart_clock()));}
         input.finish(hwnd,"Spotlight");

@@ -16,6 +16,7 @@ pub(crate) struct Preferences {
     pub glass_strength: i32,
     pub glass_blur: i32,
     pub animations: bool,
+    pub edge_wave: bool,
     pub show_names: bool,
     pub favorites_first: bool,
 }
@@ -32,6 +33,7 @@ impl Default for Preferences {
             glass_strength: 44,
             glass_blur: 48,
             animations: true,
+            edge_wave: false,
             show_names: true,
             favorites_first: true,
         }
