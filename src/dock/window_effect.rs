@@ -699,8 +699,8 @@ unsafe fn reverse(owner:HWND,id:WindowIdentity,action:Action)->bool{
         true
     })
 }
-pub(super) unsafe fn minimize(owner:HWND,path:&str,id:WindowIdentity)->bool{super::window_motion::cancel();super::overview::close_for(ptr::null_mut());begin(owner,path,id,Action::Minimize)}
-pub(super) unsafe fn restore(owner:HWND,path:&str,id:WindowIdentity)->bool{super::window_motion::cancel();super::overview::close_for(ptr::null_mut());begin(owner,path,id,Action::Restore)}
+pub(super) unsafe fn minimize(owner:HWND,path:&str,id:WindowIdentity)->bool{super::window_geometry::cancel();super::window_motion::cancel();super::overview::close_for(ptr::null_mut());begin(owner,path,id,Action::Minimize)}
+pub(super) unsafe fn restore(owner:HWND,path:&str,id:WindowIdentity)->bool{super::window_geometry::cancel();super::window_motion::cancel();super::overview::close_for(ptr::null_mut());begin(owner,path,id,Action::Restore)}
 pub(super) unsafe fn schedule_release(){
     let controller=CONTROL.with(|c|c.get());
     KillTimer(controller,TIMER);
@@ -708,7 +708,7 @@ pub(super) unsafe fn schedule_release(){
 }
 pub(super) unsafe fn release_factory(){
     KillTimer(CONTROL.with(|c|c.get()),RELEASE_TIMER);
-    if ACTIVE.with(|a|a.borrow().is_none())&&!super::window_motion::active(){FACTORY.with(|f|{f.borrow_mut().take();});}
+    if ACTIVE.with(|a|a.borrow().is_none())&&!super::window_motion::active()&&!super::window_geometry::active(){FACTORY.with(|f|{f.borrow_mut().take();});}
 }
 pub(super) unsafe fn timer(){
     #[cfg(test)] fixture_guard_pulse();
@@ -748,6 +748,7 @@ pub(super) fn invalidate_recent(hwnd:HWND){
     RECENT.with(|r|r.borrow_mut().retain(|id,_|id.hwnd!=hwnd as usize));
 }
 pub(super) unsafe fn reset(){
+    super::window_geometry::cancel();
     super::window_motion::cancel();
     cancel();release_factory();RECENT.with(|r|r.borrow_mut().clear());
 }
@@ -1068,6 +1069,8 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
             super::window_motion::probe_drag(ids[0]);
             #[cfg(target_env="msvc")]
             super::show_desktop::probe(bar,ids);
+            #[cfg(target_env="msvc")]
+            super::window_geometry::probe(ids[0]);
             let id=ids[0];let before=GetWindowLongPtrW(source,GWL_EXSTYLE);
             let (_,marker)=super::motion_guard::session().unwrap();
             let marker=wide(&marker);

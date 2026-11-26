@@ -38,6 +38,7 @@ mod stage_projection;
 mod stage_snapshot;
 mod window_effect;
 mod window_motion;
+mod window_geometry;
 mod show_desktop;
 mod jelly;
 mod shell_menu;
@@ -46,7 +47,7 @@ mod motion_guard;
 mod fluidwin_mesh;
 mod stage_peek;
 mod clipboard_history;
-pub(crate) fn motion_diagnostics()->serde_json::Value{window_effect::diagnostics()}
+pub(crate) fn motion_diagnostics()->serde_json::Value{let mut value=window_effect::diagnostics();value["geometry"]=window_geometry::diagnostics();value}
 mod stage_capture_lab;
 pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>{stage_capture_lab::inspect(path,true)}
 mod utilities;
@@ -1806,6 +1807,7 @@ unsafe fn show_feedback(hwnd:HWND,item:&Item,kind:FeedbackKind){
     InvalidateRect(hwnd,ptr::null(),0);
 }
 unsafe fn activate(hwnd:HWND,item:&Item) {
+    window_geometry::cancel();
     show_desktop::pause();
     window_motion::cancel();
     if item.path==internal_app::KEY{
@@ -2662,18 +2664,20 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
             if owner.is_some()&&window_owner(item.hwnd)==owner {
                 match cmd {
                     MENU_MINIMIZE=>{let ok=ShowWindowAsync(item.hwnd,SW_MINIMIZE)!=0;show_feedback(hwnd,&item,if ok{FeedbackKind::Minimize}else{FeedbackKind::Failed});}
-                    MENU_MAXIMIZE=>{ShowWindowAsync(item.hwnd,SW_MAXIMIZE);}
-                    MENU_RESTORE=>{let ok=ShowWindowAsync(item.hwnd,SW_RESTORE)!=0;show_feedback(hwnd,&item,if ok{FeedbackKind::Restore}else{FeedbackKind::Failed});}
+                    MENU_MAXIMIZE=>{if !WindowIdentity::read(item.hwnd).is_some_and(|id|window_geometry::apply(id,window_geometry::Action::Maximize)){ShowWindowAsync(item.hwnd,SW_MAXIMIZE);}}
+                    MENU_RESTORE=>{let ok=WindowIdentity::read(item.hwnd).is_some_and(|id|window_geometry::apply(id,window_geometry::Action::Restore))||ShowWindowAsync(item.hwnd,SW_RESTORE)!=0;show_feedback(hwnd,&item,if ok{FeedbackKind::Restore}else{FeedbackKind::Failed});}
                     MENU_SNAP_LEFT|MENU_SNAP_RIGHT|MENU_EXPAND=>{
                         let screen=displays().into_iter().find(|s|stage_window_is_local(item.hwnd,s.bounds));
                         if let Some(screen)=screen {
-                            ShowWindowAsync(item.hwnd,SW_RESTORE);
                             let mut r=screen.work;
                             if cmd!=MENU_EXPAND{
                                 let middle=r.left+(r.right-r.left)/2;
                                 if cmd==MENU_SNAP_LEFT{r.right=middle;}else{r.left=middle;}
                             }
-                            SetWindowPos(item.hwnd,HWND_TOP,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_SHOWWINDOW|SWP_ASYNCWINDOWPOS);
+                            if !WindowIdentity::read(item.hwnd).is_some_and(|id|window_geometry::apply(id,window_geometry::Action::Snap(r))){
+                                ShowWindowAsync(item.hwnd,SW_RESTORE);
+                                SetWindowPos(item.hwnd,HWND_TOP,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_SHOWWINDOW|SWP_ASYNCWINDOWPOS);
+                            }
                         }
                     }
                     _=>{}
@@ -3089,7 +3093,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             }
             0
         },
-        stage_snapshot::READY if hwnd==CONTROL.get()=>{window_effect::capture_ready();window_motion::tick();finish_stage_snapshot();0},
+        stage_snapshot::READY if hwnd==CONTROL.get()=>{window_effect::capture_ready();window_motion::tick();window_geometry::tick();finish_stage_snapshot();0},
         overview::NOTICE if hwnd==CONTROL.get()=>{
             let current=WIN_KEY.with(|s|s.borrow().as_ref().is_some_and(|hook|hook.ticket==w));
             if current{
@@ -3117,6 +3121,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER if w==motion_guard::TIMER&&hwnd==CONTROL.get()=>{motion_guard::sync();0},
         WM_TIMER if w==overview::TIMER&&hwnd==CONTROL.get()=>{overview::poll();0},
         WM_TIMER if w==window_motion::TIMER&&hwnd==CONTROL.get()=>{window_motion::tick();0},
+        WM_TIMER if w==window_geometry::TIMER&&hwnd==CONTROL.get()=>{window_geometry::tick();0},
         WM_TIMER if w==show_desktop::TIMER&&hwnd==CONTROL.get()=>{show_desktop::tick();0},
         WM_SHELL_FALLBACK if hwnd==CONTROL.with(Cell::get)=>{
             let owner=w as HWND;
@@ -3380,6 +3385,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}else{refresh_dock_clock();sync_win_key();request_dock_status();motion_guard::sync();}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
         WM_TIMECHANGE=>{refresh_dock_clock();0},
         WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_THEMECHANGED|WM_DPICHANGED=>{
+            window_geometry::cancel();
             show_desktop::pause();
             window_motion::cancel();
             overview::close_for(ptr::null_mut());
@@ -3764,6 +3770,7 @@ fn queue_refresh() {
 }
 unsafe extern "system" fn window_event(_:HWINEVENTHOOK,event:u32,hwnd:HWND,object:i32,child:i32,_thread:u32,_time:u32) {
     if object==0 && child==0 {
+        window_geometry::event(event,hwnd);
         window_motion::event(event,hwnd);
         if event==EVENT_OBJECT_DESTROY{show_desktop::forget(hwnd);stage_snapshot::forget(hwnd);}
         if event==EVENT_SYSTEM_MINIMIZEEND{show_desktop::forget(hwnd);}
@@ -3776,6 +3783,7 @@ unsafe fn drain_commands() {
     for command in commands {
         match command {
             Command::Configure(options)=>{
+                window_geometry::cancel();
                 show_desktop::pause();
                 window_motion::cancel();
                 overview::close_for(ptr::null_mut());
@@ -3805,6 +3813,7 @@ unsafe fn drain_commands() {
                 if enable_default&&!cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active(){start_saved_taskbar_mode();}
             },
             Command::Suspend(on)=>{
+                if on{window_geometry::cancel();}
                 if on{show_desktop::pause();}
                 if on{window_motion::cancel();}
                 if on{overview::close_for(ptr::null_mut());}
@@ -3936,14 +3945,14 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         }
         let mut msg:MSG=mem::zeroed();
         'dock_messages:loop{
-            if window_effect::active()||window_motion::active(){
+            if window_effect::active()||window_motion::active()||window_geometry::active(){
                 // Follow the compositor's single-frame queue while animating.
                 // Message input wakes this wait immediately. No polling at rest.
-                let clock=if window_motion::active(){window_motion::frame_ready()}else{window_effect::frame_ready()};
+                let clock=if window_geometry::active(){window_geometry::frame_ready()}else if window_motion::active(){window_motion::frame_ready()}else{window_effect::frame_ready()};
                 let count=u32::from(!clock.is_null());
                 let timeout=if count==0{12}else{100};
                 let result=MsgWaitForMultipleObjectsEx(count,if count==0{ptr::null()}else{&clock},timeout,QS_ALLINPUT,MWMO_INPUTAVAILABLE);
-                if result==WAIT_TIMEOUT||(count==1&&result==WAIT_OBJECT_0){if window_motion::active(){window_motion::tick();}else{window_effect::timer();}}
+                if result==WAIT_TIMEOUT||(count==1&&result==WAIT_OBJECT_0){if window_geometry::active(){window_geometry::tick();}else if window_motion::active(){window_motion::tick();}else{window_effect::timer();}}
                 for _ in 0..64{
                     if PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)==0{break;}
                     if msg.message==WM_QUIT{break 'dock_messages;}
@@ -3954,7 +3963,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
                 if !utilities::route_panel_keyboard(&msg){TranslateMessage(&msg);DispatchMessageW(&msg);}
             }
         }
-        show_desktop::reset();window_motion::cancel();window_effect::reset();motion_guard::stop();
+        window_geometry::cancel();show_desktop::reset();window_motion::cancel();window_effect::reset();motion_guard::stop();
         clipboard_history::configure(control,false,0);
         if taskbar_active(){show_taskbar(taskbar_guard::Exit::Requested,"Đã hiện lại thanh tác vụ khi thoát Deskland.");}
         WIN_KEY.with(|s|drop(s.borrow_mut().take()));

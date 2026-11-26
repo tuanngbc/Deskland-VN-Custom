@@ -31,7 +31,7 @@ pub(super) fn ready()->bool{
 }
 pub(super) fn refresh(){
     let ready=STATE.with(|s|{let Ok(s)=s.try_borrow()else{return false;};
-        s.prefs.enabled&&s.prefs.alt_tab_overview&&!s.suspended&&!active()&&!super::window_effect::active()&&
+        s.prefs.enabled&&s.prefs.alt_tab_overview&&!s.suspended&&!active()&&!super::window_effect::active()&&!super::window_geometry::active()&&
         s.windows.iter().any(|w|unsafe{IsWindowVisible(w.hwnd)!=0&&WindowIdentity::read(w.hwnd).is_some()&&super::previews::permitted_pid(w.hwnd).is_ok()})
     });
     READY.store(ready&&!crate::trial::demo_active()&&!crate::trial::benchmark_active(),Ordering::Release);
@@ -93,6 +93,7 @@ pub(super) unsafe fn show(owner:HWND,alt:bool,steps:i32){
     let enabled=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&!s.suspended&&(!alt||s.prefs.alt_tab_overview)});
     if !enabled||super::window_effect::active(){return;}
     super::window_motion::cancel();
+    super::window_geometry::cancel();
     let monitor=if alt{MonitorFromWindow(GetForegroundWindow(),MONITOR_DEFAULTTONEAREST)}
         else{MonitorFromWindow(owner,MONITOR_DEFAULTTONEAREST)};
     let Some(area)=super::monitor_bounds(monitor)else{return;};

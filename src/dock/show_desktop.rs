@@ -46,6 +46,7 @@ unsafe fn sources()->Vec<Source>{
 pub(super) unsafe fn can_restore()->bool{DESKTOP.with(|s|s.borrow().saved.iter().any(|s|s.valid()&&IsIconic(s.id.hwnd as HWND)!=0))}
 pub(super) unsafe fn perform(owner:HWND,restore:bool){
     let enabled=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&!s.suspended});if !enabled{return;}
+    super::window_geometry::cancel();
     super::window_motion::cancel();super::overview::close_for(ptr::null_mut());super::utilities::close_panels();
     DESKTOP.with(|s|s.borrow_mut().next=Some((owner as usize,!restore)));
     if SetTimer(CONTROL.get(),TIMER,45,None)==0{pause();return;}

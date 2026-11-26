@@ -480,7 +480,7 @@ struct Job{
     source:WindowIdentity, stamp:Stamp, live:Arc<AtomicBool>,
     receiver:mpsc::Receiver<Result<Frame,String>>,
 }
-#[derive(Clone,Default,serde::Serialize)]
+#[derive(Clone,Debug,Default,serde::Serialize)]
 pub(super) struct CaptureTiming{
     pub queue_ms:u64,pub device_ms:u64,pub capture_init_ms:u64,pub first_frame_ms:u64,
     pub readback_ms:u64,pub downsample_ms:u64,

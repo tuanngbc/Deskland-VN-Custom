@@ -15,6 +15,7 @@ pub(super) fn session()->Option<(u32,String)>{
 pub(super) unsafe fn stop(){
     let old=WATCH.with(|w|w.borrow_mut().take());
     if let Some(watch)=old{
+        super::window_geometry::cancel();
         super::window_motion::cancel();
         super::window_effect::cancel();
         super::TASKBAR_STOPPING.with(|s|s.replace(watch.stop()));
@@ -25,7 +26,7 @@ pub(super) unsafe fn sync(){
     if cfg!(test){return;}
     let wanted=super::STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&!s.suspended&&
         (s.prefs.jelly_drag||motion::settings().window_effect!=motion::WindowEffect::Windows)})&&motion::allowed();
-    if !wanted{super::window_motion::cancel();stop();FAILED.with(|f|f.set(false));return;}
+    if !wanted{super::window_geometry::cancel();super::window_motion::cancel();stop();FAILED.with(|f|f.set(false));return;}
     let taskbar=super::taskbar_active()||super::taskbar_retry_pending()
         ||super::TASKBAR_STATUS.with(|s|s.borrow().desired)||super::TASKBAR_RESTORE.with(|s|s.borrow().is_some());
     if taskbar{stop();return;}

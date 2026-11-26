@@ -5,6 +5,7 @@ use windows_sys::Win32::{Foundation::*,Graphics::Gdi::*,UI::{Accessibility::*,Hi
 pub(super) const TIMER:usize=30;
 thread_local!{static ACTIVE:RefCell<Option<Drag>>=const{RefCell::new(None)};}
 #[cfg(test)]thread_local!{static HELD:std::cell::Cell<Option<bool>>=const{std::cell::Cell::new(None)};}
+#[cfg(test)]thread_local!{static PREPARE_TIMEOUT:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
 unsafe fn held()->bool{
     #[cfg(test)]if let Some(value)=HELD.get(){return value;}
     GetAsyncKeyState(i32::from(VK_LBUTTON))<0
@@ -32,8 +33,10 @@ pub(super) unsafe fn event(event:u32,h:HWND){
     }
 }
 unsafe fn start(h:HWND){
+    #[cfg(test)]PREPARE_TIMEOUT.set(false);
     let enabled=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.jelly_drag&&!s.suspended});
     if !enabled||!super::motion::allowed()||super::motion_guard::session().is_none()||!held(){return;}
+    super::window_geometry::cancel();
     if super::window_effect::active()||IsIconic(h)!=0||IsZoomed(h)!=0||GetWindowLongW(h,GWL_EXSTYLE) as u32&WS_EX_LAYERED!=0{return;}
     let Some(id)=WindowIdentity::read(h).filter(|id|super::previews::permitted_pid(h).is_ok()&&super::window_effect::elevation(id.pid)==Some(false))else{return;};
     let Some(area)=super::window_effect::visible_area(h)else{return;};
@@ -71,7 +74,14 @@ impl Drag{
             Err(TryRecvError::Disconnected)=>return false,
             _=>{},
         }
-        let Some(proxy)=&self.proxy else{return self.released.is_none()&&self.started.elapsed()<Duration::from_millis(550);};
+        let Some(proxy)=&self.proxy else{
+            let waiting=self.released.is_none()&&self.started.elapsed()<Duration::from_millis(550);
+            if !waiting&&self.released.is_none(){
+                #[cfg(test)]PREPARE_TIMEOUT.set(true);
+                if cfg!(test)||crate::trial::active(){eprintln!("FLUIDWIN_JELLY native_fallback=capture-timeout timing={:?}",self.capture.timing.lock().ok().as_deref());}
+            }
+            return waiting;
+        };
         if self.lease.is_none()&&self.released.is_some(){return false;}
         if outer.left==self.outer.left&&outer.top==self.outer.top&&self.lease.is_none(){return true;}
         let scale=f64::from(self.dpi)/96.0;let speed=f64::from(super::motion::settings().speed)/100.0;
@@ -126,6 +136,7 @@ pub(super) unsafe fn probe_drag(id:WindowIdentity){
         tick();std::thread::sleep(Duration::from_millis(12));
     };
     for mode in ["release","cancel","resize","monitor"]{
+        'setup:for attempt in 0..3{
         ShowWindowAsync(h,SW_RESTORE);SetWindowPos(h,ptr::null_mut(),original.left,original.top,original.right-original.left,original.bottom-original.top,SWP_NOACTIVATE|SWP_NOZORDER|SWP_ASYNCWINDOWPOS);
         PostMessageW(h,WM_APP+171,0x00ff0000,0);std::thread::sleep(Duration::from_millis(100));
         let area=super::window_effect::visible_area(h).unwrap();SetCursorPos(area.left+100,area.top+12);HELD.set(Some(true));event(EVENT_SYSTEM_MOVESIZESTART,h);
@@ -136,8 +147,15 @@ pub(super) unsafe fn probe_drag(id:WindowIdentity){
             pump();
             if !evidence{evidence=ACTIVE.with(|s|s.borrow().as_ref().and_then(|d|d.proxy.as_ref()).is_some_and(|p|p.enable_evidence()));}
             let ready=ACTIVE.with(|s|s.borrow().as_ref().is_some_and(|d|d.lease.as_ref().is_some_and(|l|l.status()==1)));
-            if ready{break;}
-            assert!(active()&&start.elapsed()<Duration::from_secs(4),"Jelly did not acquire a journaled visibility lease: {mode}");
+            if ready{break 'setup;}
+            if !active(){
+                assert!(PREPARE_TIMEOUT.get(),"Jelly setup failed before a prepared proxy: {mode}");
+                assert_eq!(GetWindowLongPtrW(h,GWL_EXSTYLE),style);assert!(GetPropW(h,marker.as_ptr()).is_null());
+                println!("FLUIDWIN_JELLY setup={mode} capture_timeout_native_fallback=PASS attempt={attempt}");
+                assert!(attempt<2,"Jelly never acquired a real journaled visibility lease: {mode}");break;
+            }
+            assert!(start.elapsed()<Duration::from_secs(4),"Jelly did not acquire a journaled visibility lease: {mode}");
+        }
         }
         assert!(!GetPropW(h,marker.as_ptr()).is_null());let mut color=0;let mut alpha=0;let mut flags=0;
         assert_ne!(GetLayeredWindowAttributes(h,&mut color,&mut alpha,&mut flags),0);assert_eq!((alpha,flags),(1,LWA_ALPHA),"dragged source remains hit-testable");
