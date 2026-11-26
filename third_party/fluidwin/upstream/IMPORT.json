@@ -5,6 +5,12 @@
   "hash_note": "Git blob IDs identify canonical original source; worktree SHA-256 records the original CRLF checkout bytes.",
   "files": [
     {
+      "path": "stampa.h",
+      "source_git_blob": "14a2a476aa4f51046fd1ac4f9d957bcfc639c3b2",
+      "source_worktree_sha256": "290f9e18a7b2581551e6c8ae955832d62a85ff8310c0685c735217f3b132d4ca",
+      "local_changes": "None. Original refcounted PrintWindow callback, per-HWND admission and pixel handoff reused by static_capture_bridge. The adapter adds one global permit retained until the native callback completes; no original application entry point or permanent worker."
+    },
+    {
       "path": "widget.h",
       "source_git_blob": "5a1628bdb1006b73c822f47332f7477fc47d27f3",
       "source_worktree_sha256": "9c541a24e2cb54ed4c1036496e8ba4d22e602c33dfb1086905e60c045c542df5",

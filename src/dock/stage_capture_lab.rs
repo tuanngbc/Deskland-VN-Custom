@@ -22,9 +22,17 @@ unsafe extern "system" fn fixture_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARA
     if msg==WM_APP+171&&std::env::var("GITHUB_ACTIONS").as_deref()==Ok("true"){
         SetPropW(hwnd,wide("TLauncher.Fixture.Solid").as_ptr(),(w+1) as HANDLE);InvalidateRect(hwnd,std::ptr::null(),0);return 0;
     }
-    if msg != WM_PAINT { return DefWindowProcW(hwnd,msg,w,l); }
+    #[cfg(test)]
+    if msg==WM_PRINTCLIENT{
+        let hold=GetPropW(hwnd,wide("TLauncher.Fixture.PrintHold").as_ptr());
+        if !hold.is_null(){
+            use windows_sys::Win32::System::Threading::{SetEvent,WaitForSingleObject};
+            SetEvent(GetPropW(hwnd,wide("TLauncher.Fixture.PrintEntered").as_ptr()));WaitForSingleObject(hold,2000);
+        }
+    }
+    if msg != WM_PAINT && msg!=WM_PRINTCLIENT { return DefWindowProcW(hwnd,msg,w,l); }
     let mut ps: PAINTSTRUCT = std::mem::zeroed();
-    let dc = BeginPaint(hwnd,&mut ps);
+    let dc = if msg==WM_PAINT{BeginPaint(hwnd,&mut ps)}else{w as HDC};
     let mut client:RECT=std::mem::zeroed();GetClientRect(hwnd,&mut client);
     #[cfg(test)]
     {
@@ -34,7 +42,7 @@ unsafe extern "system" fn fixture_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARA
             if !GetPropW(hwnd,wide("TLauncher.Fixture.HighContrast").as_ptr()).is_null(){
                 for x in (0..client.right).step_by(4){FillRect(dc,&RECT{left:x,top:0,right:(x+2).min(client.right),bottom:client.bottom},GetStockObject(BLACK_BRUSH) as HBRUSH);}
             }
-            EndPaint(hwnd,&ps);return 0;
+            if msg==WM_PAINT{EndPaint(hwnd,&ps);}return 0;
         }
     }
     let background=CreateSolidBrush(0x00ede6d1);FillRect(dc,&client,background);DeleteObject(background);
@@ -58,7 +66,7 @@ unsafe extern "system" fn fixture_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARA
     SetTextColor(dc,0x00ffffff);
     let title=wide("Deskland • Window Capture Fixture");
     TextOutW(dc,12,8,title.as_ptr(),title.len() as i32-1);
-    EndPaint(hwnd,&ps);
+    if msg==WM_PAINT{EndPaint(hwnd,&ps);}
     0
 }
 
@@ -331,6 +339,103 @@ fn native_live_capture_texture_and_screen_perimeters(){
         });
         screen("source-stopped");println!("TLAUNCHER_CAPTURE_TIMING {}",serde_json::to_string(&*timing.lock().unwrap()).unwrap());
         println!("TLAUNCHER_CAPTURE_BASELINE GPU_to_GPU=PASS live_white_to_blue=PASS screen_perimeter=EXPORTED consent_prompt=NOT_REQUESTED owner_border=UNRESOLVED");
+    }
+}
+
+#[cfg(all(test,target_env="msvc"))]
+fn pump_static_fixture(fixture:&Fixture,allow_print:bool)->Result<Option<(super::stage_snapshot::GpuFrame,super::stage_snapshot::CaptureTiming)>,String>{
+    let handle=fixture.0 as usize;
+    std::thread::scope(|scope|{
+        let (tx,rx)=mpsc::sync_channel(1);
+        scope.spawn(move||unsafe{
+            let timing=std::sync::Arc::new(std::sync::Mutex::new(super::stage_snapshot::CaptureTiming::default()));
+            let result=super::stage_snapshot::static_motion_frame(handle as HWND,||allowed(handle as HWND),Some(&timing),allow_print)
+                .and_then(|f|match f{Some(super::stage_snapshot::MotionFrame::Gpu(frame))=>Ok(Some((frame,timing.lock().unwrap().clone()))),None=>Ok(None),_=>Err("static photo became a thumbnail".into())});
+            let _=tx.send(result);
+        });
+        unsafe{let mut msg:MSG=std::mem::zeroed();loop{
+            while PeekMessageW(&mut msg,null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}
+            match rx.recv_timeout(Duration::from_millis(10)){
+                Ok(result)=>return result,Err(mpsc::RecvTimeoutError::Timeout)=>{},Err(_)=>return Err("static fixture worker disconnected".into()),
+            }
+        }}
+    })
+}
+
+#[cfg(all(test,target_env="msvc"))]
+#[test]
+#[ignore="native original static photo paths, actual full texture/perimeter and source-policy split on hosted Windows"]
+fn native_static_photos_keep_original_pixels_and_reject_unsafe_sources(){
+    if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+    unsafe{
+        let source=window(false).unwrap();SetWindowPos(source.0,HWND_TOPMOST,32,32,640,420,SWP_NOACTIVATE);
+        let save=|name:&str,pixels:&[u8],w:i32,h:i32|{
+            if let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
+                let mut rgba=pixels.to_vec();for p in rgba.chunks_exact_mut(4){p.swap(0,2);}
+                image::save_buffer(std::path::PathBuf::from(dir).join(format!("static-{name}.png")),&rgba,w as u32,h as u32,image::ColorType::Rgba8).unwrap();
+            }
+        };
+        for (name,color,expected) in [("white",0x00ffffff,[255,255,255,255]),("black",0,[0,0,0,255]),("red",0x000000ff,[0,0,255,255]),("green",0x0000ff00,[0,255,0,255]),("blue",0x00ff0000,[255,0,0,255])]{
+            SetPropW(source.0,wide("TLauncher.Fixture.Solid").as_ptr(),(color+1) as HANDLE);InvalidateRect(source.0,ptr::null(),0);UpdateWindow(source.0);pump();
+            let (frame,timing)=pump_static_fixture(&source,false).unwrap().expect("rectangular source must use static photo");
+            assert_eq!((frame.width,frame.height),(640,420));assert_eq!(timing.capture_backend,Some("gdi-uncovered-screen"));assert!(!timing.gpu_to_gpu);assert_eq!(timing.live_frames,0);
+            let pixels=frame.fixture_pixels().unwrap();assert!(pixels.chunks_exact(4).all(|p|p==expected),"{name} complete texture including all perimeter pixels");save(name,&pixels,frame.width,frame.height);
+            let mut screen=Layer::new(656,436).unwrap();let dc=GetDC(ptr::null_mut());assert_ne!(BitBlt(screen.dc,0,0,656,436,dc,24,24,SRCCOPY|CAPTUREBLT),0);ReleaseDC(ptr::null_mut(),dc);
+            let mut screen=screen.pixels().to_vec();for p in screen.chunks_exact_mut(4){p[3]=255;}save(&format!("source-{name}"),&screen,656,436);
+        }
+        // A real occluder forces the original PrintWindow route. Its blue
+        // pixels must never appear in the source's red texture.
+        SetPropW(source.0,wide("TLauncher.Fixture.Solid").as_ptr(),0x100 as HANDLE);InvalidateRect(source.0,ptr::null(),0);UpdateWindow(source.0);pump();
+        let cover=window(false).unwrap();SetPropW(cover.0,wide("TLauncher.Fixture.Solid").as_ptr(),0xff0001 as HANDLE);
+        SetWindowPos(cover.0,HWND_TOPMOST,50,50,100,80,SWP_NOACTIVATE);InvalidateRect(cover.0,ptr::null(),0);UpdateWindow(cover.0);pump();
+        assert!(pump_static_fixture(&source,false).is_err(),"occluded pixels cannot use screen capture");
+        let (frame,timing)=pump_static_fixture(&source,true).unwrap().unwrap();assert_eq!(timing.capture_backend,Some("printwindow-static"));
+        let pixels=frame.fixture_pixels().unwrap();assert!(pixels.chunks_exact(4).all(|p|p==[0,0,255,255]));save("print-occluded-red",&pixels,frame.width,frame.height);drop(cover);
+        // A real custom region / layered source is left for alpha-aware WGC.
+        assert_ne!(SetWindowRgn(source.0,CreateRoundRectRgn(0,0,640,420,50,50),1),0);
+        assert!(pump_static_fixture(&source,true).unwrap().is_none());SetWindowRgn(source.0,ptr::null_mut(),1);
+        let style=GetWindowLongPtrW(source.0,GWL_EXSTYLE);SetWindowLongPtrW(source.0,GWL_EXSTYLE,style|WS_EX_LAYERED as isize);
+        SetLayeredWindowAttributes(source.0,0,128,LWA_ALPHA);assert!(pump_static_fixture(&source,true).unwrap().is_none());SetWindowLongPtrW(source.0,GWL_EXSTYLE,style);
+        assert_ne!(SetWindowDisplayAffinity(source.0,WDA_MONITOR),0);assert!(pump_static_fixture(&source,true).is_err());assert_ne!(SetWindowDisplayAffinity(source.0,WDA_NONE),0);
+        assert!(super::stage_snapshot::static_motion_frame(source.0,||false,None,true).is_err());
+        SetWindowPos(source.0,HWND_TOPMOST,20,20,2110,980,SWP_NOACTIVATE);InvalidateRect(source.0,ptr::null(),0);UpdateWindow(source.0);pump();
+        // PrintWindow also covers native resolution beyond the runner display.
+        let (frame,timing)=pump_static_fixture(&source,true).unwrap().unwrap();assert_eq!((frame.width,frame.height),(2110,980));assert!(!timing.gpu_to_gpu);
+        let pixels=frame.fixture_pixels().unwrap();assert!(pixels.chunks_exact(4).all(|p|p==[0,0,255,255]));save("large-native-red",&pixels,frame.width,frame.height);
+        println!("FLUIDWIN_STATIC_PHOTO screen_colors=VERIFIED occluded_print=VERIFIED full_native=2110x980 alpha_shape=DEFERRED_TO_WGC protected_cancel=REFUSED gpu_to_gpu=false edge_recolor=NONE owner_border=UNRESOLVED");
+    }
+}
+
+#[cfg(all(test,target_env="msvc"))]
+#[test]
+#[ignore="actual delayed PrintWindow, globally bounded admission and late cleanup on hosted Windows"]
+fn native_static_print_timeout_keeps_one_job_until_native_completion(){
+    if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+    unsafe{
+        use windows_sys::Win32::System::Threading::{CreateEventW,SetEvent,WaitForSingleObject};
+        use std::sync::{Arc,atomic::{AtomicBool,Ordering}};
+        let hold=CreateEventW(ptr::null(),1,0,ptr::null());let entered=CreateEventW(ptr::null(),1,0,ptr::null());assert!(!hold.is_null()&&!entered.is_null());
+        struct Events(HANDLE,HANDLE);impl Drop for Events{fn drop(&mut self){unsafe{SetEvent(self.0);CloseHandle(self.0);CloseHandle(self.1);}}}let _events=Events(hold,entered);
+        let stop=Arc::new(AtomicBool::new(false));let done=stop.clone();let handles=(hold as usize,entered as usize);let (tx,rx)=mpsc::sync_channel(1);
+        let owner=std::thread::spawn(move||{
+            let source=window(false).unwrap();SetPropW(source.0,wide("TLauncher.Fixture.Solid").as_ptr(),0x100 as HANDLE);
+            SetPropW(source.0,wide("TLauncher.Fixture.PrintHold").as_ptr(),handles.0 as HANDLE);SetPropW(source.0,wide("TLauncher.Fixture.PrintEntered").as_ptr(),handles.1 as HANDLE);
+            UpdateWindow(source.0);tx.send(source.0 as usize).unwrap();while !done.load(Ordering::Relaxed){pump();std::thread::sleep(Duration::from_millis(5));}
+        });
+        struct Owner{stop:Arc<AtomicBool>,hold:usize,thread:Option<std::thread::JoinHandle<()>>}
+        impl Drop for Owner{fn drop(&mut self){unsafe{SetEvent(self.hold as HANDLE);}self.stop.store(true,Ordering::Relaxed);if let Some(thread)=self.thread.take(){let _=thread.join();}}}
+        let owner=Owner{stop,hold:hold as usize,thread:Some(owner)};
+        let hwnd=rx.recv_timeout(Duration::from_secs(3)).unwrap() as HWND;
+        let second=window(false).unwrap();let cover=window(false).unwrap();SetWindowPos(cover.0,HWND_TOPMOST,0,0,700,500,SWP_NOACTIVATE);pump();
+        let started=Instant::now();let first=super::stage_snapshot::static_motion_frame(hwnd,||allowed(hwnd),None,true);
+        assert!(first.is_err());assert!(started.elapsed()<Duration::from_millis(900));assert_eq!(WaitForSingleObject(entered,0),0);
+        for _ in 0..4{let error=super::stage_snapshot::static_motion_frame(second.0,||allowed(second.0),None,true).err().unwrap();assert!(error.contains("(4)"),"global admission: {error}");}
+        SetEvent(hold);let deadline=Instant::now()+Duration::from_secs(3);
+        loop{match super::stage_snapshot::static_motion_frame(hwnd,||allowed(hwnd),None,true){
+            Ok(Some(_))=>break,Err(e) if e.contains("(4)")&&Instant::now()<deadline=>std::thread::sleep(Duration::from_millis(10)),other=>panic!("late print cleanup: {}",other.err().unwrap_or_default()),
+        }}
+        drop(owner);
+        println!("FLUIDWIN_STATIC_PRINT deadline=BOUNDED global_jobs=ONE late_native_completion=RELEASED repeated_admission=VERIFIED");
     }
 }
 

@@ -282,6 +282,16 @@ jobs:
           cargo test --release dock::brightness::tests::native_brightness_read_releases_physical_handles -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Verify original static snapshots and bounded hung-source ownership
+        if: ${{ !cancelled() }}
+        run: |
+          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
+          New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
+          cargo test --release dock::stage_capture_lab::native_static_photos_keep_original_pixels_and_reject_unsafe_sources -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::stage_capture_lab::native_static_print_timeout_keeps_one_job_until_native_completion -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Verify Spotlight Shell menu without invoking uninstall
         if: ${{ !cancelled() }}
         run: |

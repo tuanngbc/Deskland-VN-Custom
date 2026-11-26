@@ -5,31 +5,60 @@
   "note": "Section adaptations, not claims that these full headers were imported. Original CRLF worktree byte hashes and canonical Git blobs are recorded; existing notices and original license are preserved.",
   "sections": [
     {
+      "source": "genio.h::Motore::cattura / carica (without border recoloring), fluidwin.cpp::scopertaSulloSchermo",
+      "source_git_blob": "975808ed37afb4d6a4ce79b4926352c89a835060",
+      "source_worktree_sha256": "4513fc420cabdce1415857be24724a4b0186f835d9bc8105bbbec7389c2f326d",
+      "integration": [
+        "static_capture_bridge.cpp",
+        "../../src/dock/stage_snapshot.rs"
+      ],
+      "adaptation": "Static photos on existing Stage worker: whole-frame uncovered screen first, otherwise original bounded stampa callback, native-resolution opaque BGRA upload on shared ShellGpu. Only verified rectangular/non-layered sources; shaped/rounded/layered sources keep alpha-aware WGC, live Jelly always keeps WGC. Identity/visibility/affinity/geometry/style checks before/after, conservative full-area occlusion and connected-monitor checks, dynamic GPU and available-RAM refusal without downsample. Global print permit survives caller timeout until callback finishes. No artificial frame recoloring, border masking, foreign-state write or second renderer. Original blank PrintWindow heuristic retained; a verified screen black source is valid. Physical app compatibility and owner border cause/acceptance remain unverified."
+    },
+    {
       "source": "fluidwin.cpp::rileggiFotoZoom alfaPrima / morbido 150ms settled-layout handoff",
       "source_git_blob": "17519dee3f8d60b3599b427cbb33a297dd9129cf",
       "source_worktree_sha256": "e635f67fcce5978aca9d2f79da57529f4c18ff79fd59dee707c961e3b32350ef",
-      "integration": ["../../src/dock/window_geometry.rs"],
+      "integration": [
+        "../../src/dock/window_geometry.rs"
+      ],
       "adaptation": "After the existing prepared geometry reaches its native target, wait for exact Guardian restoration, then fade the old layout's same click-through proxy using original 150ms smoothstep through existing owner speed/frame clock. The restored real HWND supplies the updated layout underneath; no duplicate capture/device or foreign policy. This is the final native-content handoff only: original timed PrintWindow reread/signature stabilization and pre-command titlebar input remain incomplete."
     },
     {
       "source": "sensori.h::microfono / webcam / inUso / nomeProcesso",
       "source_git_blob": "3e330904e648a8098f3821b42ce7a5808317cbbc",
       "source_worktree_sha256": "1b19e147a17c3e545dec6d2af7ecaf8fc6c5b9107a3af8999c0437b7a267aed4",
-      "integration": ["sensors_bridge.cpp", "../../src/dock/sensors.rs", "../../src/dock/control_center.rs"],
+      "integration": [
+        "sensors_bridge.cpp",
+        "../../src/dock/sensors.rs",
+        "../../src/dock/control_center.rs"
+      ],
       "adaptation": "Read-only WASAPI active capture sessions and Windows webcam ConsentStore reports on explicit Control Center open/refresh. Scoped COM/process/registry handles instead of retained sensor singleton/main poll loop. Maximum 32 endpoints, 256 sessions per endpoint, 500 registry rows per root, 16 bounded basename labels per source; unknown/partial reports remain explicit. No recording, camera activation, privacy write, process launch or full-path export. Closed/ticket delivery and globally single scoped pool callback; no persistent data. Battery/headphone notices and standalone OSD remain separate incomplete routes."
     },
     {
       "source": "ricerca.h::pagine settings catalog",
       "source_git_blob": "cda18f93d518deeed9f2cd9025f7f035832cb822",
       "source_worktree_sha256": "4a7cc60f3374958220aa735596339455733f74461cf1d131d1a78082e75d0c44",
-      "integration": ["../../src/launcher/settings_pages.rs", "../../src/launcher.rs", "../../src/launcher/fullscreen.rs"],
+      "integration": [
+        "../../src/launcher/settings_pages.rs",
+        "../../src/launcher.rs",
+        "../../src/launcher/fullscreen.rs"
+      ],
       "adaptation": "All 29 original settings destinations and keywords; TLauncher own Settings replaces the FluidWin marker, control/taskmgr reuse existing canonical .exe identities. vi/en/zh labels and keywords, English/Italian original terms retained, Vietnamese accent folding. Existing Compact and Fullscreen search/result/keyboard owners and System category, exact target allowlist and ordinary Windows Shell launch. No new catalog, index, thread, poll timer, network or executable discovery. Ephemeral settings results preserve app/library pins and recents; canonical selection survives later indexed-file arrivals. Gear glyph uses existing text rendering without new per-URI icon work. Actual Windows page reachability/owner interaction remains separate from synthetic hosted tests."
     },
     {
       "source": "raggio.h::stile / fattore / preferenzaDwm / registra / riapplica",
       "source_git_blob": "037ac1eb57705a9fecf7dc7d1f5fa22a5e50f7a1",
       "source_worktree_sha256": "a289088cf7e88b65edcf9d8a1114f1923946fe1430cf2ebe4e72e97babd4aefa",
-      "integration": ["shell_menu_bridge.cpp", "upstream/menu.h", "../../src/dock/corners.rs", "../../src/dock/panel_chrome.rs", "../../src/dock/surface.rs", "../../src/launcher.rs", "../../src/launcher/start.rs", "../../src/web.rs"],
+      "integration": [
+        "shell_menu_bridge.cpp",
+        "upstream/menu.h",
+        "../../src/dock/corners.rs",
+        "../../src/dock/panel_chrome.rs",
+        "../../src/dock/surface.rs",
+        "../../src/launcher.rs",
+        "../../src/launcher/start.rs",
+        "../../src/web.rs"
+      ],
       "adaptation": "Original rounded/small/square factors and DWM preference table, shared by existing TLauncher own-UI appearance profile and native Rust raster/mask/region/shadow owners; original C++ glass/menu uses raggio directly. Imported menu joins original marked-HWND registration so stale handles are rejected. Rust DWM changes additionally require current-process identity; no foreign application attributes are changed. Existing TLauncher base radii/default design are retained; no Windhawk installation/patching or system policy writer. Geometry caches reject previous styles; Start and compact Spotlight refresh on the owning main thread; native controls/profile/vi-en-zh Settings are preserved. Whole original Settings replacement remains separate."
     },
     {
@@ -38,54 +67,85 @@
       "source_worktree_sha256": "9c541a24e2cb54ed4c1036496e8ba4d22e602c33dfb1086905e60c045c542df5",
       "centro_source_git_blob": "942c4ae64c59c5763801d541d70da4172f46a4a3",
       "centro_source_worktree_sha256": "da7eaf30d8b4911826b623b81ef41291c7a2e5b17368456364462f341c1c8d1d",
-      "integration": ["../../src/weather.rs", "../../src/dock/weather_panel.rs", "../../src/dock/weather_city.rs", "../../src/main.rs"],
+      "integration": [
+        "../../src/weather.rs",
+        "../../src/dock/weather_panel.rs",
+        "../../src/dock/weather_city.rs",
+        "../../src/main.rs"
+      ],
       "adaptation": "Original current/five-day Open-Meteo query fields, WMO description groups, Celsius/km/h internal values, Windows unit selection and forecast-location date labels. Structured serde_json parsing replaces substring numeric parsing; temperature/humidity/cloud/rain/snow/forecast share one request/cache with the pre-existing wallpaper weather owner. Generation validation rejects an earlier city's late result; scoped HTTPS transport has time/body bounds and single active Windows pool callback. Native Control Center view, refresh and unit choice reuse existing config/location settings; native EDIT/LISTBOX city selection reuses the existing profile with 60 UTF-16 units, six results, 300ms debounce and immediate generation-checked invalidation. Shared bounded geocoding transport also replaces the old unbounded Settings request. Rich illustrated/inline-card fidelity remains incomplete. No FluidWin registry/weather singleton is started."
     },
     {
       "source": "dock.h::controllaBordo / sulBordo / spostaVerso / cambiaSchermo",
       "source_git_blob": "f786a3cbe2fef19e5861c8a9c51f78e14b9c981b",
       "source_worktree_sha256": "6cb19c9d27daad834660fe4cad4b269ca10609d21dccc8bcfad6e4ca7cd13a72",
-      "integration": ["../../src/dock/follow_display.rs", "../../src/dock/options.rs", "../../src/dock.rs"],
+      "integration": [
+        "../../src/dock/follow_display.rs",
+        "../../src/dock/options.rs",
+        "../../src/dock.rs"
+      ],
       "adaptation": "Original four directional two-pixel display edges and greater-than-200ms uninterrupted dwell without held mouse buttons; fold-transfer-reveal in the existing Dock spring/surface owner and existing speed/reduced-motion policy. Reuses one Dock HWND and icon owner, closes transient surfaces, recomputes destination DPI/work-area/profile geometry and migrates cooperative reservations; no second Dock, input hook or worker. An 80ms UI timer exists only for enabled follow mode with multiple connected outputs; refuses foreign-motion/input/fullscreen-target conflicts. Existing config stores the last display ID and preserves independent Stage placement; synthetic injected-topology hosted evidence remains separate from physical mixed-DPI interaction."
     },
     {
       "source": "fluidwin.cpp::primoPiano / togliPrimoPiano",
       "source_git_blob": "17519dee3f8d60b3599b427cbb33a297dd9129cf",
       "source_worktree_sha256": "e635f67fcce5978aca9d2f79da57529f4c18ff79fd59dee707c961e3b32350ef",
-      "integration": ["window_lease.cpp", "../../src/dock/topmost.rs", "../../src/dock/motion_guard.rs"],
+      "integration": [
+        "window_lease.cpp",
+        "../../src/dock/topmost.rs",
+        "../../src/dock/motion_guard.rs"
+      ],
       "adaptation": "Original nonactivating SetWindowPos topmost behavior, explicit marker-before-mutation and synchronous foreign enable on existing pool. Existing single detached Guardian, process-birth identity, pending-begin acknowledgement, distinct lease kind/key, exact-bit restoration and startup orphan recovery. Refuses pre-existing topmost, elevated, Shell, owned targets and owner groups with pre-existing topmost popups. Adds native Dock/Control Center routes and opt-in Ctrl+Win+T with vi/en/zh Settings; no global policy, permanent worker or reassertion against another app."
     },
     {
       "source": "notch.h::scaffale / Bersaglio / appoggia / trascinaFuori",
       "source_git_blob": "b44082a6634d16983c45d873d7d8db025c90627c",
       "source_worktree_sha256": "c519f89e6f7f5a99aeaee5c2da7f30ddca9e85b0cce5d8792354a38873d1597a",
-      "integration": ["shelf_bridge.cpp", "../../src/dock/shelf.rs", "../../src/dock/shelf_previews.rs", "../../src/dock/control_center.rs", "../../src/launcher.rs"],
+      "integration": [
+        "shelf_bridge.cpp",
+        "../../src/dock/shelf.rs",
+        "../../src/dock/shelf_previews.rs",
+        "../../src/dock/control_center.rs",
+        "../../src/launcher.rs"
+      ],
       "adaptation": "Reference-only unlocked-session shelf in existing native Control Center, not Dynamic Notch. Original CF_HDROP/HDROP handling, case-insensitive deduplication, atomic maximum-200 admission, Shell IDataObject and copy/move/link completion. Physical drag starts after Windows thresholds; keyboard can copy Shell references. Six visible Shell thumbnails/icons, centered filenames and fixed all/clear controls follow miniatura/rettOggetto/scaffaleScena; responsive rows and paging retain access to all 200 references rather than hiding overflow. Shared existing glass/text/pixel/icon-alpha renderer, one globally admitted scoped pool callback instead of synchronous UI extraction; page/ticket/closed delivery, bounded 120px images and four-second admission timer. OLE/drop registration and session cleanup remain scoped; shelf stays open while Explorer has focus. Original illustration/exact style and actual owner drag fidelity remain unverified."
     },
     {
       "source": "launcher.h::Motore::menuApp",
       "source_git_blob": "48c76c5d1a72cb8e1990afa37ac5d380b1a5be8c",
       "source_worktree_sha256": "a8edbd83a2dc1d1cd32461097eee9892ddcd628a1374608f159f2f7de05353fc",
-      "integration": ["app_menu_bridge.cpp", "../../src/launcher/app_menu.rs"],
+      "integration": [
+        "app_menu_bridge.cpp",
+        "../../src/launcher/app_menu.rs"
+      ],
       "adaptation": "Retain Shell item/context binding and canonical Uninstall verb discovery; scoped COM/menu/subclass lifetime; native Windows menu on Spotlight thread to preserve Dock-only ownership of imported single-threaded D2D factory; existing TLauncher organization and pin actions remain. No direct uninstall command parsing."
     },
     {
       "source": "sistema.h::Sistema::radio / Sistema::monitor",
       "source_git_blob": "4292ad2c874d5b0024a6a9e806bcd46ae6d31a2c",
       "source_worktree_sha256": "68c679ab949975ac596dca891330fbf19486857f29953b60d07f7ec73b390a74",
-      "integration": ["../../src/dock/radios.rs", "../../src/dock/brightness.rs"],
+      "integration": [
+        "../../src/dock/radios.rs",
+        "../../src/dock/brightness.rs"
+      ],
       "adaptation": "Same normal WinRT radio and DDC/CI APIs, on existing transient utility worker; typed scoped activation factories, consent and result checks, per-device stale-state checks, monitor identity captured at gesture, actual native readback, physical-handle RAII and no optimistic success. Original permanent Sistema worker is not started."
     },
     {
       "source": "wifi.h::profiloAperto",
       "source_git_blob": "2d949032c3d5530d46579f25125a4aff43fd2804",
       "source_worktree_sha256": "f952b15d8e2fa6e1951ba5dd0c163bee04d1d6517ffe7a66c89ee50f5d135116",
-      "integration": ["../../src/dock/wifi.rs"],
+      "integration": [
+        "../../src/dock/wifi.rs"
+      ],
       "adaptation": "Hexadecimal SSID in a temporary manual open-network XML profile; revalidate clicked interface and refuse a saved or newly secured network; preserve existing known-profile path and Windows credential UI; TEST builds remain read-only."
     },
     {
       "source": "fluidwin.cpp::suAffiancaTasto / WM_ZOOM_TASTO keyboard route / affianca.h::zonaDi / rettZona",
-      "integration": ["stack_bridge.cpp", "upstream/affianca.h", "../../src/dock/snap_layout.rs"],
+      "integration": [
+        "stack_bridge.cpp",
+        "upstream/affianca.h",
+        "../../src/dock/snap_layout.rs"
+      ],
       "adaptation": "Original side-key half/center/quarter/adjacent-display geometry and cached foreground-state Win+Up normal maximize / Win+Down maximized restore routing; only shared TLauncher guarded/native geometry controller issues foreign commands. Hook uses a cached target and bounded queue, revalidated by Dock before execution; unsupported states retain native routing. No global Windows Snap-policy mutation. Full imported-header provenance is in upstream/IMPORT.json."
     }
   ]

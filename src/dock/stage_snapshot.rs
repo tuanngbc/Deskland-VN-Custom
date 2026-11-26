@@ -1,4 +1,4 @@
-//! Bounded WGC source cache for Stage. Frames stay in this process and never
+//! Shared static/WGC source cache for Stage and motion. Frames never
 //! touch the filesystem. Capture is scoped to a permitted top-level window.
 use std::{sync::mpsc,time::{Duration,Instant}};
 use std::{cell::RefCell,collections::HashMap,sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}},thread::JoinHandle};
@@ -85,6 +85,7 @@ impl CaptureDevice {
     unsafe fn capture(&self,hwnd:HWND,valid:impl Fn()->bool,limit:usize,wait:Duration,timing:Option<&CaptureTimingHandle>,gpu_only:bool,
         stream:Option<(&mpsc::SyncSender<Result<MotionFrame,String>>,usize)>)->Result<MotionFrame,String>{
         if !valid(){return Err("window identity, visibility or affinity denied".into());}
+        record(timing,|t|t.capture_backend=Some(if stream.is_some(){"wgc-live"}else{"wgc-snapshot"}));
         use windows_sys::Win32::UI::WindowsAndMessaging::{GetAncestor,GA_ROOT};
         if GetAncestor(hwnd,GA_ROOT)!=hwnd{return Err("WGC requires a top-level HWND".into());}
         let Self{gpu,winrt}=self;
@@ -444,6 +445,52 @@ fn gpu_capture_budget(gpu:&crate::shell_gpu::ShellGpu,w:i32,h:i32)->bool{
     }
     #[cfg(not(target_env="msvc"))] {let _=gpu;budget(w,h)}
 }
+
+// Same worker/device/renderer as live capture. Static photos follow original
+// genio::cattura's uncovered screen / bounded stampa routes; never make a
+// thumbnail or invent alpha for shaped/layered/rounded sources.
+pub(super) unsafe fn static_motion_frame(hwnd:HWND,valid:impl Fn()->bool,timing:Option<&CaptureTimingHandle>,allow_print:bool)->Result<Option<MotionFrame>,String>{
+    #[cfg(target_env="msvc")]
+    {
+        use windows_sys::Win32::{Foundation::RECT,Graphics::Dwm::{DwmGetWindowAttribute,DWMWA_EXTENDED_FRAME_BOUNDS},UI::WindowsAndMessaging::{GetWindowRect,GetWindowThreadProcessId}};
+        use std::ffi::c_void;
+        extern "C"{
+            fn tlauncher_fluidwin_capture_budget(device:*mut c_void)->u64;
+            fn tlauncher_fluidwin_static_capture(hwnd:HWND,pid:u32,tid:u32,outer:*const RECT,visible:*const RECT,max_pixels:u64,allow_print:i32,out:*mut *mut c_void)->i32;
+            fn tlauncher_fluidwin_static_pixels(photo:*mut c_void,w:*mut i32,h:*mut i32,backend:*mut i32)->*const u32;
+            fn tlauncher_fluidwin_static_free(photo:*mut c_void);
+        }
+        struct Photo(*mut c_void);
+        impl Drop for Photo{fn drop(&mut self){unsafe{tlauncher_fluidwin_static_free(self.0);}}}
+        if !valid(){return Err("static capture policy denied".into());}
+        let mut outer:RECT=std::mem::zeroed();let mut visible:RECT=std::mem::zeroed();let mut pid=0;
+        let tid=GetWindowThreadProcessId(hwnd,&mut pid);
+        if tid==0||GetWindowRect(hwnd,&mut outer)==0||DwmGetWindowAttribute(hwnd,DWMWA_EXTENDED_FRAME_BOUNDS as u32,(&mut visible as *mut RECT).cast(),std::mem::size_of::<RECT>() as u32)<0{return Err("static capture bounds unavailable".into());}
+        let started=Instant::now();let gpu=step("static shared GPU",crate::shell_gpu::ShellGpu::acquire())?;
+        record(timing,|t|t.device_ms=elapsed(started));
+        let allowance=tlauncher_fluidwin_capture_budget(gpu.device.as_raw());
+        let mut raw=std::ptr::null_mut();let start=Instant::now();
+        let status=tlauncher_fluidwin_static_capture(hwnd,pid,tid,&outer,&visible,allowance.saturating_mul(3)/16,allow_print as i32,&mut raw);
+        let photo=Photo(raw);
+        record(timing,|t|t.first_frame_ms=elapsed(start));
+        if !valid(){return Err("static capture cancelled before handoff".into());}
+        if status==1{return Ok(None);} // Unsupported alpha/shape retains WGC.
+        if status!=0||raw.is_null(){return Err(format!("static snapshot refused ({status})"));}
+        let (mut w,mut h,mut backend)=(0,0,0);
+        let pixels=tlauncher_fluidwin_static_pixels(photo.0,&mut w,&mut h,&mut backend);
+        if pixels.is_null()||w!=visible.right-visible.left||h!=visible.bottom-visible.top||!gpu_capture_budget(&gpu,w,h){return Err("invalid static snapshot size".into());}
+        let desc=D3D11_TEXTURE2D_DESC{Width:w as u32,Height:h as u32,MipLevels:0,ArraySize:1,Format:DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc:windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC{Count:1,Quality:0},Usage:D3D11_USAGE_DEFAULT,
+            BindFlags:(D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET).0 as u32,MiscFlags:D3D11_RESOURCE_MISC_GENERATE_MIPS.0 as u32,..Default::default()};
+        let mut texture=None;step("static native-resolution texture",gpu.device.CreateTexture2D(&desc,None,Some(&mut texture)))?;
+        let texture=texture.ok_or("missing static texture")?;
+        gpu.context().UpdateSubresource(&texture,0,None,pixels.cast(),w as u32*4,0);
+        if !valid(){return Err("static capture cancelled after upload".into());}
+        record(timing,|t|{t.gpu_to_gpu=false;t.capture_backend=Some(if backend==1{"gdi-uncovered-screen"}else{"printwindow-static"});t.cpu_snapshot_bytes=w as u64*h as u64*4;});
+        Ok(Some(MotionFrame::Gpu(GpuFrame{texture,width:w,height:h,gpu})))
+    }
+    #[cfg(not(target_env="msvc"))]{let _=(hwnd,valid,timing,allow_print);Ok(None)}
+}
 pub(super) const MOTION_EDGE:usize=1024;
 const CARD_EDGE:usize=360;
 fn motion_size(w:i32,h:i32,stamp:&Stamp)->bool{
@@ -509,6 +556,7 @@ pub(super) struct CaptureTiming{
     pub gpu_to_gpu:bool,pub borderless_request:bool,pub border_required:Option<bool>,
     pub border_set_hresult:Option<i32>,pub border_get_hresult:Option<i32>,
     pub live_frames:u64,
+    pub capture_backend:Option<&'static str>,pub cpu_snapshot_bytes:u64,
 }
 pub(super) type CaptureTimingHandle=Arc<Mutex<CaptureTiming>>;
 #[cfg(test)]
@@ -548,8 +596,11 @@ impl Worker{
                 let valid=||req.live.load(Ordering::Relaxed)&&stamp(req.source).is_some_and(|s|
                     if req.stream{s.i==req.stamp.i&&s.j==req.stamp.j}else{s==req.stamp});
                 let result=(||{
-                    if let Err(reason)=&apartment{return Err(reason.clone());}
                     if !valid(){return Err("capture cancelled".into());}
+                    if req.gpu_reply.is_some()&&!req.stream{
+                        if let Some(frame)=static_motion_frame(req.source.hwnd as HWND,&valid,req.timing.as_ref(),true)?{return Ok(frame);}
+                    }
+                    if let Err(reason)=&apartment{return Err(reason.clone());}
                     if device.as_ref().is_none_or(|d:&CaptureDevice|d.gpu.device.GetDeviceRemovedReason().is_err()){
                         let start=Instant::now();let result=CaptureDevice::new();
                         record(req.timing.as_ref(),|t|t.device_ms=elapsed(start));device=Some(result?);
