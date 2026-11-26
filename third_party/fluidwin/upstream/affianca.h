@@ -20,6 +20,7 @@
 #include <vector>
 #include <string>
 #include "vetro.h"
+#include "../snap_accessibility.h"
 
 namespace affianca {
 
@@ -235,9 +236,12 @@ inline RECT rettMillesimi(HMONITOR m, const RECT& p) {
 class Riquadro {
 public:
     double motionSpeed=0.70;bool reducedMotion=false,abandoned=false;
-    std::wstring panelTitle=L"Snap layouts";std::vector<std::wstring> labels;
+    std::wstring panelTitle=L"Snap layouts",actionLabel=L"Choose";std::vector<std::wstring> labels;
     HWND window()const{return fin.fin;}
-    ~Riquadro(){if(fin.fin){vetro::fermaBattito(fin.fin,1);SetWindowLongPtrW(fin.fin,GWLP_USERDATA,0);}fin.chiudi();}
+    ~Riquadro(){
+        {std::lock_guard<std::mutex> guard(access->mutex);access->state.window=nullptr;access->state.selected=-1;}
+        if(provider)provider->Release();if(fin.fin){vetro::fermaBattito(fin.fin,1);SetWindowLongPtrW(fin.fin,GWLP_USERDATA,0);}fin.chiudi();
+    }
     void poll(){passo();}
     void key(WPARAM key){LRESULT result=0;messaggio(fin.fin,WM_KEYDOWN,key,0,result);}
     std::function<void(HWND, const RECT&, HMONITOR)> scelto;   // finestra, casella (rettangolo visibile), schermo
@@ -275,6 +279,14 @@ public:
     bool messaggio(HWND, UINT m, WPARAM wp, LPARAM l, LRESULT& r) {
         r = 0;
         switch (m) {
+            case WM_CLOSE:chiudi();return true;
+            case WM_GETOBJECT:if(l==OBJID_CLIENT){if(!provider)provider=new(std::nothrow)tlauncher_snap_access::Accessible(access);if(provider)r=LresultFromObject(IID_IAccessible,wp,provider);return true;}break;
+            case tlauncher_snap_access::SELECT:case tlauncher_snap_access::CHOOSE:{
+                if(l!=reinterpret_cast<LPARAM>(access.get())||!aperto||uscendo)return true;
+                int n=0;auto ds=disposizioni(n);int index=int(wp);if(index<0||index>=11)return true;sopraD=0;
+                while(index>=ds[sopraD].n)index-=ds[sopraD++].n;sopraC=index;keyboardSelection=true;
+                announce();vetro::battito(fin.fin,1);if(m==tlauncher_snap_access::CHOOSE)choose(sopraD,sopraC);return true;
+            }
             case WM_ACTIVATE:if(LOWORD(wp)==WA_INACTIVE&&aperto){abandoned=true;chiudi();}return true;
             case WM_KEYDOWN:{
                 if(wp==VK_ESCAPE){chiudi();return true;}
@@ -310,11 +322,14 @@ public:
 private:
     double clock()const{return vetro::secondi()*(reducedMotion?10000.0:std::clamp(motionSpeed,0.05,4.0));}
     void announce(){int n=0;auto ds=disposizioni(n);int index=0;for(int d=0;d<sopraD;d++)index+=ds[d].n;index+=std::max(0,sopraC);
-        std::wstring name=panelTitle;if(sopraD>=0&&index<(int)labels.size())name+=L" - "+labels[index];if(fin.fin)SetWindowTextW(fin.fin,name.c_str());}
+        std::wstring name=panelTitle;if(sopraD>=0&&index<(int)labels.size())name+=L" - "+labels[index];if(fin.fin)SetWindowTextW(fin.fin,name.c_str());
+        updateAccess();if(fin.fin&&sopraD>=0){NotifyWinEvent(EVENT_OBJECT_SELECTION,fin.fin,OBJID_CLIENT,index+1);NotifyWinEvent(EVENT_OBJECT_FOCUS,fin.fin,OBJID_CLIENT,index+1);}}
     void choose(int d,int c){int n=0;const auto ds=disposizioni(n);if(d<0||d>=n||c<0||c>=ds[d].n||uscendo)return;
         const RECT r=rettMillesimi(mon,ds[d].p[c]);chiudi();if(scelto&&IsWindow(finestra))scelto(finestra,r,mon);}
     static constexpr float MARGINE = 12, CARTA_L = 92, CARTA_A = 58, SPAZIO = 10, FESSURA = 3;
     vetro::Finestra fin;
+    std::shared_ptr<tlauncher_snap_access::Model> access=std::make_shared<tlauncher_snap_access::Model>();
+    tlauncher_snap_access::Accessible* provider=nullptr;
     HWND finestra = nullptr; HMONITOR mon = nullptr;
     RECT zonaTasto{};
     bool tastiera = false, aperto = false, uscendo = false,keyboardSelection=false;
@@ -349,6 +364,16 @@ private:
         else { e = 1 - std::pow(1 - k, 3); a = std::min(1.0, k * 1.5); }
         fin.posiziona(x0, (int)std::lround(y0 - (1 - e) * 8 * fin.dpi), w, hh, HWND_TOPMOST, SWP_SHOWWINDOW);
         fin.alfa(a);
+        updateAccess();
+    }
+    void updateAccess(){
+        tlauncher_snap_access::Snapshot value;value.window=fin.fin;value.title=panelTitle;value.action=actionLabel;value.labels=labels;
+        int n=0;auto ds=disposizioni(n);RECT window{};if(fin.fin)GetWindowRect(fin.fin,&window);
+        int index=0;for(int d=0;d<n;d++)for(int c=0;c<ds[d].n;c++,index++){
+            auto r=casella(d,c);value.regions.push_back({window.left+(LONG)std::floor(r.left),window.top+(LONG)std::floor(r.top),window.left+(LONG)std::ceil(r.right),window.top+(LONG)std::ceil(r.bottom)});
+            if(d==sopraD&&c==sopraC)value.selected=index;
+        }
+        std::lock_guard<std::mutex> guard(access->mutex);access->state=std::move(value);
     }
     void passo() {
         // gia' chiuso: un battito arrivato dopo (era gia' in viaggio) non lo deve rimettere a schermo. Misurato: dopo

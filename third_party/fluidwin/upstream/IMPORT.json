@@ -116,7 +116,7 @@
       "path": "affianca.h",
       "source_git_blob": "392b6c61c62ed14c2e887919f1b5878ec36da0b9",
       "source_worktree_sha256": "5902107ef9f991a32f2d627d415c671be69f33dd4e9bd8236febe362ad0f50cf",
-      "local_changes": "Compile only layout/geometry without global Snap-policy writers; scoped panel destruction; keyboard selection and localized selection names; owner speed/reduced motion; no redraw at rest"
+      "local_changes": "Compile only layout/geometry without global Snap-policy writers; scoped panel destruction; keyboard selection and localized names/actions; scoped native MSAA adapter; owner speed/reduced motion; no redraw at rest"
     }
   ]
 }

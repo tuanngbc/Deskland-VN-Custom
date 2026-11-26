@@ -44,6 +44,7 @@ fn main() {
         println!("cargo:rerun-if-changed=third_party/fluidwin/window_lease.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/audio_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/stack_bridge.cpp");
+        println!("cargo:rerun-if-changed=third_party/fluidwin/snap_accessibility.h");
         println!("cargo:rerun-if-changed=third_party/fluidwin/recycle_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/media_bridge.cpp");
         cc::Build::new()

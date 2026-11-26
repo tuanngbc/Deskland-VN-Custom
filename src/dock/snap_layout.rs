@@ -41,11 +41,14 @@ pub(super) unsafe fn arrow(id:WindowIdentity,right:bool)->bool{
 #[cfg(target_env="msvc")]
 extern "C"{
     fn tlauncher_snap_arrow(visible:*const RECT,maximized:bool,right:bool,selected:*mut RECT)->bool;
-    fn tlauncher_snap_open(source:HWND,anchor:POINT,title:*const u16,labels:*const *const u16,count:u32,speed:f64,reduced:bool)->*mut c_void;
+    fn tlauncher_snap_open(source:HWND,anchor:POINT,title:*const u16,action:*const u16,labels:*const *const u16,count:u32,speed:f64,reduced:bool)->*mut c_void;
     fn tlauncher_snap_poll(raw:*mut c_void,selected:*mut RECT)->i32;
     fn tlauncher_snap_window(raw:*mut c_void)->HWND;
     fn tlauncher_snap_free(raw:*mut c_void);
     #[cfg(test)]fn tlauncher_snap_key(raw:*mut c_void,key:u32);
+    #[cfg(test)]fn tlauncher_snap_accessible(raw:*mut c_void)->*mut c_void;
+    #[cfg(test)]fn tlauncher_snap_accessible_probe(raw:*mut c_void,mode:i32)->i32;
+    #[cfg(test)]fn tlauncher_snap_accessible_free(raw:*mut c_void);
 }
 struct Native(NonNull<c_void>);
 impl Drop for Native{fn drop(&mut self){#[cfg(target_env="msvc")]unsafe{tlauncher_snap_free(self.0.as_ptr());}}}
@@ -89,7 +92,7 @@ pub(super) unsafe fn open(owner:HWND,id:WindowIdentity)->bool{
     let motion=super::motion::settings();
     #[cfg(target_env="msvc")]
     let raw={let labels=labels();let pointers:Vec<_>=labels.iter().map(|s|s.as_ptr()).collect();
-        tlauncher_snap_open(h,POINT{x:area.left+(area.right-area.left)/2,y:area.top+32},crate::desktop::wide(&title()).as_ptr(),pointers.as_ptr(),pointers.len() as u32,f64::from(motion.speed)/100.0,!super::motion::allowed())};
+        tlauncher_snap_open(h,POINT{x:area.left+(area.right-area.left)/2,y:area.top+32},crate::desktop::wide(&title()).as_ptr(),crate::desktop::wide(&text("Chọn","Choose","选择")).as_ptr(),pointers.as_ptr(),pointers.len() as u32,f64::from(motion.speed)/100.0,!super::motion::allowed())};
     #[cfg(not(target_env="msvc"))]let raw=ptr::null_mut();
     let Some(native)=NonNull::new(raw).map(Native)else{return false;};
     if SetTimer(CONTROL.get(),TIMER,80,None)==0{drop(native);return false;}
@@ -190,6 +193,16 @@ pub(super) unsafe fn probe(owner:HWND,id:WindowIdentity){
     let quarter=RECT{left:area.left,top:area.top,right:(area.left+area.right)/2,bottom:(area.top+area.bottom)/2};
     assert!(tlauncher_snap_arrow(&quarter,false,true,&mut expected));assert_eq!((expected.left,expected.top,expected.right,expected.bottom),((area.left+area.right)/2,area.top,area.right,(area.top+area.bottom)/2));
     assert!(!tlauncher_snap_arrow(&quarter,false,false,&mut expected));
+    prepare();assert!(open(owner,id));let window=panel();let start=Instant::now();while start.elapsed()<Duration::from_millis(400){pump();}
+    struct Accessible(*mut c_void);impl Drop for Accessible{fn drop(&mut self){unsafe{tlauncher_snap_accessible_free(self.0);}}}
+    let access=Accessible(OPEN.with(|s|tlauncher_snap_accessible(s.borrow().as_ref().unwrap().native.0.as_ptr())));assert!(!access.0.is_null());
+    assert_eq!(tlauncher_snap_accessible_probe(access.0,0),0,"real MSAA 11 region names/roles/hit bounds/default action/type info");
+    assert_eq!(tlauncher_snap_accessible_probe(access.0,1),0);pump();
+    let mut name=[0u16;256];GetWindowTextW(window,name.as_mut_ptr(),256);assert!(String::from_utf16_lossy(&name).contains(&text("Góc dưới phải","Bottom right quarter","右下角")));
+    assert_eq!(tlauncher_snap_accessible_probe(access.0,2),0);wait(&||!open_for(owner)&&!super::window_geometry::active());assert_eq!(IsWindow(window),0);
+    wait(&||super::window_effect::visible_area(h).is_some_and(|r|[r.left-(area.left+(area.right-area.left)/2),r.top-area.top,r.right-area.right,r.bottom-area.bottom].iter().all(|v|v.abs()<=6)));
+    assert_eq!(tlauncher_snap_accessible_probe(access.0,3),0,"outstanding accessibility client cannot retain a live panel or target a reused HWND");drop(access);
+    println!("FLUIDWIN_SNAP_ACCESSIBILITY names_roles_bounds=11 select=PASS default_action=PASS disconnected_client=PASS actual_screen_reader=NOT_VERIFIED");
     println!("FLUIDWIN_SNAP_HOTKEY_QUEUE valid=OPEN stale_ticket=PRESERVED invalid_generation=REJECTED changed_foreground=REJECTED physical_keys=NOT_INJECTED");
     drop(reset);wait(&||{let mut r:RECT=mem::zeroed();GetWindowRect(h,&mut r)!=0&&super::same_rect(r,original)});super::window_effect::fixture_settle_source(h);
     println!("FLUIDWIN_SNAP_LAYOUT_FIXTURE regions=11 keyboard=PASS no_premature_move=PASS screen=CAPTURED prepared={animated} cancel=PASS native_maximized=PASS source_style=RESTORED journal=CLEARED");

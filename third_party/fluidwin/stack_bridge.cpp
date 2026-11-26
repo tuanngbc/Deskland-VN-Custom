@@ -46,10 +46,10 @@ bool tlauncher_snap_arrow(const RECT* visible,bool maximized,bool right,RECT* se
     }
     if(next==current)return false;*selected=rettZona(monitor,next);return selected->right>selected->left&&selected->bottom>selected->top;
 }
-void* tlauncher_snap_open(HWND source,POINT anchor,const wchar_t* title,const wchar_t* const* labels,unsigned count,double speed,bool reduced)noexcept{
+void* tlauncher_snap_open(HWND source,POINT anchor,const wchar_t* title,const wchar_t* action,const wchar_t* const* labels,unsigned count,double speed,bool reduced)noexcept{
     try{
         if(!IsWindow(source)||!title||!labels||count!=11)return nullptr;
-        auto snap=std::make_unique<Snap>();snap->panel.motionSpeed=speed;snap->panel.reducedMotion=reduced;snap->panel.panelTitle=title;
+        auto snap=std::make_unique<Snap>();snap->panel.motionSpeed=speed;snap->panel.reducedMotion=reduced;snap->panel.panelTitle=title;snap->panel.actionLabel=action?action:L"Choose";
         for(unsigned i=0;i<count;i++)snap->panel.labels.emplace_back(labels[i]?labels[i]:L"");
         RECT button{anchor.x-1,anchor.y-1,anchor.x+1,anchor.y+1};snap->panel.mostra(source,anchor,button,true);
         return snap->panel.aperta()?snap.release():nullptr;
@@ -62,6 +62,31 @@ int tlauncher_snap_poll(void* raw,RECT* selected)noexcept{
 HWND tlauncher_snap_window(void* raw)noexcept{return raw?static_cast<Snap*>(raw)->panel.window():nullptr;}
 void tlauncher_snap_key(void* raw,unsigned key)noexcept{if(raw)static_cast<Snap*>(raw)->panel.key(key);}
 void tlauncher_snap_free(void* raw)noexcept{delete static_cast<Snap*>(raw);}
+void* tlauncher_snap_accessible(void* raw)noexcept{
+    if(!raw)return nullptr;IAccessible* accessible=nullptr;
+    if(FAILED(AccessibleObjectFromWindow(static_cast<Snap*>(raw)->panel.window(),OBJID_CLIENT,IID_IAccessible,reinterpret_cast<void**>(&accessible))))return nullptr;return accessible;
+}
+int tlauncher_snap_accessible_probe(void* raw,int mode)noexcept{
+    auto accessible=static_cast<IAccessible*>(raw);if(!accessible)return 1;
+    VARIANT child;VariantInit(&child);child.vt=VT_I4;child.lVal=2;
+    if(mode==3){long count=-1;if(FAILED(accessible->get_accChildCount(&count))||count!=0)return 2;
+        return accessible->accDoDefaultAction(child)==CO_E_OBJNOTCONNECTED?0:3;}
+    if(mode==1){child.lVal=11;return SUCCEEDED(accessible->accSelect(SELFLAG_TAKEFOCUS|SELFLAG_TAKESELECTION,child))?0:4;}
+    if(mode==2)return SUCCEEDED(accessible->accDoDefaultAction(child))?0:5;
+    long count=0;if(FAILED(accessible->get_accChildCount(&count))||count!=11)return 6;
+    for(long i=1;i<=11;i++){
+        child.lVal=i;BSTR name=nullptr;VARIANT role;VariantInit(&role);long x=0,y=0,w=0,h=0;
+        if(FAILED(accessible->get_accName(child,&name))||!name||!SysStringLen(name)){SysFreeString(name);return 7;}SysFreeString(name);
+        if(FAILED(accessible->get_accRole(child,&role))||role.vt!=VT_I4||role.lVal!=ROLE_SYSTEM_PUSHBUTTON)return 8;
+        if(FAILED(accessible->accLocation(&x,&y,&w,&h,child))||w<=0||h<=0)return 9;
+        VARIANT hit;VariantInit(&hit);if(FAILED(accessible->accHitTest(x+w/2,y+h/2,&hit))||hit.vt!=VT_I4||hit.lVal!=i)return 10;
+        BSTR action=nullptr;if(FAILED(accessible->get_accDefaultAction(child,&action))||!action||!SysStringLen(action)){SysFreeString(action);return 11;}SysFreeString(action);
+    }
+    VARIANT root;VariantInit(&root);root.vt=VT_I4;root.lVal=0;VARIANT next;VariantInit(&next);
+    if(FAILED(accessible->accNavigate(NAVDIR_LASTCHILD,root,&next))||next.vt!=VT_I4||next.lVal!=11)return 12;
+    ITypeInfo* info=nullptr;if(FAILED(accessible->GetTypeInfo(0,LOCALE_SYSTEM_DEFAULT,&info))||!info)return 13;info->Release();return 0;
+}
+void tlauncher_snap_accessible_free(void* raw)noexcept{if(raw)static_cast<IAccessible*>(raw)->Release();}
 HWND tlauncher_overview_show(bool(*valid)(HWND),const RECT* area,double speed,bool reduced,bool alt,int steps) noexcept{
     try{
         if(overview||!valid||!area)return nullptr;
