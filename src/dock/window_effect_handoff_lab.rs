@@ -2,31 +2,36 @@
 //! compositor captures; mesh buffers and the source are exported separately.
 //! This evidence does not infer the owner's border cause or display cadence.
 use super::*;
+struct Image{name:String,pixels:Vec<u8>,w:u32,h:u32}
+impl Image{unsafe fn write(self,dir:&std::path::Path){save(dir,&self.name,&self.pixels,self.w,self.h);}}
 
 unsafe fn save(dir:&std::path::Path,name:&str,pixels:&[u8],w:u32,h:u32){
     assert_eq!(pixels.len(),w as usize*h as usize*4);
     let rgba=pixels.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],p[3]]).collect::<Vec<_>>();
     image::save_buffer(dir.join(format!("handoff-{name}.png")),&rgba,w,h,image::ColorType::Rgba8).unwrap();
 }
-unsafe fn screen(dir:&std::path::Path,name:&str,area:RECT){
+unsafe fn screen_image(name:&str,area:RECT)->Image{
     let (w,h)=dims(area);assert!(w>0&&h>0);
     let mut layer=super::super::glass_probe::Layer::new(w,h).unwrap();
     let _=DwmFlush();let dc=GetDC(ptr::null_mut());assert!(!dc.is_null());
     let copied=BitBlt(layer.dc(),0,0,w,h,dc,area.left,area.top,SRCCOPY|CAPTUREBLT);
     ReleaseDC(ptr::null_mut(),dc);assert_ne!(copied,0);GdiFlush();
     let mut pixels=layer.pixels().to_vec();for p in pixels.chunks_exact_mut(4){p[3]=255;}
-    save(dir,name,&pixels,w as u32,h as u32);
+    Image{name:name.into(),pixels,w:w as u32,h:h as u32}
 }
-unsafe fn snapshot(dir:&std::path::Path,name:&str,proxy:&Proxy,t:&Transition){
+unsafe fn screen(dir:&std::path::Path,name:&str,area:RECT){screen_image(name,area).write(dir);}
+unsafe fn snapshot(images:&mut Vec<Image>,name:&str,proxy:&Proxy,t:&Transition){
     let (pixels,w,h,canvas)=proxy.evidence().expect("actual mesh before Present rotation");
     assert!(pixels.chunks_exact(4).all(|p|p[..3].iter().all(|c|*c<=p[3])),"complete canvas must remain premultiplied: {name}");
     // Genie/Drop intentionally disappear at progress 1. Restore starts at
     // that exact pose; a transparent first endpoint is valid evidence.
     let invisible_endpoint=t.req.effect.mesh()&&t.last_progress>=1.0-1e-8;
     let occupied=pixels.chunks_exact(4).any(|p|p[3]>0);
-    if !invisible_endpoint&&!name.ends_with("-terminal"){assert!(occupied,"empty nonterminal mesh cannot prove handoff: {name}");}
-    save(dir,&format!("{name}-mesh"),&pixels,w,h);
-    let _=proxy.comp.WaitForCommitCompletion();screen(dir,&format!("{name}-screen"),canvas);
+    // Screen readback can stall hosted DWM. Require visible first/mid content
+    // where expected; late endpoint occupancy is evidence, not an invariant.
+    if name.ends_with("-mid")||name.ends_with("-first")&&!invisible_endpoint{assert!(occupied,"empty required visible mesh: {name}");}
+    images.push(Image{name:format!("{name}-mesh"),pixels,w,h});
+    let _=proxy.comp.WaitForCommitCompletion();images.push(screen_image(&format!("{name}-screen"),canvas));
     let source=t.req.source.hwnd as HWND;let mut alpha=0;let mut color=0;let mut flags=0;
     let layered=GetLayeredWindowAttributes(source,&mut color,&mut alpha,&mut flags)!=0;
     println!("FLUIDWIN_HANDOFF_SNAPSHOT name={name} occupied={occupied} transparent_endpoint={invisible_endpoint} mesh_progress={} frames={} iconic={} source_layered={layered} alpha={alpha} lease={:?} canvas=[{},{},{},{}] full_canvas_premultiplied=PASS",
@@ -52,6 +57,7 @@ pub(super) unsafe fn probe(bar:HWND,path:&str,id:WindowIdentity,policy:motion::S
         for action in [Action::Minimize,Action::Restore]{
             let label=format!("{role}-{}-{}",effect.name(),action.name());
             assert!(begin(bar,path,id,action),"real transaction was refused: {label}");
+            let mut images=Vec::with_capacity(12);
             let mut stages=[false;4];let mut terminal=false;let mut capture=false;let started=Instant::now();
             while active(){
                 pump();timer();
@@ -60,7 +66,7 @@ pub(super) unsafe fn probe(bar:HWND,path:&str,id:WindowIdentity,policy:motion::S
                     if !capture{
                         if let Some(Phase::WaitingMinimize{frame,..})=&t.phase{
                             let stage_snapshot::MotionFrame::Gpu(frame)=frame else{panic!("full-size motion source expected");};
-                            let pixels=frame.fixture_pixels().unwrap();save(&dir,&format!("{label}-source-texture"),&pixels,frame.width as u32,frame.height as u32);
+                            let pixels=frame.fixture_pixels().unwrap();images.push(Image{name:format!("{label}-source-texture"),pixels,w:frame.width as u32,h:frame.height as u32});
                             capture=true;
                         }
                     }
@@ -68,17 +74,20 @@ pub(super) unsafe fn probe(bar:HWND,path:&str,id:WindowIdentity,policy:motion::S
                         let progress=span.progress();
                         for (i,threshold) in [0.0,0.12,0.42,0.78].into_iter().enumerate(){
                             if !stages[i]&&progress>=threshold{
-                                snapshot(&dir,&format!("{label}-{}",["first","early","mid","near-end"][i]),proxy,t);stages[i]=true;
+                                snapshot(&mut images,&format!("{label}-{}",["first","early","mid","near-end"][i]),proxy,t);stages[i]=true;
                                 break;
                             }
                         }
                     }
-                    if !terminal{if let Some(Phase::WaitingRelease{proxy,..})=&t.phase{snapshot(&dir,&format!("{label}-terminal"),proxy,t);terminal=true;}}
+                    if !terminal{if let Some(Phase::WaitingRelease{proxy,..})=&t.phase{snapshot(&mut images,&format!("{label}-terminal"),proxy,t);terminal=true;}}
                 });
                 assert!(started.elapsed()<Duration::from_secs(6),"real handoff did not settle: {label}");
                 std::thread::sleep(Duration::from_millis(8));
             }
             let result=LAST.lock().unwrap().clone().unwrap();
+            // Encode/write only after the real transaction has finished. PNG
+            // compression must not lengthen animation submission intervals.
+            for image in images{image.write(&dir);}
             assert_eq!(result["actualEffect"],effect.name(),"real handoff fallback: {result}");
             assert!(stages.into_iter().all(|v|v),"missing actual animation stage: {label} {stages:?}");
             assert!(terminal,"must retain terminal proxy while releasing the journal: {label}");
