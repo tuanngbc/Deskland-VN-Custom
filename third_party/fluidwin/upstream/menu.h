@@ -27,6 +27,14 @@
 
 namespace menu {
 
+// TLauncher UI policy is scoped to the Dock UI thread. Keep original menu
+// behavior while applying the same locale, speed and reduced-motion setting.
+inline thread_local std::wstring uiLocale=L"en-US";
+inline thread_local double motionSpeed=0.70;
+inline thread_local bool reducedMotion=false;
+inline double motionNow() { LARGE_INTEGER q{},f{};QueryPerformanceCounter(&q);QueryPerformanceFrequency(&f);return f.QuadPart?double(q.QuadPart)*1000.0/double(f.QuadPart):double(GetTickCount64()); }
+inline double duration(double ms) { return ms/std::clamp(motionSpeed,0.25,2.0); }
+
 // Mentre un menu (o la panoramica) e' aperto il ciclo principale di FluidWin e' fermo: le animazioni (genio,
 // gelatina, dock) le fa avanzare il ciclo del menu, con queste due funzioni di FluidWin. Il passo aspetta lui il vblank
 inline bool (*animazioniInCorso)() = nullptr;
@@ -182,7 +190,7 @@ private:
     bool conFreccia = false, espanso = false;
     float hCompatto = 0, hPieno = 0;
     int x0 = 0, y0 = 0;
-    ULONGLONG tEsp = 0; double kEsp = 0;
+    double tEsp = 0; double kEsp = 0;
     bool premutoPrima = true, escPrima = true;
     bool conSimboli = false, versoAltoM = false;   // qualche voce ha l'icona (il testo si sposta); il menu si apre verso l'alto
     // menu piu' alto dello schermo (tutte le "altre opzioni" della shell): la finestra si ferma all'altezza dello
@@ -264,8 +272,8 @@ private:
         fdw = fabbricaTesto();
         if (!fdw) return;
         static const wchar_t* fam = famiglia(fdw);   // (il font scelto non cambia: si cerca una volta sola)
-        fdw->CreateTextFormat(fam, nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.5f * dpi, L"it-it", &fmt);
-        fdw->CreateTextFormat(fam, nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0f * dpi, L"it-it", &fmtTitolo);
+        fdw->CreateTextFormat(fam, nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.5f * dpi, uiLocale.c_str(), &fmt);
+        fdw->CreateTextFormat(fam, nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0f * dpi, uiLocale.c_str(), &fmtTitolo);
         // (audit FW-AUDIT-004) senza formati o, sotto, senza render target il menu non si apre: esegui() trova fin o rt
         // nulli e torna 0, come un menu annullato. Prima si usavano subito, nulli
         if (!fmt || !fmtTitolo) return;
@@ -342,7 +350,7 @@ private:
 
     // allunga il menu (freccia in fondo): la finestra cresce verso il basso, o sale se sotto non c'e' posto
     void passoEspansione() {
-        kEsp = std::min(1.0, (GetTickCount64() - tEsp) / 170.0);
+        kEsp = reducedMotion?1.0:std::min(1.0, (motionNow() - tEsp) / duration(170.0));
         const double e = 1 - std::pow(1 - kEsp, 3);
         const int h = std::min((int)std::ceil(hCompatto + (hPieno - hCompatto) * e), hMax);
         MONITORINFO mi{}; mi.cbSize = sizeof(mi); GetMonitorInfoW(MonitorFromWindow(fin, MONITOR_DEFAULTTONEAREST), &mi);
@@ -661,11 +669,12 @@ private:
 
     // chiusura: dissolvenza e scivolata indietro (110 ms), poi via
     void chiudiAnimato() {
+        if(reducedMotion){ShowWindow(fin,SW_HIDE);return;}
         RECT r; GetWindowRect(fin, &r); y0 = r.top; x0 = r.left;
-        const ULONGLONG t = GetTickCount64();
+        const double t = motionNow();
         const double da = alfa / 255.0;
         for (;;) {
-            const double k = std::min(1.0, (GetTickCount64() - t) / 110.0);
+            const double k = std::min(1.0, (motionNow() - t) / duration(110.0));
             posa(da * (1 - k));
             if (k >= 1) break;
             if (animazioni()) passoAnimazioni(); else Sleep(8);
@@ -682,7 +691,8 @@ private:
         ShowWindow(fin, SW_SHOWNOACTIVATE);
         disegna();
         SetCapture(fin);
-        const ULONGLONG t0 = GetTickCount64();
+        const double t0 = motionNow();
+        if(reducedMotion)posa(1.0);
         premutoPrima = (GetAsyncKeyState(VK_LBUTTON) | GetAsyncKeyState(VK_RBUTTON) | GetAsyncKeyState(VK_MBUTTON)) & 0x8000;
         escPrima = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
         MSG msg;
@@ -697,7 +707,7 @@ private:
             if (espanso && kEsp < 1) { passoEspansione(); if (MsgWaitForMultipleObjects(0, nullptr, FALSE, 8, QS_ALLINPUT) == WAIT_TIMEOUT) continue; }
             // apertura: dissolvenza e scivolata (150 ms)
             if (alfa < 255) {
-                posa((GetTickCount64() - t0) / 150.0);
+                posa((motionNow() - t0) / duration(150.0));
                 if (!animazioni() && MsgWaitForMultipleObjects(0, nullptr, FALSE, 8, QS_ALLINPUT) == WAIT_TIMEOUT) continue;
             }
             // animazioni di FluidWin in corso: prima i messaggi in coda, poi un fotogramma (che aspetta il vblank)
@@ -767,7 +777,7 @@ private:
                     if (padre) controllaPadre();   // mouse tornato sul menu padre, su un'altra voce: il sottomenu si chiude
                     if (fine) return true;
                     // sulla freccia in fondo, senza cliccare: il menu si allunga con le altre voci
-                    if (dentro && conFreccia && !espanso && p.y + scorri >= rettFreccia.top - 2 && p.y + scorri < rettFreccia.bottom + 4) { espanso = true; tEsp = GetTickCount64(); }
+                    if (dentro && conFreccia && !espanso && p.y + scorri >= rettFreccia.top - 2 && p.y + scorri < rettFreccia.bottom + 4) { espanso = true; tEsp = motionNow(); }
                     // Mouse su un menu padre mentre questo sottomenu e' aperto (i suoi messaggi passano da questo ciclo): la
                     // sua zona blu segue subito il mouse; il sottomenu si chiude dopo ATTESA_ALTROVE_MS (controllaPadre).
                     // Prima il padre restava fermo sulla voce del sottomenu finche' questo non si chiudeva
@@ -800,7 +810,7 @@ private:
                 if (k == VK_DOWN && conFreccia && !espanso && sopra >= 0 && !voci[sopra].extra) {   // in fondo alle voci: si allunga
                     bool ultima = true;
                     for (int n = sopra + 1; n < (int)voci.size(); n++) if (selezionabile(n) && !voci[n].pulsante) { ultima = false; break; }
-                    if (ultima) { espanso = true; tEsp = GetTickCount64(); }
+                    if (ultima) { espanso = true; tEsp = motionNow(); }
                 }
                 if (k == VK_DOWN || k == VK_UP) {
                     int s = sopra;

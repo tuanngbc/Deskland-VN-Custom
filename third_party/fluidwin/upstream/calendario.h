@@ -133,11 +133,14 @@ inline Mese costruisci(int calid, const wchar_t* lingua, int offset = 0, UDate i
     u.chiudi(c);
     if (st > 0 || dow < 1 || dow > 7 || r.giorni < 1 || r.giorni > 31 || (!offset && (r.oggi < 1 || r.oggi > r.giorni))) return r;
     r.lunediPrimo = (dow + 5) % 7;
-    r.titolo = dettaglio::formatta(u, loc, conEra(calid) ? L"LLLL y G" : L"LLLL y", vista);
+    const bool zh = lingua[0] == L'z';
+    r.titolo = dettaglio::formatta(u, loc, zh ? (conEra(calid) ? L"Gy年M月" : L"y年M月")
+                                                           : (conEra(calid) ? L"LLLL y G" : L"LLLL y"), vista);
     // (stesso ordine della data lunga gregoriana del pannello: "giovedi' 19 novembre", "Thursday, November 19")
     const bool en = lingua[0] == L'e';
-    r.dataLunga = dettaglio::formatta(u, loc, en ? (conEra(calid) ? L"EEEE, MMMM d, y G" : L"EEEE, MMMM d, y")
-                                                 : (conEra(calid) ? L"EEEE d MMMM y G" : L"EEEE d MMMM y"), adesso);
+    r.dataLunga = dettaglio::formatta(u, loc, zh ? (conEra(calid) ? L"Gy年M月d日 EEEE" : L"y年M月d日 EEEE")
+                                               : en ? (conEra(calid) ? L"EEEE, MMMM d, y G" : L"EEEE, MMMM d, y")
+                                                    : (conEra(calid) ? L"EEEE d MMMM y G" : L"EEEE d MMMM y"), adesso);
     r.ok = !r.titolo.empty();
     return r;
 }

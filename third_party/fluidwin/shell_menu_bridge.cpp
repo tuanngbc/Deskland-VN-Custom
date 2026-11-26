@@ -53,6 +53,18 @@ UINT native_menu(HMENU items,POINT point,HWND owner){
 }
 
 extern "C" {
+void tlauncher_fluidwin_menu_policy(int language,double speed,bool reduced) noexcept {
+    menu::motionSpeed=std::isfinite(speed)?std::clamp(speed,0.25,2.0):0.70;
+    menu::reducedMotion=reduced;
+    menu::uiLocale=language==0?L"vi-VN":language==2?L"zh-CN":L"en-US";
+    destro::adminTitle=language==0?L"Chạy với quyền quản trị":language==2?L"以管理员身份运行":L"Run as administrator";
+}
+bool tlauncher_fluidwin_menu_policy_fixture(int language,double speed,bool reduced) noexcept {
+    tlauncher_fluidwin_menu_policy(language,speed,reduced);
+    const auto locale=language==0?L"vi-VN":language==2?L"zh-CN":L"en-US";
+    return menu::uiLocale==locale && menu::reducedMotion==reduced &&
+        std::abs(menu::duration(150.0)*menu::motionSpeed-150.0)<0.001 && !destro::adminTitle.empty();
+}
 void* tlauncher_jump_prepare(const wchar_t* path,HWND hwnd,DWORD expectedPid,DWORD expectedTid,const wchar_t* otherIds) noexcept {
     try{
         auto model=std::make_unique<JumpModel>();std::vector<std::wstring> ids,others;
@@ -144,13 +156,13 @@ void tlauncher_fluidwin_shell_menu_close() { menu::chiudi(); }
 void tlauncher_fluidwin_shell_menu_shutdown() { menu::chiudi(); condividi::ferma(0); }
 
 // Native fixture for the actual imported menu, not a JSON/settings-only test.
-unsigned tlauncher_fluidwin_shell_menu_fixture(HWND owner) {
+unsigned tlauncher_fluidwin_shell_menu_fixture(HWND owner,int language) {
     try {
         testi::lingua().store(testi::INGLESE);
         HMENU child=CreatePopupMenu();
-        AppendMenuW(child,MF_STRING,73,L"Fixture command");
-        auto disabled=menu::voce(L"Disabled",11); disabled.disattivata=true;
-        auto nested=menu::voce(L"Submenu",0); nested.sotto=child;
+        AppendMenuW(child,MF_STRING,73,destro::adminTitle.c_str());
+        auto disabled=menu::voce(language==0?L"Không khả dụng":language==2?L"不可用":L"Disabled",11); disabled.disattivata=true;
+        auto nested=menu::voce(language==0?L"Lệnh của ứng dụng":language==2?L"应用命令":L"Application commands",0); nested.sotto=child;
         const unsigned result=menu::mostra({disabled,nested},POINT{120,120},owner);
         DestroyMenu(child);
         return result;

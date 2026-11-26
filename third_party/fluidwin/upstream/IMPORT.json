@@ -14,7 +14,7 @@
       "path": "calendario.h",
       "source_git_blob": "cc332bee53ce8724617a59e32dba4566f2654b4f",
       "source_worktree_sha256": "39913fcb3f6c60ec573bc59d47bcf366a03c9cb3afb56886ca33e207f49d967e",
-      "local_changes": "Original Windows CALID mapping, System32 ICU loader and month/date formatting. Adds ucal_add month navigation and optional fixed instant for hosted fixtures; retains original scoped calendar/formatter cleanup. No system locale/clock writes or extra thread."
+      "local_changes": "Original Windows CALID mapping, System32 ICU loader and month/date formatting. Adds ucal_add month navigation, Chinese date/era ordering and optional fixed instant for hosted fixtures; retains original scoped calendar/formatter cleanup. No system locale/clock writes or extra thread."
     },
     {
       "path": "onda.h",
@@ -26,13 +26,13 @@
       "path": "destro.h",
       "source_git_blob": "a8402a8ccb271e445c3461db68ce5991a3a78f48",
       "source_worktree_sha256": "6925576d52b55863d6eff5cd74ed7651ca55519c6b078a293d0f9745b7a7250e",
-      "local_changes": "Forward IContextMenu2/3 messages in the scoped fallback"
+      "local_changes": "Forward IContextMenu2/3 messages in the scoped fallback; caller vi/en/zh label for the upstream-inserted Run as administrator command, preserving canonical Shell-owned labels"
     },
     {
       "path": "menu.h",
       "source_git_blob": "a12409ee6996c890a554d8466a4d34f9da43d2f1",
       "source_worktree_sha256": "3149d2aeec61586c37c6075ecbd532657d7a4b21127f23caf79ae24784d3bda1",
-      "local_changes": "Scoped Shell message route and native owner-draw/submenu fallback"
+      "local_changes": "Scoped Shell message route and native owner-draw/submenu fallback; same Dock-thread vi/en/zh DirectWrite locale and global motion-speed/reduced-motion policy; QPC timing for original entrance/close/expansion curves"
     },
     {
       "path": "condividi.h",

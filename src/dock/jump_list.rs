@@ -68,6 +68,7 @@ pub(super) unsafe fn poll(){
             KillTimer(CONTROL.with(std::cell::Cell::get),TIMER);control_center::close_for(owner);
             #[cfg(target_env="msvc")]
             {
+                super::shell_menu::configure_menu();
                 let selected=tlauncher_jump_show(model.0.as_ptr(),owner,p.point.x,p.point.y,
                     wide(&label("Lệnh ứng dụng","Tasks","任务")).as_ptr(),wide(&label("Gần đây","Recent","最近")).as_ptr(),
                     wide(&label("Ứng dụng chưa cung cấp danh sách","This app has no available lists","此应用没有可用列表")).as_ptr());

@@ -28,6 +28,7 @@
 #include "condividi.h"
 
 namespace destro {
+inline thread_local std::wstring adminTitle=L"Run as administrator";
 
 // la finestra sotto il punto e' una vista di file della shell (desktop o Esplora file)? Veloce: la usa il gancio
 inline bool vistaShell(POINT pt) {
@@ -386,7 +387,7 @@ inline bool mostra(POINT pt, HWND proprietario, const std::function<void(const c
                     principali.insert(principali.begin() + std::min<size_t>(1, principali.size()), x);
                 }
                 if (programma && !c) {
-                    menu::Voce x = menu::voce(testi::t(L"Esegui come amministratore", L"Run as administrator"), ID_ADMIN);
+                    menu::Voce x = menu::voce(adminTitle.c_str(), ID_ADMIN);
                     x.simbolo = menu::I_ADMIN;
                     principali.insert(principali.begin() + std::min<size_t>(1, principali.size()), x);
                 }
