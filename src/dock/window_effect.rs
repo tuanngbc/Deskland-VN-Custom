@@ -1066,6 +1066,8 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
         if actual_policy.native_minimize!=Some(0)&&guardian_ready(){
             #[cfg(target_env="msvc")]
             super::window_motion::probe_drag(ids[0]);
+            #[cfg(target_env="msvc")]
+            super::show_desktop::probe(bar,ids);
             let id=ids[0];let before=GetWindowLongPtrW(source,GWL_EXSTYLE);
             let (_,marker)=super::motion_guard::session().unwrap();
             let marker=wide(&marker);

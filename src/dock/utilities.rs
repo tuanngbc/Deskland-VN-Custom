@@ -432,10 +432,10 @@ fn utility_hint(widget:Widget,snapshot:&Snapshot)->String{
     }
 }
 pub(super) fn available_in_dock_mode(widget:Option<Widget>)->bool{
-    !matches!(widget,Some(Widget::Notifications|Widget::Desktop|Widget::Stats))
+    !matches!(widget,Some(Widget::Notifications|Widget::Stats))
 }
 pub(super) fn local_action(action:Action)->bool{
-    !matches!(action,Action::Notifications|Action::QuickSettings|Action::Desktop|Action::Windows|Action::Host(HostAction::SystemMonitor))
+    !matches!(action,Action::Notifications|Action::QuickSettings|Action::Windows|Action::Host(HostAction::SystemMonitor))
 }
 pub(super) unsafe fn show_hub(owner:HWND,anchor:chrome::Anchor,profile:&Profile,dock_mode:bool){
     // The overview is interactive immediately. Device-specific views request
@@ -474,6 +474,12 @@ pub(super) fn hub_view(snapshot:&Snapshot,profile:&Profile,dock_mode:bool,live:b
         hint:crate::launcher::localized("Bài hát, ảnh bìa và điều khiển phát","Track, artwork and playback controls","曲目、封面与播放控制").into(),icon:None,action:Some(Command::Media)});
     cards.push(Card{title:crate::launcher::localized("Tổng quan cửa sổ","Window overview","窗口概览").into(),
         hint:crate::launcher::localized("Cửa sổ đang mở trên màn hình này","Open windows on this display","此显示器上打开的窗口").into(),icon:None,action:Some(Command::Overview)});
+    if !cards.iter().any(|c|matches!(c.action,Some(Command::Widget(Widget::Desktop)))){
+        cards.push(Card{title:crate::launcher::localized("Hiện Desktop","Show desktop","显示桌面").into(),hint:String::new(),icon:Some(Widget::Desktop),action:Some(Command::Desktop(false))});
+    }
+    if unsafe{super::show_desktop::can_restore()}{
+        cards.push(Card{title:crate::launcher::localized("Khôi phục cửa sổ","Restore windows","还原窗口").into(),hint:String::new(),icon:Some(Widget::Windows),action:Some(Command::Desktop(true))});
+    }
     View{title:"Trung tâm điều khiển".into(),
         hint:"Tiện ích Dock · Chọn một mục để mở".into(),
         cards,metrics:None}
@@ -553,7 +559,7 @@ pub(super) unsafe fn delegated(action:Action){
         Sound=>open("ms-settings:sound"),Battery=>open("ms-settings:powersleep"), Explorer=>open("explorer.exe"),
         RecycleBin=>open("shell:RecycleBinFolder"),
         Notifications=>super::shell_access::win_chord(b'N' as u16),QuickSettings=>super::shell_access::win_chord(b'A' as u16),
-        Desktop=>super::shell_access::win_chord(b'D' as u16),Windows=>super::shell_access::win_chord(VK_TAB),
+        Desktop=>{},Windows=>super::shell_access::win_chord(VK_TAB),
         _=>{}
     }
 }
