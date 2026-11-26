@@ -87,7 +87,42 @@ jobs:
           cargo test --release --no-run
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Verify original standalone volume feedback without audio changes
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
+        run: |
+          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
+          New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
+          git rev-parse HEAD | Set-Content (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'early-source.txt')
+          cargo test --release dock::volume_osd::tests::native_volume_osd_displays_confirmed_values_without_audio_or_input -- --ignored --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'early-osd.log')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify original static snapshots and bounded hung-source ownership
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
+        run: |
+          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
+          New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
+          $staticFailed = $false
+          foreach ($fixture in 'native_static_photos_keep_original_pixels_and_reject_unsafe_sources','native_static_print_timeout_keeps_one_job_until_native_completion') {
+            cargo test --release "dock::stage_capture_lab::$fixture" -- --ignored --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath (Join-Path $env:TUANPC_DESK_STAGE_EVIDENCE 'early-static.log') -Append
+            if ($LASTEXITCODE -ne 0) { $staticFailed = $true }
+          }
+          if ($staticFailed) { exit 1 }
+
+      - name: Upload early native diagnostics before the full regression suite
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-static-osd-early
+          path: |
+            ${{ runner.temp }}/stage-fixture-evidence/early-*.log
+            ${{ runner.temp }}/stage-fixture-evidence/early-source.txt
+            ${{ runner.temp }}/stage-fixture-evidence/static-*.png
+            ${{ runner.temp }}/stage-fixture-evidence/volume-osd-*.png
+          retention-days: 14
+          if-no-files-found: error
+
       - name: Build Rust native app
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           cargo test --release
@@ -288,26 +323,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::brightness::tests::native_brightness_read_releases_physical_handles -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Verify original standalone volume feedback without audio changes
-        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
-        run: |
-          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
-          New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
-          cargo test --release dock::volume_osd::tests::native_volume_osd_displays_confirmed_values_without_audio_or_input -- --ignored --exact --nocapture --test-threads=1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Verify original static snapshots and bounded hung-source ownership
-        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
-        run: |
-          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
-          New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
-          $staticFailed = $false
-          foreach ($fixture in 'native_static_photos_keep_original_pixels_and_reject_unsafe_sources','native_static_print_timeout_keeps_one_job_until_native_completion') {
-            cargo test --release "dock::stage_capture_lab::$fixture" -- --ignored --exact --nocapture --test-threads=1
-            if ($LASTEXITCODE -ne 0) { $staticFailed = $true }
-          }
-          if ($staticFailed) { exit 1 }
 
       - name: Verify Spotlight Shell menu without invoking uninstall
         if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
