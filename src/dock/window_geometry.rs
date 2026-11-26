@@ -98,6 +98,11 @@ impl Transition{
                     Ok(Ok(frame))=>{
                         if frame.size()!=(self.area.right-self.area.left,self.area.bottom-self.area.top){return self.fallback("capture-size");}
                         let Some(mut canvas)=super::monitor_bounds(self.monitor as HMONITOR)else{return self.fallback("monitor-changed");};
+                        if let Action::Snap(target)=self.action{
+                            let destination=MonitorFromRect(&target,MONITOR_DEFAULTTONULL);
+                            let Some(other)=super::monitor_bounds(destination)else{return self.fallback("destination-monitor-changed");};
+                            canvas.left=canvas.left.min(other.left);canvas.top=canvas.top.min(other.top);canvas.right=canvas.right.max(other.right);canvas.bottom=canvas.bottom.max(other.bottom);
+                        }
                         let margin=(80.0*f64::from(self.dpi)/96.0).ceil() as i32;canvas.left-=margin;canvas.top-=margin;canvas.right+=margin;canvas.bottom+=margin;
                         self.proxy=Proxy::global(&frame,self.area,canvas,self.dpi);self.capture=None;
                         if self.proxy.is_none(){return self.fallback("proxy-unavailable");}self.phase(Phase::Prime);

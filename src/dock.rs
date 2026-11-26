@@ -3921,15 +3921,15 @@ unsafe fn focus_dock(){
 }
 fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc::Sender<Event>,ready:mpsc::SyncSender<Result<usize,String>>) {
     unsafe {
-        use windows::Win32::System::Com::{CoInitializeEx,CoUninitialize,COINIT_APARTMENTTHREADED};
-        let com=CoInitializeEx(None,COINIT_APARTMENTTHREADED);
+        use windows::Win32::System::WinRT::{RoInitialize,RoUninitialize,RO_INIT_SINGLETHREADED};
+        let com=RoInitialize(RO_INIT_SINGLETHREADED);
         let class=wide(CLASS);
         let mut wc:WNDCLASSEXW=mem::zeroed();
         wc.cbSize=mem::size_of::<WNDCLASSEXW>() as u32;wc.lpfnWndProc=Some(proc);wc.style=CS_DBLCLKS;
         wc.hInstance=GetModuleHandleW(ptr::null());wc.lpszClassName=class.as_ptr();
         wc.hCursor=LoadCursorW(ptr::null_mut(),IDC_ARROW);
         if RegisterClassExW(&wc)==0 && GetLastError()!=ERROR_CLASS_ALREADY_EXISTS{
-            let _=ready.send(Err(format!("Register Dock class: {}",GetLastError())));if com.is_ok(){CoUninitialize();}return;
+            let _=ready.send(Err(format!("Register Dock class: {}",GetLastError())));if com.is_ok(){RoUninitialize();}return;
         }
         let preview_class=wide(PREVIEW_CLASS);
         wc.lpszClassName=preview_class.as_ptr();wc.lpfnWndProc=Some(previews::destination_proc);
@@ -3939,7 +3939,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         wc.lpszClassName=rail_class.as_ptr();wc.lpfnWndProc=Some(stage_rail_proc);RegisterClassExW(&wc);
         SHELL_MESSAGE.with(|id|id.set(RegisterWindowMessageW(wide("TaskbarCreated").as_ptr())));
         let control=CreateWindowExW(WS_EX_TOOLWINDOW,class.as_ptr(),wide("TLauncher Dock controller").as_ptr(),WS_POPUP,0,0,0,0,ptr::null_mut(),ptr::null_mut(),wc.hInstance,ptr::null());
-        if control.is_null(){let _=ready.send(Err(format!("Create Dock controller: {}",GetLastError())));if com.is_ok(){CoUninitialize();}return;}
+        if control.is_null(){let _=ready.send(Err(format!("Create Dock controller: {}",GetLastError())));if com.is_ok(){RoUninitialize();}return;}
         CONTROL.with(|c|c.set(control));DIRTY.with(|c|c.set(false));
         internal_app::listen(control);
         let shell_hook=RegisterWindowMessageW(wide("SHELLHOOK").as_ptr());
@@ -4005,7 +4005,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         OWNER.with(|o|o.set(ptr::null_mut()));
         COMMANDS.with(|c|{c.take();});EVENTS.with(|e|{e.take();});STATE.with(|s|{s.take();});
         perf::finish();
-        if com.is_ok(){CoUninitialize();}
+        if com.is_ok(){RoUninitialize();}
     }
 }
 #[cfg(test)]

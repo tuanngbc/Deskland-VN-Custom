@@ -5,7 +5,7 @@ use windows_sys::Win32::{Foundation::*,Graphics::Gdi::*,UI::{HiDpi::GetDpiForWin
 pub(super) const TIMER:usize=33;
 pub(super) const NOTICE:u32=WM_APP+144;
 static ELIGIBLE:Mutex<Option<WindowIdentity>>=Mutex::new(None);
-static REQUEST:Mutex<Option<(usize,WindowIdentity)>>=Mutex::new(None);
+static REQUEST:Mutex<Option<(usize,WindowIdentity,u16)>>=Mutex::new(None);
 pub(super) fn refresh_hotkey(){
     let enabled=STATE.with(|s|{let Ok(s)=s.try_borrow()else{return false;};s.prefs.enabled&&s.prefs.snap_layouts&&!s.suspended});
     let id=if enabled{unsafe{WindowIdentity::read(GetForegroundWindow()).filter(|id|eligible(*id)&&GetWindowLongW(id.hwnd as HWND,GWL_STYLE) as u32&WS_POPUP==0)}}else{None};
@@ -14,23 +14,33 @@ pub(super) fn refresh_hotkey(){
 }
 /// The hook never performs COM, permission queries or foreign window calls.
 /// Only a bounded successful enqueue consumes a physical Win+Z chord.
-pub(super) unsafe fn queue_hotkey(control:HWND,ticket:usize)->bool{
+pub(super) unsafe fn queue_hotkey(control:HWND,ticket:usize,key:u16)->bool{
     let Some(id)=ELIGIBLE.try_lock().ok().and_then(|slot|*slot).filter(|id|id.hwnd==GetForegroundWindow() as usize)else{return false;};
-    let Ok(mut slot)=REQUEST.try_lock()else{return false;};if slot.is_some(){return false;}*slot=Some((ticket,id));
+    if !matches!(key,0x5A|0x25|0x27){return false;}
+    let Ok(mut slot)=REQUEST.try_lock()else{return false;};if slot.is_some(){return false;}*slot=Some((ticket,id,key));
     if PostMessageW(control,NOTICE,ticket,0)==0{*slot=None;return false;}true
 }
 pub(super) unsafe fn receive_hotkey(ticket:usize,current:bool){
-    let request=REQUEST.lock().ok().and_then(|mut slot|if slot.as_ref().is_some_and(|(generation,_)|*generation==ticket){slot.take()}else{None});
-    let Some((_,id))=request.filter(|_|current)else{return;};
+    let request=REQUEST.lock().ok().and_then(|mut slot|if slot.as_ref().is_some_and(|(generation,_,_)|*generation==ticket){slot.take()}else{None});
+    let Some((_,id,key))=request.filter(|_|current)else{return;};
     let enabled=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.snap_layouts&&!s.suspended});
     if !enabled||GetForegroundWindow() as usize!=id.hwnd||!eligible(id){return;}
     let monitor=MonitorFromWindow(id.hwnd as HWND,MONITOR_DEFAULTTONULL);
     let owner=STATE.with(|s|{let s=s.borrow();s.bars.iter().filter(|b|!b.hidden).find(|b|MonitorFromWindow(b.hwnd,MONITOR_DEFAULTTONULL)==monitor)
         .or_else(||s.bars.iter().find(|b|!b.hidden)).map(|b|b.hwnd)});
-    if let Some(owner)=owner{open(owner,id);}
+    if let Some(owner)=owner{if key==0x5A{open(owner,id);}else{arrow(id,key==0x27);}}
+}
+pub(super) unsafe fn arrow(id:WindowIdentity,right:bool)->bool{
+    if !eligible(id){return false;}let Some(visible)=super::window_effect::visible_area(id.hwnd as HWND)else{return false;};
+    let mut target:RECT=mem::zeroed();
+    #[cfg(target_env="msvc")]
+    if !tlauncher_snap_arrow(&visible,IsZoomed(id.hwnd as HWND)!=0,right,&mut target){return false;}
+    #[cfg(not(target_env="msvc"))]return false;
+    close_for(ptr::null_mut());super::window_geometry::command(id,super::window_geometry::Action::Snap(target))
 }
 #[cfg(target_env="msvc")]
 extern "C"{
+    fn tlauncher_snap_arrow(visible:*const RECT,maximized:bool,right:bool,selected:*mut RECT)->bool;
     fn tlauncher_snap_open(source:HWND,anchor:POINT,title:*const u16,labels:*const *const u16,count:u32,speed:f64,reduced:bool)->*mut c_void;
     fn tlauncher_snap_poll(raw:*mut c_void,selected:*mut RECT)->i32;
     fn tlauncher_snap_window(raw:*mut c_void)->HWND;
@@ -162,11 +172,24 @@ pub(super) unsafe fn probe(owner:HWND,id:WindowIdentity){
         [actual.left-area.left,actual.top-area.top,actual.right-(area.left+(area.right-area.left)/2),actual.bottom-area.bottom].iter().all(|v|v.abs()<=6)));
     assert_eq!(GetWindowLongPtrW(h,GWL_EXSTYLE),style);assert!(GetPropW(h,marker.as_ptr()).is_null());
     prepare();SetForegroundWindow(h);wait(&||GetForegroundWindow()==h);refresh_hotkey();
-    assert!(queue_hotkey(super::CONTROL.get(),401));assert!(!queue_hotkey(super::CONTROL.get(),401));
+    assert!(queue_hotkey(super::CONTROL.get(),401,0x5A));assert!(!queue_hotkey(super::CONTROL.get(),401,0x5A));
     receive_hotkey(402,true);assert!(!open_for(owner)); // stale notice cannot take a newer request
     receive_hotkey(401,true);assert!(open_for(owner));key(VK_ESCAPE);wait(&||!open_for(owner));
-    SetForegroundWindow(h);wait(&||GetForegroundWindow()==h);refresh_hotkey();assert!(queue_hotkey(super::CONTROL.get(),403));receive_hotkey(403,false);assert!(!open_for(owner));
-    SetForegroundWindow(h);refresh_hotkey();assert!(queue_hotkey(super::CONTROL.get(),404));SetForegroundWindow(owner);wait(&||GetForegroundWindow()!=h);receive_hotkey(404,true);assert!(!open_for(owner));
+    SetForegroundWindow(h);wait(&||GetForegroundWindow()==h);refresh_hotkey();assert!(queue_hotkey(super::CONTROL.get(),403,0x5A));receive_hotkey(403,false);assert!(!open_for(owner));
+    SetForegroundWindow(h);refresh_hotkey();assert!(queue_hotkey(super::CONTROL.get(),404,0x5A));SetForegroundWindow(owner);wait(&||GetForegroundWindow()!=h);receive_hotkey(404,true);assert!(!open_for(owner));
+    // Original side-key geometry: first half, toward-center detach, quarter
+    // side selection. Exercise real native placement with effects disabled.
+    prepare();let mut expected:RECT=mem::zeroed();let visible=super::window_effect::visible_area(h).unwrap();
+    assert!(tlauncher_snap_arrow(&visible,false,false,&mut expected));assert!(arrow(id,false));wait(&||!super::window_geometry::active());
+    wait(&||super::window_effect::visible_area(h).is_some_and(|r|[r.left-expected.left,r.top-expected.top,r.right-expected.right,r.bottom-expected.bottom].iter().all(|v|v.abs()<=6)));
+    let visible=super::window_effect::visible_area(h).unwrap();assert!(tlauncher_snap_arrow(&visible,false,true,&mut expected));
+    let width=(area.right-area.left)*6/10;let height=(area.bottom-area.top)*3/4;
+    let center=RECT{left:(area.left+area.right)/2-width/2,top:(area.top+area.bottom)/2-height/2,right:(area.left+area.right)/2-width/2+width,bottom:(area.top+area.bottom)/2-height/2+height};
+    assert!(super::same_rect(expected,center));assert!(arrow(id,true));wait(&||!super::window_geometry::active());
+    wait(&||super::window_effect::visible_area(h).is_some_and(|r|[r.left-center.left,r.top-center.top,r.right-center.right,r.bottom-center.bottom].iter().all(|v|v.abs()<=6)));
+    let quarter=RECT{left:area.left,top:area.top,right:(area.left+area.right)/2,bottom:(area.top+area.bottom)/2};
+    assert!(tlauncher_snap_arrow(&quarter,false,true,&mut expected));assert_eq!((expected.left,expected.top,expected.right,expected.bottom),((area.left+area.right)/2,area.top,area.right,(area.top+area.bottom)/2));
+    assert!(!tlauncher_snap_arrow(&quarter,false,false,&mut expected));
     println!("FLUIDWIN_SNAP_HOTKEY_QUEUE valid=OPEN stale_ticket=PRESERVED invalid_generation=REJECTED changed_foreground=REJECTED physical_keys=NOT_INJECTED");
     drop(reset);wait(&||{let mut r:RECT=mem::zeroed();GetWindowRect(h,&mut r)!=0&&super::same_rect(r,original)});super::window_effect::fixture_settle_source(h);
     println!("FLUIDWIN_SNAP_LAYOUT_FIXTURE regions=11 keyboard=PASS no_premature_move=PASS screen=CAPTURED prepared={animated} cancel=PASS native_maximized=PASS source_style=RESTORED journal=CLEARED");

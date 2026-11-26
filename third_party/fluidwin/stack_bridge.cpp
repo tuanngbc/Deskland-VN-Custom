@@ -28,6 +28,24 @@ double stackSpeed=0.70;
 double speed(){return stackSpeed;}
 }
 extern "C"{
+// fluidwin.cpp::suAffiancaTasto, geometry only. The caller owns all mutations.
+bool tlauncher_snap_arrow(const RECT* visible,bool maximized,bool right,RECT* selected)noexcept{
+    if(!visible||!selected)return false;using namespace affianca;
+    auto monitor=MonitorFromRect(visible,MONITOR_DEFAULTTONEAREST);if(!monitor)return false;
+    const Zona current=maximized?PIENO:zonaDi(*visible,monitor);Zona next=right?DESTRA:SINISTRA;
+    switch(current){
+        case SINISTRA:case DESTRA:
+            if((current==SINISTRA)==right)next=CENTRO;
+            else{MONITORINFO info{};info.cbSize=sizeof(info);if(!GetMonitorInfoW(monitor,&info))return false;
+                const POINT beyond{right?info.rcMonitor.right+1:info.rcMonitor.left-2,(info.rcMonitor.top+info.rcMonitor.bottom)/2};
+                monitor=MonitorFromPoint(beyond,MONITOR_DEFAULTTONULL);if(!monitor)return false;next=right?SINISTRA:DESTRA;}
+            break;
+        case ALTO_SX:case ALTO_DX:next=right?ALTO_DX:ALTO_SX;break;
+        case BASSO_SX:case BASSO_DX:next=right?BASSO_DX:BASSO_SX;break;
+        default:break;
+    }
+    if(next==current)return false;*selected=rettZona(monitor,next);return selected->right>selected->left&&selected->bottom>selected->top;
+}
 void* tlauncher_snap_open(HWND source,POINT anchor,const wchar_t* title,const wchar_t* const* labels,unsigned count,double speed,bool reduced)noexcept{
     try{
         if(!IsWindow(source)||!title||!labels||count!=11)return nullptr;

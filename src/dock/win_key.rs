@@ -85,20 +85,21 @@ thread_local! {
     static ALT_TAB:Cell<bool>=const{Cell::new(false)};
     static TAB_DOWN:Cell<bool>=const{Cell::new(false)};
     static SNAP:Cell<bool>=const{Cell::new(false)};
-    static SNAP_CHORD:Cell<SnapChord>=const{Cell::new(SnapChord{held:false,mask:false})};
+    static SNAP_CHORD:Cell<SnapChord>=const{Cell::new(SnapChord{held:0,mask:false})};
     static SHELL_CLICK:Cell<Option<super::shell_menu::Click>>=const{Cell::new(None)};
 }
 
 struct Quit(usize);
 impl Drop for Quit{fn drop(&mut self){unsafe{CloseHandle(self.0 as HANDLE);}}}
 
-#[derive(Clone,Copy,Default)]struct SnapChord{held:bool,mask:bool}
+#[derive(Clone,Copy,Default)]struct SnapChord{held:u16,mask:bool}
 impl SnapChord{
     fn edge(&mut self,vk:u16,down:bool,compatible:bool,queue:impl FnOnce()->bool)->bool{
-        if vk!=b'Z' as u16{return false;}
-        if !down{return std::mem::take(&mut self.held);}
-        if self.held{return true;}
-        if compatible&&queue(){self.held=true;self.mask=true;return true;}false
+        if !matches!(vk,0x5A|VK_LEFT|VK_RIGHT){return false;}
+        if !down{if self.held==vk{self.held=0;return true;}return false;}
+        if self.held==vk{return true;}
+        if self.held!=0{return false;}
+        if compatible&&queue(){self.held=vk;self.mask=true;return true;}false
     }
 }
 unsafe fn menu_mask(){
@@ -175,7 +176,7 @@ unsafe extern "system" fn keyboard(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
             }
             let win=KEYS.get().blocked.iter().any(Option::is_some)||[VK_LWIN,VK_RWIN].into_iter().any(|v|GetAsyncKeyState(i32::from(v))<0);
             let compatible=win&&e.flags&LLKHF_ALTDOWN==0&&[VK_SHIFT,VK_CONTROL,VK_MENU].into_iter().all(|v|GetAsyncKeyState(i32::from(v))>=0);
-            let consumed=chord.edge(vk,down,compatible,||super::snap_layout::queue_hotkey(target as HWND,ticket));SNAP_CHORD.set(chord);
+            let consumed=chord.edge(vk,down,compatible,||super::snap_layout::queue_hotkey(target as HWND,ticket,vk));SNAP_CHORD.set(chord);
             if consumed{let mut keys=KEYS.get();keys.cancel();KEYS.set(keys);return 1;}
         }
         if !injected&&target!=0&&OVERVIEW.get(){
@@ -284,11 +285,12 @@ mod tests{
         let mut chord=SnapChord::default();
         assert!(!chord.edge(b'Z'.into(),true,false,||panic!("modified/no-Win chord must pass")));
         assert!(!chord.edge(b'Z'.into(),true,true,||false));assert!(!chord.mask);
-        assert!(!chord.edge(VK_LEFT,true,true,||panic!("Win+Arrow remains native")));
+        assert!(!chord.edge(VK_UP,true,true,||panic!("Win+Up remains native")));
         assert!(chord.edge(b'Z'.into(),true,true,||true));assert!(chord.mask);
         assert!(chord.edge(b'Z'.into(),true,false,||panic!("autorepeat must not enqueue again")));
         assert!(chord.edge(b'Z'.into(),false,false,||panic!("release must not enqueue")));
         assert!(!chord.edge(b'Z'.into(),false,false,||false));
+        for arrow in [VK_LEFT,VK_RIGHT]{assert!(chord.edge(arrow,true,true,||true));assert!(chord.edge(arrow,true,true,||panic!("repeat")));assert!(chord.edge(arrow,false,false,||false));}
         // A deferred physical Win down is not replayed for the consumed chord,
         // and its release cannot produce a standalone Start tap.
         let mut keys=Keys::default();assert_eq!(keys.edge(stroke(VK_LWIN),true,11,false,false),Edge::Hold);

@@ -3,8 +3,8 @@
   "ui": {
     "shellContextMenu": "Menu chuột phải Desktop và Explorer",
     "altTabOverview": "Tổng quan cửa sổ bằng Alt+Tab",
-    "snapLayouts": "Bố cục cửa sổ bằng Win+Z",
-    "snapLayoutsHint": "Mở bố cục FluidWin cho cửa sổ đang dùng. Tab hoặc phím mũi tên để chọn, Enter để áp dụng, Esc để hủy.",
+    "snapLayouts": "Bố cục FluidWin bằng phím Windows",
+    "snapLayoutsHint": "Win+Z mở bố cục; Win+Trái/Phải chia màn hình. Trong bảng: Tab hoặc mũi tên để chọn, Enter để áp dụng, Esc để hủy.",
     "jellyDrag": "Hiệu ứng Jelly khi kéo cửa sổ",
     "jellyDragHint": "Dùng nội dung sống khi kéo cửa sổ thường. Cửa sổ không tương thích tiếp tục dùng Windows.",
     "altTabOverviewHint": "Hiện cửa sổ đang mở trên màn hình hiện tại. Nhả Alt để chọn, Esc để hủy.",
