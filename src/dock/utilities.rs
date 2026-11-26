@@ -477,6 +477,7 @@ pub(super) fn hub_view(snapshot:&Snapshot,profile:&Profile,dock_mode:bool,live:b
         hint:String::new(),icon:None,action:Some(Command::Comfort(super::comfort::Action::Open))});
     cards.push(Card{title:crate::launcher::localized("Đang phát","Now playing","正在播放").into(),
         hint:crate::launcher::localized("Bài hát, ảnh bìa và điều khiển phát","Track, artwork and playback controls","曲目、封面与播放控制").into(),icon:None,action:Some(Command::Media)});
+    cards.push(Card{title:crate::launcher::localized("Lịch","Calendar","日历").into(),hint:String::new(),icon:None,action:Some(Command::Calendar)});
     if !profile.hidden.contains(&Widget::QuickSettings){cards.push(Card{title:crate::launcher::localized("Độ sáng màn hình","Display brightness","显示器亮度").into(),hint:String::new(),icon:None,action:Some(Command::Brightness(None))});}
     cards.push(Card{title:crate::launcher::localized("Tổng quan cửa sổ","Window overview","窗口概览").into(),
         hint:crate::launcher::localized("Cửa sổ đang mở trên màn hình này","Open windows on this display","此显示器上打开的窗口").into(),icon:None,action:Some(Command::Overview)});

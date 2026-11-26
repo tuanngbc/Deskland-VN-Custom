@@ -1747,6 +1747,7 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::Media=>{let mut point=POINT{x:0,y:0};GetCursorPos(&mut point);media::open(owner,point);},
         Command::Overview=>overview::show(owner,false,1),
         Command::SnapLayouts=>snap_layout::choose_window(owner),
+        Command::Calendar=>calendar::show(owner,dock_app_anchor(owner,None)),
         Command::Topmost(id)=>if let Some(id)=id{topmost::toggle(owner,id);}else{topmost::choose(owner);},
         Command::Shelf(action)=>shelf::perform(owner,ptr::null_mut(),action),
         Command::CaptureAccess(action)=>capture_access::perform(owner,action),

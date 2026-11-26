@@ -14,8 +14,21 @@ const TIMER:usize=1;
 const WIDTH:i32=338;
 const HEIGHT:i32=354;
 const TEXT:u32=DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS;
-const WEEKDAYS:[&str;7]=["T2","T3","T4","T5","T6","T7","CN"];
-const DAY_NAMES:[&str;7]=["Thứ Hai","Thứ Ba","Thứ Tư","Thứ Năm","Thứ Sáu","Thứ Bảy","Chủ Nhật"];
+fn text<'a>(vi:&'a str,en:&'a str,zh:&'a str)->&'a str{crate::launcher::localized(vi,en,zh)}
+fn weekdays()->[&'static str;7]{match text("vi","en","zh"){
+    "vi"=>["T2","T3","T4","T5","T6","T7","CN"],"zh"=>["一","二","三","四","五","六","日"],_=>["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]}}
+fn day_name(index:usize)->&'static str{match text("vi","en","zh"){
+    "vi"=>["Thứ Hai","Thứ Ba","Thứ Tư","Thứ Năm","Thứ Sáu","Thứ Bảy","Chủ Nhật"][index],
+    "zh"=>["星期一","星期二","星期三","星期四","星期五","星期六","星期日"][index],
+    _=>["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"][index]}}
+fn month_name(month:Month)->String{match text("vi","en","zh"){
+    "vi"=>format!("Tháng {} · {}",month.number,month.year),"zh"=>format!("{}年{}月",month.year,month.number),
+    _=>format!("{} {}",["January","February","March","April","May","June","July","August","September","October","November","December"][(month.number-1) as usize],month.year)}}
+fn first_weekday()->usize{
+    use windows_sys::Win32::Globalization::{GetLocaleInfoEx,LOCALE_IFIRSTDAYOFWEEK,LOCALE_NAME_USER_DEFAULT};
+    let mut value=[0u16;8];let count=unsafe{GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT,LOCALE_IFIRSTDAYOFWEEK,value.as_mut_ptr(),8)};
+    if count<=1{return 0;}String::from_utf16_lossy(&value[..count as usize-1]).parse::<usize>().ok().filter(|v|*v<=6).unwrap_or(0)
+}
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 struct Month{year:i32,number:i32}
@@ -65,6 +78,7 @@ impl Button{
 struct Panel{
     hwnd:HWND,owner:HWND,anchor:chrome::Anchor,layer:Layer,dpi:u32,glass:super::glass::Glass,shadow:Option<chrome::PanelShadow>,
     fonts:[HFONT;4],local:Local,view:Month,following:bool,dirty:bool,
+    first_weekday:usize,
     hover:Option<Button>,focus:Option<Button>,pressed:Option<Button>,
     motion:Option<super::motion::Tween>,
 }
@@ -121,27 +135,29 @@ impl Panel{
             SetDCBrushColor(dc,chrome::color(p.panel));
             FillRect(dc,&rect(0,0,WIDTH,HEIGHT),GetStockObject(DC_BRUSH) as HBRUSH);
         }
-        l(rect(20,15,216,32),&format!("Tháng {} · {}",self.view.number,self.view.year),p.ink);
+        l(rect(20,15,216,32),&month_name(self.view),p.ink);
         SelectObject(dc,self.fonts[1]);
-        l(rect(21,50,215,22),&format!("{:02}:{:02}  ·  Lịch TLauncher",self.local.hour,self.local.minute),p.muted);
+        l(rect(21,50,215,22),&format!("{:02}:{:02}  ·  {}",self.local.hour,self.local.minute,text("Lịch TLauncher","TLauncher Calendar","TLauncher 日历")),p.muted);
         for button in Button::ALL{
             let (x,y,bw,bh)=button.bounds();
             let r=rect(x,y,bw,bh);
             let hot=self.hover==Some(button)||self.focus==Some(button)||self.pressed==Some(button);
             chrome::box_fill(dc,r,radius(15),if hot{p.accent}else{field},None);
             let ink=if hot{p.panel}else{p.ink};
-            let label=match button{Button::Previous=>"‹",Button::Next=>"›",Button::Today=>"Hôm nay"};
+            let label=match button{Button::Previous=>"‹",Button::Next=>"›",Button::Today=>text("Hôm nay","Today","今天")};
             SelectObject(dc,self.fonts[if button==Button::Today{1}else{3}]);
             c(r,label,ink);
         }
         SelectObject(dc,self.fonts[2]);
-        for (i,name) in WEEKDAYS.into_iter().enumerate(){
+        let names=weekdays();
+        for i in 0..7{let name=names[(i+self.first_weekday)%7];
             c(rect(18+i as i32*43,84,43,24),name,p.muted);
         }
-        let rows=self.view.rows();
+        let first=(self.view.first()-self.first_weekday as i32).rem_euclid(7);
+        let rows=((first+self.view.days()+6)/7).max(5);
         let row_height=181/rows;
         for i in 0..rows*7{
-            let (month,day)=self.view.date_at(i);
+            let (month,day)=self.view.date_at(i+self.view.first()-first);
             let x=18+(i%7)*43;
             let y=110+(i/7)*row_height;
             let today=month==self.local.month&&day==self.local.day;
@@ -152,7 +168,7 @@ impl Panel{
             c(rect(x,y,43,row_height),&day.to_string(),ink);
         }
         SelectObject(dc,self.fonts[1]);
-        l(rect(19,303,212,40),&format!("{}, {:02}/{:02}/{}",DAY_NAMES[self.local.weekday],
+        l(rect(19,303,212,40),&format!("{}, {:02}/{:02}/{}",day_name(self.local.weekday),
             self.local.day,self.local.month.number,self.local.month.year),p.muted);
         SelectObject(dc,prev);
         GdiFlush();
@@ -196,7 +212,7 @@ pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor){
     let Some(layer)=Layer::new(w,h)else{return;};
     let class=wide(CLASS);
     if !chrome::register_with_style(&class,Some(proc),0){return;}
-    let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST|WS_EX_LAYERED,class.as_ptr(),wide("Lịch TLauncher").as_ptr(),
+    let hwnd=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST|WS_EX_LAYERED,class.as_ptr(),wide(text("Lịch TLauncher","TLauncher Calendar","TLauncher 日历")).as_ptr(),
         WS_POPUP,x,y,w,h,owner,ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
     if hwnd.is_null(){return;}
     chrome::disable_system_border(hwnd);
@@ -205,7 +221,7 @@ pub(super) unsafe fn show(owner:HWND,anchor:chrome::Anchor){
     let local=Local::now();
     let glass=super::glass::Glass::capture(RECT{left:x,top:y,right:x+w,bottom:y+h},dock_dpi,anchor.dark,anchor.transparency);
     let mut panel=Panel{hwnd,owner,anchor,layer,dpi:dock_dpi,glass,shadow:None,fonts,local,view:local.month,following:true,
-        dirty:true,hover:None,focus:None,pressed:None,motion:None};
+        dirty:true,first_weekday:first_weekday(),hover:None,focus:None,pressed:None,motion:None};
     panel.paint();
     if super::motion::native_allowed()&&SetTimer(hwnd,MOTION_TIMER,16,None)!=0{
         panel.motion=Some(super::motion::Tween::new(true,super::motion::CALENDAR,None).prepared());
@@ -339,10 +355,12 @@ mod tests{
     #[ignore = "uses a real layered popover and a fixture HWND"]
     fn native_calendar_navigates_and_presents_light_dark_months(){
         unsafe{
+            struct Locale(String);impl Drop for Locale{fn drop(&mut self){crate::launcher::spotlight_locale(&self.0);}}
+            let _locale=Locale(text("vi","en","zh-CN").into());
             let owner=CreateWindowExW(WS_EX_TOOLWINDOW,wide("STATIC").as_ptr(),wide("Calendar fixture").as_ptr(),
                 WS_POPUP,40,40,160,48,ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
             assert!(!owner.is_null());
-            for dark in [false,true]{
+            for language in ["vi","en","zh-CN"]{crate::launcher::spotlight_locale(language);for dark in [false,true]{
                 let anchor=chrome::Anchor{point:POINT{x:260,y:480},side:super::super::DockSide::Bottom,dark,transparency:32};
                 show(owner,anchor);
                 assert!(open_for(owner));
@@ -372,7 +390,7 @@ mod tests{
                             let unpremul=|v:u8|if a==0{0}else{((v as u16*255+a/2)/a).min(255) as u8};
                             [unpremul(src[2]),unpremul(src[1]),unpremul(src[0]),src[3]]
                         }).collect::<Vec<_>>();
-                        image::save_buffer(dir.join(if dark{"calendar-dark.png"}else{"calendar-light.png"}),
+                        image::save_buffer(dir.join(format!("calendar-{language}-{}.png",if dark{"dark"}else{"light"})),
                             &rgba,w as u32,h as u32,image::ColorType::Rgba8).unwrap();
                     }
                 });
@@ -392,7 +410,9 @@ mod tests{
                 SendMessageW(hwnd,WM_KEYDOWN,VK_ESCAPE as usize,0);
                 assert!(!open_for(owner));
                 assert_eq!(IsWindow(hwnd),0);
-            }
+            }}
+            super::super::perform_control(owner,super::super::control_center::Command::Calendar);
+            assert!(open_for(owner),"Control Center opens the existing native calendar");close_for(owner);assert!(!open_for(owner));
             for speed in [25,50,70,75,100,150,200]{
                 super::super::motion::native_fixture(speed,||{
                     let anchor=chrome::Anchor{point:POINT{x:260,y:480},side:super::super::DockSide::Bottom,dark:false,transparency:32};
