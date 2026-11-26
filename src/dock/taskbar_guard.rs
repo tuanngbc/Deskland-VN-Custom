@@ -299,8 +299,9 @@ impl GuardProcess{
                 // Read the explicit acknowledgement, not pipe EOF: a
                 // detached descendant can retain an inherited pipe writer.
                 let stdout=child.stdout.take().ok_or_else(||io::Error::other("Missing Guardian response pipe"))?;
+                let mut reader=io::BufReader::new(stdout);
                 let mut response=None;
-                for line in io::BufReader::new(stdout).lines().take(32){
+                for line in (&mut reader).lines().take(32){
                     let line=line?;
                     if let Some((_,fields))=line.split_once("TLAUNCHER_GUARDIAN "){response=Some(fields.to_owned());break;}
                 }
@@ -380,7 +381,11 @@ impl Watch {
     pub(super) fn poll(&mut self)->Result<bool,Exit>{
         match self.child.as_mut().ok_or(Exit::LinkLost)?.try_wait(){
             Ok(Some(status))=>return Err(Exit::from_code(status.code())),
-            Err(_)=>return Err(Exit::LinkLost),
+            Err(error)=>{
+                crate::log!("GUARDIAN_HANDSHAKE {error}");
+                #[cfg(test)] eprintln!("GUARDIAN_HANDSHAKE {error}");
+                return Err(Exit::LinkLost);
+            }
             Ok(None)=>{}
         }
         if unsafe{SetEvent(self.pulse.0)}==0{return Err(Exit::LinkLost);}
