@@ -295,6 +295,8 @@ jobs:
         run: |
           cargo test --release dock::window_lease::native_pending_style_begin_keeps_journal_until_worker_acknowledges -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::window_lease::native_old_lease_drop_cannot_revoke_a_replacement_journal -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify topmost leases preserve original styles and layered alpha
         if: ${{ !cancelled() }}

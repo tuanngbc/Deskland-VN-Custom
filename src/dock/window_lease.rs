@@ -87,6 +87,33 @@ fn native_topmost_lease_preserves_original_state_and_restores_only_its_bit(){
     }
     println!("WINDOW_TOPMOST release=PASS drop=PASS guardian_session=PASS original_topmost=PRESERVED layered_alpha=PRESERVED unrelated_style=PRESERVED geometry=PRESERVED journal=CLEARED");
 }
+
+#[cfg(all(test,target_env="msvc"))]
+#[test]
+#[ignore="hosted released lease retained across replacement, both foreign mutation kinds"]
+fn native_old_lease_drop_cannot_revoke_a_replacement_journal(){
+    if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    use std::{ptr,time::{Duration,Instant}};
+    unsafe{
+        let h=CreateWindowExW(0,crate::desktop::wide("STATIC").as_ptr(),crate::desktop::wide("Synthetic lease epoch").as_ptr(),WS_OVERLAPPEDWINDOW|WS_VISIBLE,
+            40,40,240,140,ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),ptr::null());assert!(!h.is_null());
+        struct Window(HWND);impl Drop for Window{fn drop(&mut self){unsafe{DestroyWindow(self.0);}}}let _window=Window(h);
+        let original=GetWindowLongPtrW(h,GWL_EXSTYLE);
+        let pump_until=|condition:&dyn Fn()->bool|{let start=Instant::now();while !condition(){let mut msg:MSG=std::mem::zeroed();for _ in 0..64{if PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)==0{break;}TranslateMessage(&msg);DispatchMessageW(&msg);}assert!(start.elapsed()<Duration::from_secs(4));std::thread::sleep(Duration::from_millis(5));}};
+        for topmost in [false,true]{
+            let begin=if topmost{tlauncher_window_lease_topmost}else{tlauncher_window_lease};let key=crate::desktop::wide(&format!("TLauncher.Fixture.Epoch.{}.{topmost}",std::process::id()));
+            let old=Lease(NonNull::new(begin(h,GetCurrentProcess(),key.as_ptr())).unwrap());pump_until(&||old.status()!=0);assert_eq!(old.status(),1);
+            old.restore();pump_until(&||old.status()==2&&GetPropW(h,key.as_ptr()).is_null());
+            let new=Lease(NonNull::new(begin(h,GetCurrentProcess(),key.as_ptr())).unwrap());pump_until(&||new.status()!=0);assert_eq!(new.status(),1);
+            drop(old); // A delayed destructor must not revoke the replacement.
+            for _ in 0..8{assert_eq!(new.status(),1);let mut msg:MSG=std::mem::zeroed();while PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}std::thread::sleep(Duration::from_millis(5));}
+            assert_ne!(GetWindowLongPtrW(h,GWL_EXSTYLE)&if topmost{WS_EX_TOPMOST as isize}else{WS_EX_LAYERED as isize},0);
+            new.restore();pump_until(&||new.status()==2&&GetPropW(h,key.as_ptr()).is_null());drop(new);assert_eq!(GetWindowLongPtrW(h,GWL_EXSTYLE),original);
+        }
+    }
+    println!("WINDOW_LEASE_EPOCH kinds=visibility,topmost old_drop=ISOLATED replacement=ACTIVE original_style=RESTORED journal=CLEARED");
+}
 pub(super) struct Lease(NonNull<c_void>);
 impl Lease{
     pub(super) unsafe fn begin(hwnd:HWND)->Option<Self>{
