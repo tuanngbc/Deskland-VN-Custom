@@ -6,6 +6,7 @@ use windows_sys::Win32::{Foundation::*,Graphics::Gdi::*,System::LibraryLoader::G
     UI::{Controls::*,Input::KeyboardAndMouse::*,WindowsAndMessaging::*}};
 const READY:u32=WM_APP+142;const TIMER:usize=1;
 const ART:i32=5400;const TITLE:i32=5401;const ARTIST:i32=5402;const PREV:i32=5403;const PLAY:i32=5404;const NEXT:i32=5405;
+const STATIC_OWNER_DRAW:u32=0x0000000d; // SS_OWNERDRAW
 static WORKER:AtomicBool=AtomicBool::new(false);
 thread_local!{static PANEL:RefCell<Option<Panel>>=const{RefCell::new(None)};static SERIAL:Cell<usize>=const{Cell::new(0)};}
 #[cfg(target_env="msvc")]
@@ -57,7 +58,7 @@ impl Worker{
     }
 }
 fn text(vi:&str,en:&str,zh:&str)->String{crate::launcher::localized(vi,en,zh).into()}
-struct Panel{hwnd:HWND,owner:HWND,tag:usize,dpi:u32,dark:bool,worker:Worker,view:Snapshot,pending:bool}
+struct Panel{hwnd:HWND,owner:HWND,tag:usize,dark:bool,worker:Worker,view:Snapshot,pending:bool}
 impl Panel{
     unsafe fn submit(&mut self,job:Job){
         if self.pending||self.worker.tx.try_send(job).is_err(){return;}
@@ -89,12 +90,12 @@ pub(super) unsafe fn open(owner:HWND,point:POINT){
             px(x),px(y),px(w),px(hg),h,id as usize as HMENU,GetModuleHandleW(ptr::null()),ptr::null());
         SendMessageW(control,WM_SETFONT,GetStockObject(DEFAULT_GUI_FONT) as usize,0);control
     };
-    child("STATIC",&text("Ảnh bìa","Album art","专辑封面"),ART,SS_OWNERDRAW as u32,16,76,112,112);
+    child("STATIC",&text("Ảnh bìa","Album art","专辑封面"),ART,STATIC_OWNER_DRAW,16,76,112,112);
     child("STATIC",&text("Đang đọc…","Reading…","正在读取…"),TITLE,0,144,76,236,52);child("STATIC","",ARTIST,0,144,136,236,52);
     for (id,label,x) in [(PREV,text("Trước","Previous","上一首"),16),(PLAY,text("Phát","Play","播放"),140),(NEXT,text("Tiếp","Next","下一首"),264)]{
         child("BUTTON",&label,id,WS_TABSTOP|BS_OWNERDRAW as u32,x,220,116,40);EnableWindow(GetDlgItem(h,id),0);
     }
-    let mut panel=Panel{hwnd:h,owner,tag,dpi,dark:anchor.dark,worker,view:Snapshot::default(),pending:false};panel.submit(Job::Read);
+    let mut panel=Panel{hwnd:h,owner,tag,dark:anchor.dark,worker,view:Snapshot::default(),pending:false};panel.submit(Job::Read);
     PANEL.with(|p|p.replace(Some(panel)));SetTimer(h,TIMER,1000,None);ShowWindow(h,SW_SHOW);SetForegroundWindow(h);SetFocus(GetDlgItem(h,PLAY));
 }
 pub(super) fn open_for(owner:HWND)->bool{PANEL.with(|p|p.borrow().as_ref().is_some_and(|p|p.owner==owner))}
@@ -117,7 +118,7 @@ unsafe extern "system" fn proc(h:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                     super::fill(item.hDC,item.rcItem,chrome::color(background));
                     if p.view.art.len()==96*96{
                         let pixels=p.view.art.iter().map(|&pixel|{
-                            let alpha=pixel>>24;let channel=|shift,back:u8|(((pixel>>shift)&255)+(u32::from(back)*(255-alpha)+127)/255).min(255);
+                            let alpha=pixel>>24;let channel=|shift:u32,back:u8|(((pixel>>shift)&255u32)+(u32::from(back)*(255-alpha)+127)/255).min(255);
                             0xff000000|(channel(16,background[0])<<16)|(channel(8,background[1])<<8)|channel(0,background[2])
                         }).collect::<Vec<u32>>();
                         let mut info:BITMAPINFO=std::mem::zeroed();info.bmiHeader.biSize=std::mem::size_of::<BITMAPINFOHEADER>() as u32;
