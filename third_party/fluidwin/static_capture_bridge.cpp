@@ -105,12 +105,12 @@ int capture(const Identity& id,Photo& photo,bool allowPrint){
     bool expected=false;if(!printBusy.compare_exchange_strong(expected,true))return 4;
     struct Permit{bool queued=false;~Permit(){if(!queued)printBusy.store(false);}}permit;
     const int w=id.outer.right-id.outer.left,h=id.outer.bottom-id.outer.top;
-    if(!stampa::prenota(id.h)){printBusy.store(false);return 4;}
+    if(!stampa::prenota(id.h))return 4;
     auto* work=new(std::nothrow) stampa::Lavoro{id.h,w,h,{},FALSE,CreateEventW(nullptr,TRUE,FALSE,nullptr),2};
     auto* print=work?new(std::nothrow) Print{work,id}:nullptr;
     if(!work||!work->fatto||!print||!TrySubmitThreadpoolCallback(print_callback,print,nullptr)){
         delete print;if(work){if(work->fatto)CloseHandle(work->fatto);delete work;}
-        stampa::libera(id.h);printBusy.store(false);return 3;
+        stampa::libera(id.h);return 3;
     }
     permit.queued=true;
     // Original refcount/event ownership: timeout drops only the caller's ref;
