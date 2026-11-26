@@ -104,9 +104,13 @@ impl CaptureDevice {
                 step("omit cursor",session.SetIsCursorCaptureEnabled(false))?;
                 // Same request as FluidWin viva.h; API success alone does not
                 // prove Windows honored borderless capture. Keep it in evidence.
-                let border_request=session.SetIsBorderRequired(false).is_ok();
-                let border_reported=session.IsBorderRequired().ok();
-                record(timing,|t|{t.borderless_request=border_request;t.border_required=border_reported;});
+                let border_set=session.SetIsBorderRequired(false);
+                let border_get=session.IsBorderRequired();
+                record(timing,|t|{
+                    t.borderless_request=border_set.is_ok();t.border_required=border_get.as_ref().ok().copied();
+                    t.border_set_hresult=Some(border_set.as_ref().err().map_or(0,|e|e.code().0));
+                    t.border_get_hresult=Some(border_get.as_ref().err().map_or(0,|e|e.code().0));
+                });
                 let (tx,rx)=mpsc::sync_channel(1);
                 let notify=TypedEventHandler::new(move|_,_|{let _=tx.try_send(());Ok(())});
                 let token=step("frame event",pool.FrameArrived(&notify))?;
@@ -245,6 +249,11 @@ pub(super) unsafe fn frame(hwnd:HWND,valid:impl Fn()->bool)->Result<Frame,String
 pub(super) unsafe fn gpu_frame(hwnd:HWND,valid:impl Fn()->bool)->Result<MotionFrame,String>{
     let _apartment=Apartment::enter()?;
     CaptureDevice::new()?.capture(hwnd,valid,MOTION_EDGE,Duration::from_secs(2),None,true,None)
+}
+#[cfg(test)]
+pub(super) unsafe fn fixture_live_gpu(hwnd:HWND,valid:impl Fn()->bool,sink:&mpsc::SyncSender<Result<MotionFrame,String>>,timing:&CaptureTimingHandle)->Result<MotionFrame,String>{
+    let _apartment=Apartment::enter()?;
+    CaptureDevice::new()?.capture(hwnd,valid,MOTION_EDGE,Duration::from_secs(2),Some(timing),true,Some((sink,0)))
 }
 
 pub(super) const READY:u32=WM_APP+58;
@@ -409,6 +418,19 @@ pub(super) type Frame=(Vec<u8>,i32,i32);
 pub(super) struct GpuFrame{
     pub texture:ID3D11Texture2D,pub width:i32,pub height:i32,pub gpu:Arc<crate::shell_gpu::ShellGpu>,
 }
+#[cfg(test)]impl GpuFrame{
+    pub(super) unsafe fn fixture_pixels(&self)->Result<Vec<u8>,String>{
+        let context=self.gpu.context();let mut desc=D3D11_TEXTURE2D_DESC::default();self.texture.GetDesc(&mut desc);
+        desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.MiscFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ.0 as u32;desc.MipLevels=1;
+        let mut staging=None;step("fixture source readback texture",self.gpu.device.CreateTexture2D(&desc,None,Some(&mut staging)))?;
+        let staging=staging.ok_or("missing fixture source readback texture")?;context.CopySubresourceRegion(&staging,0,0,0,0,&self.texture,0,None);
+        let mut mapped=D3D11_MAPPED_SUBRESOURCE::default();step("fixture source readback map",context.Map(&staging,0,D3D11_MAP_READ,0,Some(&mut mapped)))?;
+        let row=self.width as usize*4;let mut pixels=vec![0;row*self.height as usize];
+        let result=if mapped.pData.is_null()||(mapped.RowPitch as usize)<row{Err("invalid fixture source mapping".into())}else{
+            for y in 0..self.height as usize{std::ptr::copy_nonoverlapping(mapped.pData.cast::<u8>().add(y*mapped.RowPitch as usize),pixels.as_mut_ptr().add(y*row),row);}Ok(pixels)
+        };context.Unmap(&staging,0);result
+    }
+}
 #[derive(Clone)]
 pub(super) enum MotionFrame{Cpu(Frame),Gpu(GpuFrame)}
 impl MotionFrame {
@@ -485,6 +507,7 @@ pub(super) struct CaptureTiming{
     pub queue_ms:u64,pub device_ms:u64,pub capture_init_ms:u64,pub first_frame_ms:u64,
     pub readback_ms:u64,pub downsample_ms:u64,
     pub gpu_to_gpu:bool,pub borderless_request:bool,pub border_required:Option<bool>,
+    pub border_set_hresult:Option<i32>,pub border_get_hresult:Option<i32>,
     pub live_frames:u64,
 }
 pub(super) type CaptureTimingHandle=Arc<Mutex<CaptureTiming>>;

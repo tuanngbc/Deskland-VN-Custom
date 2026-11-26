@@ -276,6 +276,65 @@ fn native_fluidwin_gpu_capture_full_resolution(){
 }
 
 #[cfg(all(test,target_env="msvc"))]
+#[test]
+#[ignore="separate source texture and live screen perimeter evidence on hosted Windows; never infers an owner border fix"]
+fn native_live_capture_texture_and_screen_perimeters(){
+    if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+    use std::sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}};
+    use super::stage_snapshot::{self,MotionFrame,CaptureTiming};
+    unsafe{
+        let source=window(true).unwrap();let h=source.0;
+        SetWindowLongPtrW(h,GWL_STYLE,(WS_POPUP|WS_VISIBLE) as isize);
+        SetWindowPos(h,HWND_TOPMOST,80,80,480,320,SWP_NOACTIVATE|SWP_FRAMECHANGED);
+        SetPropW(h,wide("TLauncher.Fixture.Solid").as_ptr(),0x01000000usize as HANDLE);InvalidateRect(h,ptr::null(),0);UpdateWindow(h);
+        let area=RECT{left:80,top:80,right:560,bottom:400};let expanded=RECT{left:64,top:64,right:576,bottom:416};
+        let pump=||{let mut message:MSG=std::mem::zeroed();for _ in 0..64{if PeekMessageW(&mut message,ptr::null_mut(),0,0,PM_REMOVE)==0{break;}TranslateMessage(&message);DispatchMessageW(&message);}DwmFlush();};
+        let save=|name:&str,bgra:&[u8],width:i32,height:i32|{
+            if let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
+                let rgba=bgra.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],p[3]]).collect::<Vec<_>>();
+                image::save_buffer(std::path::PathBuf::from(dir).join(format!("capture-{name}.png")),&rgba,width as u32,height as u32,image::ColorType::Rgba8).unwrap();
+            }
+        };
+        let screen=|name:&str|{pump();let width=expanded.right-expanded.left;let height=expanded.bottom-expanded.top;let mut layer=Layer::new(width,height).unwrap();
+            let dc=GetDC(ptr::null_mut());assert_ne!(BitBlt(layer.dc(),0,0,width,height,dc,expanded.left,expanded.top,SRCCOPY|CAPTUREBLT),0);ReleaseDC(ptr::null_mut(),dc);GdiFlush();
+            let mut pixels=layer.pixels().to_vec();for p in pixels.chunks_exact_mut(4){p[3]=255;}save(name,&pixels,width,height);pixels};
+        pump();let before=screen("source-before");let timing=Arc::new(Mutex::new(CaptureTiming::default()));
+        std::thread::scope(|scope|{
+            let live=Arc::new(AtomicBool::new(true));struct Stop(Arc<AtomicBool>);impl Drop for Stop{fn drop(&mut self){self.0.store(false,Ordering::Release);}}
+            let stop=Stop(live.clone());let (send,receive)=mpsc::sync_channel(1);let handle=h as usize;let worker_timing=timing.clone();
+            let worker=scope.spawn(move||stage_snapshot::fixture_live_gpu(handle as HWND,||live.load(Ordering::Acquire)&&allowed(handle as HWND),&send,&worker_timing));
+            let started=Instant::now();let frame=loop{
+                pump();match receive.recv_timeout(Duration::from_millis(12)){
+                    Ok(Ok(MotionFrame::Gpu(frame)))=>break frame,Ok(Ok(_))=>panic!("live screen fixture got a CPU thumbnail"),Ok(Err(e))=>panic!("live screen fixture: {e}"),
+                    Err(mpsc::RecvTimeoutError::Disconnected)=>panic!("live screen fixture ended before first frame"),Err(mpsc::RecvTimeoutError::Timeout)=>assert!(started.elapsed()<Duration::from_secs(5)),
+                }
+            };
+            assert_eq!((frame.width,frame.height),(480,320));
+            let white=frame.fixture_pixels().unwrap();let center=(160*480+240)*4;assert!(white[center..center+3].iter().all(|v|*v>=245));
+            save("texture-white",&white,frame.width,frame.height);
+            let start=Instant::now();while start.elapsed()<Duration::from_millis(150){pump();std::thread::sleep(Duration::from_millis(10));}
+            let during=screen("source-active-white");
+            let (mut ring,mut changed,mut chromatic)=(0usize,0usize,0usize);let width=(expanded.right-expanded.left) as usize;
+            for (i,(b,d)) in before.chunks_exact(4).zip(during.chunks_exact(4)).enumerate(){
+                let x=expanded.left+(i%width) as i32;let y=expanded.top+(i/width) as i32;
+                if x>=area.left+3&&x<area.right-3&&y>=area.top+3&&y<area.bottom-3{continue;}
+                ring+=1;changed+=usize::from(b[..3]!=d[..3]);let high=*d[..3].iter().max().unwrap();let low=*d[..3].iter().min().unwrap();chromatic+=usize::from(high.saturating_sub(low)>32);
+            }
+            SetPropW(h,wide("TLauncher.Fixture.Solid").as_ptr(),0x00ff0001usize as HANDLE);InvalidateRect(h,ptr::null(),0);UpdateWindow(h);
+            let repaint=Instant::now();let blue=loop{
+                pump();let pixels=frame.fixture_pixels().unwrap();if pixels[center]>245&&pixels[center+1]<10&&pixels[center+2]<10{break pixels;}
+                assert!(repaint.elapsed()<Duration::from_secs(4),"same live texture did not update from white to blue");std::thread::sleep(Duration::from_millis(12));
+            };
+            save("texture-blue",&blue,frame.width,frame.height);screen("source-active-blue");
+            println!("TLAUNCHER_CAPTURE_SCREEN ring_pixels={ring} changed={changed} chromatic={chromatic} source_texture=EXPORTED border_conclusion=NOT_INFERRED");
+            drop(stop);let result=worker.join().expect("capture perimeter worker panicked");assert!(result.is_err(),"live stream should end through explicit cancellation");
+        });
+        screen("source-stopped");println!("TLAUNCHER_CAPTURE_TIMING {}",serde_json::to_string(&*timing.lock().unwrap()).unwrap());
+        println!("TLAUNCHER_CAPTURE_BASELINE GPU_to_GPU=PASS live_white_to_blue=PASS screen_perimeter=EXPORTED consent_prompt=NOT_REQUESTED owner_border=UNRESOLVED");
+    }
+}
+
+#[cfg(all(test,target_env="msvc"))]
 fn pump_gpu_fixture(fixture:&Fixture)->Result<super::stage_snapshot::GpuFrame,String>{
     let handle=fixture.0 as usize;
     std::thread::scope(|scope|{
