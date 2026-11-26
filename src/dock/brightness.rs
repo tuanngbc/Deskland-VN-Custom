@@ -1,6 +1,6 @@
 //! sistema.h DDC/CI brightness, scoped to the display chosen at the click.
 use std::{mem,ptr};
-use windows_sys::Win32::{Foundation::*,Devices::Display::*,Graphics::Gdi::*};
+use windows_sys::Win32::{Foundation::*,Devices::Display::*,Graphics::Gdi::*,UI::WindowsAndMessaging::EDD_GET_DEVICE_INTERFACE_NAME};
 #[derive(Clone)]pub(super) struct Target{monitor:usize,device:[u16;32],interface:[u16;128],bounds:(i32,i32,i32,i32)}
 #[derive(Clone)]pub(super) struct Query{pub target:Target,pub change:Option<Change>}
 #[derive(Clone)]pub(super) struct Change{description:[u16;128],minimum:u32,maximum:u32,observed:u32,value:u32}
