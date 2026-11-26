@@ -79,7 +79,8 @@ fn native_lease_restores_style_and_respects_existing_layered_windows(){
                     assert_eq!(helper.join().unwrap(),0);drop(lease);
                 }
             }
-            pump_until(&||GetWindowLongPtrW(hwnd,GWL_EXSTYLE)&WS_EX_LAYERED as isize==0);
+            pump_until(&||GetWindowLongPtrW(hwnd,GWL_EXSTYLE)&WS_EX_LAYERED as isize==0
+                &&GetPropW(hwnd,crate::desktop::wide(&marker).as_ptr()).is_null());
             assert_eq!(GetWindowLongPtrW(hwnd,GWL_EXSTYLE),before);
             assert!(GetPropW(hwnd,crate::desktop::wide(&marker).as_ptr()).is_null());
         }

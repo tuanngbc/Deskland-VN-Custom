@@ -4,7 +4,8 @@ use std::{
     io::{self,Write},
     path::PathBuf,
     os::windows::process::CommandExt,
-    process::{Child,Command,Stdio},
+    process::{Command,Stdio},
+    sync::mpsc,
     time::{Duration,Instant,SystemTime,UNIX_EPOCH},
 };
 use windows_sys::Win32::{
@@ -16,12 +17,15 @@ use windows_sys::Win32::{
 };
 
 pub(crate) const ARG:&str="--dock-taskbar-guard";
+const BOOTSTRAP:&str="--dock-guard-bootstrap";
 const SYNC:u32=0x0010_0000; // SYNCHRONIZE access
 const SIGNAL:u32=0x0002; // EVENT_MODIFY_STATE access
 const HOTKEY:i32=1;
 const QUIET_PROCESS:u32=0x0800_0000; // CREATE_NO_WINDOW
 
 struct Handle(HANDLE);
+// Kernel handles can be moved between threads; this owner closes exactly once.
+unsafe impl Send for Handle{}
 impl Handle{
     fn from_raw(value:HANDLE)->io::Result<Self>{if value.is_null(){Err(io::Error::last_os_error())}else{Ok(Self(value))}}
     fn fired(&self)->bool{unsafe{WaitForSingleObject(self.0,0)==WAIT_OBJECT_0}}
@@ -270,8 +274,51 @@ impl Exit{
     }
 }
 
+struct ProcessHandle{handle:Handle,pid:u32}
+pub(super) struct GuardProcess{process:Option<ProcessHandle>,answer:Option<mpsc::Receiver<io::Result<ProcessHandle>>>}
+impl GuardProcess{
+    fn spawn(mut command:Command)->io::Result<Self>{
+        command.stdout(Stdio::piped());
+        let child=command.spawn()?;
+        let (tx,answer)=mpsc::sync_channel(1);
+        thread::Builder::new().name("TLauncher guardian bootstrap".into()).spawn(move||{
+            let result=(||{
+                let output=child.wait_with_output()?;
+                if !output.status.success(){return Err(io::Error::other("Guardian bootstrap failed"));}
+                let text=String::from_utf8_lossy(&output.stdout);
+                let mut fields=text.split_whitespace();
+                let pid=fields.next().and_then(|v|v.parse::<u32>().ok()).ok_or_else(||io::Error::other("Missing Guardian identity"))?;
+                let birth=fields.next().and_then(|v|u64::from_str_radix(v,16).ok()).ok_or_else(||io::Error::other("Missing Guardian birth time"))?;
+                unsafe{
+                    let handle=Handle::from_raw(OpenProcess(SYNC|PROCESS_QUERY_LIMITED_INFORMATION,0,pid))?;
+                    if process_birth(handle.0)!=Some(birth)||!same_executable(handle.0){return Err(io::Error::other("Guardian identity mismatch"));}
+                    Ok(ProcessHandle{handle,pid})
+                }
+            })();
+            let _=tx.send(result);
+        })?;
+        Ok(Self{process:None,answer:Some(answer)})
+    }
+    pub(super) fn try_wait(&mut self)->io::Result<Option<std::process::ExitStatus>>{
+        use std::os::windows::process::ExitStatusExt;
+        if let Some(answer)=self.answer.as_ref(){
+            match answer.try_recv(){
+                Ok(result)=>{self.process=Some(result?);self.answer=None;}
+                Err(mpsc::TryRecvError::Empty)=>return Ok(None),
+                Err(mpsc::TryRecvError::Disconnected)=>return Err(io::Error::other("Guardian bootstrap disconnected")),
+            }
+        }
+        let process=self.process.as_ref().ok_or_else(||io::Error::other("Guardian handle missing"))?;
+        if !process.handle.fired(){return Ok(None);}
+        let mut code=0;
+        if unsafe{windows_sys::Win32::System::Threading::GetExitCodeProcess(process.handle.0,&mut code)}==0{return Err(io::Error::last_os_error());}
+        Ok(Some(std::process::ExitStatus::from_raw(code)))
+    }
+    fn id(&self)->Option<u32>{self.process.as_ref().map(|p|p.pid)}
+}
+
 pub(super) struct Watch {
-    child:Option<Child>, stop:Handle, ready:Handle, armed:Handle, pulse:Handle, hidden:Vec<WindowId>, started:Instant,
+    child:Option<GuardProcess>, stop:Handle, ready:Handle, armed:Handle, pulse:Handle, hidden:Vec<WindowId>, started:Instant,
     token:u128,
 }
 impl Watch {
@@ -291,16 +338,16 @@ impl Watch {
         let expected=all.iter().map(|v|format!("{}:{}:{}:{}",v.id.handle,v.id.pid,v.id.thread,u8::from(v.visible))).collect::<Vec<_>>().join(",");
         let exe=env::current_exe().map_err(|e|e.to_string())?;
         let mut command=Command::new(exe);
-        command.arg(ARG).arg(pid.to_string()).arg(format!("{token:032x}")).arg(expected).arg(format!("{birth:016x}"))
+        command.arg(BOOTSTRAP).arg(pid.to_string()).arg(format!("{token:032x}")).arg(expected).arg(format!("{birth:016x}"))
             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).creation_flags(QUIET_PROCESS)
             .env_remove("TUANPC_DESK_TASKBAR_TRIAL_TRACE");
         if let Some(profile)=crate::trial::data_dir(){command.env("TUANPC_DESK_TASKBAR_TRIAL_TRACE",profile);}
-        let child=command.spawn().map_err(|e|e.to_string())?;
+        let child=GuardProcess::spawn(command).map_err(|e|e.to_string())?;
         Ok(Self{child:Some(child),stop,ready,armed,pulse,hidden,started:Instant::now(),token})
     }
     pub(super) fn motion_session(&self)->Option<(u32,String)>{
         if !self.ready.fired()||!self.armed.fired()||self.stop.fired(){return None;}
-        let pid=self.child.as_ref()?.id();
+        let pid=self.child.as_ref()?.id()?;
         let process=unsafe{Handle::from_raw(OpenProcess(SYNC,0,pid)).ok()?};
         if process.fired(){return None;}
         let marker=name(std::process::id(),self.token,"Motion");
@@ -317,7 +364,7 @@ impl Watch {
         if self.started.elapsed()>Duration::from_secs(4){return Err(Exit::ReadyTimeout);}
         Ok(false)
     }
-    pub(super) fn stop(mut self)->Option<Child>{
+    pub(super) fn stop(mut self)->Option<GuardProcess>{
         // Drop signals stop and restores; retain the process handle so a
         // successor cannot claim the recovery hotkey until cleanup has ended.
         self.child.take()
@@ -346,6 +393,21 @@ unsafe fn process_birth(handle:HANDLE)->Option<u64>{
 }
 
 pub(crate) fn watchdog(args:&[String])->bool{
+    if args.get(1).map(String::as_str)==Some(BOOTSTRAP){
+        if args.len()!=6{return true;}
+        // The short-lived intermediate exits before the Guardian is adopted.
+        // End-process-tree against TLauncher then cannot take recovery with it.
+        let result=(||->io::Result<()>{
+            use std::os::windows::io::AsRawHandle;
+            let child=Command::new(env::current_exe()?).arg(ARG).args(&args[2..])
+                .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).creation_flags(QUIET_PROCESS).spawn()?;
+            let stamp=unsafe{process_birth(child.as_raw_handle() as HANDLE)}.ok_or_else(||io::Error::other("Guardian birth unavailable"))?;
+            println!("{} {stamp:016x}",child.id());io::stdout().flush()?;
+            Ok(())
+        })();
+        if result.is_err(){std::process::exit(1);}
+        return true;
+    }
     if args.get(1).map(String::as_str)!=Some(ARG){return false;}
     if args.len()!=6{return true;}
     let Some(pid)=args[2].parse::<u32>().ok().filter(|&p|p!=0&&p!=std::process::id())else{return true;};

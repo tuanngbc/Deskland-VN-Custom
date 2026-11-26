@@ -2095,7 +2095,7 @@ unsafe fn dock_context(owner:HWND,bar:usize,index:usize,advanced:bool){
 thread_local!{
     static TASKBAR_RETRY:RefCell<taskbar_state::Recovery>=RefCell::new(taskbar_state::Recovery::default());
     static TASKBAR_RESUME:Cell<bool>=const{Cell::new(false)};
-    static TASKBAR_STOPPING:RefCell<Option<std::process::Child>>=const{RefCell::new(None)};
+    static TASKBAR_STOPPING:RefCell<Option<taskbar_guard::GuardProcess>>=const{RefCell::new(None)};
     static TASKBAR_WATCH:RefCell<Option<taskbar_guard::Watch>>=const{RefCell::new(None)};
     static TASKBAR_STATUS:RefCell<TaskbarStatus>=RefCell::new(TaskbarStatus::default());
     static TASKBAR_RESTORE:RefCell<Option<(bool,TaskbarMode,&'static str,String,Instant,usize)>>=const{RefCell::new(None)};
