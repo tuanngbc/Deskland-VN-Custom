@@ -4,6 +4,7 @@
 #include "upstream/pila.h"
 #include "upstream/jumplist.h"
 #include "upstream/anteprime.h"
+#include "upstream/comodita.h"
 
 namespace{
 struct Apartment{bool active=false;~Apartment(){if(active)OleUninitialize();}};
@@ -19,6 +20,29 @@ double stackSpeed=0.70;
 double speed(){return stackSpeed;}
 }
 extern "C"{
+bool tlauncher_comfort_command(int operation,uint64_t duration) noexcept{
+    if(operation==1)return comodita::tieniSveglio(duration);
+    if(operation==2){comodita::avviaTimer(duration);return true;}
+    if(operation==3){comodita::fermaTimer();return true;}
+    if(operation==4){comodita::aggiungiTimer(duration);return true;}
+    return false;
+}
+unsigned tlauncher_comfort_state(uint64_t* timer,uint64_t* awake) noexcept{
+    comodita::controlla();auto& s=comodita::stato();const auto now=GetTickCount64();
+    *timer=comodita::timerResto();*awake=s.svegliaFino==comodita::SEMPRE?UINT64_MAX:s.svegliaFino>now?s.svegliaFino-now:0;
+    return (s.sveglioApplicato?1:0)|(comodita::timerAttivo()?2:0)|(comodita::timerSuona()?4:0);
+}
+int tlauncher_comfort_fixture() noexcept{
+    int failure=0;auto& s=comodita::stato();
+    if(!comodita::tieniSveglio(1000)||!s.sveglioApplicato)failure|=1;
+    s.svegliaFino=GetTickCount64();comodita::controlla();if(s.sveglioApplicato)failure|=2;
+    comodita::avviaTimer(10000);const auto end=s.timerFino;comodita::aggiungiTimer(5000);
+    if(s.timerFino!=end+5000||s.timerDurata!=15000)failure|=4;
+    s.senzaSuono=true;s.timerFino=GetTickCount64();comodita::controlla();
+    if(!comodita::timerSuona()||comodita::timerAttivo())failure|=8;
+    s.suonaFino=GetTickCount64();comodita::controlla();if(comodita::timerSuona())failure|=16;
+    comodita::fermaTimer();comodita::tieniSveglio(0);return failure;
+}
 void* tlauncher_previews_open(const HWND* sources,unsigned count,const RECT* icon,const RECT* area,int side,HWND owner,
     double speed,bool reduced,const wchar_t* minimized,const wchar_t* unavailable) noexcept{
     try{

@@ -50,6 +50,7 @@ mod audio_mixer;
 mod jump_list;
 mod folder_stack;
 mod app_previews;
+mod comfort;
 mod wifi;
 mod control_center;
 pub(crate) mod panel_chrome;
@@ -1722,6 +1723,7 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::BackgroundApps=>show_background_apps(owner),
         Command::Clipboard=>show_clipboard_history(owner),
         Command::AudioMixer=>{let mut point=POINT{x:0,y:0};GetCursorPos(&mut point);audio_mixer::open(owner,point);},
+        Command::Comfort(action)=>comfort::perform(owner,action),
         Command::ClipboardCopy(id)=>{
             if clipboard_history::active()&&!clipboard_history::copy(owner,id){show_clipboard_history(owner);}
         }
@@ -3075,6 +3077,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER if w==jump_list::TIMER&&hwnd==CONTROL.get()=>{jump_list::poll();0},
         WM_TIMER if w==folder_stack::TIMER&&hwnd==CONTROL.get()=>{folder_stack::poll();0},
         WM_TIMER if w==app_previews::TIMER&&hwnd==CONTROL.get()=>{app_previews::poll();0},
+        WM_TIMER if w==comfort::TIMER&&hwnd==CONTROL.get()=>{comfort::poll();0},
         WM_SHELL_FALLBACK if hwnd==CONTROL.with(Cell::get)=>{
             let owner=w as HWND;
             if !local_shell_buttons()&&!control_center::open_for(owner){
@@ -3745,6 +3748,7 @@ unsafe fn drain_commands() {
                 if enable_default&&!cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active(){start_saved_taskbar_mode();}
             },
             Command::Suspend(on)=>{
+                if on{comfort::reset();}
                 if on{app_previews::close_for(ptr::null_mut());}
                 if on{window_effect::reset();shell_menu::close();}
                 if on&&(taskbar_active()||taskbar_retry_pending()){
@@ -3896,7 +3900,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
         update_state(|s|{s.appbars.clear();s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){destroy_stage(&mut b);}});
         SURFACES.with(|s|s.borrow_mut().clear());STAGE_SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
-        utilities::close_panels();UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));
+        comfort::reset();utilities::close_panels();UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));
         if ATTENTION_MSG.with(|id|id.replace(0))!=0{DeregisterShellHookWindow(control);}
         ATTENTION.with(|queue|queue.borrow_mut().clear());
         internal_app::unlisten(control);

@@ -188,6 +188,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::app_previews::native_original_previews_select_close_reconcile_and_release -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::comfort::native_original_awake_and_countdown_expire_and_release -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::command_pin::tests::native_shell_launch_passes_arguments_and_working_directory -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::utilities::tests::native_on_demand_provider_completes_without_an_assumed_device -- --ignored --exact --nocapture --test-threads=1

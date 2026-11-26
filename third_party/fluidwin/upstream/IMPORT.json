@@ -93,6 +93,12 @@
       "source_git_blob": "b246f40b974d6b7a27b362beb5c06518b2b0a7d7",
       "source_worktree_sha256": "79d476d8ec8187dc2e8fb809c99e7a1a72f5d4bb7dc9dac9ccb68ab66223c238",
       "local_changes": "Scoped HWND/timer/DWM teardown; caller motion speed, reduced motion and vi/en/zh labels; read-only fixture inspection"
+    },
+    {
+      "path": "comodita.h",
+      "source_git_blob": "8ccd6830ffdc81871e0930c2b53c11cca5cdab17",
+      "source_worktree_sha256": "5421c9d05376c7ac49e882d06917c8b033effd584db38c019fa4d573199d7c66",
+      "local_changes": "Propagate SetThreadExecutionState failure; integrate only awake/countdown through existing Dock UI thread, preserve notification-silence functions for later notification owner"
     }
   ]
 }

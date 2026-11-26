@@ -466,6 +466,8 @@ pub(super) fn hub_view(snapshot:&Snapshot,profile:&Profile,dock_mode:bool,live:b
             hint:crate::launcher::localized("Văn bản và ảnh","Text and images","文字与图片").into(),
             icon:None,action:Some(Command::Clipboard)});
     }
+    cards.push(Card{title:crate::launcher::localized("Giữ máy thức và Hẹn giờ","Keep awake and Countdown","保持唤醒与倒计时").into(),
+        hint:String::new(),icon:None,action:Some(Command::Comfort(super::comfort::Action::Open))});
     View{title:"Trung tâm điều khiển".into(),
         hint:"Tiện ích Dock · Chọn một mục để mở".into(),
         cards,metrics:None}
