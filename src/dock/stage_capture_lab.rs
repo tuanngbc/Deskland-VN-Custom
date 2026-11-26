@@ -453,7 +453,10 @@ fn native_static_print_timeout_keeps_one_job_until_native_completion(){
         let owner=Owner{stop,hold:hold as usize,thread:Some(owner)};
         let hwnd=rx.recv_timeout(Duration::from_secs(3)).unwrap() as HWND;
         let second=window(false).unwrap();let cover=window(false).unwrap();SetWindowPos(cover.0,HWND_TOPMOST,0,0,700,500,SWP_NOACTIVATE);pump();
-        let started=Instant::now();let first=super::stage_snapshot::static_motion_frame(hwnd,||allowed(hwnd),None,true);
+        let cancelled=Arc::new(AtomicBool::new(false));let cancellation=cancelled.clone();let signal=entered as usize;
+        let cancel=std::thread::spawn(move||{assert_eq!(WaitForSingleObject(signal as HANDLE,1500),0);cancellation.store(true,Ordering::Release);});
+        let started=Instant::now();let first=super::stage_snapshot::static_motion_frame(hwnd,||!cancelled.load(Ordering::Acquire)&&allowed(hwnd),None,true);
+        cancel.join().unwrap();assert!(first.as_ref().err().unwrap().contains("cancelled before handoff"));
         assert!(first.is_err());assert!(started.elapsed()<Duration::from_millis(900));assert_eq!(WaitForSingleObject(entered,0),0);
         for _ in 0..4{let error=super::stage_snapshot::static_motion_frame(second.0,||allowed(second.0),None,true).err().unwrap();assert!(error.contains("(4)"),"global admission: {error}");}
         SetEvent(hold);let deadline=Instant::now()+Duration::from_secs(3);

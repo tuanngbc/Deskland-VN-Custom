@@ -78,11 +78,18 @@ jobs:
           key: windows-tlauncher-v1-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
           restore-keys: windows-tlauncher-v1-${{ hashFiles('Cargo.lock') }}-
 
-      - name: Build Rust native app
+      - name: Compile native app and fixtures on hosted runner
+        id: native-compile
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           rustup toolchain install stable --profile minimal
           rustup default stable
+          cargo test --release --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Rust native app
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           cargo test --release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $parseErrors = $null; $tokens = $null
@@ -237,7 +244,7 @@ jobs:
           ./tests/cooperative-tray-poc.ps1 -Exe (Resolve-Path target/release/TLauncher.exe).Path
 
       - name: Verify independent native utilities even when a motion fixture fails
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           cargo test --release dock::app_previews::native_original_previews_select_close_reconcile_and_release -- --ignored --exact --nocapture --test-threads=1
@@ -253,7 +260,7 @@ jobs:
           cargo test --release dock::audio_mixer::native_panel_reads_devices_and_releases_worker_without_audio_writes -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify independent desktop cascade and geometry commands
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
@@ -265,7 +272,7 @@ jobs:
           if ($fixtureFailed) { exit 1 }
 
       - name: Verify maximized native drag handoff and live Jelly recovery
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
           $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
           New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
@@ -273,7 +280,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify read-only radio provider and mutation refusal boundaries
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
           $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
           New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
@@ -283,7 +290,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify original static snapshots and bounded hung-source ownership
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
           $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
           New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
@@ -293,13 +300,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify Spotlight Shell menu without invoking uninstall
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
           cargo test --release launcher::app_menu::tests::native_app_menu_enumerates_and_releases_without_uninstalling -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify File Shelf Shell references without performing file operations
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
           $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
           New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
@@ -309,7 +316,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify read-only microphone and webcam activity without recording
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
           $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
           New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
@@ -317,7 +324,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify on-demand notification history without dismissing notifications
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
           $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
           New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
@@ -325,7 +332,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify on-demand News panel with original synthetic RSS and no browser
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
           $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
           New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
@@ -333,7 +340,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify shared native weather with synthetic forecasts
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
           $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
           New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
@@ -342,12 +349,12 @@ jobs:
           cargo test --release dock::weather_city::tests::native_city_picker_clears_stale_rows_routes_keyboard_and_cancels_delivery -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify own UI corners and refuse foreign DWM changes
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
           cargo test --release dock::corners::tests::native_owned_corner_masks_regions_and_foreign_refusal -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify original settings catalog in both Spotlight modes
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
           $env:TUANPC_SPOTLIGHT_EVIDENCE = Join-Path $env:RUNNER_TEMP 'spotlight-evidence'
           New-Item -ItemType Directory -Force -Path $env:TUANPC_SPOTLIGHT_EVIDENCE | Out-Null
@@ -355,7 +362,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Compare live capture source textures with actual screen perimeters
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
           $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
           New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
@@ -363,7 +370,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify Guardian cancellation while a foreign style begin is pending
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
           cargo test --release dock::window_lease::native_pending_style_begin_keeps_journal_until_worker_acknowledges -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -371,7 +378,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify topmost leases preserve original styles and layered alpha
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         run: |
           $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
           New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
@@ -381,7 +388,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify original Spotlight wave shader and scoped shared GPU lifetime
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.native-compile.outcome == 'success' }}
         # Original shader on synthetic content only; no personal screen export.
         run: |
           $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
