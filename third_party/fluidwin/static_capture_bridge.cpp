@@ -88,6 +88,14 @@ bool screen_photo(const Identity& id,Photo& photo){
     photo.w=w;photo.h=h;photo.backend=1;return true;
 }
 struct Print {stampa::Lavoro* work;Identity id;};
+bool reserve_print(HWND h){
+    // Original reservation, with exception-safe CS release if vector growth
+    // fails. The original header/callback stays unchanged.
+    auto& jobs=stampa::inCorso();EnterCriticalSection(&jobs.cs);
+    struct Unlock{CRITICAL_SECTION* cs;~Unlock(){LeaveCriticalSection(cs);}}unlock{&jobs.cs};
+    if(std::find(jobs.h.begin(),jobs.h.end(),h)!=jobs.h.end())return false;
+    jobs.h.push_back(h);return true;
+}
 void CALLBACK print_callback(PTP_CALLBACK_INSTANCE instance,void* context){
     CallbackMayRunLong(instance);std::unique_ptr<Print> print(static_cast<Print*>(context));
     auto* work=print->work;
@@ -105,7 +113,7 @@ int capture(const Identity& id,Photo& photo,bool allowPrint){
     bool expected=false;if(!printBusy.compare_exchange_strong(expected,true))return 4;
     struct Permit{bool queued=false;~Permit(){if(!queued)printBusy.store(false);}}permit;
     const int w=id.outer.right-id.outer.left,h=id.outer.bottom-id.outer.top;
-    if(!stampa::prenota(id.h))return 4;
+    if(!reserve_print(id.h))return 4;
     auto* work=new(std::nothrow) stampa::Lavoro{id.h,w,h,{},FALSE,CreateEventW(nullptr,TRUE,FALSE,nullptr),2};
     auto* print=work?new(std::nothrow) Print{work,id}:nullptr;
     if(!work||!work->fatto||!print||!TrySubmitThreadpoolCallback(print_callback,print,nullptr)){
