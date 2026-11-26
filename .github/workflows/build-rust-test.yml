@@ -23,13 +23,21 @@ jobs:
           ref: 2f773a8733b84c7dbee88fff6628d14e9ac802b9
           path: upstream-fluidwin
           persist-credentials: false
+      - name: Reuse exact hosted upstream reference evidence
+        id: baseline-cache
+        uses: actions/cache@v4
+        with:
+          path: baseline-evidence
+          key: fluidwin-phase0-2f773a8-v1-${{ hashFiles('tests/fluidwin-baseline.cpp','tests/fluidwin-baseline.rc') }}
       - name: Install upstream toolchain on hosted runner
+        if: steps.baseline-cache.outputs.cache-hit != 'true'
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
           update: false
           install: mingw-w64-ucrt-x86_64-gcc git
       - name: Build original application and exercise original renderer
+        if: steps.baseline-cache.outputs.cache-hit != 'true'
         shell: msys2 {0}
         run: |
           set -euo pipefail
@@ -76,7 +84,7 @@ jobs:
           libs='-ld3d11 -ldxgi -ldcomp -ld3dcompiler -ld2d1 -ldwrite -ldwmapi -luser32 -lgdi32 -lshell32 -lole32 -loleaut32 -lversion -lpropsys -luuid -liphlpapi -lwindowscodecs -lruntimeobject -lpowrprof -lshlwapi -lshcore -lsetupapi -lwinmm -ldxva2 -lwinhttp -lcomdlg32 -lbcrypt'
           (cd native/fluidwin && windres icona.rc -O coff -o ../../native-build/icon.o)
           g++ -O2 -std=gnu++20 -Wall -municode -mwindows native/fluidwin/fluidwin.cpp native-build/icon.o -o native-build/TLauncher.exe $libs -static
-          g++ -O2 -std=gnu++20 -Wall tests/native-base-contract.cpp native-build/icon.o -o native-build/native-contract.exe $libs -static
+          g++ -O2 -std=gnu++20 -Wall -DUNICODE -D_UNICODE tests/native-base-contract.cpp native-build/icon.o -o native-build/native-contract.exe $libs -static
           mkdir -p native-build/runtime-licenses
           for license_dir in /ucrt64/share/licenses/gcc* /ucrt64/share/licenses/libwinpthread* /ucrt64/share/licenses/mingw-w64*; do
             if [ -d "$license_dir" ]; then cp -r "$license_dir" native-build/runtime-licenses/; fi

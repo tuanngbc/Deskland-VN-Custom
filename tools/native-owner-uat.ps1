@@ -67,6 +67,16 @@ try {
         $env:TLAUNCHER_NATIVE_TRIAL_DIR=$profile
         $p=Start-Process -FilePath $candidate -ArgumentList @('--trial-dir',('"'+$profile+'"'),'--log') -WorkingDirectory $PSScriptRoot -PassThru
         Add-Content -LiteralPath (Join-Path $PSScriptRoot 'native-uat-session.log') -Value ("{0:o} owner launch PID={1} commit={2}" -f [DateTime]::UtcNow,$p.Id,$verified.sourceCommit)
+        $ready=$false;$until=[DateTime]::UtcNow.AddSeconds(20)
+        do {
+            $guards=@(Get-SessionProcesses | Where-Object { (Same-Path $_.ExecutablePath $candidate) -and $_.CommandLine -match ('\s--guardiano\s+'+$p.Id+'\s') })
+            if($guards.Count -eq 1){$ready=$true;break}
+            if($p.HasExited){break};Start-Sleep -Milliseconds 250
+        }while([DateTime]::UtcNow -lt $until)
+        if(!$ready){
+            Start-Process -FilePath $candidate -ArgumentList '--quit' -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -Wait
+            throw 'Native Guardian did not become ready. TEST was asked to exit normally.'
+        }
         $p.WaitForExit()
         # Original FluidWin can restart for DPI/GPU changes. Keep waiting for the
         # exact native session and its detached Guardian before restoring stable.

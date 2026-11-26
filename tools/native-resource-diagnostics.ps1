@@ -8,18 +8,12 @@ if (!(Test-Path -LiteralPath $exe)) { throw 'Run from the verified candidate dir
 $roots = @(Get-CimInstance Win32_Process -Filter "Name='TLauncher.exe'" |
     Where-Object {
         $_.ExecutablePath -and $_.ExecutablePath -ieq $exe -and $_.CommandLine -and
-        $_.CommandLine -match '(?:^|\s)--trial-dir(?:\s|$)' -and
-        $_.CommandLine -notmatch '(?:^|\s)--dock-taskbar-guard(?:\s|$)'
+        $_.CommandLine -notmatch '(?:^|\s)--(?:guardiano|lancia-guardiano|quit)(?:\s|$)'
     })
 if ($roots.Count -ne 1) { throw 'Open this candidate using the Desktop TEST shortcut first.' }
 $rootId = [int]$roots[0].ProcessId
 $rootCreated = $roots[0].CreationDate
 $rootSession = $roots[0].SessionId
-# WMI timestamps truncate sub-microsecond precision; Guardian records the exact
-# kernel FILETIME, so read the same process start timestamp through Get-Process.
-$mainProcess=Get-Process -Id $rootId
-try {$rootBirth = '{0:x16}' -f $mainProcess.StartTime.ToUniversalTime().ToFileTimeUtc()}
-finally {$mainProcess.Dispose()}
 if (!$Scenario) { $Scenario = Read-Host 'Scenario (desktop, covered, Spotlight, Settings, recording, idle)' }
 $Scenario = ($Scenario -replace '[^a-zA-Z0-9_-]','_').Substring(0,[Math]::Min(60,$Scenario.Length))
 if (!$Scenario) { $Scenario = 'desktop' }
@@ -37,7 +31,7 @@ while ($clock.Elapsed.TotalSeconds -lt $Seconds) {
     if (!$root) { break }
     $owned = @{$rootId=$root}
     # The detached Guardian outlives its bootstrap parent. Match its owner PID
-    # AND owner birth timestamp, exact candidate executable and Windows session.
+    # with exact candidate executable/session and a birth after the live main.
     foreach ($guard in $table) {
         if ($guard.ExecutablePath -ieq $exe -and $guard.SessionId -eq $rootSession -and
             $guard.CreationDate -ge $rootCreated -and $guard.CommandLine -match

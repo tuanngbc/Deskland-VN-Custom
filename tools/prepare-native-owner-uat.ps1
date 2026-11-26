@@ -99,6 +99,6 @@ $link.Description='TLauncher native Phase 1 owner TEST. Exit normally to restore
 $readback=$wsh.CreateShortcut($linkPath)
 if($readback.TargetPath -ine  $link.TargetPath -or  $readback.Arguments -cne  $link.Arguments -or  $readback.WorkingDirectory -ine  $root){throw 'Shortcut readback mismatch'}
 if((Get-FileHash -LiteralPath $ProductionExe).Hash -cne  $stableHash){throw 'Production file changed'}
-$verified|Add-Member -NotePropertyName desktopShortcut -NotePropertyValue $linkPath
+$verified['desktopShortcut']=$linkPath
 $verified|ConvertTo-Json -Depth 6|Set-Content (Join-Path $download 'handoff.json') -Encoding UTF8
 [pscustomobject]@{candidate=$candidate;profile=$profile;shortcut=$linkPath;commit=$Commit;packageSha256=$wanted;executed=$false}

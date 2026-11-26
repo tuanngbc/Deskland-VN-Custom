@@ -80,12 +80,12 @@ public:
         enabled = si;
         if (!si) {
             if (fin) { KillTimer(fin, 2); vetro::fermaBattito(fin, 1); }
-            visibile=false; animando=false; sopra=false; attesa=0;
+            visibile=false; animando=false; sopra=false; attesa=0; cliccabileOra=false;
             finisciNotifica(); fineVolume=0; fineAvviso=0;
             if (fin) { RevokeDragDrop(fin); SetWindowLongPtrW(fin, 0, 0); DestroyWindow(fin); fin=nullptr; }
             svuotaScaffale(); libera(); W2=H2=0;
             for (auto** f : {&fOra,&fGiorno,&fTitolo,&fPiccolo,&fTesto,&fNumero,&fGrande}) if (*f) {(*f)->Release();*f=nullptr;}
-            fDpi=0;
+            fDpi=0; copertinaNuova=true; iconaNuova=true;
             // Reader is also the Dock media source. Keep it for that shared
             // consumer while Dock is active; never keep a Notch-only worker.
         } else {
@@ -154,14 +154,20 @@ public:
         bersagli(); anima();
         if (!animando) ridisegna();   // (non visibile: niente animazione, solo il disegno)
     }
-    bool fisso() const { return abilitato; }
+    bool fisso() const { return enabled && abilitato; }
     void aggiornaAngoli() { ridisegna(); }   // impostazione "Angoli" cambiata (vedi ridisegna)
     // col dock in alto il notch sta sul bordo in basso (impostazione "Posizione" del dock)
     bool basso = false;
     void inBasso(bool b) { if (b != basso) { basso = b; ridisegna(); } }
 
     // musica e timer per la capsula del dock (notch a scomparsa)
-    const musica::Brano& musicaOra() { if (!enabled) brano=lettore.stato(); return brano; }
+    const musica::Brano& musicaOra() {
+        if (!enabled) {
+            const UINT version=lettore.versione();
+            if(version!=versioneBrano){versioneBrano=version;brano=lettore.stato();}
+        }
+        return brano;
+    }
     // tasti della musica dalla capsula del dock: 0 indietro, 1 play/pausa, 2 avanti
     void comandoMusica(int b) {
         if (b < 0 || b > 2) return;
