@@ -7,7 +7,8 @@ use windows_sys::Win32::{Foundation::*,System::Threading::{TrySubmitThreadpoolCa
 pub(super) const READY:u32=WM_APP+149;
 #[derive(Clone)]pub(super) enum Action{Open,Refresh(u64),Details(u64,u32),Dismiss(u64,u32),Clear(u64),Back(u64),WindowsSettings}
 #[derive(Clone,Debug,PartialEq,Eq)]struct Item{id:u32,time:i64,app:String,aumid:String,title:String,body:String}
-#[derive(Default)]struct Snapshot{status:i32,items:Vec<Item>,command_failed:bool}
+#[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]struct AccessDiagnostic{operation:i32,result:i32,access:i32}
+#[derive(Default)]struct Snapshot{status:i32,items:Vec<Item>,command_failed:bool,diagnostic:Option<AccessDiagnostic>}
 #[derive(Default)]struct Shared{closed:AtomicBool,answer:Mutex<Option<Snapshot>>}
 struct Panel{owner:usize,popup:usize,ticket:usize,generation:u64,view:Snapshot,selected:Option<u32>,pending:bool,work:Arc<Shared>}
 impl Drop for Panel{fn drop(&mut self){self.work.closed.store(true,Ordering::Release);}}
@@ -17,6 +18,7 @@ static WORKER:AtomicBool=AtomicBool::new(false);
 unsafe extern "C"{
     fn tlauncher_notifications_create()->*mut c_void;fn tlauncher_notifications_free(raw:*mut c_void);
     fn tlauncher_notifications_read(raw:*mut c_void)->i32;fn tlauncher_notifications_count(raw:*mut c_void)->u32;
+    fn tlauncher_notifications_diagnostic(raw:*mut c_void,operation:*mut i32,result:*mut i32,access:*mut i32)->bool;
     fn tlauncher_notifications_item(raw:*mut c_void,index:u32,id:*mut u32,time:*mut i64,app:*mut u16,aumid:*mut u16,title:*mut u16,body:*mut u16,size:u32)->bool;
     fn tlauncher_notifications_remove(raw:*mut c_void,id:u32,time:i64,aumid:*const u16,read_only:bool)->bool;
     #[cfg(test)]fn tlauncher_notifications_identity_fixture()->bool;
@@ -48,6 +50,8 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut c_void){
                     tlauncher_notifications_remove(reader.0,item.id,item.time,wide(&item.aumid).as_ptr(),crate::trial::active()||cfg!(test)));
                 if !job.work.closed.load(Ordering::Acquire){
                     view.status=tlauncher_notifications_read(reader.0);
+                    let mut diagnostic=AccessDiagnostic::default();
+                    if tlauncher_notifications_diagnostic(reader.0,&mut diagnostic.operation,&mut diagnostic.result,&mut diagnostic.access){view.diagnostic=Some(diagnostic);}
                     if matches!(view.status,1|2){
                         for index in 0..tlauncher_notifications_count(reader.0).min(64){
                             let mut id=0;let mut time=0;let mut app=[0u16;2049];let mut aumid=[0u16;2049];let mut title=[0u16;2049];let mut body=[0u16;2049];
@@ -68,6 +72,14 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut c_void){
 }
 fn text(vi:&str,en:&str,zh:&str)->String{crate::launcher::localized(vi,en,zh).into()}
 fn title()->String{text("Thông báo","Notifications","通知")}
+fn access_hint(diagnostic:Option<AccessDiagnostic>)->String{
+    match diagnostic{
+        Some(d) if d.result as u32==0x80073d54=>text("Windows cần bản cài đặt đã đăng ký để đọc thông báo","Windows needs a registered app installation to read notifications","Windows 需要已注册的应用安装才能读取通知"),
+        Some(d) if d.result>=0&&d.access==2=>text("Quyền đọc thông báo đã bị từ chối trong Windows","Notification access was denied in Windows","Windows 已拒绝通知访问权限"),
+        Some(d) if d.result>=0&&d.access==0=>text("Chưa cấp quyền đọc thông báo trong Windows","Notification access has not been granted in Windows","尚未授予 Windows 通知访问权限"),
+        _=>text("Quyền truy cập thông báo Windows chưa khả dụng cho ứng dụng này","Windows notification access is unavailable for this app","此应用暂时无法访问 Windows 通知"),
+    }
+}
 fn enabled()->bool{STATE.with(|s|s.try_borrow().is_ok_and(|s|s.prefs.enabled&&!s.suspended))}
 fn merge(current:&mut Snapshot,mut incoming:Snapshot){
     if incoming.status==2{
@@ -95,7 +107,7 @@ impl Panel{
         let hint=if self.pending{text("Đang đọc…","Reading…","正在读取…")}
             else if self.view.command_failed{text("Chưa bỏ được một số thông báo. Hãy làm mới danh sách.","Some notifications could not be dismissed. Refresh the list.","部分通知无法清除，请刷新列表。")}
             else{match self.view.status{
-                0=>text("Quyền truy cập thông báo Windows chưa khả dụng cho ứng dụng này","Windows notification access is unavailable for this app","此应用暂时无法访问 Windows 通知"),
+                0=>access_hint(self.view.diagnostic),
                 2=>text("Danh sách chưa đầy đủ · tối đa 64 thông báo","Partial list · up to 64 notifications","列表不完整 · 最多 64 条通知"),
                 3=>text("Chưa đọc được thông báo mới. Nội dung cũ có thể đã thay đổi.","Could not refresh notifications. Previous entries may have changed.","无法刷新通知，先前条目可能已更改。"),
                 _=>String::new(),
@@ -168,9 +180,16 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
 
 #[cfg(test)]mod tests{
     use super::*;
+    #[test]fn denied_unspecified_and_registration_failure_remain_distinct(){
+        let diagnostic=|result,access|Some(AccessDiagnostic{operation:7,result,access});
+        let denied=access_hint(diagnostic(0,2));let unspecified=access_hint(diagnostic(0,0));
+        let registration=access_hint(diagnostic(0x80073d54u32 as i32,-1));let failed=access_hint(diagnostic(0x80004005u32 as i32,2));
+        assert_ne!(denied,unspecified);assert_ne!(denied,registration);assert_ne!(unspecified,registration);
+        assert_ne!(failed,denied);assert_eq!(failed,access_hint(None));
+    }
     fn item(id:u32,time:i64)->Item{Item{id,time,app:"Synthetic app".into(),aumid:"Synthetic.App".into(),title:format!("Notification {id}"),body:"Synthetic notification content".into()}}
     #[test]fn dismiss_all_requires_complete_list_valid_identity_and_stops_at_cancellation_or_failure(){
-        let mut view=Snapshot{status:1,items:vec![item(1,10),item(2,20)],command_failed:false};
+        let mut view=Snapshot{status:1,items:vec![item(1,10),item(2,20)],command_failed:false,..Default::default()};
         assert!(removal_plan(&view,None,true).is_none());let plan=removal_plan(&view,None,false).unwrap();
         // Later arrivals are outside the explicit list the user selected.
         view.items.push(item(3,30));assert_eq!(plan.len(),2);
@@ -186,14 +205,14 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
         assert!(!remove_rows(&view.items,||false,|_|panic!("oversized batch must not remove anything")));
     }
     #[test]fn partial_reads_preserve_missing_entries_but_revocation_discards_content(){
-        let mut snapshot=Snapshot{status:1,items:vec![item(1,10),item(2,20)],command_failed:false};
-        merge(&mut snapshot,Snapshot{status:2,items:vec![item(2,21),item(3,30)],command_failed:false});
+        let mut snapshot=Snapshot{status:1,items:vec![item(1,10),item(2,20)],command_failed:false,..Default::default()};
+        merge(&mut snapshot,Snapshot{status:2,items:vec![item(2,21),item(3,30)],command_failed:false,..Default::default()});
         assert_eq!(snapshot.items.iter().map(|i|(i.id,i.time)).collect::<Vec<_>>(),vec![(3,30),(2,21),(1,10)]);
         merge(&mut snapshot,Snapshot{status:3,..Default::default()});assert_eq!(snapshot.items.len(),3);
-        merge(&mut snapshot,Snapshot{status:1,items:vec![item(3,30)],command_failed:false});assert_eq!(snapshot.items.len(),1);
+        merge(&mut snapshot,Snapshot{status:1,items:vec![item(3,30)],command_failed:false,..Default::default()});assert_eq!(snapshot.items.len(),1);
         merge(&mut snapshot,Snapshot::default());assert!(snapshot.items.is_empty());
         snapshot.items=(0..64).map(|i|item(i,i64::from(i))).collect();
-        merge(&mut snapshot,Snapshot{status:2,items:vec![item(80,90)],command_failed:false});assert_eq!(snapshot.items.len(),64);
+        merge(&mut snapshot,Snapshot{status:2,items:vec![item(80,90)],command_failed:false,..Default::default()});assert_eq!(snapshot.items.len(),64);
     }
     #[cfg(target_env="msvc")]
     #[test]fn dismiss_requires_the_same_observed_id_timestamp_and_application(){unsafe{
@@ -219,12 +238,12 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
                 perform(owner,ptr::null_mut(),Action::Open);let popup=control_center::window(owner).unwrap();
                 pump_until(&||PANEL.with(|s|s.borrow().as_ref().is_some_and(|p|!p.pending))&&!WORKER.load(Ordering::Acquire));
                 let (generation,ticket,shared)=PANEL.with(|s|{let s=s.borrow();let p=s.as_ref().unwrap();
-                    println!("FLUIDWIN_NOTIFICATIONS read_status={} content_exported=NONE",p.view.status);
+                    println!("FLUIDWIN_NOTIFICATIONS read_status={} access_diagnostic={:?} content_exported=NONE",p.view.status,p.view.diagnostic);
                     (p.generation,p.ticket,p.work.clone())
                 });
                 // The saved panel contains only synthetic rows, even on a runner
                 // that has granted access to unrelated notifications.
-                PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().unwrap();p.view=Snapshot{status:1,items:vec![item(7,123)],command_failed:false};});
+                PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().unwrap();p.view=Snapshot{status:1,items:vec![item(7,123)],command_failed:false,..Default::default()};});
                 perform(owner,popup,Action::Details(generation.wrapping_sub(1),7));assert!(PANEL.with(|s|s.borrow().as_ref().unwrap().selected.is_none()));
                 perform(owner,popup,Action::Details(generation,7));assert_eq!(PANEL.with(|s|s.borrow().as_ref().unwrap().selected),Some(7));
                 perform(owner,popup,Action::Dismiss(generation,7));assert!(!PANEL.with(|s|s.borrow().as_ref().unwrap().pending),"TEST cannot dismiss a real notification");

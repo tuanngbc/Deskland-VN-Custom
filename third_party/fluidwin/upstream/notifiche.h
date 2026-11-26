@@ -37,6 +37,10 @@ typedef HRESULT (STDMETHODCALLTYPE *FnStr)(void*, HSTRING*);
 
 class Lettore {
 public:
+    // TLauncher: retain the precise read-only failure without requesting access
+    // or exporting notification contents. chiudi() preserves the last result.
+    HRESULT ultimoEsito = S_OK;
+    int ultimaOperazione = 0, ultimoAccesso = -1;
     Lettore() = default;
     ~Lettore() { chiudi(); } // TLauncher readers are scoped inside their WinRT apartment.
     Lettore(const Lettore&) = delete;              // possiede un riferimento COM: niente copie
@@ -160,17 +164,22 @@ private:
     bool prepara() {
         if (ascolta) {
             int accesso = 0;
-            if (SUCCEEDED(metodo<HRESULT (STDMETHODCALLTYPE*)(void*, int*)>(ascolta, 7)(ascolta, &accesso)) && accesso == 1) return true;
+            ultimaOperazione=7;
+            ultimoEsito=metodo<HRESULT (STDMETHODCALLTYPE*)(void*, int*)>(ascolta, 7)(ascolta, &accesso);
+            ultimoAccesso=SUCCEEDED(ultimoEsito)?accesso:-1;
+            if (SUCCEEDED(ultimoEsito) && accesso == 1) return true;
             chiudi(); // Permission can be revoked while the panel is open.
             return false;
         }
         // permesso negato: si riprova al massimo ogni 5 s (l'utente puo' averlo appena concesso)
         if (provato && GetTickCount64() - tProva < 5000) return false;
         provato = true; tProva = GetTickCount64();
+        ultimoAccesso=-1;
         HSTRING cl = nullptr; const wchar_t* nome = L"Windows.UI.Notifications.Management.UserNotificationListener";
-        WindowsCreateString(nome, (UINT32)wcslen(nome), &cl);
+        ultimaOperazione=2;ultimoEsito=WindowsCreateString(nome, (UINT32)wcslen(nome), &cl);
+        if(FAILED(ultimoEsito))return false;
         IInspectable* fab = nullptr;
-        const HRESULT hr = RoGetActivationFactory(cl, __uuidof(IInspectable), (void**)&fab);
+        ultimaOperazione=3;const HRESULT hr = ultimoEsito=RoGetActivationFactory(cl, __uuidof(IInspectable), (void**)&fab);
         WindowsDeleteString(cl);
         if (FAILED(hr) || !fab) return false;
         // Le interfacce esatte dell'SDK (windows.ui.notifications.management.h, 10.0.26100): prima si prendeva la prima
@@ -179,19 +188,20 @@ private:
         static const IID IID_Statics = {0xff6123cf, 0x4386, 0x4aa3, {0xb7, 0x3d, 0xb8, 0x04, 0xe5, 0xb6, 0x3b, 0x23}};
         static const IID IID_Ascolta = {0x62553e41, 0x8a06, 0x4cef, {0x82, 0x15, 0x60, 0x33, 0xa5, 0xbe, 0x4b, 0x03}};
         void* stat = nullptr;
-        fab->QueryInterface(IID_Statics, &stat);
+        ultimaOperazione=4;ultimoEsito=fab->QueryInterface(IID_Statics, &stat);
         fab->Release();
         if (!stat) return false;
         IInspectable* corrente = nullptr;
-        metodo<FnPtr>(stat, 6)(stat, (void**)&corrente);
+        ultimaOperazione=5;ultimoEsito=metodo<FnPtr>(stat, 6)(stat, (void**)&corrente);
         rilascia(stat);
         if (!corrente) return false;
-        corrente->QueryInterface(IID_Ascolta, &ascolta);
+        ultimaOperazione=6;ultimoEsito=corrente->QueryInterface(IID_Ascolta, &ascolta);
         corrente->Release();
         if (!ascolta) return false;
         int accesso = 0;
-        metodo<HRESULT (STDMETHODCALLTYPE*)(void*, int*)>(ascolta, 7)(ascolta, &accesso);   // GetAccessStatus
-        if (accesso != 1) { rilascia(ascolta); ascolta = nullptr; return false; }
+        ultimaOperazione=7;ultimoEsito=metodo<HRESULT (STDMETHODCALLTYPE*)(void*, int*)>(ascolta, 7)(ascolta, &accesso);   // GetAccessStatus
+        ultimoAccesso=SUCCEEDED(ultimoEsito)?accesso:-1;
+        if (FAILED(ultimoEsito) || accesso != 1) { rilascia(ascolta); ascolta = nullptr; return false; }
         return true;
     }
 };

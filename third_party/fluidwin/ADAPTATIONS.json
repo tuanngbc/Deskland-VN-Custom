@@ -5,6 +5,11 @@
   "note": "Section adaptations, not claims that these full headers were imported. Original CRLF worktree byte hashes and canonical Git blobs are recorded; existing notices and original license are preserved.",
   "sections": [
     {
+      "source": "notifiche.h::Lettore::prepara read-only failure diagnosis",
+      "integration": ["upstream/notifiche.h", "notifications_bridge.cpp", "../../src/dock/notifications.rs"],
+      "adaptation": "Retain the actual failing activation-factory, exact-interface, get_Current and GetAccessStatus HRESULT/operation/access status through cleanup. Distinguish a successful Denied/Unspecified result from API failure and actual APPMODEL_ERROR_NO_PACKAGE. No RequestAccessAsync call, capability/identity bypass, permission prompt or content logging. Hosted history fixture exports only numeric diagnosis; production UI localizes the relevant access reason. This diagnoses the existing reader and does not implement banners/badges or establish the owner's access status. Official listener requirements: https://learn.microsoft.com/en-us/windows/apps/develop/notifications/app-notifications/notification-listener ."
+    },
+    {
       "source": "sensori.h::uscite/cuffie; notch.h::cuffie independent utility glyph",
       "source_git_blob": "3e330904e648a8098f3821b42ce7a5808317cbbc",
       "source_worktree_sha256": "1b19e147a17c3e545dec6d2af7ecaf8fc6c5b9107a3af8999c0437b7a267aed4",

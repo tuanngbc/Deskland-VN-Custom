@@ -29,6 +29,11 @@ int tlauncher_notifications_read(void* raw) noexcept {
 unsigned tlauncher_notifications_count(void* raw) noexcept {
     return raw?unsigned(static_cast<Reader*>(raw)->rows.size()):0;
 }
+bool tlauncher_notifications_diagnostic(void* raw,int* operation,int* result,int* access)noexcept{
+    if(!raw||!operation||!result||!access)return false;
+    const auto& reader=static_cast<Reader*>(raw)->reader;
+    *operation=reader.ultimaOperazione;*result=reader.ultimoEsito;*access=reader.ultimoAccesso;return true;
+}
 bool tlauncher_notifications_item(void* raw,unsigned index,UINT32* id,INT64* time,
                                 wchar_t* app,wchar_t* aumid,wchar_t* title,wchar_t* body,unsigned size) noexcept {
     if(!raw||!id||!time)return false;
