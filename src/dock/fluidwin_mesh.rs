@@ -13,6 +13,7 @@ extern "C" {
     fn tlauncher_fluidwin_release_layer(layer: *mut c_void);
     fn tlauncher_fluidwin_gpu_layer(pipeline:*mut c_void,width:u32,height:u32,texture:*mut c_void)->*mut c_void;
     fn tlauncher_fluidwin_content(layer: *mut c_void) -> *mut c_void;
+    fn tlauncher_fluidwin_frame_ready(layer:*mut c_void)->windows_sys::Win32::Foundation::HANDLE;
     #[cfg(test)]
     fn tlauncher_fluidwin_source_mips(layer: *mut c_void) -> u32;
     #[cfg(test)]
@@ -53,6 +54,10 @@ pub(super) struct Layer {
     scale_effect:bool,
 }
 impl Layer {
+    pub(super) unsafe fn frame_ready(&self)->windows_sys::Win32::Foundation::HANDLE{
+        #[cfg(target_env="msvc")]{tlauncher_fluidwin_frame_ready(self.raw.as_ptr())}
+        #[cfg(not(target_env="msvc"))]{std::ptr::null_mut()}
+    }
     #[cfg(all(test,target_env="msvc"))]
     pub(super) unsafe fn source_mips(&self)->u32{tlauncher_fluidwin_source_mips(self.raw.as_ptr())}
     #[cfg(all(test,target_env="msvc"))]

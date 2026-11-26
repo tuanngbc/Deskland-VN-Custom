@@ -3847,8 +3847,24 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
             start_saved_taskbar_mode();
         }
         let mut msg:MSG=mem::zeroed();
-        while GetMessageW(&mut msg,ptr::null_mut(),0,0)>0{
-            if !utilities::route_panel_keyboard(&msg){TranslateMessage(&msg);DispatchMessageW(&msg);}
+        'dock_messages:loop{
+            if window_effect::active(){
+                // Follow the compositor's single-frame queue while animating.
+                // Message input wakes this wait immediately. No polling at rest.
+                let clock=window_effect::frame_ready();
+                let count=u32::from(!clock.is_null());
+                let timeout=if count==0{12}else{100};
+                let result=MsgWaitForMultipleObjectsEx(count,if count==0{ptr::null()}else{&clock},timeout,QS_ALLINPUT,MWMO_INPUTAVAILABLE);
+                if result==WAIT_TIMEOUT||(count==1&&result==WAIT_OBJECT_0){window_effect::timer();}
+                for _ in 0..64{
+                    if PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)==0{break;}
+                    if msg.message==WM_QUIT{break 'dock_messages;}
+                    if !utilities::route_panel_keyboard(&msg){TranslateMessage(&msg);DispatchMessageW(&msg);}
+                }
+            }else{
+                if GetMessageW(&mut msg,ptr::null_mut(),0,0)<=0{break;}
+                if !utilities::route_panel_keyboard(&msg){TranslateMessage(&msg);DispatchMessageW(&msg);}
+            }
         }
         window_effect::reset();
         clipboard_history::configure(control,false,0);

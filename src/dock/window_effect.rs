@@ -621,6 +621,16 @@ pub(super) unsafe fn timer(){
     if next.is_none(){schedule_release();}
     ACTIVE.with(|a|{a.replace(next);});
 }
+pub(super) fn active()->bool{ACTIVE.with(|a|a.borrow().is_some())}
+pub(super) unsafe fn frame_ready()->HANDLE{
+    ACTIVE.with(|a|{
+        let a=a.borrow();
+        match a.as_ref().and_then(|t|t.phase.as_ref()){
+            Some(Phase::Animate{proxy:Proxy{render:Render::Mesh(mesh),..},..})=>mesh.frame_ready(),
+            _=>ptr::null_mut(),
+        }
+    })
+}
 pub(super) unsafe fn capture_ready(){
     if ACTIVE.with(|a|a.borrow().as_ref().is_some_and(|t|matches!(t.phase.as_ref(),Some(Phase::Capture{..})))){timer();}
 }

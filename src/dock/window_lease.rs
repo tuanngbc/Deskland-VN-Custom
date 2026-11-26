@@ -94,3 +94,72 @@ fn native_lease_restores_style_and_respects_existing_layered_windows(){
         println!("WINDOW_RECOVERY_JOURNAL release=PASS drop=PASS guardian_restore=PASS original_layered_fallback=PASS crash_process_tree=NOT_VERIFIED");
     }
 }
+
+#[cfg(all(test,target_env="msvc"))]
+#[test]
+#[ignore="synthetic lease owner started only by the hosted crash recovery fixture"]
+fn native_lease_owner_fixture(){
+    if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+    let Ok(request)=std::env::var("TUANPC_WINDOW_LEASE_FIXTURE")else{return;};
+    let values:serde_json::Value=serde_json::from_str(&request).unwrap();
+    unsafe{
+        let guardian=OpenProcess(0x0010_0000,0,values["guardian"].as_u64().unwrap() as u32);
+        let key=crate::desktop::wide(values["marker"].as_str().unwrap());
+        let raw=tlauncher_window_lease(values["hwnd"].as_u64().unwrap() as usize as HWND,guardian,key.as_ptr());
+        CloseHandle(guardian);
+        let lease=Lease(NonNull::new(raw).unwrap());
+        let start=std::time::Instant::now();
+        while lease.status()==0{
+            assert!(start.elapsed()<std::time::Duration::from_secs(5));
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(lease.status(),1);
+        std::fs::write(values["ready"].as_str().unwrap(),"hidden-and-journaled").unwrap();
+        loop{std::thread::sleep(std::time::Duration::from_secs(1));}
+    }
+}
+
+#[cfg(all(test,target_env="msvc"))]
+#[test]
+#[ignore="abrupt synthetic process death and persistent foreign-state journal on hosted Windows"]
+fn native_crash_recovers_foreign_window_without_owner_memory(){
+    if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    use std::{process::{Child,Command,Stdio},time::{Duration,Instant}};
+    struct ChildFixture(Child);
+    impl Drop for ChildFixture{fn drop(&mut self){let _=self.0.kill();let _=self.0.wait();}}
+    unsafe{
+        let hwnd=CreateWindowExW(0,crate::desktop::wide("STATIC").as_ptr(),crate::desktop::wide("Synthetic foreign crash target").as_ptr(),WS_OVERLAPPEDWINDOW|WS_VISIBLE,
+            50,50,280,180,std::ptr::null_mut(),std::ptr::null_mut(),std::ptr::null_mut(),std::ptr::null());
+        assert!(!hwnd.is_null());
+        let original=GetWindowLongPtrW(hwnd,GWL_EXSTYLE);
+        let ready=std::path::PathBuf::from(std::env::var_os("RUNNER_TEMP").unwrap()).join(format!("window-lease-ready-{}.txt",std::process::id()));
+        let marker=format!("TLauncher.Motion.CrashFixture.{}",std::process::id());
+        let request=serde_json::json!({"guardian":std::process::id(),"marker":marker,"hwnd":hwnd as usize,"ready":ready});
+        let mut owner=ChildFixture(Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored","--exact","dock::window_lease::native_lease_owner_fixture","--nocapture"])
+            .env("TUANPC_WINDOW_LEASE_FIXTURE",request.to_string()).stdout(Stdio::inherit()).spawn().unwrap());
+        let start=Instant::now();let mut msg=std::mem::zeroed();
+        while !ready.is_file(){
+            while PeekMessageW(&mut msg,std::ptr::null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}
+            assert!(start.elapsed()<Duration::from_secs(8),"synthetic owner could not acquire journaled lease");
+            assert!(owner.0.try_wait().unwrap().is_none());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        owner.0.kill().unwrap();owner.0.wait().unwrap(); // only this known child fixture, never an application
+        let key=crate::desktop::wide(&marker);
+        assert!(!GetPropW(hwnd,key.as_ptr()).is_null(),"recovery journal survives owner process termination");
+        let helper=std::thread::spawn(move||recover(&marker));
+        let start=Instant::now();
+        while !helper.is_finished(){
+            while PeekMessageW(&mut msg,std::ptr::null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}
+            assert!(start.elapsed()<Duration::from_secs(5));std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(helper.join().unwrap(),0);
+        assert_eq!(GetWindowLongPtrW(hwnd,GWL_EXSTYLE),original);
+        assert!(GetPropW(hwnd,key.as_ptr()).is_null());
+        assert_ne!(IsWindowVisible(hwnd),0);
+        DestroyWindow(hwnd);let _=std::fs::remove_file(ready);
+        println!("WINDOW_RECOVERY_JOURNAL abrupt_owner_exit=PASS foreign_style=RESTORED identity=VERIFIED original_visibility=PRESERVED guardian_process_tree=NOT_VERIFIED");
+    }
+}

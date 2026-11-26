@@ -117,6 +117,8 @@ struct Layer {
     ComPtr<ID3D11RenderTargetView> target;
     ComPtr<ID3D11ShaderResourceView> texture;
     UINT w = 0, h = 0, tw = 0, th = 0;
+    HANDLE frameReady=nullptr;
+    ~Layer(){if(frameReady)CloseHandle(frameReady);}
 
     bool surface(Pipeline& q, UINT width, UINT height) {
         if (!width || !height || width > 16384 || height > 16384 || uint64_t(width)*height > 33554432)
@@ -131,7 +133,14 @@ struct Layer {
         sc.Scaling = DXGI_SCALING_STRETCH;
         sc.AlphaMode = DXGI_ALPHA_MODE_PREMULTIPLIED;
         sc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
-        if (FAILED(q.factory->CreateSwapChainForComposition(q.device.Get(), &sc, nullptr, &chain))) return false;
+        sc.Flags=DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+        if (FAILED(q.factory->CreateSwapChainForComposition(q.device.Get(), &sc, nullptr, &chain))) {
+            sc.Flags=0; // old DXGI compatibility, reported by a missing clock
+            if(FAILED(q.factory->CreateSwapChainForComposition(q.device.Get(), &sc, nullptr, &chain)))return false;
+        } else {
+            ComPtr<IDXGISwapChain2> paced;
+            if(SUCCEEDED(chain.As(&paced))&&SUCCEEDED(paced->SetMaximumFrameLatency(1))) frameReady=paced->GetFrameLatencyWaitableObject();
+        }
         ComPtr<ID3D11Texture2D> back;
         if (FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&back))) ||
             FAILED(q.device->CreateRenderTargetView(back.Get(), nullptr, &target))) return false;
@@ -319,6 +328,7 @@ void* tlauncher_fluidwin_gpu_layer(void* p,UINT w,UINT h,ID3D11Texture2D* textur
 
 // Borrowed COM pointer; DirectComposition AddRefs it when visual content is set.
 IDXGISwapChain1* tlauncher_fluidwin_content(void* p) { return static_cast<Layer*>(p)->chain.Get(); }
+HANDLE tlauncher_fluidwin_frame_ready(void* p) { return static_cast<Layer*>(p)->frameReady; }
 
 UINT tlauncher_fluidwin_source_mips(void* p) {
     ComPtr<ID3D11Resource> resource;
