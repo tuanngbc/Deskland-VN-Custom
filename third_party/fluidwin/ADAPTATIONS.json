@@ -5,6 +5,13 @@
   "note": "Section adaptations, not claims that these full headers were imported. Original CRLF worktree byte hashes and canonical Git blobs are recorded; existing notices and original license are preserved.",
   "sections": [
     {
+      "source": "widget.h::meteo / descrizione / fahrenheitDiWindows / gradi / nomeGiorno",
+      "source_git_blob": "5a1628bdb1006b73c822f47332f7477fc47d27f3",
+      "source_worktree_sha256": "9c541a24e2cb54ed4c1036496e8ba4d22e602c33dfb1086905e60c045c542df5",
+      "integration": ["../../src/weather.rs", "../../src/dock/weather_panel.rs", "../../src/main.rs"],
+      "adaptation": "Original current/five-day Open-Meteo query fields, WMO description groups, Celsius/km/h internal values, Windows unit selection and forecast-location date labels. Structured serde_json parsing replaces substring numeric parsing; temperature/humidity/cloud/rain/snow/forecast share one request/cache with the pre-existing wallpaper weather owner. Generation validation rejects an earlier city's late result; scoped HTTPS transport has time/body bounds and single active Windows pool callback. Native Control Center view, refresh and unit choice reuse existing config/location settings; rich illustrated cards and in-panel city search remain incomplete. No FluidWin registry/weather singleton is started."
+    },
+    {
       "source": "dock.h::controllaBordo / sulBordo / spostaVerso / cambiaSchermo",
       "source_git_blob": "f786a3cbe2fef19e5861c8a9c51f78e14b9c981b",
       "source_worktree_sha256": "6cb19c9d27daad834660fe4cad4b269ca10609d21dccc8bcfad6e4ca7cd13a72",

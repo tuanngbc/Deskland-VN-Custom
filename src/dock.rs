@@ -61,6 +61,7 @@ mod audio_mixer;
 mod media;
 mod notifications;
 mod news;
+mod weather_panel;
 mod overview;
 mod jump_list;
 mod folder_stack;
@@ -1755,6 +1756,7 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::Calendar=>calendar::show(owner,dock_app_anchor(owner,None)),
         Command::Notifications(action)=>notifications::perform(owner,ptr::null_mut(),action),
         Command::News(action)=>news::perform(owner,ptr::null_mut(),action),
+        Command::Weather(action)=>weather_panel::perform(owner,ptr::null_mut(),action),
         Command::Topmost(id)=>if let Some(id)=id{topmost::toggle(owner,id);}else{topmost::choose(owner);},
         Command::Shelf(action)=>shelf::perform(owner,ptr::null_mut(),action),
         Command::CaptureAccess(action)=>capture_access::perform(owner,action),
@@ -3839,6 +3841,7 @@ unsafe fn drain_commands() {
                 if !options.enabled{capture_access::reset();}
                 if !options.enabled{shelf::reset();}
                 if !options.enabled{news::reset();}
+                if !options.enabled{weather_panel::reset();}
                 snap_layout::close_for(ptr::null_mut());
                 window_geometry::cancel();
                 show_desktop::pause();
@@ -3874,6 +3877,7 @@ unsafe fn drain_commands() {
                 if on{capture_access::reset();}
                 if on{shelf::reset();}
                 if on{news::reset();}
+                if on{weather_panel::reset();}
                 if on{snap_layout::close_for(ptr::null_mut());}
                 if on{window_geometry::cancel();}
                 if on{show_desktop::pause();}
@@ -4041,7 +4045,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
         for hook in hooks{UnhookWinEvent(hook);}KillTimer(control,1);KillTimer(control,2);
         update_state(|s|{s.appbars.clear();s.workspaces.recover_for_exit();for b in s.bars.drain(..){DestroyWindow(b.hwnd);}for mut b in s.stages.drain(..){destroy_stage(&mut b);}});
         SURFACES.with(|s|s.borrow_mut().clear());STAGE_SURFACES.with(|s|s.borrow_mut().clear());ATLAS.with(|a|a.borrow_mut().take());
-        capture_access::reset();shelf::reset();news::reset();comfort::reset();utilities::close_panels();UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));
+        capture_access::reset();shelf::reset();news::reset();weather_panel::reset();comfort::reset();utilities::close_panels();UTILITIES.with(|u|u.borrow_mut().take());UTILITY_ANCHOR.with(|a|a.set(None));
         if ATTENTION_MSG.with(|id|id.replace(0))!=0{DeregisterShellHookWindow(control);}
         ATTENTION.with(|queue|queue.borrow_mut().clear());
         internal_app::unlisten(control);

@@ -304,6 +304,14 @@ jobs:
           cargo test --release dock::news::tests::native_news_panel_rejects_stale_actions_and_closed_results -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Verify shared native weather with synthetic forecasts
+        if: ${{ !cancelled() }}
+        run: |
+          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
+          New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
+          cargo test --release dock::weather_panel::tests::native_shared_forecast_panel_keeps_city_generation_and_releases_subscription -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Compare live capture source textures with actual screen perimeters
         if: ${{ !cancelled() }}
         run: |

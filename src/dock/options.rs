@@ -145,6 +145,7 @@ pub struct Options {
     pub always_on_top:bool,
     pub jelly_drag:bool,
     pub news_source:u8,
+    pub weather_unit:u8,
     pub stage_side: String,
     pub dock_display: DisplayTarget,
     pub stage_display: DisplayTarget,
@@ -160,6 +161,7 @@ pub struct Options {
 pub enum Edit {
     FollowDisplay(String),
     NewsSource(u8),
+    WeatherUnit(u8),
     Pin(String), Unpin(String), MovePin { path:String, anchor:String, after:bool }, AllWindows(bool), StageSide(String), DockEnabled(bool), StageEnabled(bool),
     StageStyle(String, StageStyle),
     StagePresentation(bool), StageCardHeight(u32), StageGroupHeight(String,u32),
@@ -173,6 +175,7 @@ impl Edit {
         match self {
             Self::FollowDisplay(id)=>{if options.dock_display.mode==DisplayMode::Follow{if let Some(id)=display_id(&id){options.dock_display.selected=Some(id);}}},
             Self::NewsSource(source)=>options.news_source=source.min(5),
+            Self::WeatherUnit(unit)=>options.weather_unit=unit.min(2),
             Self::AppIcon{key,file}=>{
                 let Some(key)=crate::app_icons::normalized(&key)else{return;};
                 match file{
@@ -240,7 +243,7 @@ impl Edit {
 }
 impl Default for Options {
     fn default() -> Self {
-        Self { enabled: false, taskbar_default:true, stage_enabled: false, stage_peek:false, stage_peek_delay:350,clipboard_history:false,clipboard_history_limit:20,pinned: Vec::new(), app_icons:Default::default(), all_windows: false, native_shell_buttons:false, start_shortcut:false, win_key_start:false, shell_context_menu:false, alt_tab_overview:false, snap_layouts:false, always_on_top:false, jelly_drag:false, news_source:0, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), stage_perspective:true,stage_card_height:0,stage_card_overrides:BTreeMap::new(),appearance: Appearance::default(),utility_profiles:BTreeMap::new(),window_policies:BTreeMap::new() }
+        Self { enabled: false, taskbar_default:true, stage_enabled: false, stage_peek:false, stage_peek_delay:350,clipboard_history:false,clipboard_history_limit:20,pinned: Vec::new(), app_icons:Default::default(), all_windows: false, native_shell_buttons:false, start_shortcut:false, win_key_start:false, shell_context_menu:false, alt_tab_overview:false, snap_layouts:false, always_on_top:false, jelly_drag:false, news_source:0, weather_unit:0, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), stage_perspective:true,stage_card_height:0,stage_card_overrides:BTreeMap::new(),appearance: Appearance::default(),utility_profiles:BTreeMap::new(),window_policies:BTreeMap::new() }
     }
 }
 impl Options {
@@ -272,6 +275,7 @@ impl Options {
             always_on_top:v["alwaysOnTop"].as_bool().unwrap_or(false),
             jelly_drag:v["jellyDrag"].as_bool().unwrap_or(false),
             news_source:v["newsSource"].as_u64().filter(|&n|n<=5).unwrap_or(0) as u8,
+            weather_unit:v["weatherUnit"].as_u64().filter(|&n|n<=2).unwrap_or(0) as u8,
             dock_display: DisplayTarget::from_json(&v["dockDisplay"]),
             stage_display: DisplayTarget::from_json(&v["stageDisplay"]),
             stage_perspective:v["stagePresentation"].as_str()!=Some("dwm"),
@@ -334,6 +338,7 @@ impl Options {
             "stagePeek":self.stage_peek,"stagePeekDelay":self.stage_peek_delay,
             "clipboardHistory":self.clipboard_history,"clipboardHistoryLimit":self.clipboard_history_limit,
             "newsSource":self.news_source,
+            "weatherUnit":self.weather_unit,
             "pinned":self.pinned,"allWindows":self.all_windows,"nativeShellButtons":self.native_shell_buttons,"startShortcut":self.start_shortcut,"winKeyStart":self.win_key_start,"shellContextMenu":self.shell_context_menu,"altTabOverview":self.alt_tab_overview,"snapLayouts":self.snap_layouts,"alwaysOnTop":self.always_on_top,"jellyDrag":self.jelly_drag,"stageSide":self.stage_side,
             "appIcons":self.app_icons.iter().map(|(app,image)|json!({"app":app,"image":image})).collect::<Vec<_>>(),
             "stagePresentation":if self.stage_perspective{"perspective"}else{"dwm"},"stageCardHeight":self.stage_card_height,"stageCardOverrides":self.stage_card_overrides,

@@ -37,6 +37,7 @@ mod themes {
 }
 mod wgl;
 mod widget;
+mod weather;
 mod system_monitor;
 mod presentation;
 mod gpu_present;
@@ -556,29 +557,12 @@ fn live_weather_amount(env: &Environment, live: Option<LiveWeather>) -> Option<f
     Some(w.storm.max(w.snow).max(w.rain).max(w.cloud * 0.42).clamp(0.0, 1.0))
 }
 
-fn fetch_live_weather(env: &Environment, target: Arc<StdMutex<Option<LiveWeather>>>) {
-    let Some(loc) = env.location.as_ref() else { return };
-    let Some(lat) = loc.get("latitude").and_then(|v| v.as_f64()) else { return };
-    let Some(lon) = loc.get("longitude").and_then(|v| v.as_f64()) else { return };
-    std::thread::spawn(move || {
-        let url = format!("https://api.open-meteo.com/v1/forecast?latitude={lat:.5}&longitude={lon:.5}&timezone=auto&current=precipitation,rain,showers,snowfall,weather_code,cloud_cover,wind_speed_10m");
-        let Ok(resp) = reqwest::blocking::get(url) else { log!("Thời tiết live: không kết nối được Open-Meteo"); return };
-        let Ok(root) = resp.json::<serde_json::Value>() else { log!("Thời tiết live: dữ liệu JSON không hợp lệ"); return };
-        let Some(c) = root.get("current") else { log!("Thời tiết live: thiếu current"); return };
-        let n = |k: &str| c.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-        let code = c.get("weather_code").and_then(|v| v.as_i64()).unwrap_or(0);
-        let sample = LiveWeather {
-            cloud: (n("cloud_cover") / 100.0).clamp(0.0, 1.0),
-            rain: ((n("precipitation") + n("rain") + n("showers")) / 4.0).clamp(0.0, 1.0),
-            snow: (n("snowfall") / 3.0).clamp(0.0, 1.0),
-            storm: if code >= 95 { 1.0 } else { 0.0 },
-            wind: (n("wind_speed_10m") / 70.0).clamp(0.0, 1.0),
-        };
-        if let Ok(mut slot) = target.lock() { *slot = Some(sample); }
-        log!("Thời tiết live: đã cập nhật lat={lat:.4}, lon={lon:.4}, code={code}");
-    });
+fn configure_shared_weather(env:&Environment){
+    weather::configure(env.location.as_ref().and_then(weather::Location::read));
 }
-
+fn fetch_live_weather(env:&Environment){
+    configure_shared_weather(env);weather::request(false);
+}
 #[repr(C)]
 struct LocalSystemTime {
     year: u16, month: u16, _dow: u16, day: u16,
@@ -1067,7 +1051,6 @@ struct App {
     headless: bool,
     interactions_enabled: bool,
     boost_until: f64,
-    live_weather: Arc<StdMutex<Option<LiveWeather>>>,
     weather_fetch_at: f64,
     environment_update_at: f64,
     widget: Option<widget::Widget>,
@@ -1335,7 +1318,7 @@ impl App {
     fn maybe_fetch_live_weather(&mut self, now: f64) {
         if self.environment.source != "live" || self.environment.location.is_none() || now < self.weather_fetch_at { return; }
         self.weather_fetch_at = now + 900_000.0;
-        fetch_live_weather(&self.environment, self.live_weather.clone());
+        fetch_live_weather(&self.environment);
     }
 
     fn seed(&self) -> i32 {
@@ -1936,7 +1919,7 @@ impl App {
             let shared=self.shared.as_mut().unwrap();
             shared.day_phase=self.environment.day_phase();
             shared.sun=self.environment.sun();
-            let live=self.live_weather.lock().ok().and_then(|g|*g);
+            let live=weather::current().map(|r|LiveWeather{cloud:r.cloud,rain:r.rain,snow:r.snow,storm:if r.code>=95{1.0}else{0.0},wind:(r.wind as f32/70.0).clamp(0.0,1.0)});
             shared.weather=live_weather_amount(&self.environment,live).unwrap_or_else(||self.environment.weather_amount(now));
             self.environment_update_at=now+1000.0;
         }
@@ -2548,7 +2531,6 @@ fn main() {
         headless,
         interactions_enabled,
         boost_until: 0.0,
-        live_weather: Arc::new(StdMutex::new(None)),
         weather_fetch_at: 0.0,
         environment_update_at: 0.0,
         widget: None,
@@ -2567,6 +2549,7 @@ fn main() {
         legacy_panorama_post:args.iter().any(|a|a=="--legacy-panorama-post"),
     };
     log!("Cách hiển thị: {}", if app.prefer_gpu {"GPU trực tiếp (GDI dự phòng)"} else if app.gdi { "GDI" } else { "OpenGL SwapBuffers" });
+    configure_shared_weather(&app.environment);
     let autostart = !saver && !headless && args.iter().any(|arg| arg == "--autostart");
     if !saver && !headless {
         // Publish Dock and Stage before waiting on Explorer or initializing GL.
@@ -2983,7 +2966,7 @@ fn main() {
                     app.environment = app.cfg.environment.clone();
                     app.weather_fetch_at = 0.0;
                     app.environment_update_at = 0.0;
-                    if let Ok(mut live) = app.live_weather.lock() { *live = None; }
+                    configure_shared_weather(&app.environment);
                     log!("Môi trường: time={}, weather={}, preset={}, source={}", app.environment.time_enabled, app.environment.weather_enabled, app.environment.preset, app.environment.source);
                     web::post(&web_init(&app).to_string());
                     web_changed = true;

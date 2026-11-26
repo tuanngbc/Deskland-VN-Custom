@@ -16,7 +16,7 @@ const METRIC_TIMER:usize=1;
 const ENTRANCE_TIMER:usize=2;
 const SINGLE_LINE:u32=DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS;
 #[derive(Clone)]
-pub(super) enum Command{AddApp,WindowsTray,BackgroundApps,AudioMixer,Media,Calendar,Notifications(super::notifications::Action),News(super::news::Action),Overview,SnapLayouts,Topmost(Option<super::WindowIdentity>),SnapWindow(super::WindowIdentity),Shelf(super::shelf::Action),CaptureAccess(super::capture_access::Action),Desktop(bool),Comfort(super::comfort::Action),Recycle(super::recycle_bin::Action),Clipboard,ClipboardCopy(u64),ClipboardRemove(Option<u64>),Widget(UtilityWidget),Run(Action),Wifi(super::wifi::Change),Radio(super::radios::Request),Brightness(Option<super::brightness::Query>),DisplaySettings,App{path:String,operation:super::AppOperation},Window{hwnd:usize,pid:u32,tid:u32},StageMember(super::WindowIdentity)}
+pub(super) enum Command{AddApp,WindowsTray,BackgroundApps,AudioMixer,Media,Calendar,Notifications(super::notifications::Action),News(super::news::Action),Weather(super::weather_panel::Action),Overview,SnapLayouts,Topmost(Option<super::WindowIdentity>),SnapWindow(super::WindowIdentity),Shelf(super::shelf::Action),CaptureAccess(super::capture_access::Action),Desktop(bool),Comfort(super::comfort::Action),Recycle(super::recycle_bin::Action),Clipboard,ClipboardCopy(u64),ClipboardRemove(Option<u64>),Widget(UtilityWidget),Run(Action),Wifi(super::wifi::Change),Radio(super::radios::Request),Brightness(Option<super::brightness::Query>),DisplaySettings,App{path:String,operation:super::AppOperation},Window{hwnd:usize,pid:u32,tid:u32},StageMember(super::WindowIdentity)}
 #[derive(Clone)]
 pub(super) struct Card{pub icon:Option<UtilityWidget>,pub title:String,pub hint:String,pub action:Option<Command>}
 pub(super) struct View{pub title:String,pub hint:String,pub cards:Vec<Card>,pub metrics:Option<MetricOptions>}
@@ -423,6 +423,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         super::shelf::CHANGED=>{super::shelf::changed(hwnd);0},
         super::notifications::READY=>{super::notifications::receive(hwnd,w);0},
         super::news::READY=>{super::news::receive(hwnd,w);0},
+        crate::weather::READY=>{super::weather_panel::receive(hwnd,w);0},
         WM_DPICHANGED=>{DestroyWindow(hwnd);0},
         WM_CLOSE=>{
             let animated=PANE.with(|s|{
@@ -446,6 +447,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             super::shelf::detach(hwnd);
             super::notifications::detach(hwnd);
             super::news::detach(hwnd);
+            super::weather_panel::detach(hwnd);
             KillTimer(hwnd,METRIC_TIMER);
             KillTimer(hwnd,ENTRANCE_TIMER);
             let owner=PANE.with(|s|{
@@ -583,6 +585,9 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 }else if let Command::News(action)=action{
                     if GetCapture()==hwnd{ReleaseCapture();}
                     super::news::perform(owner,hwnd,action);
+                }else if let Command::Weather(action)=action{
+                    if GetCapture()==hwnd{ReleaseCapture();}
+                    super::weather_panel::perform(owner,hwnd,action);
                 }else{
                     DestroyWindow(hwnd);
                     super::perform_control(owner,action);
