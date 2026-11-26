@@ -1073,12 +1073,28 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
             let marker=wide(&marker);
             for failure in ["cancel","injected-device-removed","injected-monitor-change"]{
                 motion::configure(motion::Settings{window_effect:motion::WindowEffect::Genie,..policy});
-                assert!(minimize(bar,path,id));
-                let start=Instant::now();
-                while !ACTIVE.with(|a|a.borrow().as_ref().is_some_and(|t|t.last_progress>0.18)){
-                    assert!(start.elapsed()<Duration::from_secs(5));timer();
-                    let mut msg:MSG=mem::zeroed();while PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}
-                    std::thread::sleep(Duration::from_millis(10));
+                for attempt in 0..3{
+                    assert!(minimize(bar,path,id));
+                    let start=Instant::now();
+                    while active()&&!ACTIVE.with(|a|a.borrow().as_ref().is_some_and(|t|t.last_progress>0.18)){
+                        assert!(start.elapsed()<Duration::from_secs(5));fixture_guard_pulse();timer();
+                        let mut msg:MSG=mem::zeroed();while PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)!=0{TranslateMessage(&msg);DispatchMessageW(&msg);}
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    if active(){break;}
+                    // A late capture must retain the production deadline and
+                    // native fallback. Verify it, then retry the injection's
+                    // setup; never wait for a phase that has already ended.
+                    let result=last();
+                    assert_eq!(result["fallbackReason"],"capture-timeout","unexpected recovery setup failure: {result}");
+                    assert_eq!(GetWindowLongPtrW(source,GWL_EXSTYLE),before);
+                    assert!(GetPropW(source,marker.as_ptr()).is_null());
+                    let settle=Instant::now();
+                    while IsIconic(source)==0{fixture_guard_pulse();assert!(settle.elapsed()<Duration::from_secs(2));std::thread::sleep(Duration::from_millis(10));}
+                    ShowWindowAsync(source,SW_RESTORE);let settle=Instant::now();
+                    while IsIconic(source)!=0{fixture_guard_pulse();assert!(settle.elapsed()<Duration::from_secs(2));std::thread::sleep(Duration::from_millis(10));}
+                    println!("FLUIDWIN_GUARDED_RECOVERY setup={failure} capture_timeout_native_fallback=PASS attempt={attempt}");
+                    assert!(attempt<2,"could not reach a real journaled animation for {failure}");
                 }
                 assert!(!GetPropW(source,marker.as_ptr()).is_null(),"journal exists while foreign window is concealed");
                 match failure{
