@@ -660,6 +660,11 @@ pub(super) fn status_on(data:&mut[u8],w:i32,h:i32,cell:Rect,scale:f32,tint:[u8;3
                         .fold(horn,|d,r|d.min(arc(x,y,0.42,0.50,r,1.0,0.0))),
                 }
             }
+            Some(RecycleBin) if super::utilities::recycle_status().is_some_and(|(n,_)|n>0)=>{
+                let bin=RecycleBin.glyph().iter().map(|&(ax,ay,bx,by)|line(x,y,0.5+(ax-0.5)*1.17,0.5+(ay-0.5)*1.17,
+                    0.5+(bx-0.5)*1.17,0.5+(by-0.5)*1.17)).fold(f32::INFINITY,f32::min);
+                bin.min(segments(&[(0.30,0.52,0.41,0.40),(0.41,0.40,0.53,0.52),(0.48,0.47,0.63,0.41)]))
+            }
             Some(widget)=>widget.glyph().iter().map(|&(ax,ay,bx,by)|{
                 // Expand each control equally about its optical center.
                 let pos=|p:f32|0.5+(p-0.5)*1.17;

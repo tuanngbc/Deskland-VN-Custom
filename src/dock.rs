@@ -51,6 +51,7 @@ mod jump_list;
 mod folder_stack;
 mod app_previews;
 mod comfort;
+mod recycle_bin;
 mod wifi;
 mod control_center;
 pub(crate) mod panel_chrome;
@@ -843,6 +844,7 @@ unsafe fn recreate(state:&mut State) {
             r.left,r.top,r.right-r.left,r.bottom-r.top,
             ptr::null_mut(),ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
         if !hwnd.is_null(){
+        recycle_bin::register(hwnd);
         state.bars.push(Bar{hwnd,bounds:screen.bounds,items,hovered:-1,hidden:true,layout:Some(layout),pinned_widgets,motion:Motion::default(),collapsed:false,auto_hide:false,status_hover:None,pressed:None,keyboard:None,previous_focus:0,pointer:None,
             reveal:motion::Spring::rest(1.0),rail_face:0,rail:RailFade::default(),feedback:None,active:None,minimized:0,attention:0,metric_repaint:None});
         }else{emit(Event::Error(format!("Create Dock window: {}",GetLastError())));}
@@ -1555,6 +1557,7 @@ unsafe fn request_utilities_with_change(hwnd:HWND,widget:Option<UtilityWidget>,c
         open_dock_hub(hwnd,dock_mode);
         return;
     }
+    if widget==Some(UtilityWidget::RecycleBin){recycle_bin::perform(hwnd,recycle_bin::Action::Open);return;}
     if let Some(action)=widget.filter(|w|*w!=UtilityWidget::QuickSettings).and_then(UtilityWidget::simple){
         if !dock_mode||utilities::local_action(action){match action {utilities::Action::Host(action)=>emit(Event::Utility(action)),_=>utilities::delegated(action)}}
         return;
@@ -1724,6 +1727,7 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::Clipboard=>show_clipboard_history(owner),
         Command::AudioMixer=>{let mut point=POINT{x:0,y:0};GetCursorPos(&mut point);audio_mixer::open(owner,point);},
         Command::Comfort(action)=>comfort::perform(owner,action),
+        Command::Recycle(action)=>recycle_bin::perform(owner,action),
         Command::ClipboardCopy(id)=>{
             if clipboard_history::active()&&!clipboard_history::copy(owner,id){show_clipboard_history(owner);}
         }
@@ -3078,6 +3082,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER if w==folder_stack::TIMER&&hwnd==CONTROL.get()=>{folder_stack::poll();0},
         WM_TIMER if w==app_previews::TIMER&&hwnd==CONTROL.get()=>{app_previews::poll();0},
         WM_TIMER if w==comfort::TIMER&&hwnd==CONTROL.get()=>{comfort::poll();0},
+        WM_TIMER if w==recycle_bin::TIMER&&hwnd==CONTROL.get()=>{recycle_bin::poll();0},
         WM_SHELL_FALLBACK if hwnd==CONTROL.with(Cell::get)=>{
             let owner=w as HWND;
             if !local_shell_buttons()&&!control_center::open_for(owner){
@@ -3098,6 +3103,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_NCDESTROY=>{
+            recycle_bin::unregister(hwnd);
             app_previews::close_for(hwnd);
             stage_peek::close(hwnd);
             cancel_deferred_click(hwnd);
@@ -3659,7 +3665,12 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             let on_status=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd&&!b.collapsed)
                 .and_then(|b|b.layout.as_ref())
                 .is_some_and(|layout|layout.is_utility_button(x as f32,y as f32)||layout.inline_at(x as f32,y as f32).is_some()));
-            if on_status{KillTimer(hwnd,STATUS_TIP_TIMER);close_status_tip(hwnd);request_utilities(hwnd,None);return 0;}
+            if on_status{
+                let recycle=STATE.with(|s|s.borrow().bars.iter().find(|b|b.hwnd==hwnd).and_then(|b|b.layout.as_ref())
+                    .is_some_and(|l|l.inline_at(x as f32,y as f32)==Some(UtilityWidget::RecycleBin)));
+                KillTimer(hwnd,STATUS_TIP_TIMER);close_status_tip(hwnd);
+                if recycle{recycle_bin::perform(hwnd,recycle_bin::Action::Menu);}else{request_utilities(hwnd,None);}return 0;
+            }
             let (bar,index)=STATE.with(|s|{let a=s.borrow();let i=a.bars.iter().position(|b|b.hwnd==hwnd).unwrap_or(0);
               let y=(l>>16) as i16 as f32;
               let hit=a.bars.get(i).and_then(|b|

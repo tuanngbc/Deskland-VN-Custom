@@ -26,12 +26,12 @@ pub(super) enum NetworkGlyph{Unknown,Disconnected,Disabled,Wired,Wifi(u8)}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub(super) enum VolumeGlyph{Unknown,Muted,Waves(u8)}
 #[derive(Clone,Debug,Default,PartialEq,Eq)]
-pub(super) struct Status{network:Option<Link>,ssid:Option<String>,audio:Option<Audio>}
+pub(super) struct Status{network:Option<Link>,ssid:Option<String>,audio:Option<Audio>,recycle:Option<(u64,u64)>}
 thread_local!{static STATUS:RefCell<Status>=RefCell::new(Status::default());}
 impl Status{
     fn read(audio:Option<Audio>)->Self{
         let (network,ssid)=unsafe{network()};
-        Self{network,ssid,audio}
+        Self{network,ssid,audio,recycle:super::recycle_bin::query()}
     }
     fn network_glyph(&self)->NetworkGlyph{
         match self.network{
@@ -55,6 +55,7 @@ impl Status{
             }
             Widget::Sound=>Some(self.audio.map_or("Không đọc được âm lượng".into(),|a|
                 if a.muted{format!("Tắt tiếng · {}%",a.level)}else{format!("{}%",a.level)})),
+            Widget::RecycleBin=>self.recycle.map(|(n,_)|format!("{n} {}",crate::launcher::localized("mục","items","项"))),
             _=>None,
         }
     }
@@ -67,7 +68,8 @@ pub(super) fn replace_status(status:Status)->bool{STATUS.with(|s|{
 pub(super) fn replace_audio(audio:Option<Audio>)->bool{STATUS.with(|s|{
     let mut s=s.borrow_mut();if s.audio==audio{return false;}s.audio=audio;true
 })}
-pub(super) fn live_widget(w:Widget)->bool{matches!(w,Widget::Network|Widget::Sound)}
+pub(super) fn live_widget(w:Widget)->bool{matches!(w,Widget::Network|Widget::Sound|Widget::RecycleBin)}
+pub(super) fn recycle_status()->Option<(u64,u64)>{STATUS.with(|s|s.borrow().recycle)}
 struct ClassicDevice { name:String, connected:bool, paired:bool }
 enum BluetoothState { Unknown, Adapter(Vec<ClassicDevice>) }
 #[derive(Clone,Copy)]
@@ -418,7 +420,7 @@ fn device_label(state:&BluetoothState)->String{
 }
 fn utility_hint(widget:Widget,snapshot:&Snapshot)->String{
     match widget{
-        Widget::Network|Widget::Sound=>snapshot.status.detail(widget).unwrap_or_default(),
+        Widget::Network|Widget::Sound|Widget::RecycleBin=>snapshot.status.detail(widget).unwrap_or_default(),
         Widget::Bluetooth=>device_label(&snapshot.bluetooth),
         Widget::Battery=>match snapshot.battery{
             BatteryState::Present{level,charging,..}=>level.map_or("".into(),|n|format!("{n}%{}",if charging{" · Đang sạc"}else{""})),

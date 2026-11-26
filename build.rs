@@ -44,6 +44,7 @@ fn main() {
         println!("cargo:rerun-if-changed=third_party/fluidwin/window_lease.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/audio_bridge.cpp");
         println!("cargo:rerun-if-changed=third_party/fluidwin/stack_bridge.cpp");
+        println!("cargo:rerun-if-changed=third_party/fluidwin/recycle_bridge.cpp");
         cc::Build::new()
             .cpp(true)
             .debug(true)
@@ -59,6 +60,7 @@ fn main() {
             .file("third_party/fluidwin/window_lease.cpp")
             .file("third_party/fluidwin/audio_bridge.cpp")
             .file("third_party/fluidwin/stack_bridge.cpp")
+            .file("third_party/fluidwin/recycle_bridge.cpp")
             .compile("tlauncher_fluidwin_motion");
         println!("cargo:rustc-link-lib=d3dcompiler");
         println!("cargo:rustc-link-lib=uuid");
