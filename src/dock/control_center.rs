@@ -255,6 +255,8 @@ impl Panel{
         let forecast_drawn=self.forecast.as_mut().is_some_and(|f|f.draw(g,RECT{left:px(14),top:px(67),right:w-px(14),bottom:px(235)},self.dpi,self.index==Some(0)));
         if had_forecast&&!forecast_drawn{
             self.forecast=None;
+            self.access_token=serial();self.index=None;self.pressed=None;self.pressed_point=None;
+            self.page=self.page.min(self.pages()-1);
             if !old.is_null(){SelectObject(g,old);}
             // Repaint the real glass too: a failed EndDraw may have changed
             // part of the DC before reporting failure. Never keep those pixels.
@@ -734,6 +736,26 @@ unsafe fn announce(hwnd:HWND){
 }
 #[cfg(test)] mod tests{
     use super::*;
+    #[cfg(target_env="msvc")]
+    #[test]#[ignore="hosted partial weather-render failure, glass repaint and accessibility revision; synthetic panel only"]
+    fn native_forecast_failure_repaints_glass_and_revokes_old_access_actions(){
+        if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+        unsafe{
+            let owner=CreateWindowExW(WS_EX_TOOLWINDOW,wide("STATIC").as_ptr(),wide("Forecast fallback fixture").as_ptr(),WS_POPUP,10,10,160,60,ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),ptr::null());assert!(!owner.is_null());
+            struct Cleanup(HWND);impl Drop for Cleanup{fn drop(&mut self){unsafe{close_for(self.0);DestroyWindow(self.0);}}}let _cleanup=Cleanup(owner);
+            let forecast=super::super::forecast_card::Card::new("Synthetic city".into(),"25°C".into(),"Rain".into(),Some(61),vec![super::super::forecast_card::Day{code:61,label:"Today".into(),temperature:"29° 20°".into()}]);
+            let cards=vec![Card{title:"Synthetic city · 25°C".into(),hint:"Rain".into(),icon:None,action:Some(Command::Weather(super::super::weather_panel::Action::City))},Card{title:"Today · 20–29°C".into(),hint:"Rain".into(),icon:None,action:None},Card{title:"Synthetic action".into(),hint:String::new(),icon:None,action:Some(Command::Clipboard)}];
+            show_forecast(owner,chrome::Anchor{point:POINT{x:400,y:650},side:super::super::DockSide::Bottom,dark:false,transparency:30},View{title:"Weather fallback".into(),hint:"Synthetic only".into(),cards,metrics:None},forecast);
+            let popup=window(owner).unwrap();let accessible=super::super::control_access::get(popup);assert!(!accessible.is_null());
+            let old=PANE.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().unwrap();assert!(p.forecast.is_some(),"initial native renderer must work before fault injection");p.index=Some(2);p.pressed=Some(2);p.pressed_point=Some(POINT{x:12,y:12});p.access_token});
+            super::super::forecast_card::fixture_fail_next();
+            PANE.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().unwrap();p.paint();assert!(p.forecast.is_none());assert_eq!(p.pinned(),0);assert_ne!(old,p.access_token);assert!(p.index.is_none()&&p.pressed.is_none()&&p.pressed_point.is_none());assert!(p.layer.pixels().chunks_exact(4).all(|p|p[..3]!=[255,0,255]),"partial native magenta pixels must not survive fallback");assert!(p.present());});
+            assert_eq!(SendMessageW(popup,super::super::control_access::CHOOSE,2,old as isize),0,"old illustrated layout must not execute against the new list");
+            assert_eq!(super::super::control_access::probe(accessible,fixture_access_count(owner).unwrap(),0,0),0);
+            close_for(owner);assert_eq!(super::super::control_access::probe(accessible,0,0,3),0);super::super::control_access::release(accessible);
+            println!("FLUIDWIN_FORECAST_FALLBACK partial_pixels=REMOVED actual_glass=REPAINTED native_canvas=RELEASED full_text_list=RESTORED old_access_action=REFUSED msaa_bounds=VERIFIED");
+        }
+    }
     #[cfg(target_env="msvc")]
     #[test]#[ignore="hosted File Shelf images/paging/lifetime/accessibility; synthetic files only, no Shell file operations"]
     fn native_shelf_grid_pages_all_references_and_releases_images(){

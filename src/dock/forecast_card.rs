@@ -1,12 +1,15 @@
 //! Original FluidWin blue weather card, drawn into the existing panel bitmap.
 use std::{ffi::c_void,ptr::NonNull};
 use windows_sys::Win32::{Foundation::RECT,Graphics::Gdi::HDC};
+#[cfg(test)]thread_local!{static FAIL_NEXT:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
+#[cfg(test)]pub(super) fn fixture_fail_next(){FAIL_NEXT.set(true);}
 pub(super) struct Day{pub code:i32,pub label:String,pub temperature:String}
 pub(super) struct Card{pub city:String,pub temperature:String,pub detail:String,pub code:Option<i32>,pub days:Vec<Day>,canvas:Option<Canvas>}
 impl Card{
     pub fn new(city:String,temperature:String,detail:String,code:Option<i32>,days:Vec<Day>)->Self{Self{city,temperature,detail,code,days,canvas:None}}
     pub fn rows(&self)->usize{1+self.days.len().min(5)}
     pub unsafe fn draw(&mut self,dc:HDC,rect:RECT,dpi:u32,focused:bool)->bool{
+        #[cfg(test)]if FAIL_NEXT.replace(false){super::fill(dc,rect,0x00ff00ff);return false;}
         #[cfg(target_env="msvc")]{
             if self.canvas.is_none(){self.canvas=NonNull::new(tlauncher_forecast_canvas_create()).map(Canvas);}
             let Some(canvas)=self.canvas.as_ref()else{return false;};
