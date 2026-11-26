@@ -174,7 +174,7 @@ pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
         if !cfg!(test){ShellExecuteW(owner,wide("open").as_ptr(),wide("ms-settings:privacy-notifications").as_ptr(),ptr::null(),ptr::null(),SW_SHOWNORMAL);}return;
     }
     if let Action::Request(generation)=action{
-        let current=PANEL.with(|s|s.borrow().as_ref().is_some_and(|p|p.owner==owner as usize&&p.popup==popup as usize&&p.generation==generation&&!p.pending&&p.consent.is_none()));
+        let current=PANEL.with(|s|s.borrow().as_ref().is_some_and(|p|p.owner==owner as usize&&p.popup==popup as usize&&p.generation==generation&&p.view.status==0&&!p.pending&&p.consent.is_none()));
         if !current||super::notification_access::read_only(){return;}
         // Never hold PANEL across a Windows consent API call: Windows can
         // synchronously reenter activation/focus handlers on this UI thread.
