@@ -21,6 +21,7 @@ pub(crate) mod glass;
 pub(crate) mod glass_menu;
 mod calendar;
 mod appearance;
+mod follow_display;
 mod geometry;
 pub(crate) mod motion;
 pub(crate) fn popup_motion_allowed()->bool{
@@ -1288,6 +1289,7 @@ unsafe fn refresh(state:&mut State, topology:bool) {
             .map(|layout|layout.caption as f32*1.2).fold(0.0,f32::max);
         worker.restrict_visible(dock.chain(stage),icon_atlas::source_request(dock_edge.max(stage_edge)));
     });
+    follow_display::sync(state);
 }
 unsafe fn fill(hdc:HDC,r:RECT,color:u32) {
     let brush=CreateSolidBrush(color);FillRect(hdc,&r,brush);DeleteObject(brush as HGDIOBJ);
@@ -3156,6 +3158,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TICK=>{SetTimer(hwnd,2,60,None);0},
         WM_UTILITY_READY=>{show_utilities();0},
         WM_TIMER if w==jump_list::TIMER&&hwnd==CONTROL.get()=>{jump_list::poll();0},
+        WM_TIMER if w==follow_display::TIMER&&hwnd==CONTROL.get()=>{follow_display::poll();0},
         WM_TIMER if w==folder_stack::TIMER&&hwnd==CONTROL.get()=>{folder_stack::poll();0},
         WM_TIMER if w==app_previews::TIMER&&hwnd==CONTROL.get()=>{app_previews::poll();0},
         WM_TIMER if w==comfort::TIMER&&hwnd==CONTROL.get()=>{comfort::poll();0},
@@ -3892,6 +3895,13 @@ unsafe fn drain_commands() {
             Command::Taskbar(hidden)=>set_taskbar_hidden(hidden),
             Command::Stop=>{shell_menu::close();stage_peek::close(ptr::null_mut());control_center::inline_config(CONTROL.with(Cell::get),None);EndMenu();PostQuitMessage(0);},
             Command::Focus=>focus_dock(),
+            #[cfg(test)] Command::FollowSample{screens,point,blocked,at,reply}=>{
+                if let Some(screens)=screens{update_state(|s|{s.screens=screens;refresh(s,false);});}
+                follow_display::fixture_sample(point,blocked,at);
+                let snapshot=STATE.with(|s|{let s=s.borrow();(s.bars.iter().map(|b|(b.hwnd as usize,b.bounds)).collect(),
+                    s.stages.iter().map(|b|b.hwnd as usize).collect(),follow_display::fixture_armed())});
+                let _=reply.send(snapshot);
+            },
             #[cfg(test)] Command::InspectSettings{reply}=>{
                 let all=windows(false);
                 let items=STATE.with(|s|{
@@ -4019,6 +4029,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
             }
         }
         topmost::shutdown();snap_layout::close_for(ptr::null_mut());window_geometry::cancel();show_desktop::reset();window_motion::cancel();window_effect::reset();motion_guard::stop();
+        follow_display::shutdown();
         clipboard_history::configure(control,false,0);
         if taskbar_active(){show_taskbar(taskbar_guard::Exit::Requested,"Đã hiện lại thanh tác vụ khi thoát Deskland.");}
         WIN_KEY.with(|s|drop(s.borrow_mut().take()));

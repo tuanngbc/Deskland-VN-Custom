@@ -35,6 +35,8 @@
     "dockDisplayAll": "Tất cả màn hình",
     "dockDisplayPrimary": "Chỉ màn hình chính",
     "dockDisplaySelected": "Một màn hình đã chọn",
+  "dockDisplayFollow": "Theo chuột ở cạnh màn hình",
+  "dockDisplayFollowHint": "Để chuột ở cạnh Dock trên màn hình khác hơn 200 ms, không giữ nút chuột.",
     "dockDisplayCustom": "Tự chọn nhiều màn hình",
     "dockDisplayPreview": "Bố cục hiển thị",
     "dockDisplayFallback": "Màn hình đã chọn không có mặt. Tạm hiển thị trên màn hình chính; lựa chọn cũ được giữ lại.",

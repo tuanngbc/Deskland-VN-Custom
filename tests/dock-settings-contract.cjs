@@ -377,4 +377,15 @@ test('global motion controls round-trip independently of Dock and Spotlight',()=
   $('motionReset').listeners.click();
   assert.deepEqual(JSON.parse(JSON.stringify(messages.pop())),{t:'motionPreferences',value:{animationsEnabled:true,animationSpeed:0.70,respectSystemReducedMotion:true,windowEffect:'windows'}});
 });
+test('follow-display acknowledgement preserves mode and independent Stage placement',()=>{
+  const screens=[{id:'main',name:'Main',w:2560,h:1080,dpi:96,primary:true},{id:'portrait',name:'Portrait',w:1080,h:1920,dpi:144,primary:false}];
+  context.syncDockSettings({dockDisplays:screens,dock:{enabled:true,stageEnabled:true,dockDisplay:{mode:'primary',selected:'main'},stageDisplay:{mode:'primary'}}});
+  $('dockDisplayMode').listeners.change({target:{value:'follow'}});
+  const edit=messages.pop();assert.equal(edit.dockDisplay.mode,'follow');assert.equal(Object.keys(edit).sort().join(','),'dockDisplay,t');
+  assert.equal($('stageDisplayMode').value,'primary');
+  context.syncDockSettings({dock:{dockDisplay:{mode:'follow',selected:'portrait'}}});
+  assert.equal($('dockDisplayMode').value,'follow');assert.equal($('stageDisplayMode').value,'primary');
+  assert.match($('dockDisplayPreview').innerHTML,/<small>Stage Manager<\/small>.+<small>Dock<\/small>/);
+  assert.equal(messages.length,0);
+});
 console.log('TOTAL: '+count+' PASS / 0 FAIL');

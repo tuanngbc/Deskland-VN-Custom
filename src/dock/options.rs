@@ -76,13 +76,13 @@ fn persistent_group(key:&str)->bool{
 
 /// Output placement is independent of the application model's window scope.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum DisplayMode { #[default] All, Primary, Selected, Custom }
+pub enum DisplayMode { #[default] All, Primary, Selected, Custom, Follow }
 impl DisplayMode {
     pub fn key(self) -> &'static str {
-        match self { Self::All => "all", Self::Primary => "primary", Self::Selected => "selected", Self::Custom => "custom" }
+        match self { Self::All => "all", Self::Primary => "primary", Self::Selected => "selected", Self::Custom => "custom", Self::Follow=>"follow" }
     }
     pub fn parse(value: &str) -> Self {
-        match value { "primary" => Self::Primary, "selected" => Self::Selected, "custom" => Self::Custom, _ => Self::All }
+        match value { "primary" => Self::Primary, "selected" => Self::Selected, "custom" => Self::Custom, "follow"=>Self::Follow, _ => Self::All }
     }
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -114,7 +114,7 @@ impl DisplayTarget {
         let mut selected: Vec<_> = outputs.iter().enumerate().filter(|(_, (id, primary))| match self.mode {
             DisplayMode::All => true,
             DisplayMode::Primary => *primary,
-            DisplayMode::Selected => self.selected.as_deref() == Some(*id),
+            DisplayMode::Selected|DisplayMode::Follow => self.selected.as_deref() == Some(*id),
             DisplayMode::Custom => self.custom.iter().any(|s| s == *id),
         }).map(|(i, _)| i).collect();
         if selected.is_empty() && !outputs.is_empty() {
@@ -157,6 +157,7 @@ pub struct Options {
 }
 #[derive(Debug)]
 pub enum Edit {
+    FollowDisplay(String),
     Pin(String), Unpin(String), MovePin { path:String, anchor:String, after:bool }, AllWindows(bool), StageSide(String), DockEnabled(bool), StageEnabled(bool),
     StageStyle(String, StageStyle),
     StagePresentation(bool), StageCardHeight(u32), StageGroupHeight(String,u32),
@@ -168,6 +169,7 @@ pub enum Edit {
 impl Edit {
     pub fn apply(self, options: &mut Options) {
         match self {
+            Self::FollowDisplay(id)=>{if options.dock_display.mode==DisplayMode::Follow{if let Some(id)=display_id(&id){options.dock_display.selected=Some(id);}}},
             Self::AppIcon{key,file}=>{
                 let Some(key)=crate::app_icons::normalized(&key)else{return;};
                 match file{
@@ -415,6 +417,14 @@ mod tests {
         assert_eq!(custom.custom,vec!["other","portrait"]);
         assert_eq!(custom.outputs(normal),vec![1]);
         assert_eq!(custom.outputs([]),Vec::<usize>::new());
+        let mut follow=Options::from_json(&json!({"dockDisplay":{"mode":"follow","selected":"PORTRAIT"}}));
+        assert_eq!(follow.dock_display.outputs(normal),vec![1]);
+        assert_eq!(follow.dock_display.outputs([("landscape",true)]),vec![0]);
+        Edit::FollowDisplay("landscape".into()).apply(&mut follow);
+        assert_eq!(Options::from_json(&follow.json()).dock_display.outputs(normal),vec![0]);
+        follow.dock_display.mode=DisplayMode::All;
+        Edit::FollowDisplay("portrait".into()).apply(&mut follow);
+        assert_eq!(follow.dock_display.selected.as_deref(),Some("landscape"));
         assert_eq!(Options::migrate(&json!({"dock":{"allWindows":false}}),None).dock_display.outputs(normal),vec![0,1]);
     }
     #[test]

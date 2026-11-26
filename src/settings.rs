@@ -645,6 +645,7 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
     add(2, "Chỉ màn hình chính", target.mode == DisplayMode::Primary);
     add(3, "Chọn một màn hình", target.mode == DisplayMode::Selected);
     add(4, "Tự chọn nhiều màn hình", target.mode == DisplayMode::Custom);
+    if !stage{add(5,"Theo chuột ở cạnh màn hình",target.mode==DisplayMode::Follow);}
     AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
     for (i,d) in displays.iter().take(32).enumerate() {
         let label = format!("{} · {} × {} · {} DPI{}{}", d.name.replace('&',"&&"),
@@ -910,6 +911,7 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
     match command {
         1 => target.mode=DisplayMode::All,
         2 => target.mode=DisplayMode::Primary,
+        5 if !stage=>target.mode=DisplayMode::Follow,
         3 => {
             target.mode=DisplayMode::Selected;
             if target.selected.is_none() { target.selected=displays.first().map(|d| d.id.clone()); }

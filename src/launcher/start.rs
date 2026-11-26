@@ -221,6 +221,10 @@ pub(crate) fn follow_dock(anchor:DockAnchor){
         unsafe{PostMessageW(target,FOLLOW_DOCK,w,l);}
     }
 }
+pub(crate) fn dismiss_for_dock_move(){
+    let target=VISIBLE_START.load(std::sync::atomic::Ordering::Relaxed) as HWND;
+    if !target.is_null(){unsafe{PostMessageW(target,WM_CLOSE,0,0);}}
+}
 const START_TWEEN:usize=11;
 thread_local!{static START_MOTION:Cell<Option<super::motion::Tween>>=const{Cell::new(None)};}
 

@@ -5,6 +5,13 @@
   "note": "Section adaptations, not claims that these full headers were imported. Original CRLF worktree byte hashes and canonical Git blobs are recorded; existing notices and original license are preserved.",
   "sections": [
     {
+      "source": "dock.h::controllaBordo / sulBordo / spostaVerso / cambiaSchermo",
+      "source_git_blob": "f786a3cbe2fef19e5861c8a9c51f78e14b9c981b",
+      "source_worktree_sha256": "6cb19c9d27daad834660fe4cad4b269ca10609d21dccc8bcfad6e4ca7cd13a72",
+      "integration": ["../../src/dock/follow_display.rs", "../../src/dock/options.rs", "../../src/dock.rs"],
+      "adaptation": "Original four directional two-pixel display edges and greater-than-200ms uninterrupted dwell without held mouse buttons; fold-transfer-reveal in the existing Dock spring/surface owner and existing speed/reduced-motion policy. Reuses one Dock HWND and icon owner, closes transient surfaces, recomputes destination DPI/work-area/profile geometry and migrates cooperative reservations; no second Dock, input hook or worker. An 80ms UI timer exists only for enabled follow mode with multiple connected outputs; refuses foreign-motion/input/fullscreen-target conflicts. Existing config stores the last display ID and preserves independent Stage placement; synthetic injected-topology hosted evidence remains separate from physical mixed-DPI interaction."
+    },
+    {
       "source": "fluidwin.cpp::primoPiano / togliPrimoPiano",
       "source_git_blob": "17519dee3f8d60b3599b427cbb33a297dd9129cf",
       "source_worktree_sha256": "e635f67fcce5978aca9d2f79da57529f4c18ff79fd59dee707c961e3b32350ef",

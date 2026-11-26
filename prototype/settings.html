@@ -228,6 +228,7 @@
       <option value="primary" data-i18n="dockDisplayPrimary">Chỉ màn hình chính</option>
       <option value="selected" data-i18n="dockDisplaySelected">Một màn hình đã chọn</option>
       <option value="custom" data-i18n="dockDisplayCustom">Tự chọn nhiều màn hình</option>
+      <option value="follow" data-i18n="dockDisplayFollow">Theo chuột ở cạnh màn hình</option>
     </select></label>
     <div id="dockDisplayChoices" class="dock-display-choices"></div>
   </section>
@@ -1019,7 +1020,7 @@ $('dockLookReset').addEventListener('click',()=>{
 });
 function requestedDisplays(target){
   return dockDisplays.filter(d=>target.mode==='all'||(target.mode==='primary'&&d.primary)||
-    (target.mode==='selected'&&target.selected===d.id)||(target.mode==='custom'&&target.custom.includes(d.id)));
+    (['selected','follow'].includes(target.mode)&&target.selected===d.id)||(target.mode==='custom'&&target.custom.includes(d.id)));
 }
 const defaultDisplay=()=>dockDisplays.find(d=>d.primary)||dockDisplays[0];
 const displayLabel=d=>d.name+' · '+d.w+' × '+d.h+' · '+d.dpi+' DPI'+(d.primary?' · '+dockText('primaryMonitor'):'');
@@ -1238,6 +1239,7 @@ function renderDockPlacement(){
     const missing=target.mode==='custom'?target.custom.filter(id=>!dockDisplays.some(d=>d.id===id)).length:0;
     const choices=$(key+'Choices');
     let markup='';
+    if(target.mode==='follow')markup='<small>'+esc(dockText('dockDisplayFollowHint'))+'</small>';
     if(target.mode==='selected'){
       const values=dockDisplays.map(d=>'<option value="'+esc(d.id)+'"'+(target.selected===d.id?' selected':'')+'>'+esc(displayLabel(d))+'</option>');
       const pending=unavailable?'<option value="" disabled selected>'+esc(dockText('dockDisplayDisconnected'))+'</option>':'';

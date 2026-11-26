@@ -11,6 +11,8 @@ pub(super) enum Command {
     #[cfg(test)] InspectSettings { reply:Sender<Vec<(String,usize,bool,bool)>> },
     #[cfg(test)] InspectStageSettings { reply:Sender<Vec<(String,usize,bool)>> },
     #[cfg(test)] Inspect { reply:Sender<Vec<usize>>, paint:bool },
+    #[cfg(test)] FollowSample { screens:Option<Vec<super::Display>>, point:windows_sys::Win32::Foundation::POINT, blocked:bool, at:std::time::Instant,
+        reply:Sender<(Vec<(usize,windows_sys::Win32::Foundation::RECT)>,Vec<usize>,bool)> },
 }
 #[derive(Debug)]
 pub enum Event { Edit(super::Edit), Error(String), Utility(super::HostAction), WinKey(String), Taskbar(super::TaskbarStatus) }
@@ -34,7 +36,7 @@ impl Runtime {
             result=>{let _=thread.join();Err(match result {Ok(Err(error))=>error,_=>"Dock initialization ended without readiness".into()})}
         }
     }
-    fn send(&self,command:Command) {
+    pub(super) fn send(&self,command:Command) {
         if self.commands.send(command).is_ok() {
             unsafe {windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(self.control as _,super::WM_CONFIG,0,0);}
         }

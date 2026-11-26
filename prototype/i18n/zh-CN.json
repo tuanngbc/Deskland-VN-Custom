@@ -42,6 +42,8 @@
     "dockDisplayAll": "所有显示器",
     "dockDisplayPrimary": "仅主显示器",
     "dockDisplaySelected": "选择一台显示器",
+  "dockDisplayFollow": "跟随鼠标到屏幕边缘",
+  "dockDisplayFollowHint": "将鼠标停留在另一显示器的 Dock 边缘超过 200 毫秒，不按鼠标按钮。",
     "dockDisplayCustom": "自定义显示器",
     "dockDisplayPreview": "显示布局",
     "dockDisplayFallback": "所选显示器未连接，暂时使用主显示器。",
