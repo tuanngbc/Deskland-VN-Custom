@@ -733,6 +733,9 @@ unsafe fn announce(hwnd:HWND){
                 assert!(image.width>0&&image.height>0&&image.width<=120&&image.height<=120);
                 assert!(image.pixels.chunks_exact(4).all(|p|p[..3].iter().all(|&c|c<=p[3])));
                 assert!(image.pixels.chunks_exact(4).any(|p|p[3]>0));
+                let patterns=[[230i32,80,30],[30,150,240],[100,210,60]]; // premultiplied BGRA source swatches
+                let content=patterns.into_iter().all(|expected|image.pixels.chunks_exact(4).filter(|p|p[3]>240&&p[..3].iter().zip(expected).all(|(&a,b)|(i32::from(a)-b).abs()<8)).count()>8);
+                println!("FLUIDWIN_SHELF_PNG source_thumbnail={} native_icon_fallback={}",if content{"VERIFIED"}else{"UNAVAILABLE"},!content);
                 assert!(!super::super::shelf_previews::receive(popup,tag.wrapping_add(1)));
                 let mut observed=std::collections::BTreeSet::new();
                 PANE.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().unwrap();

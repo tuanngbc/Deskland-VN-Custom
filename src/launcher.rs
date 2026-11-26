@@ -652,7 +652,7 @@ pub(crate) unsafe fn shell_thumbnail(path:&Path,source_size:i32)->Option<IconPix
 }
 
 unsafe fn shell_image(path:&Path,source_size:i32,icon_only:bool)->Option<IconPixels>{
-    use windows::Win32::UI::Shell::{SHCreateItemFromParsingName, IShellItemImageFactory, SIIGBF_ICONONLY, SIIGBF_BIGGERSIZEOK};
+    use windows::Win32::UI::Shell::{SHCreateItemFromParsingName, IShellItemImageFactory, SIIGBF_ICONONLY, SIIGBF_BIGGERSIZEOK,SIIGBF_THUMBNAILONLY};
     let name = path.to_string_lossy();
     let factory_for = |name: &str| {
         let path = wide(name);
@@ -661,8 +661,14 @@ unsafe fn shell_image(path:&Path,source_size:i32,icon_only:bool)->Option<IconPix
     let factory = factory_for(&name).or_else(|error| {
         if let Some(alternate)=apps_folder_parsing_name(&name){factory_for(&alternate)}else{Err(error)}
     }).ok()?;
-    let flags=if icon_only{SIIGBF_ICONONLY|SIIGBF_BIGGERSIZEOK}else{SIIGBF_BIGGERSIZEOK};
-    let bitmap = factory.GetImage(windows::Win32::Foundation::SIZE { cx: source_size, cy: source_size }, flags).ok()?;
+    let size=windows::Win32::Foundation::SIZE { cx: source_size, cy: source_size };
+    let bitmap=if icon_only{factory.GetImage(size,SIIGBF_ICONONLY|SIIGBF_BIGGERSIZEOK)}else{
+        // At small tile sizes the Shell may choose a generic icon even for an
+        // image. Explicitly prefer its thumbnail provider, then use the file's
+        // normal icon when Windows cannot supply a thumbnail.
+        factory.GetImage(size,SIIGBF_THUMBNAILONLY|SIIGBF_BIGGERSIZEOK)
+            .or_else(|_|factory.GetImage(size,SIIGBF_ICONONLY|SIIGBF_BIGGERSIZEOK))
+    }.ok()?;
     let bitmap = bitmap.0;
     let mut object: BITMAP = std::mem::zeroed();
     if GetObjectW(bitmap, std::mem::size_of::<BITMAP>() as i32, &mut object as *mut _ as *mut _) == 0 { DeleteObject(bitmap); return None; }
