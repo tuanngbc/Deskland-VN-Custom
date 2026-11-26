@@ -89,7 +89,10 @@ pub(super) unsafe fn receive(popup:HWND,ticket:usize){
 }
 pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
     if !enabled()||IsWindow(owner)==0{return;}
-    if matches!(action,Action::City){super::weather_city::open(owner);return;}
+    if matches!(action,Action::City){
+        let combined=PANEL.with(|s|s.borrow().as_ref().is_some_and(|p|p.owner==owner as usize&&p.popup==popup as usize&&p.combined));
+        if combined{super::weather_city::open_widgets(owner);}else{super::weather_city::open(owner);}return;
+    }
     if matches!(action,Action::Settings){super::emit(super::Event::Utility(super::HostAction::Settings));return;}
     if matches!(action,Action::Open|Action::Widgets){
         super::utilities::close_panels();weather::request(false);

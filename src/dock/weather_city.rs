@@ -43,7 +43,7 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut c_void){
     ACTIVE.store(false,Ordering::Release);
     PostMessageW(job.hwnd as HWND,READY,job.ticket,0);
 }
-struct Panel{hwnd:HWND,owner:HWND,ticket:usize,dark:bool,font:HFONT,model:Search,delivery:Arc<Delivery>}
+struct Panel{hwnd:HWND,owner:HWND,ticket:usize,dark:bool,font:HFONT,model:Search,delivery:Arc<Delivery>,return_widgets:bool}
 impl Drop for Panel{fn drop(&mut self){self.delivery.closed.store(true,Ordering::Release);unsafe{DeleteObject(self.font);}}}
 impl Panel{
     unsafe fn clear_results(&self){
@@ -95,7 +95,9 @@ pub(super) unsafe fn close_for(owner:HWND){
     let hwnd=PANEL.with(|s|s.borrow().as_ref().filter(|p|owner.is_null()||p.owner==owner).map(|p|p.hwnd));
     if let Some(hwnd)=hwnd{DestroyWindow(hwnd);}
 }
-pub(super) unsafe fn open(owner:HWND){
+pub(super) unsafe fn open(owner:HWND){open_inner(owner,false);}
+pub(super) unsafe fn open_widgets(owner:HWND){open_inner(owner,true);}
+unsafe fn open_inner(owner:HWND,return_widgets:bool){
     if !enabled()||IsWindow(owner)==0{return;}
     utilities::close_panels();let class=wide("TLauncher.WeatherCity");if !chrome::register(&class,Some(proc)){return;}
     let anchor=super::dock_app_anchor(owner,None);let Some(work)=anchor.work()else{return;};
@@ -122,15 +124,20 @@ pub(super) unsafe fn open(owner:HWND){
     control("BUTTON",&text("Hủy","Cancel","取消"),IDCANCEL,WS_TABSTOP|BS_OWNERDRAW as u32,348,334,96,30);
     if [edit,list,apply].iter().any(|h|h.is_null()){DestroyWindow(hwnd);DeleteObject(font);return;}
     EnableWindow(apply,0);let ticket=SERIAL.with(|s|{let n=s.get().wrapping_add(1);s.set(n);n});
-    PANEL.with(|s|s.replace(Some(Panel{hwnd,owner,ticket,dark:anchor.dark,font,model:Search::default(),
+    PANEL.with(|s|s.replace(Some(Panel{hwnd,owner,ticket,dark:anchor.dark,font,model:Search::default(),return_widgets,
         delivery:Arc::new(Delivery{closed:AtomicBool::new(false),answer:Mutex::new(None)})})));
     ShowWindow(hwnd,SW_SHOW);SetForegroundWindow(hwnd);SetFocus(edit);
+}
+unsafe fn cancel(hwnd:HWND){
+    let owner=PANEL.with(|s|s.borrow().as_ref().filter(|p|p.hwnd==hwnd&&p.return_widgets).map(|p|p.owner));
+    DestroyWindow(hwnd);
+    if let Some(owner)=owner{super::weather_panel::perform(owner,ptr::null_mut(),super::weather_panel::Action::Widgets);}
 }
 pub(super) unsafe fn keyboard(msg:&MSG)->bool{
     let hwnd=PANEL.with(|s|s.borrow().as_ref().map(|p|p.hwnd));let Some(hwnd)=hwnd else{return false;};
     if msg.hwnd!=hwnd&&IsChild(hwnd,msg.hwnd)==0{return false;}
     if msg.message==WM_KEYDOWN{
-        if msg.wParam as u16==VK_ESCAPE{DestroyWindow(hwnd);return true;}
+        if msg.wParam as u16==VK_ESCAPE{cancel(hwnd);return true;}
         if msg.wParam as u16==VK_RETURN{
             let focus=GetDlgCtrlID(GetFocus());
             let command=if focus==IDCANCEL{IDCANCEL}else if focus==RESULTS||focus==APPLY{APPLY}else{SEARCH};
@@ -145,7 +152,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         if let Some(old)=old{super::panel_closed(old.owner);drop(old);}return DefWindowProcW(hwnd,msg,w,l);
     }
     if msg==WM_ACTIVATE&&w&0xffff==WA_INACTIVE as usize{PostMessageW(hwnd,WM_CLOSE,0,0);return 0;}
-    if msg==WM_COMMAND&&w&0xffff==IDCANCEL as usize{DestroyWindow(hwnd);return 0;}
+    if msg==WM_COMMAND&&w&0xffff==IDCANCEL as usize{cancel(hwnd);return 0;}
     let mut chosen=None;
     let result=PANEL.with(|s|{
         let Ok(mut s)=s.try_borrow_mut()else{return DefWindowProcW(hwnd,msg,w,l);};let Some(p)=s.as_mut().filter(|p|p.hwnd==hwnd)else{return DefWindowProcW(hwnd,msg,w,l);};
@@ -165,9 +172,9 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     });
     if let Some(row)=chosen{
         if let Some(location)=weather::Location::read(&row){
-            let owner=PANEL.with(|s|s.borrow().as_ref().map(|p|p.owner));
+            let origin=PANEL.with(|s|s.borrow().as_ref().map(|p|(p.owner,p.return_widgets)));
             weather::configure(Some(location));super::emit(super::Event::WeatherLocation(row));DestroyWindow(hwnd);
-            if let Some(owner)=owner{super::weather_panel::perform(owner,ptr::null_mut(),super::weather_panel::Action::Open);}
+            if let Some((owner,widgets))=origin{super::weather_panel::perform(owner,ptr::null_mut(),if widgets{super::weather_panel::Action::Widgets}else{super::weather_panel::Action::Open});}
         }
     }
     result
@@ -248,9 +255,36 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 match events_rx.try_recv().unwrap(){super::super::Event::WeatherLocation(row)=>assert_eq!(row,city()),other=>panic!("unexpected event: {other:?}")}
                 assert_eq!(weather::snapshot().location.unwrap().name,"Synthetic city");
                 super::super::control_center::close_for(owner);assert_eq!(weather::fixture_subscribers(),0);
+                // The shared widget route must survive its existing separate
+                // native picker, on both explicit cancellation and selection.
+                let widgets=super::super::weather_panel::Action::Widgets;
+                weather::fixture_reading();let shared=weather::current().unwrap();
+                super::super::weather_panel::perform(owner,ptr::null_mut(),widgets);
+                let old_popup=super::super::control_center::window(owner).unwrap();
+                let old_ticket=super::super::control_center::ticket(owner).unwrap();
+                super::super::weather_panel::perform(owner,old_popup,super::super::weather_panel::Action::City);
+                let picker=PANEL.with(|s|{let s=s.borrow();let p=s.as_ref().unwrap();assert!(p.return_widgets);p.hwnd});
+                assert_eq!(IsWindow(old_popup),0);assert_eq!(weather::fixture_subscribers(),0);
+                assert!(keyboard(&MSG{hwnd:GetDlgItem(picker,QUERY),message:WM_KEYDOWN,wParam:VK_ESCAPE as usize,..std::mem::zeroed()}));
+                let combined=super::super::control_center::window(owner).unwrap();let ticket=super::super::control_center::ticket(owner).unwrap();
+                assert_ne!(old_ticket,ticket);assert!(super::super::weather_panel::combined_for(owner,combined,ticket));
+                assert!(Arc::ptr_eq(&shared,&weather::current().unwrap()));assert_eq!(weather::fixture_subscribers(),1);
+                assert!(events_rx.try_recv().is_err(),"cancel must not persist a location");
+                super::super::weather_panel::perform(owner,combined,super::super::weather_panel::Action::City);
+                let picker=PANEL.with(|s|s.borrow().as_ref().unwrap().hwnd);
+                let mut replacement=city();replacement["name"]=Value::from("Changed synthetic city");
+                SetWindowTextW(GetDlgItem(picker,QUERY),wide("Changed synthetic city").as_ptr());KillTimer(picker,DEBOUNCE);
+                PANEL.with(|s|{let mut s=s.borrow_mut();let p=s.as_mut().unwrap();assert!(p.model.publish(p.model.generation,Ok(vec![replacement.clone()])));p.render_results();});
+                SendMessageW(GetDlgItem(picker,RESULTS),LB_SETCURSEL,0,0);SendMessageW(picker,WM_COMMAND,APPLY as usize,0);
+                let popup=super::super::control_center::window(owner).unwrap();let ticket=super::super::control_center::ticket(owner).unwrap();
+                assert!(super::super::weather_panel::combined_for(owner,popup,ticket));
+                assert_eq!(weather::snapshot().location.unwrap().name,"Changed synthetic city");assert!(weather::current().is_none());
+                match events_rx.try_recv().unwrap(){super::super::Event::WeatherLocation(row)=>assert_eq!(row,replacement),other=>panic!("unexpected combined event: {other:?}")}
+                super::super::control_center::close_for(owner);assert_eq!(weather::fixture_subscribers(),0);
+                assert!(super::super::news::view_for(popup,ticket).is_none());
             }
             weather::configure(None);assert!(!ACTIVE.load(Ordering::Acquire));DestroyWindow(owner);
         }
-        println!("FLUIDWIN_WEATHER_CITY locales=vi,en,zh native_edit_list_buttons=PASS query_limit=60 stale_query=REFUSED stale_ticket=REFUSED keyboard_escape=PASS keyboard_select=PASS existing_profile_event=PASS closed_delivery=CANCELLED network=NOT_INVOKED profile_write=NOT_INVOKED");
+        println!("FLUIDWIN_WEATHER_CITY locales=vi,en,zh native_edit_list_buttons=PASS query_limit=60 stale_query=REFUSED stale_ticket=REFUSED keyboard_escape=PASS keyboard_select=PASS existing_profile_event=PASS combined_cancel_and_select=RESTORED combined_old_forecast=CLEARED combined_subscription=RELEASED closed_delivery=CANCELLED network=NOT_INVOKED profile_write=NOT_INVOKED");
     }
 }
