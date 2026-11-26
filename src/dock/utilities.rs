@@ -76,8 +76,8 @@ enum BluetoothState { Unknown, Adapter(Vec<ClassicDevice>) }
 enum BatteryState { Unknown, Absent, Present{level:Option<u8>,ac:Option<bool>,charging:bool} }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub(super) struct Audio { level:u32, muted:bool }
-pub(super) struct Snapshot { pub status:Status, wlan:Option<wifi::View>, bluetooth:BluetoothState, battery:BatteryState, radios:Option<super::radios::View> }
-#[derive(Clone)]pub(super) enum Change{Network(wifi::Change),Radio(super::radios::Change)}
+pub(super) struct Snapshot { pub status:Status, wlan:Option<wifi::View>, bluetooth:BluetoothState, battery:BatteryState, radios:Option<super::radios::View>, brightness:Option<super::brightness::View> }
+#[derive(Clone)]pub(super) enum Change{Network(wifi::Change),Radio(super::radios::Change),Brightness(super::brightness::Query)}
 
 #[derive(Clone,Copy)]
 enum JobKind { Read, ReadStatus, AudioRead, Volume(u32), Mute }
@@ -152,11 +152,12 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut std::ffi::c_vo
                     for (i,device) in devices.iter_mut().enumerate(){device.name=format!("Fixture device {}",i+1);}
                 }
             }
-            let (network_change,radio_change)=match job.change{Some(Change::Network(change))=>(Some(change),None),Some(Change::Radio(change))=>(None,Some(change)),None=>(None,None)};
+            let (network_change,radio_change,brightness_query)=match job.change{Some(Change::Network(change))=>(Some(change),None,None),Some(Change::Radio(change))=>(None,Some(change),None),Some(Change::Brightness(query))=>(None,None,Some(query)),None=>(None,None,None)};
+            let brightness=brightness_query.map(super::brightness::read);
             let radio_kind=match job.widget{Some(Widget::Network)=>Some(super::radios::Kind::Wifi),Some(Widget::Bluetooth)=>Some(super::radios::Kind::Bluetooth),_=>None};
             let radios=radio_kind.map(|kind|super::radios::read(kind,radio_change));
             let wlan=(job.widget==Some(Widget::Network)).then(||wifi::read(network_change));
-            let snapshot=Snapshot{status:Status::read(audio),wlan,bluetooth,battery:battery(),radios};
+            let snapshot=Snapshot{status:Status::read(audio),wlan,bluetooth,battery:battery(),radios,brightness};
             if let Ok(mut result)=state.result.lock(){*result=Some(snapshot);}
         }else if matches!(job.kind,JobKind::ReadStatus){
             if let Ok(mut result)=state.status_result.lock(){*result=Some(Status::read(audio));}
@@ -444,7 +445,7 @@ pub(super) fn local_action(action:Action)->bool{
 pub(super) unsafe fn show_hub(owner:HWND,anchor:chrome::Anchor,profile:&Profile,dock_mode:bool){
     // The overview is interactive immediately. Device-specific views request
     // their readings on demand; this click never waits on WLan / COM.
-    let initial=Snapshot{status:STATUS.with(|s|s.borrow().clone()),wlan:None,bluetooth:BluetoothState::Unknown,battery:battery(),radios:None};
+    let initial=Snapshot{status:STATUS.with(|s|s.borrow().clone()),wlan:None,bluetooth:BluetoothState::Unknown,battery:battery(),radios:None,brightness:None};
     control_center::show_hub(owner,anchor,hub_view(&initial,profile,dock_mode,false));
 }
 pub(super) fn hub_view(snapshot:&Snapshot,profile:&Profile,dock_mode:bool,live:bool)->View{
@@ -476,6 +477,7 @@ pub(super) fn hub_view(snapshot:&Snapshot,profile:&Profile,dock_mode:bool,live:b
         hint:String::new(),icon:None,action:Some(Command::Comfort(super::comfort::Action::Open))});
     cards.push(Card{title:crate::launcher::localized("Đang phát","Now playing","正在播放").into(),
         hint:crate::launcher::localized("Bài hát, ảnh bìa và điều khiển phát","Track, artwork and playback controls","曲目、封面与播放控制").into(),icon:None,action:Some(Command::Media)});
+    if !profile.hidden.contains(&Widget::QuickSettings){cards.push(Card{title:crate::launcher::localized("Độ sáng màn hình","Display brightness","显示器亮度").into(),hint:String::new(),icon:None,action:Some(Command::Brightness(None))});}
     cards.push(Card{title:crate::launcher::localized("Tổng quan cửa sổ","Window overview","窗口概览").into(),
         hint:crate::launcher::localized("Cửa sổ đang mở trên màn hình này","Open windows on this display","此显示器上打开的窗口").into(),icon:None,action:Some(Command::Overview)});
     cards.push(Card{title:crate::launcher::localized("Bố cục cửa sổ","Snap layouts","窗口布局").into(),
@@ -500,6 +502,7 @@ pub(super) unsafe fn show_view(owner:HWND,point:POINT,snapshot:&Snapshot,profile
             _=>{}
         }
     }
+    if let Some(view)=&snapshot.brightness{control_center::show(owner,anchor,super::brightness::cards(view));return;}
     let make=|title:String,hint:String,icon:Option<Widget>,action|Card{title,hint,icon,action};
     let (title,hint,cards)=if let Some(widget)=widget{
         let mut cards=Vec::new();

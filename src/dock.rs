@@ -41,6 +41,7 @@ mod window_motion;
 mod window_geometry;
 mod snap_layout;
 mod radios;
+mod brightness;
 mod show_desktop;
 mod jelly;
 mod shell_menu;
@@ -1763,6 +1764,10 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::Wifi(change)=>request_utilities_with_change(owner,Some(UtilityWidget::Network),Some(utilities::Change::Network(change))),
         Command::Radio(request)=>{let widget=if request.kind==radios::Kind::Wifi{UtilityWidget::Network}else{UtilityWidget::Bluetooth};
             let change=radios::request(request);request_utilities_with_change(owner,Some(widget),Some(utilities::Change::Radio(change)));},
+        Command::Brightness(query)=>{let query=query.or_else(||brightness::target(MonitorFromWindow(owner,MONITOR_DEFAULTTONULL)).map(|target|brightness::Query{target,change:None}));
+            if let Some(query)=query{request_utilities_with_change(owner,Some(UtilityWidget::QuickSettings),Some(utilities::Change::Brightness(query)));}
+            else{open("ms-settings:display");}},
+        Command::DisplaySettings=>open("ms-settings:display"),
         Command::Run(utilities::Action::Host(action))=>emit(Event::Utility(action)),
         Command::Run(utilities::Action::Desktop)=>show_desktop::perform(owner,false),
         Command::Run(action)=>if !taskbar_hidden()||utilities::local_action(action){utilities::delegated(action)},

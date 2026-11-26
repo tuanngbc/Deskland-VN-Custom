@@ -260,6 +260,8 @@ jobs:
         run: |
           cargo test --release dock::radios::tests::native_read_only_radios_release_without_an_assumed_adapter -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::brightness::tests::native_brightness_read_releases_physical_handles -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package Rust native build
         run: |
