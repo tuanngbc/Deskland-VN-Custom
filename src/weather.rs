@@ -13,6 +13,35 @@ impl Location{
         Some(Self{name:value["name"].as_str().unwrap_or("").chars().filter(|c|!c.is_control()).take(160).collect(),latitude,longitude})
     }
 }
+// Shared by the existing Settings page and the native city picker. Keep only
+// bounded location metadata; neither caller persists a query/result history.
+fn geocode_rows(root:&Value)->Vec<Value>{
+    root["results"].as_array().into_iter().flatten().take(6).filter_map(|row|{
+        let location=Location::read(row)?;if location.name.trim().is_empty(){return None;}
+        let mut result=serde_json::json!({"name":location.name,"latitude":location.latitude,"longitude":location.longitude});
+        for key in ["admin1","country","country_code","timezone"]{
+            if let Some(value)=row[key].as_str(){result[key]=Value::String(value.chars().filter(|c|!c.is_control()).take(160).collect());}
+        }
+        if let Some(id)=row["id"].as_i64(){result["id"]=Value::from(id);}
+        Some(result)
+    }).collect()
+}
+pub(crate) fn geocode(query:&str,language:&str)->Result<Vec<Value>,()>{
+    let query=query.trim();if query.chars().count()<2{return Ok(Vec::new());}
+    if query.encode_utf16().count()>60||query.chars().any(char::is_control){return Err(());}
+    if cfg!(test){return Err(());}
+    let language=match language{"vi"=>"vi","zh"|"zh-CN"=>"zh",_=>"en"};
+    let client=reqwest::blocking::Client::builder().user_agent("TLauncher/1.0.3").https_only(true)
+        .connect_timeout(Duration::from_secs(4)).timeout(Duration::from_secs(15)).redirect(reqwest::redirect::Policy::none()).build().map_err(|_|())?;
+    let response=client.get("https://geocoding-api.open-meteo.com/v1/search")
+        .query(&[("name",query),("count","6"),("language",language),("format","json")]).send().map_err(|_|())?;
+    if response.status()!=reqwest::StatusCode::OK{return Err(());}
+    let mut bytes=Vec::new();response.take(128*1024+1).read_to_end(&mut bytes).map_err(|_|())?;
+    if bytes.len()>128*1024{return Err(());}
+    let root=serde_json::from_slice::<Value>(&bytes).map_err(|_|())?;
+    if root["error"].as_bool()==Some(true){return Err(());}
+    Ok(geocode_rows(&root))
+}
 #[derive(Clone,Debug)]pub(crate) struct Day{pub date:String,pub code:i32,pub high:f64,pub low:f64}
 #[derive(Clone,Debug)]pub(crate) struct Reading{
     pub temperature:f64,pub code:i32,pub wind:f64,pub humidity:f64,
@@ -95,6 +124,16 @@ pub(crate) fn unsubscribe(hwnd:HWND){lock().subscribers.retain(|(h,_)|*h!=hwnd a
 
 #[cfg(test)]mod tests{
     use super::*;
+    #[test]fn geocoder_bounds_metadata_and_rejects_invalid_coordinates(){
+        let valid=serde_json::json!({"name":"Hồ Chí Minh","admin1":"Region","country":"Việt Nam","latitude":10.8,"longitude":106.7,"timezone":"Asia/Ho_Chi_Minh","unrelated":"discard"});
+        let mut rows=vec![valid.clone();8];rows[1]["latitude"]=Value::from(91);rows[2]["name"]=Value::from("\n");
+        let result=geocode_rows(&serde_json::json!({"results":rows}));assert_eq!(result.len(),4);
+        assert_eq!(result[0]["name"],"Hồ Chí Minh");assert!(result[0].get("unrelated").is_none());
+        assert_eq!(result[0]["timezone"],"Asia/Ho_Chi_Minh");
+        assert!(geocode_rows(&serde_json::json!({"results":[]})).is_empty());
+        assert!(geocode(&"x".repeat(61),"en").is_err());assert!(geocode("x\ny","en").is_err());
+        assert!(geocode("x","vi").unwrap().is_empty());
+    }
     fn sample()->Reading{parse(&serde_json::json!({"current":{"temperature_2m":25,"weather_code":63,"wind_speed_10m":14,"relative_humidity_2m":80,"cloud_cover":90,"precipitation":1,"rain":2,"showers":0,"snowfall":0},"daily":{"time":["2026-11-27"],"weather_code":[61],"temperature_2m_max":[29],"temperature_2m_min":[20]}})).unwrap()}
     #[test]fn shared_owner_never_publishes_old_city_or_creates_parallel_jobs(){
         let a=Location{name:"First".into(),latitude:10.0,longitude:106.0};let b=Location{name:"Second".into(),latitude:20.0,longitude:105.0};

@@ -3,7 +3,7 @@ use super::{STATE,control_center::{self,Card,Command,View}};
 use crate::{weather,desktop::wide};
 use std::{cell::RefCell,ptr};
 use windows_sys::Win32::{Foundation::*,Globalization::*,UI::WindowsAndMessaging::*};
-#[derive(Clone)]pub(super) enum Action{Open,Refresh(u64),Unit(u64,u8),Settings}
+#[derive(Clone)]pub(super) enum Action{Open,Refresh(u64),Unit(u64,u8),City,Settings}
 struct Panel{owner:usize,popup:usize,ticket:usize,generation:u64,unit:u8,weather:weather::Snapshot}
 thread_local!{static PANEL:RefCell<Option<Panel>>=const{RefCell::new(None)};}
 impl Drop for Panel{fn drop(&mut self){weather::unsubscribe(self.popup as HWND);}}
@@ -41,8 +41,9 @@ impl Panel{
                 cards.push(Card{title:label,hint:if choice==self.unit{text("Đang chọn","Selected","已选择")}else{String::new()},icon:None,action:Some(Command::Weather(Action::Unit(self.generation,choice)))});
             }
         }
-        cards.push(Card{title:text("Vị trí thời tiết trong Cài đặt","Weather location in Settings","在设置中选择天气位置"),hint:"Open-Meteo".into(),icon:None,action:Some(Command::Weather(Action::Settings))});
-        let status=if self.weather.location.is_none(){text("Chọn thành phố trong Cài đặt","Choose a city in Settings","请在设置中选择城市")}
+        cards.push(Card{title:text("Chọn thành phố","Choose a city","选择城市"),hint:"Open-Meteo".into(),icon:None,action:Some(Command::Weather(Action::City))});
+        cards.push(Card{title:text("Vị trí thời tiết trong Cài đặt","Weather location in Settings","在设置中选择天气位置"),hint:String::new(),icon:None,action:Some(Command::Weather(Action::Settings))});
+        let status=if self.weather.location.is_none(){text("Chọn thành phố","Choose a city","请选择城市")}
             else if self.weather.pending{text("Đang tải…","Loading…","正在加载…")}
             else if self.weather.failed{text("Chưa tải được thời tiết mới. Dữ liệu cũ có thể đã thay đổi.","Could not refresh weather. Previous data may have changed.","无法刷新天气，先前数据可能已更改。")}
             else{"Open-Meteo".into()};
@@ -60,6 +61,7 @@ pub(super) unsafe fn receive(popup:HWND,ticket:usize){
 }
 pub(super) unsafe fn perform(owner:HWND,popup:HWND,action:Action){
     if !enabled()||IsWindow(owner)==0{return;}
+    if matches!(action,Action::City){super::weather_city::open(owner);return;}
     if matches!(action,Action::Settings){super::emit(super::Event::Utility(super::HostAction::Settings));return;}
     if matches!(action,Action::Open){
         super::utilities::close_panels();weather::request(false);

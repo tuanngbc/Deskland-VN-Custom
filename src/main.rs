@@ -2756,6 +2756,16 @@ fn main() {
         if let Some(edit)=launcher::take_dock_edit(){edit.apply(&mut app.cfg.dock);dock_edited=true;}
         for event in dock_events {match event {
             dock::Event::Edit(edit)=>{edit.apply(&mut app.cfg.dock);dock_edited=true;}
+            dock::Event::WeatherLocation(location)=>{
+                if weather::Location::read(&location).is_some(){
+                    app.cfg.environment.location=Some(location);
+                    app.environment=app.cfg.environment.clone();
+                    app.weather_fetch_at=0.0;app.environment_update_at=0.0;
+                    configure_shared_weather(&app.environment);
+                    save_config(&app.cfg);settings::sync(&app.settings_state());
+                    web::post(&web_init(&app).to_string());
+                }
+            }
             dock::Event::Utility(action)=>{
                 use dock::HostAction::*;
                 let command=match action {
@@ -2975,15 +2985,12 @@ fn main() {
                     let query = s_("query");
                     if query.trim().len() < 2 { web::post(&serde_json::json!({"t":"geocodeResults","results":[]}).to_string()); continue; }
                     let language = s_("language");
-                    let url = format!("https://geocoding-api.open-meteo.com/v1/search?name={}&count=6&language={}&format=json", urlencoding::encode(query.trim()), if language == "vi" || language == "zh" { language } else { "en".to_string() });
-                    match reqwest::blocking::get(url).and_then(|r| r.json::<serde_json::Value>().map_err(Into::into)) {
-                        Ok(root) => {
-                            let results = root.get("results").cloned().unwrap_or_else(|| serde_json::json!([]));
+                    match weather::geocode(&query,&language) {
+                        Ok(results) => {
                             web::post(&serde_json::json!({"t":"geocodeResults","results":results}).to_string());
                         }
-                        Err(e) => {
-                            log!("Tìm vị trí thời tiết lỗi: {e}");
-                            web::post(&serde_json::json!({"t":"geocodeResults","error":e.to_string()}).to_string());
+                        Err(()) => {
+                            web::post(&serde_json::json!({"t":"geocodeResults","error":"Location search unavailable"}).to_string());
                         }
                     }
                 }

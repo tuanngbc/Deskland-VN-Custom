@@ -620,6 +620,7 @@ thread_local! {
 }
 
 pub(super) unsafe fn panel_open_for(owner:HWND)->bool{
+    if super::weather_city::open_for(owner){return true;}
     if super::overview::open_for(owner){return true;}
     if super::snap_layout::open_for(owner){return true;}
     if super::media::open_for(owner){return true;}
@@ -694,6 +695,7 @@ pub(super) unsafe fn paint_button(item:&DRAWITEMSTRUCT,dark:bool){
         if item.itemState&ODS_DISABLED!=0{p.muted}else{p.ink},DT_CENTER|DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);
 }
 pub(super) unsafe fn close_panels(){
+    super::weather_city::close_for(ptr::null_mut());
     super::snap_layout::close_for(ptr::null_mut());
     super::overview::close_for(ptr::null_mut());
     super::media::close_for(ptr::null_mut());
@@ -760,6 +762,7 @@ pub(super) unsafe fn audio_panel(owner:HWND,point:POINT,level:u32,muted:bool){
 }
 
 pub(super) unsafe fn close_panels_for(owner:HWND){
+    super::weather_city::close_for(owner);
     super::snap_layout::close_for(owner);
     super::overview::close_for(owner);
     super::media::close_for(owner);
@@ -774,6 +777,7 @@ pub(super) unsafe fn close_panels_for(owner:HWND){
 }
 
 pub(super) unsafe fn route_panel_keyboard(message:&MSG)->bool{
+    if super::weather_city::keyboard(message){return true;}
     if super::media::keyboard(message){return true;}
     if !(WM_KEYFIRST..=WM_KEYLAST).contains(&message.message){return false;}
     if super::audio_mixer::keyboard(message){return true;}

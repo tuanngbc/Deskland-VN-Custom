@@ -5,11 +5,13 @@
   "note": "Section adaptations, not claims that these full headers were imported. Original CRLF worktree byte hashes and canonical Git blobs are recorded; existing notices and original license are preserved.",
   "sections": [
     {
-      "source": "widget.h::meteo / descrizione / fahrenheitDiWindows / gradi / nomeGiorno",
+      "source": "widget.h::meteo / descrizione / fahrenheitDiWindows / gradi / nomeGiorno / lavoroCerca; centro.h city-search lifecycle",
       "source_git_blob": "5a1628bdb1006b73c822f47332f7477fc47d27f3",
       "source_worktree_sha256": "9c541a24e2cb54ed4c1036496e8ba4d22e602c33dfb1086905e60c045c542df5",
-      "integration": ["../../src/weather.rs", "../../src/dock/weather_panel.rs", "../../src/main.rs"],
-      "adaptation": "Original current/five-day Open-Meteo query fields, WMO description groups, Celsius/km/h internal values, Windows unit selection and forecast-location date labels. Structured serde_json parsing replaces substring numeric parsing; temperature/humidity/cloud/rain/snow/forecast share one request/cache with the pre-existing wallpaper weather owner. Generation validation rejects an earlier city's late result; scoped HTTPS transport has time/body bounds and single active Windows pool callback. Native Control Center view, refresh and unit choice reuse existing config/location settings; rich illustrated cards and in-panel city search remain incomplete. No FluidWin registry/weather singleton is started."
+      "centro_source_git_blob": "942c4ae64c59c5763801d541d70da4172f46a4a3",
+      "centro_source_worktree_sha256": "da7eaf30d8b4911826b623b81ef41291c7a2e5b17368456364462f341c1c8d1d",
+      "integration": ["../../src/weather.rs", "../../src/dock/weather_panel.rs", "../../src/dock/weather_city.rs", "../../src/main.rs"],
+      "adaptation": "Original current/five-day Open-Meteo query fields, WMO description groups, Celsius/km/h internal values, Windows unit selection and forecast-location date labels. Structured serde_json parsing replaces substring numeric parsing; temperature/humidity/cloud/rain/snow/forecast share one request/cache with the pre-existing wallpaper weather owner. Generation validation rejects an earlier city's late result; scoped HTTPS transport has time/body bounds and single active Windows pool callback. Native Control Center view, refresh and unit choice reuse existing config/location settings; native EDIT/LISTBOX city selection reuses the existing profile with 60 UTF-16 units, six results, 300ms debounce and immediate generation-checked invalidation. Shared bounded geocoding transport also replaces the old unbounded Settings request. Rich illustrated/inline-card fidelity remains incomplete. No FluidWin registry/weather singleton is started."
     },
     {
       "source": "dock.h::controllaBordo / sulBordo / spostaVerso / cambiaSchermo",

@@ -62,6 +62,7 @@ mod media;
 mod notifications;
 mod news;
 mod weather_panel;
+mod weather_city;
 mod overview;
 mod jump_list;
 mod folder_stack;

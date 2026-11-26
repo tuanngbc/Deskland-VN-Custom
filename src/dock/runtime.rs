@@ -15,7 +15,7 @@ pub(super) enum Command {
         reply:Sender<(Vec<(usize,windows_sys::Win32::Foundation::RECT)>,Vec<usize>,bool)> },
 }
 #[derive(Debug)]
-pub enum Event { Edit(super::Edit), Error(String), Utility(super::HostAction), WinKey(String), Taskbar(super::TaskbarStatus) }
+pub enum Event { Edit(super::Edit), WeatherLocation(serde_json::Value), Error(String), Utility(super::HostAction), WinKey(String), Taskbar(super::TaskbarStatus) }
 
 pub struct Runtime {
     control: usize,
