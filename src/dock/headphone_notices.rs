@@ -18,8 +18,11 @@ impl Tracker{
 #[derive(Default)]struct Shared{closed:AtomicBool,result:Mutex<Option<Option<Vec<Endpoint>>>>}
 struct Watch{ticket:usize,pending:bool,dirty:bool,tracker:Tracker,shared:Arc<Shared>}
 impl Drop for Watch{fn drop(&mut self){self.shared.closed.store(true,Ordering::Release);}}
-struct Job{owner:usize,ticket:usize,shared:Arc<Shared>}
+struct Job{owner:usize,ticket:usize,shared:Arc<Shared>,#[cfg(test)]gate:Option<Arc<Gate>>}
 thread_local!{static WATCH:RefCell<Option<Watch>>=const{RefCell::new(None)};}
+#[cfg(test)]struct Gate{reached:AtomicBool,resume:Mutex<bool>,wake:std::sync::Condvar}
+#[cfg(test)]impl Gate{fn release(&self){if let Ok(mut resume)=self.resume.lock(){*resume=true;self.wake.notify_all();}}}
+#[cfg(test)]thread_local!{static GATE:RefCell<Option<Arc<Gate>>>=const{RefCell::new(None)};}
 static ACTIVE:AtomicBool=AtomicBool::new(false);
 static NEXT:AtomicUsize=AtomicUsize::new(1);
 #[repr(C)]struct NativeRow{id:[u16;1025],name:[u16;257],container:[u8;16],bluetooth:i32,battery:i32}
@@ -50,6 +53,7 @@ unsafe fn read()->Option<Vec<Endpoint>>{
 }
 unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut std::ffi::c_void){
     let job=*Box::from_raw(raw.cast::<Job>());
+    #[cfg(test)]if let Some(gate)=&job.gate{gate.reached.store(true,Ordering::Release);if let Ok(resume)=gate.resume.lock(){drop(gate.wake.wait_timeout_while(resume,std::time::Duration::from_secs(15),|resume|!*resume));}}
     if !job.shared.closed.load(Ordering::Acquire){let reading=read();if !job.shared.closed.load(Ordering::Acquire){if let Ok(mut slot)=job.shared.result.lock(){*slot=Some(reading);}}}
     ACTIVE.store(false,Ordering::Release);
     // Even an old cancelled job wakes admission for a replacement subscription.
@@ -59,7 +63,7 @@ unsafe extern "system" fn worker(_:PTP_CALLBACK_INSTANCE,raw:*mut std::ffi::c_vo
 unsafe fn submit(){
     WATCH.with(|s|{let mut s=s.borrow_mut();let Some(w)=s.as_mut()else{return;};
         if w.pending||!w.dirty||ACTIVE.swap(true,Ordering::AcqRel){return;}
-        w.pending=true;w.dirty=false;let raw=Box::into_raw(Box::new(Job{owner:super::CONTROL.get() as usize,ticket:w.ticket,shared:w.shared.clone()}));
+        w.pending=true;w.dirty=false;let raw=Box::into_raw(Box::new(Job{owner:super::CONTROL.get() as usize,ticket:w.ticket,shared:w.shared.clone(),#[cfg(test)]gate:GATE.with(|g|g.borrow().clone())}));
         if TrySubmitThreadpoolCallback(Some(worker),raw.cast(),ptr::null())==0{drop(Box::from_raw(raw));ACTIVE.store(false,Ordering::Release);w.pending=false;w.dirty=true;}
     });
 }
@@ -114,7 +118,8 @@ pub(super) unsafe fn reset(){
             let old_control=super::super::CONTROL.replace(owner);let old_state=super::super::STATE.with(|s|{let mut s=s.borrow_mut();let old=(s.prefs.enabled,s.suspended);s.prefs.enabled=true;s.suspended=false;old});
             struct Cleanup(HWND,HWND,(bool,bool));impl Drop for Cleanup{fn drop(&mut self){unsafe{reset();super::super::CONTROL.set(self.1);super::super::STATE.with(|s|{let mut s=s.borrow_mut();s.prefs.enabled=self.2.0;s.suspended=self.2.1;});DestroyWindow(self.0);CoUninitialize();}}}let _cleanup=Cleanup(owner,old_control,old_state);
             for _ in 0..6{assert!(tlauncher_headphones_fixture(owner,CHANGED));}
-            let reading=read();assert!(reading.as_ref().is_none_or(|rows|rows.len()<=64));
+            let reading=std::thread::spawn(||read()).join().unwrap();assert!(reading.as_ref().is_none_or(|rows|rows.len()<=64));
+            println!("FLUIDWIN_HEADPHONES native_read_rows={:?} real_device_identifiers=NOT_EXPORTED",reading.as_ref().map(Vec::len));
             let mut t=Tracker::default();assert!(t.observe(reading).is_empty());
             for _ in 0..3{
                 sync();let (ticket,shared)=WATCH.with(|s|{let s=s.borrow();let w=s.as_ref().unwrap();(w.ticket,w.shared.clone())});
@@ -123,6 +128,18 @@ pub(super) unsafe fn reset(){
                 receive(ticket);assert!(!WATCH.with(|s|s.borrow().as_ref().unwrap().pending));
                 reset();assert!(shared.closed.load(Ordering::Acquire));*shared.result.lock().unwrap()=Some(Some(vec![row("late",7,true,Some(99))]));receive(ticket);assert!(WATCH.with(|s|s.borrow().is_none()));
             }
+            let pump=||{let mut msg:MSG=std::mem::zeroed();while PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)!=0{match msg.message{CHANGED=>changed(msg.wParam),READY=>receive(msg.wParam),_=>{TranslateMessage(&msg);DispatchMessageW(&msg);}}}std::thread::sleep(std::time::Duration::from_millis(5));};
+            let gate=Arc::new(Gate{reached:AtomicBool::new(false),resume:Mutex::new(false),wake:std::sync::Condvar::new()});
+            struct Unpause(Arc<Gate>);impl Drop for Unpause{fn drop(&mut self){self.0.release();GATE.with(|g|g.borrow_mut().take());}}let _unpause=Unpause(gate.clone());
+            GATE.with(|g|g.replace(Some(gate.clone())));sync();
+            let old_ticket=WATCH.with(|s|s.borrow().as_ref().unwrap().ticket);let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
+            while !gate.reached.load(Ordering::Acquire){pump();assert!(std::time::Instant::now()<deadline);}
+            assert!(ACTIVE.load(Ordering::Acquire));reset();GATE.with(|g|g.borrow_mut().take());sync();
+            let new_ticket=WATCH.with(|s|{let s=s.borrow();let w=s.as_ref().unwrap();assert!(!w.pending&&w.dirty,"the held old callback must retain the only admission permit");w.ticket});assert_ne!(old_ticket,new_ticket);
+            for _ in 0..40{changed(new_ticket);receive(old_ticket);assert!(ACTIVE.load(Ordering::Acquire));assert!(!WATCH.with(|s|s.borrow().as_ref().unwrap().pending));}
+            gate.release();let deadline=std::time::Instant::now()+std::time::Duration::from_secs(20);
+            while ACTIVE.load(Ordering::Acquire)||WATCH.with(|s|s.borrow().as_ref().is_some_and(|w|w.dirty||w.pending)){pump();assert!(std::time::Instant::now()<deadline,"late cancellation must admit a new silent baseline after completion");}
+            WATCH.with(|s|assert_eq!(s.borrow().as_ref().unwrap().ticket,new_ticket));reset();
             super::super::STATE.with(|s|s.borrow_mut().suspended=true);sync();assert!(WATCH.with(|s|s.borrow().is_none()));
             println!("FLUIDWIN_HEADPHONES native_registration=RELEASED event_burst=COALESCED initial_list=SILENT unknown_pin=OMITTED late_delivery=REFUSED worker=BOUNDED physical_bluetooth_change=NOT_INVOKED audio_write=NONE poll=NONE");
         }
