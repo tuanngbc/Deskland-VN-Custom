@@ -181,15 +181,12 @@ mod tests {
         let directory=std::env::temp_dir().join(format!("deskland command pin {}",std::process::id()));
         std::fs::create_dir(&directory).unwrap();
         let proof=directory.join("argv check.txt");
-        let fixture=directory.join("fixture command.ps1");
-        std::fs::write(&fixture,r#"$ErrorActionPreference = 'Stop'
-$temp = Join-Path $PSScriptRoot 'argv partial.txt'
-$result = [ordered]@{ args = @($args); location = (Get-Location).Path; expected = $PSScriptRoot }
-[IO.File]::WriteAllText($temp, ($result | ConvertTo-Json -Compress -Depth 4))
-[IO.File]::Move($temp, (Join-Path $PSScriptRoot 'argv check.txt'))"#).unwrap();
-        let executable=Path::new(&std::env::var_os("SystemRoot").unwrap()).join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
-        let line=format!("\"{}\" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\" \"A & B\" CaseSensitive",
-            executable.display(),fixture.display());
+        // Use the same native test binary as a child. PowerShell cold-start
+        // occasionally never produced a report on a busy hosted runner; it
+        // is not part of the application's ShellExecute launch contract.
+        let executable=std::env::current_exe().unwrap();
+        let line=format!("\"{}\" --exact dock::command_pin::tests::native_shell_child_reports_actual_arguments --ignored --nocapture --test-threads=1 --skip \"A & B\" --skip CaseSensitive --skip TLAUNCHER_COMMAND_PIN_CHILD",
+            executable.display());
         let launch=Launch{directory:directory.to_string_lossy().into_owned(),..parse(&line,"Fixture").unwrap()};
         // Both the legacy string parser and the new library's explicit fields
         // must produce the same launch target, arguments, and working directory.
@@ -198,24 +195,19 @@ $result = [ordered]@{ args = @($args); location = (Get-Location).Path; expected 
         let result = unsafe { open(&encoded) };
         assert!(result > 32, "ShellExecuteW returned {result}");
         let start = Instant::now();
-        // The hosted runner can still be initializing PowerShell and Defender
-        // after ShellExecuteW returns. Preserve the exact assertions rather
-        // than treating an arbitrary 8-second startup delay as a launch failure.
         while !proof.exists() && start.elapsed() < Duration::from_secs(30) {
             std::thread::sleep(Duration::from_millis(25));
         }
-        let data = std::fs::read(&proof).expect("PowerShell launch fixture did not report within 30 seconds");
+        let data = std::fs::read(&proof).expect("native ShellExecute child did not report within 30 seconds");
         let actual: serde_json::Value = serde_json::from_slice(&data).expect("fixture must report actual arguments and directory");
-        assert_eq!(actual["args"], serde_json::json!(["A & B", "CaseSensitive"]));
+        assert_eq!(actual["args"], serde_json::json!(["--skip", "A & B", "--skip", "CaseSensitive", "--skip", "TLAUNCHER_COMMAND_PIN_CHILD"]));
         // The runner's TEMP can use DOS 8.3 aliases or a different path
         // spelling. Compare resolved filesystem directories, not their strings.
         let canonical = |value: &str| std::fs::canonicalize(value).unwrap();
         let requested = canonical(&launch.directory);
         assert_eq!(canonical(actual["location"].as_str().unwrap()), requested,
             "unexpected location: {}, requested: {}", actual["location"], launch.directory);
-        assert_eq!(canonical(actual["expected"].as_str().unwrap()), requested);
         std::fs::remove_file(proof).unwrap();
-        std::fs::remove_file(fixture).unwrap();
         // Explorer returns before the process exits. Windows keeps the
         // working directory locked until the child has fully shut down.
         let cleanup=Instant::now();
@@ -227,6 +219,19 @@ $result = [ordered]@{ args = @($args); location = (Get-Location).Path; expected 
                 Err(err)=>panic!("fixture directory locked: {err}"),
             }
         }
+    }
+    #[test]
+    #[ignore="child entry point for the individual hosted ShellExecute launch fixture"]
+    fn native_shell_child_reports_actual_arguments(){
+        let args=std::env::args().collect::<Vec<_>>();
+        if !args.iter().any(|a|a=="TLAUNCHER_COMMAND_PIN_CHILD"){return;}
+        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(),Ok("true"));
+        let directory=std::env::current_dir().unwrap();
+        assert!(directory.file_name().unwrap().to_string_lossy().starts_with("deskland command pin "));
+        let start=args.iter().position(|a|a=="--skip").unwrap();
+        let result=serde_json::json!({"args":&args[start..],"location":directory});
+        let partial=directory.join("argv partial.txt");std::fs::write(&partial,serde_json::to_vec(&result).unwrap()).unwrap();
+        std::fs::rename(partial,directory.join("argv check.txt")).unwrap();
     }
     #[test]
     fn validates_quoted_and_unquoted_paths_with_spaces(){
