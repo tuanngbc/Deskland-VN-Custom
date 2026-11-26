@@ -32,6 +32,7 @@ thread_local!{
     static RECENT:RefCell<HashMap<WindowIdentity,Recent>>=RefCell::new(HashMap::new());
     static FACTORY:RefCell<Option<ProxyFactory>>=const{RefCell::new(None)};
     #[cfg(test)] static FAIL_PRESENT:std::cell::Cell<Option<i32>>=const{std::cell::Cell::new(None)};
+    #[cfg(test)] static FIXTURE_NORMAL:std::cell::Cell<Option<RECT>>=const{std::cell::Cell::new(None)};
 }
 static LAST:Mutex<Option<Value>>=Mutex::new(None);
 
@@ -458,7 +459,7 @@ enum Phase{
     WaitingRestore{_proxy:Proxy,started:Instant},
     WaitingRelease{proxy:Proxy,started:Instant},
 }
-struct Transition{req:Request,phase:Option<Phase>,attempt:Attempt,last_progress:f64,lease:Option<super::window_lease::Lease>}
+struct Transition{req:Request,phase:Option<Phase>,attempt:Attempt,last_progress:f64,lease:Option<super::window_lease::Lease>,native_restore:Option<Instant>}
 impl Drop for Transition{fn drop(&mut self){self.lease.take();self.phase.take();}}
 impl Transition{
     unsafe fn prime(&mut self,proxy:Proxy,frame:Option<stage_snapshot::MotionFrame>,started:Instant)->Result<Phase,Reason>{
@@ -492,6 +493,7 @@ impl Transition{
         }else{
             if self.req.guarded{
                 if ShowWindowAsync(h,SW_RESTORE)==0{return Err("state-transition-timeout");}
+                self.native_restore=Some(Instant::now());
                 return Ok(Phase::WaitingGuardedRestore{proxy,started:Instant::now()});
             }
             self.attempt.animation=Some(Instant::now());
@@ -524,16 +526,38 @@ impl Transition{
         // MonitorFromWindow(NULL) must not cancel a journaled reversal.
         if MonitorFromRect(&self.req.area,MONITOR_DEFAULTTONULL) as usize!=self.req.monitor{return Err("monitor-changed");}
         let observed=placement(h).map(|p|p.rcNormalPosition);
+        #[cfg(test)]let observed=FIXTURE_NORMAL.with(|s|s.take()).or(observed);
         if !observed.is_some_and(|r|super::same_rect(r,self.req.normal)){
             let r=self.req.normal;self.attempt.values["expectedNormalBounds"]=json!([r.left,r.top,r.right,r.bottom]);
             self.attempt.values["observedNormalBounds"]=json!(observed.map(|r|[r.left,r.top,r.right,r.bottom]));
+            let parked=observed.is_some_and(|r|r.left==-32000&&r.top==-32000&&r.right>r.left&&r.bottom>r.top&&MonitorFromRect(&r,MONITOR_DEFAULTTONULL).is_null());
+            let own_restore=self.req.guarded&&self.req.action==Action::Restore&&self.lease.as_ref().is_some_and(|l|l.status()==1)
+                &&self.native_restore.is_some_and(|t|t.elapsed()<SETTLE);
+            let waiting=matches!(self.phase,Some(Phase::Reversal{..}|Phase::WaitingGuardedRestore{..}))
+                ||self.req.effect.mesh()&&matches!(self.phase,Some(Phase::Animate{..}));
+            if parked&&own_restore&&waiting{
+                self.attempt.values["nativeParkWaits"]=json!(self.attempt.values["nativeParkWaits"].as_u64().unwrap_or(0)+1);
+                return Err("native-placement-pending");
+            }
             return Err("window-placement-changed");
         }
         Ok(())
     }
     unsafe fn tick(&mut self)->bool{
         let h=self.req.source.hwnd as HWND;
-        if let Err(reason)=self.stable(){return self.fallback(reason);}
+        if let Err(reason)=self.stable(){
+            if reason=="native-placement-pending"{
+                // Keep the last accepted pose while our own native restore
+                // reports the observed minimized parking sentinel. Resume from
+                // the same mesh only after original normal placement returns.
+                self.phase=self.phase.take().map(|phase|match phase{
+                    Phase::Animate{proxy,..}=>Phase::Reversal{proxy,elapsed:fluidwin_mesh::invert(self.last_progress,true,self.req.effect==motion::WindowEffect::Drop),base:450,started:self.native_restore.unwrap()},
+                    phase=>phase,
+                });
+                return true;
+            }
+            return self.fallback(reason);
+        }
         let icon=icon_fit(self.req.area,self.req.icon);
         let action=self.req.action;
         let phase=self.phase.take().expect("active phase");
@@ -675,7 +699,7 @@ unsafe fn begin(owner:HWND,path:&str,id:WindowIdentity,action:Action)->bool{
         Ok((req,phase))=>{
             let last_progress=if req.action==Action::Restore{1.0}else{0.0};
             let restoring=req.action==Action::Restore;
-            ACTIVE.with(|a|{a.replace(Some(Transition{req,phase:Some(phase),attempt,last_progress,lease:None}));});
+            ACTIVE.with(|a|{a.replace(Some(Transition{req,phase:Some(phase),attempt,last_progress,lease:None,native_restore:None}));});
             if restoring{timer();}
             true
         }
@@ -698,6 +722,7 @@ unsafe fn reverse(owner:HWND,id:WindowIdentity,action:Action)->bool{
         if t.req.guarded{
             let show=if restoring{SW_RESTORE}else if super::taskbar_hidden(){SW_SHOWMINNOACTIVE}else{SW_MINIMIZE};
             if ShowWindowAsync(id.hwnd as HWND,show)==0{t.phase=Some(Phase::Animate{proxy,span});return false;}
+            t.native_restore=restoring.then(Instant::now);
             t.phase=Some(Phase::Reversal{proxy,elapsed,base,started:Instant::now()});
         }else{t.phase=Some(Phase::Animate{proxy,span:motion::Span::resume(base,elapsed)});}
         t.req.action=action;
@@ -1083,6 +1108,10 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
             super::activate(bar,&item(id));
             assert!(ACTIVE.with(|a|matches!(a.borrow().as_ref().and_then(|t|t.phase.as_ref()),
                 Some(Phase::Animate{proxy:p,..}|Phase::Reversal{proxy:p,..}) if p.hwnd==proxy)));
+            if actual_policy.native_minimize!=Some(0)&&guardian_ready(){
+                FIXTURE_NORMAL.with(|s|s.set(Some(RECT{left:-32000,top:-32000,right:-31840,bottom:-31972})));timer();
+                assert!(ACTIVE.with(|a|a.borrow().as_ref().is_some_and(|t|t.attempt.values["nativeParkWaits"].as_u64().unwrap_or(0)>0&&matches!(t.phase,Some(Phase::Reversal{..})))),"native parked restore keeps the accepted mesh and journal");
+            }
             pump(false);
             let result=last();
             assert_eq!(result["actualEffect"],effect.name(),"{result}");
@@ -1108,7 +1137,7 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
             let id=ids[0];let before=GetWindowLongPtrW(source,GWL_EXSTYLE);
             let (_,marker)=super::motion_guard::session().unwrap();
             let marker=wide(&marker);
-            for failure in ["cancel","injected-device-removed","injected-monitor-change"]{
+            for failure in ["cancel","injected-device-removed","injected-monitor-change","injected-normal-placement-change"]{
                 motion::configure(motion::Settings{window_effect:motion::WindowEffect::Genie,..policy});
                 for attempt in 0..3{
                     fixture_settle_source(source);
@@ -1138,6 +1167,7 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
                 match failure{
                     "cancel"=>cancel(),
                     "injected-device-removed"=>{FAIL_PRESENT.with(|s|s.set(Some(0x887a0005u32 as i32)));timer();},
+                    "injected-normal-placement-change"=>{let r=ACTIVE.with(|a|a.borrow().as_ref().unwrap().req.normal);FIXTURE_NORMAL.with(|s|s.set(Some(RECT{left:r.left+7,right:r.right+7,..r})));timer();},
                     _=>{ACTIVE.with(|a|a.borrow_mut().as_mut().unwrap().req.monitor=0);timer();},
                 }
                 assert!(!active());
