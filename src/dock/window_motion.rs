@@ -4,6 +4,39 @@ use std::{cell::RefCell,mem,ptr,time::{Instant,Duration},sync::mpsc::TryRecvErro
 use windows_sys::Win32::{Foundation::*,Graphics::Gdi::*,UI::{Accessibility::*,HiDpi::GetDpiForWindow,Input::KeyboardAndMouse::{GetAsyncKeyState,VK_LBUTTON},WindowsAndMessaging::*}};
 pub(super) const TIMER:usize=30;
 thread_local!{static ACTIVE:RefCell<Option<Drag>>=const{RefCell::new(None)};static DETACH:RefCell<Option<Detach>>=const{RefCell::new(None)};}
+// Original fluidwin.cpp EVENT_OBJECT_LOCATIONCHANGE / gUltimoPosto route for
+// apps that move their own HWND without native MOVESIZESTART. One foreground
+// observation replaces upstream's all-window map; no idle timer or worker.
+#[derive(Clone,Copy)]struct Observation{id:WindowIdentity,rect:RECT,dpi:u32,monitor:usize,at:Instant}
+thread_local!{static OBSERVED:RefCell<Option<Observation>>=const{RefCell::new(None)};}
+fn custom_move(old:Observation,new:Observation,held:bool)->bool{
+    old.id==new.id&&held&&new.at.saturating_duration_since(old.at)<Duration::from_secs(2)&&old.dpi==new.dpi&&old.monitor==new.monitor
+        &&(old.rect.left!=new.rect.left||old.rect.top!=new.rect.top)
+        &&old.rect.right-old.rect.left==new.rect.right-new.rect.left&&old.rect.bottom-old.rect.top==new.rect.bottom-new.rect.top
+}
+#[cfg(test)]#[test]
+fn custom_drag_admission_requires_same_identity_size_monitor_dpi_and_held_input(){
+    let now=Instant::now();let original=Observation{id:WindowIdentity{hwnd:7,pid:8,tid:9},rect:RECT{left:20,top:30,right:420,bottom:330},dpi:144,monitor:2,at:now};
+    let moved=Observation{rect:RECT{left:28,top:36,right:428,bottom:336},at:now+Duration::from_millis(20),..original};
+    assert!(custom_move(original,moved,true));assert!(!custom_move(original,moved,false));assert!(!custom_move(original,original,true));
+    assert!(!custom_move(original,Observation{dpi:96,..moved},true));assert!(!custom_move(original,Observation{monitor:3,..moved},true));
+    assert!(!custom_move(original,Observation{id:WindowIdentity{pid:10,..moved.id},..moved},true));
+    assert!(!custom_move(original,Observation{at:now+Duration::from_secs(2),..moved},true));
+    assert!(!custom_move(original,Observation{rect:RECT{right:430,..moved.rect},..moved},true));
+}
+unsafe fn observe_custom(h:HWND,moving:bool){
+    if !STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.jelly_drag&&!s.suspended}){OBSERVED.with(|s|s.take());return;}
+    if h.is_null()||h!=GetForegroundWindow()||GetAncestor(h,GA_ROOT)!=h{return;}
+    let mut rect:RECT=mem::zeroed();
+    if IsIconic(h)!=0||IsZoomed(h)!=0||IsWindowVisible(h)==0||GetWindowRect(h,&mut rect)==0||rect.left<=-30000||rect.top<=-30000{
+        OBSERVED.with(|s|s.take());return;
+    }
+    let Some(id)=WindowIdentity::read(h)else{return;};let monitor=MonitorFromWindow(h,MONITOR_DEFAULTTONULL);if monitor.is_null(){return;}
+    let now=Observation{id,rect,dpi:GetDpiForWindow(h),monitor:monitor as usize,at:Instant::now()};
+    let old=OBSERVED.with(|s|s.replace(Some(now)));
+    if moving&&!active()&&!DETACH.with(|s|s.borrow().is_some())&&!super::window_geometry::active()&&!super::window_effect::active()
+        &&old.is_some_and(|old|custom_move(old,now,held())){start(h);}
+}
 // Windows retains ownership of restoring a maximized titlebar drag. Wait for
 // its actual restored bounds before attaching the existing live Jelly stream.
 // No mouse edge, native restore command or global Snap policy is intercepted.
@@ -24,17 +57,20 @@ impl Drop for Drag{fn drop(&mut self){
     if let Some(lease)=&self.lease{unsafe{lease.restore();}}
 }}
 pub(super) fn active()->bool{ACTIVE.with(|s|s.borrow().is_some())}
-pub(super) unsafe fn cancel(){DETACH.with(|s|s.take());let old=ACTIVE.with(|s|s.borrow_mut().take());if old.is_some(){drop(old);super::window_effect::schedule_release();}KillTimer(CONTROL.get(),TIMER);}
+pub(super) unsafe fn cancel(){OBSERVED.with(|s|s.take());DETACH.with(|s|s.take());let old=ACTIVE.with(|s|s.borrow_mut().take());if old.is_some(){drop(old);super::window_effect::schedule_release();}KillTimer(CONTROL.get(),TIMER);}
 pub(super) unsafe fn frame_ready()->HANDLE{ACTIVE.with(|s|s.borrow().as_ref().filter(|d|d.revealed.is_none()||d.lease.as_ref().is_some_and(|l|l.status()==2)).and_then(|d|d.proxy.as_ref()).map_or(ptr::null_mut(),|p|p.frame_clock()))}
 pub(super) unsafe fn event(event:u32,h:HWND){
     if event==EVENT_SYSTEM_FOREGROUND{
         if DETACH.with(|s|s.borrow().as_ref().is_some_and(|d|d.id.hwnd!=h as usize)){cancel();}
         if ACTIVE.with(|s|s.borrow().as_ref().is_some_and(|d|d.id.hwnd!=h as usize)){cancel();}
+        observe_custom(h,false);
     }else if event==EVENT_SYSTEM_MOVESIZESTART{start(h);}
+    else if event==EVENT_OBJECT_LOCATIONCHANGE{observe_custom(h,true);}
     else if event==EVENT_SYSTEM_MOVESIZEEND{
         if DETACH.with(|s|s.borrow().as_ref().is_some_and(|d|d.id.hwnd==h as usize)){cancel();}
         ACTIVE.with(|s|if let Some(d)=s.borrow_mut().as_mut().filter(|d|d.id.hwnd==h as usize){d.released.get_or_insert_with(Instant::now);});
     }else if event==EVENT_OBJECT_DESTROY||event==EVENT_OBJECT_HIDE{
+        if OBSERVED.with(|s|s.borrow().as_ref().is_some_and(|o|o.id.hwnd==h as usize)){OBSERVED.with(|s|s.take());}
         if DETACH.with(|s|s.borrow().as_ref().is_some_and(|d|d.id.hwnd==h as usize)){cancel();}
         if ACTIVE.with(|s|s.borrow().as_ref().is_some_and(|d|d.id.hwnd==h as usize)){cancel();}
     }
@@ -203,7 +239,7 @@ pub(super) unsafe fn probe_drag(id:WindowIdentity){
         assert_eq!(GetWindowLongPtrW(h,GWL_EXSTYLE),style);assert!(GetPropW(h,marker.as_ptr()).is_null());assert_ne!(IsZoomed(h),0);
         println!("FLUIDWIN_JELLY_NATIVE_DETACH cancellation={refusal} no_native_restore_command=PASS no_visibility_lease=PASS pending_cleared=PASS");
     }
-    for mode in ["release","native-maximized-detach","regrab","cancel","resize","monitor"]{
+    for mode in ["release","native-maximized-detach","custom-app","regrab","cancel","resize","monitor"]{
         'setup:for attempt in 0..3{
         ShowWindowAsync(h,SW_RESTORE);SetWindowPos(h,ptr::null_mut(),original.left,original.top,original.right-original.left,original.bottom-original.top,SWP_NOACTIVATE|SWP_NOZORDER|SWP_ASYNCWINDOWPOS);
         PostMessageW(h,WM_APP+171,0x00ff0000,0);std::thread::sleep(Duration::from_millis(100));
@@ -220,6 +256,13 @@ pub(super) unsafe fn probe_drag(id:WindowIdentity){
                 pump();assert!(until.elapsed()<Duration::from_secs(4),"native restored geometry did not attach existing Jelly");
             }
             assert!(DETACH.with(|s|s.borrow().is_none()));
+        }else if mode=="custom-app"{
+            let area=super::window_effect::visible_area(h).unwrap();SetCursorPos(area.left+100,area.top+12);HELD.set(Some(true));SetForegroundWindow(h);
+            let until=Instant::now();while GetForegroundWindow()!=h{pump();SetForegroundWindow(h);assert!(until.elapsed()<Duration::from_secs(3),"custom-app fixture needs actual foreground ownership");}
+            event(EVENT_SYSTEM_FOREGROUND,h);event(EVENT_OBJECT_LOCATIONCHANGE,h);assert!(!active(),"unchanged foreground baseline cannot begin a drag");
+            SetWindowPos(h,ptr::null_mut(),original.left+12,original.top+8,0,0,SWP_NOSIZE|SWP_NOACTIVATE|SWP_NOZORDER|SWP_ASYNCWINDOWPOS);
+            let until=Instant::now();loop{let mut r:RECT=mem::zeroed();GetWindowRect(h,&mut r);if r.left==original.left+12&&r.top==original.top+8{break;}pump();assert!(until.elapsed()<Duration::from_secs(3));}
+            event(EVENT_OBJECT_LOCATIONCHANGE,h);
         }else{
             let area=super::window_effect::visible_area(h).unwrap();SetCursorPos(area.left+100,area.top+12);HELD.set(Some(true));event(EVENT_SYSTEM_MOVESIZESTART,h);
         }
@@ -242,7 +285,7 @@ pub(super) unsafe fn probe_drag(id:WindowIdentity){
         }
         assert!(!GetPropW(h,marker.as_ptr()).is_null());let mut color=0;let mut alpha=0;let mut flags=0;
         assert_ne!(GetLayeredWindowAttributes(h,&mut color,&mut alpha,&mut flags),0);assert_eq!((alpha,flags),(1,LWA_ALPHA),"dragged source remains hit-testable");
-        if mode=="release"||mode=="native-maximized-detach"{
+        if mode=="release"||mode=="native-maximized-detach"||mode=="custom-app"{
             SetWindowPos(h,ptr::null_mut(),original.left+140,original.top+60,0,0,SWP_NOSIZE|SWP_NOACTIVATE|SWP_NOZORDER|SWP_ASYNCWINDOWPOS);
             for _ in 0..4{pump();}
             ACTIVE.with(|s|{
@@ -254,7 +297,7 @@ pub(super) unsafe fn probe_drag(id:WindowIdentity){
                 for p in pixels.chunks_exact(4){assert!(p[..3].iter().all(|&c|c<=p[3]));}
                 if let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
                     let rgba=pixels.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],p[3]]).collect::<Vec<_>>();
-                    image::save_buffer(std::path::PathBuf::from(dir).join(if mode=="release"{"jelly-moving.png"}else{"jelly-native-maximized-detach.png"}),&rgba,w,height,image::ColorType::Rgba8).unwrap();
+                    image::save_buffer(std::path::PathBuf::from(dir).join(if mode=="release"{"jelly-moving.png"}else if mode=="custom-app"{"jelly-custom-app-moving.png"}else{"jelly-native-maximized-detach.png"}),&rgba,w,height,image::ColorType::Rgba8).unwrap();
                 }
             });
         }
@@ -269,11 +312,11 @@ pub(super) unsafe fn probe_drag(id:WindowIdentity){
                 for pixel in pixels.chunks_exact(4){assert!(pixel[..3].iter().all(|&c|c<=pixel[3]),"premultiplied full Jelly canvas");}
                 if let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
                     let rgba=pixels.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],p[3]]).collect::<Vec<_>>();
-                    image::save_buffer(std::path::PathBuf::from(dir).join(if mode=="release"{format!("jelly-live-{name}.png")}else{format!("jelly-native-detach-live-{name}.png")}),&rgba,w,height,image::ColorType::Rgba8).unwrap();
+                    image::save_buffer(std::path::PathBuf::from(dir).join(if mode=="release"{format!("jelly-live-{name}.png")}else if mode=="custom-app"{format!("jelly-custom-app-live-{name}.png")}else{format!("jelly-native-detach-live-{name}.png")}),&rgba,w,height,image::ColorType::Rgba8).unwrap();
                 }
             });
         };
-        if mode=="release"||mode=="native-maximized-detach"{
+        if mode=="release"||mode=="native-maximized-detach"||mode=="custom-app"{
             sample("blue",0);
             // WGC reports content changes, not a guaranteed stream cadence for
             // a static HWND. Require new pixels and a new GPU copy for each
