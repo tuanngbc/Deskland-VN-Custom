@@ -91,7 +91,7 @@ impl Wave{
     }
     unsafe fn step(&mut self)->bool{
         if !ENABLED.get()||!crate::dock::popup_motion_allowed(){return false;}
-        if self.closing.is_none()&&(IsWindow(self.owner)==0||IsWindowVisible(self.owner)==0){return false;}
+        if self.closing.is_none()&&(IsWindow(self.owner)==0||IsWindowVisible(self.owner)==0||IsIconic(self.owner)!=0){return false;}
         let point=POINT{x:self.area.left+(self.area.right-self.area.left)/2,y:self.area.top+(self.area.bottom-self.area.top)/2};
         if self.closing.is_none()&&MonitorFromWindow(self.owner,MONITOR_DEFAULTTONULL)!=MonitorFromPoint(point,MONITOR_DEFAULTTONULL){return false;}
         if !bounds(point).is_some_and(|a|a.left==self.area.left&&a.top==self.area.top&&a.right==self.area.right&&a.bottom==self.area.bottom){return false;}
@@ -151,6 +151,7 @@ fn native_original_wave_renders_perimeters_and_releases_shared_resources(){
             for (index,(time,fade,photo)) in [(0.0,1.0,true),(0.06,1.0,true),(0.18,1.0,true),(0.42,1.0,true),(1.4,1.0,false),(1.5,0.0,false)].into_iter().enumerate(){
                 wave.photo=photo;assert_eq!(WaitForSingleObject(tlauncher_wave_ready(wave.raw.as_ptr()),3000),WAIT_OBJECT_0);
                 assert!(wave.draw_at(time,fade));
+                if index==0{ShowWindow(hwnd,SW_SHOWNOACTIVATE);}
                 let mut output=vec![0u8;W*H*4];let context=wave.gpu.context();
                 assert!(tlauncher_wave_pixels(wave.raw.as_ptr(),context.as_raw(),output.as_mut_ptr(),W as u32*4));drop(context);
                 for (pixel_index,p) in output.chunks_exact(4).enumerate(){
