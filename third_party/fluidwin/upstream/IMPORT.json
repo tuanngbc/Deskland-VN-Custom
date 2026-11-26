@@ -87,6 +87,12 @@
       "source_git_blob": "cb5c830156bf30dab456e1d84975eafe9b8817b6",
       "source_worktree_sha256": "0808bda50d5590efd16af7ebfafe2c3fcc87d4e7d95e246ca7a1ae569f0e82a9",
       "local_changes": "Use existing UI timers without the upstream permanent heartbeat thread; owner motion-speed callback"
+    },
+    {
+      "path": "anteprime.h",
+      "source_git_blob": "b246f40b974d6b7a27b362beb5c06518b2b0a7d7",
+      "source_worktree_sha256": "79d476d8ec8187dc2e8fb809c99e7a1a72f5d4bb7dc9dac9ccb68ab66223c238",
+      "local_changes": "Scoped HWND/timer/DWM teardown; caller motion speed, reduced motion and vi/en/zh labels; read-only fixture inspection"
     }
   ]
 }

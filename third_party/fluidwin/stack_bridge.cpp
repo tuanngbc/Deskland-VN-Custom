@@ -3,14 +3,44 @@
 #define TLAUNCHER_SHARED_UI_TIMERS
 #include "upstream/pila.h"
 #include "upstream/jumplist.h"
+#include "upstream/anteprime.h"
 
 namespace{
 struct Apartment{bool active=false;~Apartment(){if(active)OleUninitialize();}};
 struct Stack{Apartment apartment;pila::Pila panel;std::wstring folder;};
+struct Preview{
+    anteprime::Anteprime panel;HWND target=nullptr;int action=0;
+    Preview(){
+        panel.scegli=[this](HWND h){target=h;action=1;};
+        panel.chiudiFinestra=[this](HWND h){target=h;action=2;};
+    }
+};
 double stackSpeed=0.70;
 double speed(){return stackSpeed;}
 }
 extern "C"{
+void* tlauncher_previews_open(const HWND* sources,unsigned count,const RECT* icon,const RECT* area,int side,HWND owner,
+    double speed,bool reduced,const wchar_t* minimized,const wchar_t* unavailable) noexcept{
+    try{
+        if(!sources||!count||count>8||!icon||!area||!IsWindow(owner))return nullptr;
+        auto preview=std::make_unique<Preview>();
+        preview->panel.motionSpeed=speed;preview->panel.reducedMotion=reduced;
+        preview->panel.minimizedLabel=minimized;preview->panel.unavailableLabel=unavailable;
+        const LONG inner=side==2?icon->right:side==3?icon->left:icon->top;
+        preview->panel.apri(std::vector<HWND>(sources,sources+count),*icon,inner,*area,0,owner,side);
+        return preview->panel.visible()?preview.release():nullptr;
+    }catch(...){return nullptr;}
+}
+int tlauncher_previews_poll(void* raw,HWND* target) noexcept{
+    if(!raw||!target)return 0;auto& p=*static_cast<Preview*>(raw);
+    p.panel.riconcilia();*target=p.target;const int action=p.action;p.target=nullptr;p.action=0;return action;
+}
+bool tlauncher_previews_hover(void* raw) noexcept{return raw&&static_cast<Preview*>(raw)->panel.mouseSopra();}
+bool tlauncher_previews_visible(void* raw) noexcept{return raw&&static_cast<Preview*>(raw)->panel.visible();}
+void tlauncher_previews_close(void* raw) noexcept{if(raw)static_cast<Preview*>(raw)->panel.chiudi();}
+void tlauncher_previews_free(void* raw) noexcept{delete static_cast<Preview*>(raw);}
+HWND tlauncher_previews_card(void* raw,unsigned index) noexcept{return raw?static_cast<Preview*>(raw)->panel.card(index):nullptr;}
+unsigned tlauncher_previews_thumbnails(void* raw) noexcept{return raw?static_cast<Preview*>(raw)->panel.thumbnails():0;}
 void* tlauncher_stack_prepare(const wchar_t* fixtureFolder) noexcept{
     try{
         auto stack=std::make_unique<Stack>();

@@ -568,6 +568,7 @@ thread_local! {
 }
 
 pub(super) unsafe fn panel_open_for(owner:HWND)->bool{
+    if super::app_previews::open_for(owner){return true;}
     super::folder_stack::open_for(owner)||super::audio_mixer::open_for(owner)||super::calendar::open_for(owner)||control_center::open_for(owner)||[AUDIO_WINDOW.with(Cell::get)]
         .into_iter().any(|h|!h.is_null()&&GetWindow(h,GW_OWNER)==owner)
 }
@@ -638,6 +639,7 @@ pub(super) unsafe fn paint_button(item:&DRAWITEMSTRUCT,dark:bool){
         if item.itemState&ODS_DISABLED!=0{p.muted}else{p.ink},DT_CENTER|DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);
 }
 pub(super) unsafe fn close_panels(){
+    super::app_previews::close_for(ptr::null_mut());
     super::folder_stack::close_for(ptr::null_mut());
     super::jump_list::close();
     super::audio_mixer::close_for(ptr::null_mut());
@@ -700,6 +702,7 @@ pub(super) unsafe fn audio_panel(owner:HWND,point:POINT,level:u32,muted:bool){
 }
 
 pub(super) unsafe fn close_panels_for(owner:HWND){
+    super::app_previews::close_for(owner);
     super::folder_stack::close_for(owner);
     super::audio_mixer::close_for(owner);
     for hwnd in [AUDIO_WINDOW.with(Cell::get)] {

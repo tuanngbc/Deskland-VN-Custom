@@ -49,6 +49,7 @@ mod utilities;
 mod audio_mixer;
 mod jump_list;
 mod folder_stack;
+mod app_previews;
 mod wifi;
 mod control_center;
 pub(crate) mod panel_chrome;
@@ -3073,6 +3074,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_UTILITY_READY=>{show_utilities();0},
         WM_TIMER if w==jump_list::TIMER&&hwnd==CONTROL.get()=>{jump_list::poll();0},
         WM_TIMER if w==folder_stack::TIMER&&hwnd==CONTROL.get()=>{folder_stack::poll();0},
+        WM_TIMER if w==app_previews::TIMER&&hwnd==CONTROL.get()=>{app_previews::poll();0},
         WM_SHELL_FALLBACK if hwnd==CONTROL.with(Cell::get)=>{
             let owner=w as HWND;
             if !local_shell_buttons()&&!control_center::open_for(owner){
@@ -3093,6 +3095,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_NCDESTROY=>{
+            app_previews::close_for(hwnd);
             stage_peek::close(hwnd);
             cancel_deferred_click(hwnd);
             APP_CLICK.with(|p|{if p.borrow().as_ref().is_some_and(|c|c.owner==hwnd as usize){p.borrow_mut().take();}});
@@ -3103,6 +3106,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             DefWindowProcW(hwnd,msg,w,l)
         },
         WM_DOCK_MOUSELEAVE=>{
+            app_previews::leave(hwnd);
             KillTimer(hwnd,stage_peek::TIMER);stage_peek::close(hwnd);
             KillTimer(hwnd,STATUS_TIP_TIMER);close_status_tip(hwnd);
             let stage=STATE.with(|s|{
@@ -3332,6 +3336,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}else{refresh_dock_clock();sync_win_key();request_dock_status();}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
         WM_TIMECHANGE=>{refresh_dock_clock();0},
         WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_THEMECHANGED|WM_DPICHANGED=>{
+            app_previews::close_for(ptr::null_mut());
             window_effect::reset();
             stage_peek::close(ptr::null_mut());
             if msg==WM_SETTINGCHANGE{motion::refresh_system();}
@@ -3418,11 +3423,12 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
                 }
             }
             if animate{SetTimer(hwnd,MOTION_TIMER,16,None);}
-            if track{retarget_start(hwnd);}
+            if track{retarget_start(hwnd);app_previews::mouse(hwnd);}
             if changed{InvalidateRect(hwnd,ptr::null(),0);}
             0
         }
         WM_LBUTTONDOWN|WM_LBUTTONDBLCLK=>{
+            app_previews::close_for(ptr::null_mut());
             KillTimer(hwnd,stage_peek::TIMER);stage_peek::close(ptr::null_mut());
             cancel_deferred_click(hwnd);
             KillTimer(hwnd,STATUS_TIP_TIMER);close_status_tip(hwnd);
@@ -3713,6 +3719,7 @@ unsafe fn drain_commands() {
     for command in commands {
         match command {
             Command::Configure(options)=>{
+                app_previews::close_for(ptr::null_mut());
                 if !options.shell_context_menu{shell_menu::close();}
                 window_effect::reset();
                 stage_peek::close(ptr::null_mut());
@@ -3738,6 +3745,7 @@ unsafe fn drain_commands() {
                 if enable_default&&!cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active(){start_saved_taskbar_mode();}
             },
             Command::Suspend(on)=>{
+                if on{app_previews::close_for(ptr::null_mut());}
                 if on{window_effect::reset();shell_menu::close();}
                 if on&&(taskbar_active()||taskbar_retry_pending()){
                     cancel_taskbar_retry();
