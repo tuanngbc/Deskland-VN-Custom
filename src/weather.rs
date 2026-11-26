@@ -154,5 +154,9 @@ pub(crate) fn unsubscribe(hwnd:HWND){lock().subscribers.retain(|(h,_)|*h!=hwnd a
     }
     #[cfg(test)]pub(crate) fn synthetic()->Reading{sample()}
 }
-#[cfg(test)]pub(crate) fn fixture_reading(){let mut s=lock();s.configure(Some(Location{name:"Synthetic city".into(),latitude:10.0,longitude:106.0}));s.reading=Some(Arc::new(tests::synthetic()));s.updated=Some(Instant::now());}
+#[cfg(test)]pub(crate) fn fixture_reading(){
+    let mut s=lock();s.configure(Some(Location{name:"Synthetic city".into(),latitude:10.0,longitude:106.0}));
+    let mut reading=tests::synthetic();for (date,code) in [("2026-11-28",0),("2026-11-29",2),("2026-11-30",45),("2026-12-01",95)]{reading.days.push(Day{date:date.into(),code,high:28.0,low:19.0});}
+    s.reading=Some(Arc::new(reading));s.updated=Some(Instant::now());
+}
 #[cfg(test)]pub(crate) fn fixture_subscribers()->usize{lock().subscribers.len()}

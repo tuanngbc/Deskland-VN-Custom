@@ -125,12 +125,15 @@ pub(super) fn reset(){PANEL.with(|s|s.take());}
                 };
                 let (w,h)=(bounds.right-bounds.left,bounds.bottom-bounds.top);let mut layer=super::super::glass_probe::Layer::new(w,h).unwrap();
                 let dc=GetDC(ptr::null_mut());assert_ne!(BitBlt(layer.dc(),0,0,w,h,dc,bounds.left,bounds.top,SRCCOPY|CAPTUREBLT),0);ReleaseDC(ptr::null_mut(),dc);GdiFlush();
-                let blue=layer.pixels().chunks_exact(4).filter(|p|p[0].saturating_sub(p[2])>40&&p[1].saturating_sub(p[2])>20).count();
-                assert!(blue>4000,"actual native weather card must reach the display for {locale}: {blue}");
                 if let Some(root)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
                     let rgba=layer.pixels().chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],255]).collect::<Vec<_>>();
                     image::save_buffer(std::path::PathBuf::from(root).join(format!("weather-synthetic-{locale}.png")),&rgba,w as u32,h as u32,image::ColorType::Rgba8).unwrap();
                 }
+                let blue=layer.pixels().chunks_exact(4).filter(|p|p[0].saturating_sub(p[2])>40&&p[1].saturating_sub(p[2])>20).count();
+                assert!(blue>4000,"actual native weather card must reach the display for {locale}: {blue}");
+                let dpi=windows_sys::Win32::UI::HiDpi::GetDpiForWindow(popup);let px=|n|super::super::panel_chrome::scale(dpi,n);
+                let cw=(w-px(44))/5;let pixels=layer.pixels();
+                for day in 0..5{let left=px(22)+cw*day;let right=left+cw;let glyph=pixels.chunks_exact(4).enumerate().filter(|(i,p)|{let x=*i as i32%w;let y=*i as i32/w;x>=left&&x<right&&y>=px(184)&&y<px(212)&&p[..3].iter().all(|c|*c>220)}).count();assert!(glyph>6,"actual five-day glyph {day} is missing for {locale}: {glyph}");}
                 // Changing city clears the old forecast immediately; an old
                 // panel action cannot refresh or relabel it as the new city.
                 weather::configure(None);receive(popup,ticket);
