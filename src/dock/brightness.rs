@@ -6,7 +6,7 @@ use windows_sys::Win32::{Foundation::*,Devices::Display::*,Graphics::Gdi::*};
 #[derive(Clone)]pub(super) struct Change{description:[u16;128],minimum:u32,maximum:u32,observed:u32,value:u32}
 pub(super) struct View{pub query:Query,pub name:String,pub percent:Option<u32>,pub error:Option<u32>,pub outcome:Option<Result<(),u32>>,change:Option<Change>}
 struct Physical(Vec<PHYSICAL_MONITOR>);
-impl Drop for Physical{fn drop(&mut self){if !self.0.is_empty(){unsafe{DestroyPhysicalMonitors(self.0.len() as u32,self.0.as_ptr());}}}}
+impl Drop for Physical{fn drop(&mut self){for item in &self.0{let handle=item.hPhysicalMonitor;if !handle.is_null(){unsafe{DestroyPhysicalMonitor(handle);}}}}}
 fn bounds(r:RECT)->(i32,i32,i32,i32){(r.left,r.top,r.right,r.bottom)}
 pub(super) unsafe fn target(monitor:HMONITOR)->Option<Target>{
     let mut info:MONITORINFOEXW=mem::zeroed();info.monitorInfo.cbSize=mem::size_of::<MONITORINFOEXW>() as u32;
@@ -37,7 +37,7 @@ pub(super) fn read(query:Query)->View{unsafe{
         // ambiguous composite rather than silently selecting physical[0].
         if count!=1{return Err(ERROR_NOT_SUPPORTED);}
         let mut physical=Physical(vec![mem::zeroed()]);
-        if GetPhysicalMonitorsFromHMONITOR(query.target.monitor as HMONITOR,1,physical.0.as_mut_ptr())==0{physical.0.clear();return Err(GetLastError());}
+        if GetPhysicalMonitorsFromHMONITOR(query.target.monitor as HMONITOR,1,physical.0.as_mut_ptr())==0{return Err(GetLastError());}
         let monitor=physical.0[0].hPhysicalMonitor;let description=physical.0[0].szPhysicalMonitorDescription;
         let length=description.iter().position(|c|*c==0).unwrap_or(description.len());view.name=String::from_utf16_lossy(&description[..length]).chars().filter(|c|!c.is_control()).collect();
         let (mut caps,mut temperatures)=(0,0);if GetMonitorCapabilities(monitor,&mut caps,&mut temperatures)==0{return Err(GetLastError());}
