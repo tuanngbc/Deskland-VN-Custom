@@ -83,7 +83,7 @@ void release(const Ref& ref){
 DWORD WINAPI begin_worker(void* raw){
     std::unique_ptr<Ref> ref(static_cast<Ref*>(raw));auto& l=**ref;
     std::lock_guard<std::mutex> lock(l.operation);
-    struct Pending{Lease& lease;~Pending(){if(marked(lease.hwnd,lease.key))put(lease.hwnd,lease.key,L".pending",0);}}pending{l};
+    struct Pending{Lease& lease;~Pending(){if(marked(lease.hwnd,lease.key))RemovePropW(lease.hwnd,(lease.key+L".pending").c_str());}}pending{l};
     if(l.cancel.load()||!l.alive()||!marked(l.hwnd,l.key)||get(l.hwnd,l.key,L".state")!=1||!risponde(l.hwnd,200)){l.state.store(-1);release(*ref);return 0;}
     if(const auto resume=fixtureResume.load()){
         if(const auto reached=fixtureReached.load())SetEvent(reached);
