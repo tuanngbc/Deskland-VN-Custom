@@ -194,7 +194,7 @@ pub(super) unsafe fn visible_area(hwnd:HWND)->Option<RECT>{
     let mut r:RECT=mem::zeroed();
     (DwmGetWindowAttribute(hwnd,DWMWA_EXTENDED_FRAME_BOUNDS as u32,(&mut r as *mut RECT).cast(),mem::size_of::<RECT>() as u32)>=0).then_some(r)
 }
-unsafe fn elevation(pid:u32)->Option<bool>{
+pub(super) unsafe fn elevation(pid:u32)->Option<bool>{
     use windows_sys::Win32::{Security::{GetTokenInformation,TokenElevation,TOKEN_ELEVATION,TOKEN_QUERY},
         System::Threading::{OpenProcess,OpenProcessToken,PROCESS_QUERY_LIMITED_INFORMATION}};
     let process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,0,pid);

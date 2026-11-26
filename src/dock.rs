@@ -1800,6 +1800,7 @@ unsafe fn show_feedback(hwnd:HWND,item:&Item,kind:FeedbackKind){
     InvalidateRect(hwnd,ptr::null(),0);
 }
 unsafe fn activate(hwnd:HWND,item:&Item) {
+    window_motion::cancel();
     if item.path==internal_app::KEY{
         window_effect::cancel();
         PostMessageW(OWNER.with(Cell::get),crate::WM_OPEN_SETTINGS,0,0);

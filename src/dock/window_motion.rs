@@ -22,7 +22,9 @@ pub(super) fn active()->bool{ACTIVE.with(|s|s.borrow().is_some())}
 pub(super) unsafe fn cancel(){let old=ACTIVE.with(|s|s.borrow_mut().take());if old.is_some(){drop(old);super::window_effect::schedule_release();}KillTimer(CONTROL.get(),TIMER);}
 pub(super) unsafe fn frame_ready()->HANDLE{ACTIVE.with(|s|s.borrow().as_ref().and_then(|d|d.proxy.as_ref()).map_or(ptr::null_mut(),|p|p.frame_clock()))}
 pub(super) unsafe fn event(event:u32,h:HWND){
-    if event==EVENT_SYSTEM_MOVESIZESTART{start(h);}
+    if event==EVENT_SYSTEM_FOREGROUND{
+        if ACTIVE.with(|s|s.borrow().as_ref().is_some_and(|d|d.id.hwnd!=h as usize)){cancel();}
+    }else if event==EVENT_SYSTEM_MOVESIZESTART{start(h);}
     else if event==EVENT_SYSTEM_MOVESIZEEND{
         ACTIVE.with(|s|if let Some(d)=s.borrow_mut().as_mut().filter(|d|d.id.hwnd==h as usize){d.released.get_or_insert_with(Instant::now);});
     }else if event==EVENT_OBJECT_DESTROY||event==EVENT_OBJECT_HIDE{
@@ -33,7 +35,7 @@ unsafe fn start(h:HWND){
     let enabled=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.jelly_drag&&!s.suspended});
     if !enabled||!super::motion::allowed()||super::motion_guard::session().is_none()||!held(){return;}
     if super::window_effect::active()||IsIconic(h)!=0||IsZoomed(h)!=0||GetWindowLongW(h,GWL_EXSTYLE) as u32&WS_EX_LAYERED!=0{return;}
-    let Some(id)=WindowIdentity::read(h).filter(|_|super::previews::permitted_pid(h).is_ok())else{return;};
+    let Some(id)=WindowIdentity::read(h).filter(|id|super::previews::permitted_pid(h).is_ok()&&super::window_effect::elevation(id.pid)==Some(false))else{return;};
     let Some(area)=super::window_effect::visible_area(h)else{return;};
     let mut point:POINT=mem::zeroed();let mut outer:RECT=mem::zeroed();
     if GetCursorPos(&mut point)==0||GetWindowRect(h,&mut outer)==0||PtInRect(&area,point)==0{return;}
@@ -152,11 +154,34 @@ pub(super) unsafe fn probe_drag(id:WindowIdentity){
                     let rgba=pixels.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],p[3]]).collect::<Vec<_>>();
                     image::save_buffer(std::path::PathBuf::from(dir).join(format!("jelly-live-{name}.png")),&rgba,w,height,image::ColorType::Rgba8).unwrap();
                 }
-                assert!(d.capture.timing.lock().unwrap().live_frames>3,"same WGC session must produce successive GPU frames");
             });
         };
         if mode=="release"{
-            sample("blue",0);PostMessageW(h,WM_APP+171,0x000000ff,0);for _ in 0..30{pump();}sample("red",2);
+            sample("blue",0);
+            // WGC reports content changes, not a guaranteed stream cadence for
+            // a static HWND. Require new pixels and a new GPU copy for each
+            // deliberate repaint, including while the alpha-1 lease is held.
+            for (name,color,channel) in [("red",0x000000ff,2),("blue",0x00ff0000,0),("red",0x000000ff,2)]{
+                let before=ACTIVE.with(|s|s.borrow().as_ref().unwrap().capture.timing.lock().unwrap().live_frames);
+                assert_ne!(PostMessageW(h,WM_APP+171,color,0),0);
+                let changed=Instant::now();
+                loop{
+                    pump();
+                    let updated=ACTIVE.with(|s|s.borrow().as_ref().is_some_and(|d|{
+                        if d.capture.timing.lock().unwrap().live_frames<=before{return false;}
+                        let Some(p)=&d.proxy else{return false;};
+                        let Some((pixels,w,height,canvas))=p.evidence()else{return false;};
+                        let vertex=d.jelly.vertices()[77];
+                        let x=(vertex.x.round() as i32-canvas.left).clamp(0,w as i32-1);
+                        let y=(vertex.y.round() as i32-canvas.top).clamp(0,height as i32-1);
+                        let pixel=&pixels[((y as u32*w+x as u32)*4) as usize..][..4];
+                        pixel[channel]>180&&pixel[(channel+1)%3]<45&&pixel[(channel+2)%3]<45
+                    }));
+                    if updated{break;}
+                    assert!(active()&&changed.elapsed()<Duration::from_secs(3),"same WGC session did not deliver repainted {name} content");
+                }
+                sample(name,channel);
+            }
         }
         match mode{
             "cancel"=>cancel(),
