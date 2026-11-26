@@ -291,14 +291,21 @@ pub(super) struct GuardProcess{process:Option<ProcessHandle>,answer:Option<mpsc:
 impl GuardProcess{
     fn spawn(mut command:Command)->io::Result<Self>{
         command.stdout(Stdio::piped());
-        let child=command.spawn()?;
+        let mut child=command.spawn()?;
         let (tx,answer)=mpsc::sync_channel(1);
         thread::Builder::new().name("TLauncher guardian bootstrap".into()).spawn(move||{
             let result=(||{
-                let output=child.wait_with_output()?;
-                if !output.status.success(){return Err(io::Error::other("Guardian bootstrap failed"));}
-                let text=String::from_utf8_lossy(&output.stdout);
-                let line=text.lines().find_map(|l|l.split_once("TLAUNCHER_GUARDIAN ").map(|(_,v)|v)).ok_or_else(||io::Error::other("Missing Guardian bootstrap response"))?;
+                use std::io::BufRead;
+                // Read the explicit acknowledgement, not pipe EOF: a
+                // detached descendant can retain an inherited pipe writer.
+                let stdout=child.stdout.take().ok_or_else(||io::Error::other("Missing Guardian response pipe"))?;
+                let mut response=None;
+                for line in io::BufReader::new(stdout).lines().take(32){
+                    let line=line?;
+                    if let Some((_,fields))=line.split_once("TLAUNCHER_GUARDIAN "){response=Some(fields.to_owned());break;}
+                }
+                let line=response.ok_or_else(||io::Error::other("Missing Guardian bootstrap response"))?;
+                if !child.wait()?.success(){return Err(io::Error::other("Guardian bootstrap failed"));}
                 let mut fields=line.split_whitespace();
                 let pid=fields.next().and_then(|v|v.parse::<u32>().ok()).ok_or_else(||io::Error::other("Missing Guardian identity"))?;
                 let birth=fields.next().and_then(|v|u64::from_str_radix(v,16).ok()).ok_or_else(||io::Error::other("Missing Guardian birth time"))?;
@@ -634,7 +641,7 @@ mod tests{
         unsafe{
             let mut watch=Watch::start_motion_fixture().unwrap();let start=Instant::now();
             while !watch.poll().unwrap()||watch.motion_session().is_none(){
-                assert!(start.elapsed()<Duration::from_secs(8));thread::sleep(Duration::from_millis(20));
+                assert!(start.elapsed()<Duration::from_secs(8),"Guardian handshake ready={} armed={} stop={} adopted={:?}",watch.ready.fired(),watch.armed.fired(),watch.stop.fired(),watch.child.as_ref().and_then(GuardProcess::id));thread::sleep(Duration::from_millis(20));
             }
             let (pid,marker)=watch.motion_session().unwrap();
             super::super::TASKBAR_WATCH.with(|w|w.replace(Some(watch)));
