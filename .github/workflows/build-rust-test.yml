@@ -1,8 +1,8 @@
-name: Build TLauncher Rust
+name: Build TLauncher
 
 on:
   push:
-    branches: [main, codex/rust-dock, codex/unified-spotlight-v1.0.2, codex/fluidwin-integration-v1.0.3]
+    branches: [main, codex/rust-dock, codex/unified-spotlight-v1.0.2, codex/fluidwin-integration-v1.0.3, codex/fluidwin-native-base-v1.0.3]
     tags: [v*]
   workflow_dispatch:
 
@@ -54,7 +54,80 @@ jobs:
           path: baseline-evidence/
           retention-days: 14
           if-no-files-found: error
+  native-base:
+    if: github.ref == 'refs/heads/codex/fluidwin-native-base-v1.0.3'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: mingw-w64-ucrt-x86_64-gcc git
+      - name: Audit native source boundaries and provenance
+        shell: pwsh
+        run: ./tests/native-source-audit.ps1
+      - name: Compile complete upstream-based application and lifecycle contract
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          mkdir -p native-build native-evidence
+          libs='-ld3d11 -ldxgi -ldcomp -ld3dcompiler -ld2d1 -ldwrite -ldwmapi -luser32 -lgdi32 -lshell32 -lole32 -loleaut32 -lversion -lpropsys -luuid -liphlpapi -lwindowscodecs -lruntimeobject -lpowrprof -lshlwapi -lshcore -lsetupapi -lwinmm -ldxva2 -lwinhttp -lcomdlg32 -lbcrypt'
+          (cd native/fluidwin && windres icona.rc -O coff -o ../../native-build/icon.o)
+          g++ -O2 -std=gnu++20 -Wall -municode -mwindows native/fluidwin/fluidwin.cpp native-build/icon.o -o native-build/TLauncher.exe $libs -static
+          g++ -O2 -std=gnu++20 -Wall tests/native-base-contract.cpp native-build/icon.o -o native-build/native-contract.exe $libs -static
+      - name: Verify real profile, Notch resources, native startup and Guardian recovery
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $profile=Join-Path $env:RUNNER_TEMP 'tlauncher-native-trial-ci-contract'
+          New-Item -ItemType Directory -Path $profile -Force | Out-Null
+          [IO.File]::WriteAllText((Join-Path $profile '.tlauncher-native-trial'),"tlauncher-native isolated profile v1`n")
+          $env:TLAUNCHER_NATIVE_TRIAL_DIR=$profile
+          & ./native-build/native-contract.exe ./native-evidence
+          if ($LASTEXITCODE -ne 0) {throw "Native lifecycle contract failed: $LASTEXITCODE"}
+          ./tests/native-runtime-smoke.ps1 -Exe (Resolve-Path native-build/TLauncher.exe).Path -Evidence (Resolve-Path native-evidence).Path
+      - name: Package immutable Native Base TEST
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $name='TLauncher-Native-1.0.3-${{ github.sha }}-win-x64'
+          $dir=Join-Path 'dist' $name
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          Copy-Item native-build/TLauncher.exe $dir
+          foreach ($file in 'LICENSE','NOTICE','THIRD_PARTY_NOTICES.md','TRADEMARKS.md') {Copy-Item $file $dir}
+          Copy-Item native/fluidwin/LICENSE (Join-Path $dir 'FLUIDWIN-LICENSE.txt')
+          Copy-Item native/fluidwin/PROVENANCE.json $dir
+          Copy-Item docs/NATIVE_BASE_UAT.md (Join-Path $dir 'NATIVE-BASE-UAT.md')
+          Copy-Item tools/native-owner-uat.ps1 $dir
+          Copy-Item tools/legacy-uat-library.ps1 $dir
+          Copy-Item tools/native-resource-diagnostics.ps1 $dir
+          Copy-Item tools/NATIVE-RESOURCE.cmd $dir
+          '1.0.3' | Set-Content (Join-Path $dir 'VERSION.txt') -Encoding ascii
+          '${{ github.sha }}' | Set-Content (Join-Path $dir 'BUILD-COMMIT.txt') -Encoding ascii
+          '2f773a8733b84c7dbee88fff6628d14e9ac802b9' | Set-Content (Join-Path $dir 'UPSTREAM-COMMIT.txt') -Encoding ascii
+          if ((Get-Item (Join-Path $dir 'TLauncher.exe')).VersionInfo.ProductVersion -cne '1.0.3') {throw 'Wrong PE version'}
+          Compress-Archive -LiteralPath $dir -DestinationPath "dist/$name.zip"
+          $hash=(Get-FileHash "dist/$name.zip").Hash.ToLowerInvariant()
+          "$hash  $name.zip" | Set-Content "dist/$name.zip.sha256" -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TLauncher-Native-Base-win-x64
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          retention-days: 30
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-base-evidence
+          path: native-evidence/
+          retention-days: 30
+          if-no-files-found: warn
   build-rust:
+    if: github.ref != 'refs/heads/codex/fluidwin-native-base-v1.0.3'
     runs-on: windows-latest
     timeout-minutes: 20
     env:

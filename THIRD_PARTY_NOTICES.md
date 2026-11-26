@@ -40,3 +40,25 @@ Original Git blobs/byte hashes, scoped adapters and local changes are recorded
 in `third_party/fluidwin/upstream/IMPORT.json` and
 `third_party/fluidwin/ADAPTATIONS.json`. No upstream standalone service,
 executable or additional media license is implied by these source imports.
+## Native foundation — Phase 1 (2026-11-27)
+
+`native/fluidwin` contains the complete application sources from
+clooudfn/FluidWin v1.3.1 at `2f773a8733b84c7dbee88fff6628d14e9ac802b9`.
+Copyright (c) 2026 Clooudy; the exact MIT license is retained there and packaged.
+`PROVENANCE.json` records every imported file's original SHA-256 and identity edits.
+GPL-3.0 remains the combined TLauncher license; existing LICENSE is unchanged.
+About credits FluidWin, TLauncher, BLEZZ0102/Deskland and nhhoang188/Deskland-VN.
+
+Asset audit: three `sfondi/*.jpg` are declared by the upstream README as FluidWin's
+own wallpapers and embedded by its `icona.rc`; no separate asset license/credit is
+present at the pinned commit. Their hashes and that evidence are retained. They
+are preserved for the private owner checkpoint under the upstream repository MIT
+grant; independent authorship provenance must be resolved before public release.
+The FluidWin logo/icon is replaced by existing `assets/app.ico`; upstream showcase
+images/GIFs are not packaged or presented as TLauncher screenshots. System Segoe UI
+fonts and Windows Shell icons are referenced through Windows APIs, not redistributed.
+No cursor pack/font/media download is bundled. User-selected cursor packs remain
+user-owned. Windows SDK APIs and system DLLs are OS dependencies. GCC/libstdc++
+static runtime uses the GCC Runtime Library Exception; toolchain license texts
+must accompany distributable runtime packaging. No WebView2/Rust runtime is linked
+by Phase 1. Older notices below describe preserved earlier integration source.

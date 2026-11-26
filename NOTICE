@@ -44,3 +44,10 @@ in third_party/fluidwin/motion_upstream.h, Windows Search in index_upstream.h an
 the Spotlight calculator grammar and clipboard history logic come from FluidWin
 under MIT. See the original license in third_party/fluidwin/LICENSE
 (FLUIDWIN-LICENSE.txt in packages).
+Native Base migration (TLauncher 1.0.3, Phase 1)
+The complete native desktop foundation in native/fluidwin derives from
+clooudfn/FluidWin v1.3.1, commit 2f773a8733b84c7dbee88fff6628d14e9ac802b9.
+Copyright (c) 2026 Clooudy. MIT License retained in native/fluidwin/LICENSE.
+TLauncher modifications and combined distribution remain GPL-3.0.
+Prior Deskland / Deskland-VN / TLauncher attribution below remains applicable
+to preserved source and later extensions. The native TEST is not the full 1.0.3.

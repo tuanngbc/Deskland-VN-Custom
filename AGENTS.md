@@ -1,6 +1,6 @@
 # TLauncher VN development notes
 
-- Source chính là Rust native ở thư mục gốc (`src/`, `Cargo.toml`, `assets/`).
+- Phase 1 native migration uses the complete C++ FluidWin foundation in `native/fluidwin/`; old Rust source remains preserved for owner-gated later extensions. Do not run two desktop cores.
 - `prototype/` chứa giao diện cài đặt, thumbnail và shader dùng chung; phải được đóng gói cạnh `TLauncher.exe`.
 - Người đóng góp có thể build trên máy riêng theo README-rust.md. Trên máy owner, build và kiểm thử chỉ chạy qua GitHub Actions.
 - GitHub Actions ở `.github/workflows/build-rust-test.yml` là workflow phát hành duy nhất.

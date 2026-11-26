@@ -1,0 +1,32 @@
+1 ICON "icona.ico"
+
+// sfondi di FluidWin (sfondi.h): JPG 3840x2160 dentro l'exe, estratti quando si sceglie uno nelle impostazioni
+201 RCDATA "sfondi/colline.jpg"
+202 RCDATA "sfondi/seta.jpg"
+203 RCDATA "sfondi/pastello.jpg"
+
+1 VERSIONINFO
+FILEVERSION     1,0,3,0
+PRODUCTVERSION  1,0,3,0
+FILEOS          0x40004
+FILETYPE        0x1
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041004B0"
+        BEGIN
+            VALUE "CompanyName",      "TLauncher contributors"
+            VALUE "FileDescription",  "TLauncher"
+            VALUE "FileVersion",      "1.0.3"
+            VALUE "InternalName",     "TLauncher"
+            VALUE "LegalCopyright",   "TLauncher GPL-3.0; FluidWin Copyright (c) 2026 Clooudy - MIT"
+            VALUE "OriginalFilename", "TLauncher.exe"
+            VALUE "ProductName",      "TLauncher"
+            VALUE "ProductVersion",   "1.0.3"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0410, 1200
+    END
+END
