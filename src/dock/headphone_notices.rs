@@ -110,7 +110,7 @@ pub(super) unsafe fn reset(){
         unsafe{
             use windows::Win32::System::Com::{CoInitializeEx,CoUninitialize,COINIT_APARTMENTTHREADED};
             CoInitializeEx(None,COINIT_APARTMENTTHREADED).unwrap();
-            let owner=CreateWindowExW(0,crate::desktop::wide("STATIC").as_ptr(),crate::desktop::wide("Endpoint event fixture").as_ptr(),0,0,0,1,1,HWND_MESSAGE,ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),ptr::null());assert!(!owner.is_null());
+            let owner=CreateWindowExW(0,crate::desktop::wide("STATIC").as_ptr(),crate::desktop::wide("Endpoint event fixture").as_ptr(),0,0,0,1,1,HWND_MESSAGE,ptr::null_mut(),ptr::null_mut(),ptr::null());assert!(!owner.is_null());
             let old_control=super::super::CONTROL.replace(owner);let old_state=super::super::STATE.with(|s|{let mut s=s.borrow_mut();let old=(s.prefs.enabled,s.suspended);s.prefs.enabled=true;s.suspended=false;old});
             struct Cleanup(HWND,HWND,(bool,bool));impl Drop for Cleanup{fn drop(&mut self){unsafe{reset();super::super::CONTROL.set(self.1);super::super::STATE.with(|s|{let mut s=s.borrow_mut();s.prefs.enabled=self.2.0;s.suspended=self.2.1;});DestroyWindow(self.0);CoUninitialize();}}}let _cleanup=Cleanup(owner,old_control,old_state);
             for _ in 0..6{assert!(tlauncher_headphones_fixture(owner,CHANGED));}
