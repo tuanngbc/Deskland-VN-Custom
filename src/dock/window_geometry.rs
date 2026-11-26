@@ -159,7 +159,7 @@ impl Transition{
     }
 }
 pub(super) fn active()->bool{ACTIVE.with(|s|s.borrow().is_some())}
-pub(super) unsafe fn frame_ready()->HANDLE{ACTIVE.with(|s|s.borrow().as_ref().and_then(|t|t.proxy.as_ref()).map_or(ptr::null_mut(),|p|p.frame_clock()))}
+pub(super) unsafe fn frame_ready()->HANDLE{ACTIVE.with(|s|s.borrow().as_ref().filter(|t|!matches!(t.phase,Phase::Release|Phase::NativeRestoreSnap)).and_then(|t|t.proxy.as_ref()).map_or(ptr::null_mut(),|p|p.frame_clock()))}
 pub(super) unsafe fn cancel(){let old=ACTIVE.with(|s|s.borrow_mut().take());drop(old);KillTimer(CONTROL.get(),TIMER);super::window_effect::schedule_release();}
 pub(super) unsafe fn event(event:u32,h:HWND){
     use windows_sys::Win32::UI::Accessibility::*;

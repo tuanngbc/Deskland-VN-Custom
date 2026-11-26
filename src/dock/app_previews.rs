@@ -56,7 +56,7 @@ pub(super) unsafe fn poll(){
         let active=PANEL.with(|p|p.borrow_mut().take());
         if let Some(mut panel)=active{
             let owner=panel.owner as HWND;
-            let valid=IsWindow(owner)!=0&&!super::window_effect::active()&&!super::window_motion::active()&&panel.sources.iter().all(|id|
+            let valid=IsWindow(owner)!=0&&!super::window_effect::active()&&!super::window_motion::active()&&!super::window_geometry::active()&&panel.sources.iter().all(|id|
                 id.matches(id.hwnd as HWND)&&super::previews::permitted_pid(id.hwnd as HWND).is_ok());
             if valid{
                 let mut target=ptr::null_mut();let action=tlauncher_previews_poll(panel.native.0.as_ptr(),&mut target);
@@ -81,7 +81,7 @@ pub(super) unsafe fn poll(){
         if let Some((owner,path))=ready{
             if PANEL.with(|p|p.borrow().as_ref().is_some_and(|p|p.owner==owner&&p.path==path)){stop_if_idle();return;}
             let owner=owner as HWND;
-            if hovered(owner).as_deref()!=Some(path.as_str())||super::window_effect::active()||super::window_motion::active()||super::utilities::panel_open_for(owner){stop_if_idle();return;}
+            if hovered(owner).as_deref()!=Some(path.as_str())||super::window_effect::active()||super::window_motion::active()||super::window_geometry::active()||super::utilities::panel_open_for(owner){stop_if_idle();return;}
             let sources=STATE.with(|s|{
                 let state=s.borrow();let bar=state.bars.iter().find(|b|b.hwnd==owner)?;
                 Some(state.windows.iter().filter(|w|w.path.eq_ignore_ascii_case(&path)&&

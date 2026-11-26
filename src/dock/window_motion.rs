@@ -21,7 +21,7 @@ impl Drop for Drag{fn drop(&mut self){
 }}
 pub(super) fn active()->bool{ACTIVE.with(|s|s.borrow().is_some())}
 pub(super) unsafe fn cancel(){let old=ACTIVE.with(|s|s.borrow_mut().take());if old.is_some(){drop(old);super::window_effect::schedule_release();}KillTimer(CONTROL.get(),TIMER);}
-pub(super) unsafe fn frame_ready()->HANDLE{ACTIVE.with(|s|s.borrow().as_ref().and_then(|d|d.proxy.as_ref()).map_or(ptr::null_mut(),|p|p.frame_clock()))}
+pub(super) unsafe fn frame_ready()->HANDLE{ACTIVE.with(|s|s.borrow().as_ref().filter(|d|d.revealed.is_none()||d.lease.as_ref().is_some_and(|l|l.status()==2)).and_then(|d|d.proxy.as_ref()).map_or(ptr::null_mut(),|p|p.frame_clock()))}
 pub(super) unsafe fn event(event:u32,h:HWND){
     if event==EVENT_SYSTEM_FOREGROUND{
         if ACTIVE.with(|s|s.borrow().as_ref().is_some_and(|d|d.id.hwnd!=h as usize)){cancel();}
@@ -159,6 +159,22 @@ pub(super) unsafe fn probe_drag(id:WindowIdentity){
         }
         assert!(!GetPropW(h,marker.as_ptr()).is_null());let mut color=0;let mut alpha=0;let mut flags=0;
         assert_ne!(GetLayeredWindowAttributes(h,&mut color,&mut alpha,&mut flags),0);assert_eq!((alpha,flags),(1,LWA_ALPHA),"dragged source remains hit-testable");
+        if mode=="release"{
+            SetWindowPos(h,ptr::null_mut(),original.left+140,original.top+60,0,0,SWP_NOSIZE|SWP_NOACTIVATE|SWP_NOZORDER|SWP_ASYNCWINDOWPOS);
+            for _ in 0..4{pump();}
+            ACTIVE.with(|s|{
+                let s=s.borrow();let d=s.as_ref().unwrap();let vertices=d.jelly.vertices();
+                let edge=vertices.iter().step_by(14).map(|v|v.x).collect::<Vec<_>>();
+                let spread=edge.iter().copied().fold(f32::NEG_INFINITY,f32::max)-edge.iter().copied().fold(f32::INFINITY,f32::min);
+                assert!(spread>0.75,"actual moving proxy must deform instead of translating a rectangle: {spread}");
+                let (pixels,w,height,_)=d.proxy.as_ref().unwrap().evidence().unwrap();
+                for p in pixels.chunks_exact(4){assert!(p[..3].iter().all(|&c|c<=p[3]));}
+                if let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
+                    let rgba=pixels.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],p[3]]).collect::<Vec<_>>();
+                    image::save_buffer(std::path::PathBuf::from(dir).join("jelly-moving.png"),&rgba,w,height,image::ColorType::Rgba8).unwrap();
+                }
+            });
+        }
         for _ in 0..24{pump();}
         let sample=|name:&str,expected:usize|{
             ACTIVE.with(|s|{
