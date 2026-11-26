@@ -81,18 +81,24 @@ thread_local! {
     static TARGET:Cell<(usize,usize)>=const{Cell::new((0,0))};
     static REPLAY_FAILED:Cell<bool>=const{Cell::new(false)};
     static MODE:Cell<(bool,bool)>=const{Cell::new((false,false))};
+    static OVERVIEW:Cell<bool>=const{Cell::new(false)};
+    static ALT_TAB:Cell<bool>=const{Cell::new(false)};
+    static TAB_DOWN:Cell<bool>=const{Cell::new(false)};
     static SHELL_CLICK:Cell<Option<super::shell_menu::Click>>=const{Cell::new(None)};
 }
 
 struct Quit(usize);
 impl Drop for Quit{fn drop(&mut self){unsafe{CloseHandle(self.0 as HANDLE);}}}
 
-pub(super) struct Hook { quit:Arc<Quit>, thread:Option<JoinHandle<()>>, pub ticket:usize, pub mode:(bool,bool) }
+pub(super) struct Hook { quit:Arc<Quit>, thread:Option<JoinHandle<()>>, pub ticket:usize, pub mode:(bool,bool,bool) }
 impl Hook {
     pub fn install(target:HWND,ticket:usize)->Result<Self,String>{
         Self::install_mode(target,ticket,true,false)
     }
     pub fn install_mode(target:HWND,ticket:usize,win_tap:bool,shell_menu:bool)->Result<Self,String>{
+        Self::install_features(target,ticket,win_tap,shell_menu,false)
+    }
+    pub fn install_features(target:HWND,ticket:usize,win_tap:bool,shell_menu:bool,overview:bool)->Result<Self,String>{
         let target=target as usize;
         let handle=unsafe{CreateEventW(std::ptr::null(),1,0,std::ptr::null())};
         if handle.is_null(){return Err(format!("CreateEventW: {}",unsafe{GetLastError()}));}
@@ -110,6 +116,7 @@ impl Hook {
                 let _=ready.send(Err(format!("WH_MOUSE_LL: {error}")));return;
             }
             KEYS.set(Keys::default());TARGET.set((target,ticket));MODE.set((win_tap,shell_menu));
+            OVERVIEW.set(overview);ALT_TAB.set(false);TAB_DOWN.set(false);
             REPLAY_FAILED.set(false);SHELL_CLICK.set(None);
             if ready.send(Ok(())).is_ok(){
                 let quit=thread_quit.0 as HANDLE;
@@ -125,7 +132,7 @@ impl Hook {
             TARGET.set((0,0));UnhookWindowsHookEx(mouse);UnhookWindowsHookEx(keyboard);
         }).map_err(|e|e.to_string())?;
         match answer.recv(){
-            Ok(Ok(()))=>Ok(Self{quit,thread:Some(thread),ticket,mode:(win_tap,shell_menu)}),
+            Ok(Ok(()))=>Ok(Self{quit,thread:Some(thread),ticket,mode:(win_tap,shell_menu,overview)}),
             other=>{let _=thread.join();Err(other.ok().and_then(Result::err).unwrap_or_else(||"Luồng phím Win đã dừng.".into()))}
         }
     }
@@ -143,6 +150,34 @@ unsafe extern "system" fn keyboard(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
         let e=&*(l as *const KBDLLHOOKSTRUCT);
         let injected=e.flags&LLKHF_INJECTED!=0;
         let (target,ticket)=TARGET.get();
+        if !injected&&target!=0&&OVERVIEW.get(){
+            let down=matches!(w as u32,WM_KEYDOWN|WM_SYSKEYDOWN);
+            let vk=e.vkCode as u16;
+            // Never consume modifier edges. AltGr, Ctrl+Alt and Win chords
+            // keep Windows behavior. Only consume Tab after a queued request.
+            if matches!(vk,VK_MENU|VK_LMENU|VK_RMENU)&&!down&&ALT_TAB.replace(false){
+                // Upstream's inert menu mask prevents a consumed Alt+Tab
+                // from opening the previous application's menu. Keep the
+                // physical Alt release on Windows' path even if injection fails.
+                let mask=Stroke{vk:0xE8,scan:0,extended:false}.down();
+                let mut release=mask;release.Anonymous.ki.dwFlags|=KEYEVENTF_KEYUP;
+                let inputs=[mask,release];let sent=SendInput(2,inputs.as_ptr(),size_of::<INPUT>() as i32);
+                if sent==1{SendInput(1,&release,size_of::<INPUT>() as i32);}
+                PostMessageW(target as HWND,super::overview::NOTICE,ticket,0);
+            }
+            if vk==VK_TAB{
+                if !down&&TAB_DOWN.replace(false){return 1;}
+                let alt=e.flags&LLKHF_ALTDOWN!=0;
+                let compatible=alt&&[VK_CONTROL,VK_LWIN,VK_RWIN].into_iter().all(|v|GetAsyncKeyState(i32::from(v))>=0);
+                if down&&compatible&&(ALT_TAB.get()||super::overview::ready()){
+                    let direction=if GetAsyncKeyState(i32::from(VK_SHIFT))<0{-1}else{1};
+                    let direction=direction*if ALT_TAB.get(){2}else{1};
+                    if PostMessageW(target as HWND,super::overview::NOTICE,ticket,direction)!=0{
+                        ALT_TAB.set(true);TAB_DOWN.set(true);return 1;
+                    }
+                }
+            }
+        }
         if target!=0&&MODE.get().0&&!REPLAY_FAILED.get(){
             let mut keys=KEYS.get();
             let win=matches!(e.vkCode as u16,VK_LWIN|VK_RWIN);

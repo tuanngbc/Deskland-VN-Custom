@@ -194,6 +194,8 @@
     <label class="setting-row switch-row"><b data-i18n="dockStageEnabled">Bật thanh Stage Manager</b><input type="checkbox" id="dockStageEnabled" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <label class="setting-row switch-row"><b data-i18n="shellContextMenu">Menu chuột phải Desktop và Explorer</b><input type="checkbox" id="shellContextMenu" role="switch"><i class="switch" aria-hidden="true"></i></label>
     <p class="monitor-detail" data-i18n="shellContextMenuHint">Dùng menu hệ thống kiểu FluidWin khi bật Dock. Giữ Shift khi nhấp chuột phải để dùng menu Windows.</p>
+    <label class="setting-row switch-row"><b data-i18n="altTabOverview">Tổng quan cửa sổ bằng Alt+Tab</b><input type="checkbox" id="altTabOverview" role="switch"><i class="switch" aria-hidden="true"></i></label>
+    <p class="monitor-detail" data-i18n="altTabOverviewHint">Hiện cửa sổ đang mở trên màn hình hiện tại. Nhả Alt để chọn, Esc để hủy.</p>
     <p id="dockRuntimeStatus" class="monitor-detail" role="status" aria-live="polite"></p>
   </section>
   <section class="setting-card">
@@ -1320,6 +1322,7 @@ function syncDockSettings(m) {
   $('dockStageEnabled').checked=!!dockOptions.stageEnabled;
   $('stagePeek').checked=!!dockOptions.stagePeek;
   $('shellContextMenu').checked=!!dockOptions.shellContextMenu;
+  $('altTabOverview').checked=!!dockOptions.altTabOverview;
   $('stagePeekDelay').value=String(dockOptions.stagePeekDelay??350);
   $('stagePeekDelay').disabled=!dockOptions.stagePeek;
   $('stagePeekDelayValue').textContent=$('stagePeekDelay').value;
@@ -1348,6 +1351,9 @@ $('stagePeek').addEventListener('change',()=>{
 });
 $('shellContextMenu').addEventListener('change',()=>{
   dockOptions.shellContextMenu=$('shellContextMenu').checked;send({t:'dock',shellContextMenu:dockOptions.shellContextMenu});
+});
+$('altTabOverview').addEventListener('change',()=>{
+  dockOptions.altTabOverview=$('altTabOverview').checked;send({t:'dock',altTabOverview:dockOptions.altTabOverview});
 });
 $('stagePeekDelay').addEventListener('input',()=>{$('stagePeekDelayValue').textContent=$('stagePeekDelay').value;});
 $('stagePeekDelay').addEventListener('change',()=>{

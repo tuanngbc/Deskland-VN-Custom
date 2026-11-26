@@ -5,6 +5,7 @@
 #include "upstream/jumplist.h"
 #include "upstream/anteprime.h"
 #include "upstream/comodita.h"
+#include "upstream/panoramica.h"
 
 namespace{
 struct Apartment{bool active=false;~Apartment(){if(active)OleUninitialize();}};
@@ -16,10 +17,28 @@ struct Preview{
         panel.chiudiFinestra=[this](HWND h){target=h;action=2;};
     }
 };
+panoramica::Panoramica* overview=nullptr;
 double stackSpeed=0.70;
 double speed(){return stackSpeed;}
 }
 extern "C"{
+HWND tlauncher_overview_show(bool(*valid)(HWND),const RECT* area,double speed,bool reduced,bool alt,int steps) noexcept{
+    try{
+        if(overview||!valid||!area)return nullptr;
+        panoramica::Panoramica panel;panel.idonea=valid;panel.areaOverride=*area;
+        panel.motionSpeed=speed;panel.reducedMotion=reduced;panel.externalActivation=true;
+        struct Active{Active(panoramica::Panoramica* p){overview=p;}~Active(){overview=nullptr;}}active(&panel);
+        panel.apri(alt,steps);return panel.selected();
+    }catch(...){return nullptr;}
+}
+void tlauncher_overview_key(int key) noexcept{
+    if(!overview)return;
+    if(key==0)overview->scegliSelezionata();
+    else if(key==99)overview->cancel();
+    else{LRESULT result=0;overview->messaggio(overview->window(),WM_KEYDOWN,VK_TAB,key<0?1:0,result);}
+}
+HWND tlauncher_overview_window() noexcept{return overview?overview->window():nullptr;}
+unsigned tlauncher_overview_thumbnails() noexcept{return overview?overview->thumbnails():0;}
 bool tlauncher_comfort_command(int operation,uint64_t duration) noexcept{
     if(operation==1)return comodita::tieniSveglio(duration);
     if(operation==2){comodita::avviaTimer(duration);return true;}

@@ -105,6 +105,12 @@
       "source_git_blob": "637f46fd8db84217ff130be393c82a3a6b2da6e4",
       "source_worktree_sha256": "2c93a6c14e728b33b188bc001e38f0d30f4aa42eac2fa607b41abbcfde4d2963",
       "local_changes": "On-demand one-shot reads/commands without original background thread; scoped manager cleanup, per-instance retry, identity and async boolean-result checks"
+    },
+    {
+      "path": "panoramica.h",
+      "source_git_blob": "6542f44f7ceaa7f5ea5a510808f3e87285489602",
+      "source_worktree_sha256": "2305647f1b5ae79beef74ffcec7623d8be69e3633b734771cca544c4c17888a0",
+      "local_changes": "Scoped overlay/font/DWM teardown; selected monitor, caller motion policy, bounded source revalidation and external identity-checked activation"
     }
   ]
 }

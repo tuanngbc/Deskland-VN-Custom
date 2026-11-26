@@ -49,6 +49,7 @@ pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>
 mod utilities;
 mod audio_mixer;
 mod media;
+mod overview;
 mod jump_list;
 mod folder_stack;
 mod app_previews;
@@ -1729,6 +1730,7 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::Clipboard=>show_clipboard_history(owner),
         Command::AudioMixer=>{let mut point=POINT{x:0,y:0};GetCursorPos(&mut point);audio_mixer::open(owner,point);},
         Command::Media=>{let mut point=POINT{x:0,y:0};GetCursorPos(&mut point);media::open(owner,point);},
+        Command::Overview=>overview::show(owner,false,1),
         Command::Comfort(action)=>comfort::perform(owner,action),
         Command::Recycle(action)=>recycle_bin::perform(owner,action),
         Command::ClipboardCopy(id)=>{
@@ -2157,10 +2159,12 @@ fn win_key_status(status:&'static str){
     }
 }
 fn sync_win_key(){
+    overview::refresh();
     let (requested,context)=STATE.with(|s|{let s=s.borrow();
         (s.prefs.enabled&&s.prefs.win_key_start&&!s.suspended,s.prefs.enabled&&s.prefs.shell_context_menu&&!s.suspended)});
     let on=requested&&taskbar_hidden();
-    let allowed=(on||context)&&!crate::trial::benchmark_active()&&!crate::trial::demo_active();
+    let overview=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.alt_tab_overview&&!s.suspended});
+    let allowed=(on||context||overview)&&!crate::trial::benchmark_active()&&!crate::trial::demo_active();
     if !allowed{
         WIN_KEY.with(|s|drop(s.borrow_mut().take()));
         WIN_KEY_FAILED.set(false);
@@ -2172,12 +2176,12 @@ fn sync_win_key(){
         WIN_KEY_FAILED.set(true);
         win_key_status("failed");
     }
-    if WIN_KEY.with(|s|s.borrow().as_ref().is_some_and(|hook|hook.mode!=(on,context))){
+    if WIN_KEY.with(|s|s.borrow().as_ref().is_some_and(|hook|hook.mode!=(on,context,overview))){
         WIN_KEY.with(|s|drop(s.borrow_mut().take()));WIN_KEY_FAILED.set(false);
     }
     if WIN_KEY_FAILED.get()||WIN_KEY.with(|s|s.borrow().is_some()){return;}
     let generation=WIN_KEY_TOKEN.with(|n|{let next=n.get().wrapping_add(1).max(1);n.set(next);next});
-    match win_key::Hook::install_mode(CONTROL.get(),generation,on,context){
+    match win_key::Hook::install_features(CONTROL.get(),generation,on,context,overview){
         Ok(hook)=>{WIN_KEY.with(|s|s.replace(Some(hook)));win_key_status(if on{"installed"}else if requested{"waiting"}else{"off"});}
         Err(reason)=>{
             crate::log!("DOCK_WIN_KEY install failed: {reason}");
@@ -3072,6 +3076,13 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         stage_snapshot::READY if hwnd==CONTROL.get()=>{window_effect::capture_ready();finish_stage_snapshot();0},
+        overview::NOTICE if hwnd==CONTROL.get()=>{
+            let current=WIN_KEY.with(|s|s.borrow().as_ref().is_some_and(|hook|hook.ticket==w));
+            if current{
+                let owner=STATE.with(|s|s.borrow().bars.iter().find(|b|!b.hidden).map_or(hwnd,|b|b.hwnd));
+                overview::receive(owner,l as i32);
+            }0
+        },
         shell_menu::NOTICE if hwnd==CONTROL.get()=>{
             let enabled=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.shell_context_menu&&!s.suspended});
             let current=WIN_KEY.with(|s|s.borrow().as_ref().is_some_and(|hook|hook.ticket==w));
@@ -3090,6 +3101,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER if w==comfort::TIMER&&hwnd==CONTROL.get()=>{comfort::poll();0},
         WM_TIMER if w==recycle_bin::TIMER&&hwnd==CONTROL.get()=>{recycle_bin::poll();0},
         WM_TIMER if w==motion_guard::TIMER&&hwnd==CONTROL.get()=>{motion_guard::sync();0},
+        WM_TIMER if w==overview::TIMER&&hwnd==CONTROL.get()=>{overview::poll();0},
         WM_SHELL_FALLBACK if hwnd==CONTROL.with(Cell::get)=>{
             let owner=w as HWND;
             if !local_shell_buttons()&&!control_center::open_for(owner){
@@ -3352,6 +3364,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}else{refresh_dock_clock();sync_win_key();request_dock_status();motion_guard::sync();}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
         WM_TIMECHANGE=>{refresh_dock_clock();0},
         WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_THEMECHANGED|WM_DPICHANGED=>{
+            overview::close_for(ptr::null_mut());
             app_previews::close_for(ptr::null_mut());
             window_effect::reset();
             stage_peek::close(ptr::null_mut());
@@ -3743,6 +3756,7 @@ unsafe fn drain_commands() {
     for command in commands {
         match command {
             Command::Configure(options)=>{
+                overview::close_for(ptr::null_mut());
                 app_previews::close_for(ptr::null_mut());
                 if !options.shell_context_menu{shell_menu::close();}
                 window_effect::reset();
@@ -3769,6 +3783,7 @@ unsafe fn drain_commands() {
                 if enable_default&&!cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active(){start_saved_taskbar_mode();}
             },
             Command::Suspend(on)=>{
+                if on{overview::close_for(ptr::null_mut());}
                 if on{motion_guard::stop();}
                 if on{comfort::reset();}
                 if on{app_previews::close_for(ptr::null_mut());}

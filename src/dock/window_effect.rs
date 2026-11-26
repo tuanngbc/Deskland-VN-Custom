@@ -677,8 +677,8 @@ unsafe fn reverse(owner:HWND,id:WindowIdentity,action:Action)->bool{
         true
     })
 }
-pub(super) unsafe fn minimize(owner:HWND,path:&str,id:WindowIdentity)->bool{begin(owner,path,id,Action::Minimize)}
-pub(super) unsafe fn restore(owner:HWND,path:&str,id:WindowIdentity)->bool{begin(owner,path,id,Action::Restore)}
+pub(super) unsafe fn minimize(owner:HWND,path:&str,id:WindowIdentity)->bool{super::overview::close_for(ptr::null_mut());begin(owner,path,id,Action::Minimize)}
+pub(super) unsafe fn restore(owner:HWND,path:&str,id:WindowIdentity)->bool{super::overview::close_for(ptr::null_mut());begin(owner,path,id,Action::Restore)}
 unsafe fn schedule_release(){
     let controller=CONTROL.with(|c|c.get());
     KillTimer(controller,TIMER);

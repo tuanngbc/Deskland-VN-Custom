@@ -2,6 +2,8 @@
   "name": "Tiếng Việt",
   "ui": {
     "shellContextMenu": "Menu chuột phải Desktop và Explorer",
+    "altTabOverview": "Tổng quan cửa sổ bằng Alt+Tab",
+    "altTabOverviewHint": "Hiện cửa sổ đang mở trên màn hình hiện tại. Nhả Alt để chọn, Esc để hủy.",
     "shellContextMenuHint": "Dùng menu hệ thống kiểu FluidWin khi bật Dock. Giữ Shift khi nhấp chuột phải để dùng menu Windows.",
     "dockAutoHide": "Ẩn Dock khi cửa sổ phóng tối đa",
     "dockAppearanceTitle": "Kiểu hiển thị Dock",
