@@ -192,6 +192,55 @@ mod tests {
         assert_eq!(restored.len(),1);assert!(fits(restored[0],selected.bounds));
     }
     #[test]
+    #[ignore = "real four-edge Dock and top popup placement; hosted Windows only"]
+    fn native_four_edge_dock_keeps_top_popups_inside_the_display() {
+        use super::super::{displays,DockSide,DisplayMode,control_center,panel_chrome,glass_probe::Layer};
+        use windows_sys::Win32::{Foundation::*,Graphics::{Dwm::DwmFlush,Gdi::*},UI::WindowsAndMessaging::*};
+        use std::{ptr,time::{Duration,Instant}};
+        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(),Ok("true"));
+        let display=displays().into_iter().find(|d|d.primary).unwrap();
+        let mut options=Options{enabled:true,..Default::default()};
+        options.dock_display.mode=DisplayMode::Primary;
+        options.appearance.reduced_motion=true;
+        options.appearance.position=DockSide::Top;
+        let runtime=Runtime::new(options.clone(),0).unwrap();
+        let mut old=Vec::new();
+        for side in [DockSide::Top,DockSide::Left,DockSide::Right,DockSide::Bottom,DockSide::Top] {
+            options.appearance.position=side;runtime.configure(options.clone());
+            let handles=runtime.inspect_with_paint(true);assert_eq!(handles.len(),1);
+            let owner=handles[0] as HWND;old.push(owner as usize);
+            unsafe {
+                let mut bounds:RECT=std::mem::zeroed();assert_ne!(GetWindowRect(owner,&mut bounds),0);
+                assert!(bounds.left>=display.work.left&&bounds.right<=display.work.right&&bounds.top>=display.work.top&&bounds.bottom<=display.work.bottom);
+                if side!=DockSide::Top{continue;}
+                assert!(bounds.top<display.work.top+40,"top Dock must remain at the selected top edge");
+                let anchor=panel_chrome::Anchor{point:POINT{x:(bounds.left+bounds.right)/2,y:bounds.bottom},side,dark:true,transparency:30};
+                control_center::show_list(owner,anchor,control_center::View{title:"Top Dock".into(),hint:"Synthetic placement fixture".into(),
+                    cards:vec![control_center::Card{title:"Below the Dock".into(),hint:"Keyboard and pointer use the same popup".into(),icon:None,action:None}],metrics:None});
+                let popup=control_center::window(owner).unwrap();
+                let until=Instant::now()+Duration::from_millis(500);
+                while Instant::now()<until {
+                    let mut msg:MSG=std::mem::zeroed();for _ in 0..64{if PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)==0{break;}TranslateMessage(&msg);DispatchMessageW(&msg);}
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let mut panel:RECT=std::mem::zeroed();assert_ne!(GetWindowRect(popup,&mut panel),0);
+                assert!(panel.top>=bounds.bottom&&panel.bottom<=display.work.bottom&&panel.left>=display.bounds.left&&panel.right<=display.bounds.right);
+                DwmFlush();
+                let (left,top,right,bottom)=(bounds.left.min(panel.left),bounds.top,bounds.right.max(panel.right),panel.bottom);
+                let (w,h)=(right-left,bottom-top);let mut pixels=Layer::new(w,h).unwrap();
+                let dc=GetDC(ptr::null_mut());assert_ne!(BitBlt(pixels.dc(),0,0,w,h,dc,left,top,SRCCOPY|CAPTUREBLT),0);ReleaseDC(ptr::null_mut(),dc);GdiFlush();
+                let rgba=pixels.pixels().chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],255]).collect::<Vec<_>>();
+                if let Some(root)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE") {
+                    let root=std::path::PathBuf::from(root);std::fs::create_dir_all(&root).unwrap();
+                    image::save_buffer(root.join("dock-top-popup.png"),&rgba,w as u32,h as u32,image::ColorType::Rgba8).unwrap();
+                }
+                control_center::close_for(owner);assert_eq!(IsWindow(popup),0);
+            }
+        }
+        drop(runtime);for hwnd in old{assert_eq!(unsafe{IsWindow(hwnd as HWND)},0);}
+        println!("DOCK_EDGES four_positions=PASS top_popup_below=PASS reconfigure=PASS teardown=PASS physical_mixed_dpi=NOT_VERIFIED");
+    }
+    #[test]
     #[ignore = "real isolated Windows HWND/thread lifecycle; explicitly run in CI"]
     fn native_integrated_modules_toggle_suspend_and_cleanup() {
         // Never load/write a real profile or use the installed application.

@@ -15,7 +15,7 @@ pub struct Request {
     pub depth:i32,
 }
 impl Request {
-    fn edge(&self)->u32 { match self.side {DockSide::Bottom=>ABE_BOTTOM,DockSide::Left=>ABE_LEFT,DockSide::Right=>ABE_RIGHT} }
+    fn edge(&self)->u32 { match self.side {DockSide::Bottom=>ABE_BOTTOM,DockSide::Top=>ABE_TOP,DockSide::Left=>ABE_LEFT,DockSide::Right=>ABE_RIGHT} }
     fn same_slot(&self,other:&Self)->bool {
         self.display==other.display&&self.stage==other.stage&&self.side==other.side&&same_rect(self.monitor,other.monitor)
     }
@@ -26,7 +26,7 @@ impl Request {
         let m=self.monitor;
         r.left>=m.left&&r.top>=m.top&&r.right<=m.right&&r.bottom<=m.bottom
             &&r.right>r.left&&r.bottom>r.top&&match self.side{
-                DockSide::Bottom=>r.bottom-r.top==self.depth,
+                DockSide::Bottom|DockSide::Top=>r.bottom-r.top==self.depth,
                 _=>r.right-r.left==self.depth,
             }
     }
@@ -36,6 +36,7 @@ fn trim(mut rect:RECT,side:DockSide,depth:i32)->Option<RECT>{
     if depth<=0||rect.right<=rect.left || rect.bottom<=rect.top{return None;}
     match side{
         DockSide::Bottom=>{if rect.bottom-rect.top<=depth{return None;}rect.top=rect.bottom-depth;}
+        DockSide::Top=>{if rect.bottom-rect.top<=depth{return None;}rect.bottom=rect.top+depth;}
         DockSide::Left=>{if rect.right-rect.left<=depth{return None;}rect.right=rect.left+depth;}
         DockSide::Right=>{if rect.right-rect.left<=depth{return None;}rect.left=rect.right-depth;}
     }
@@ -152,6 +153,7 @@ impl Bars {
         // and prevents Stage and Dock intersecting if they share an edge.
         match bar.request.side {
             DockSide::Bottom=>{result.work.bottom=r.bottom;}
+            DockSide::Top=>{result.work.top=r.top;}
             DockSide::Left=>{result.work.left=r.left;}
             DockSide::Right=>{result.work.right=r.right;}
         }
@@ -159,7 +161,7 @@ impl Bars {
     }
     pub fn dock_placement(&self, display:&Display, side:DockSide)->Display{
         let (mut dock,_)=self.placement(display,false);
-        if side==DockSide::Bottom{
+        if side.horizontal(){
             // Release only the Stage strip along the Dock's length. Keep
             // the cross-axis position and any work area reserved by Windows.
             for bar in self.bars.iter().filter(|b|b.request.display==display.id&&b.request.stage){
@@ -230,6 +232,15 @@ mod tests{
             expect("Dock OFF",0,91,0);
             bars.clear();
             expect("all reservations removed",0,0,0);
+            let top=request(false,DockSide::Top,70);
+            assert!(bars.sync(vec![top],false,false).healthy);
+            let until=Instant::now()+Duration::from_secs(4);
+            loop{
+                let mut msg:MSG=mem::zeroed();while PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)!=0{DispatchMessageW(&msg);}
+                if same_rect(primary().work,RECT{top:before.work.top+70,..before.work}){break;}
+                assert!(Instant::now()<until,"top Dock reservation was not negotiated");thread::sleep(Duration::from_millis(25));
+            }
+            bars.clear();expect("top reservation removed",0,0,0);
             eprintln!("Live AppBar left/right, independent removal and registration replay verified (no Explorer restart)");
         }
     }
@@ -238,6 +249,7 @@ mod tests{
     fn shell_strip_keeps_negative_coordinates_and_the_taskbar_inset(){
         let available=RECT{left:-1080,top:-731,right:0,bottom:1141};
         assert!(same_rect(trim(available,DockSide::Bottom,80).unwrap(),RECT{top:1061,..available}));
+        assert!(same_rect(trim(available,DockSide::Top,80).unwrap(),RECT{bottom:available.top+80,..available}));
         assert!(same_rect(trim(available,DockSide::Left,132).unwrap(),RECT{right:-948,..available}));
         assert!(same_rect(trim(available,DockSide::Right,132).unwrap(),RECT{left:-132,..available}));
         assert!(trim(available,DockSide::Left,1080).is_none());

@@ -1589,6 +1589,7 @@ unsafe fn request_utilities_with_change(hwnd:HWND,widget:Option<UtilityWidget>,c
             let r=widget.and_then(|id|l.inline.iter().find(|(w,_)|*w==id).map(|(_,r)|*r)).unwrap_or(l.utility);
             let (x,y)=match l.side{
                 DockSide::Bottom=>(r.x+r.w*0.5,l.glass.y),
+                DockSide::Top=>(r.x+r.w*0.5,l.glass.y+l.glass.h),
                 DockSide::Left=>(l.glass.x+l.glass.w,r.y+r.h*0.5),
                 DockSide::Right=>(l.glass.x,r.y+r.h*0.5),
             };
@@ -1987,6 +1988,7 @@ unsafe fn dock_app_anchor(owner:HWND,path:Option<&str>)->panel_chrome::Anchor{
             .and_then(|index|layout.slots.get(index).copied()).unwrap_or(layout.scan);
         let (x,y)=match layout.side{
             DockSide::Bottom=>(slot.x+slot.w*0.5,layout.glass.y),
+            DockSide::Top=>(slot.x+slot.w*0.5,layout.glass.y+layout.glass.h),
             DockSide::Left=>(layout.glass.x+layout.glass.w,slot.y+slot.h*0.5),
             DockSide::Right=>(layout.glass.x,slot.y+slot.h*0.5),
         };
@@ -2251,7 +2253,7 @@ unsafe fn start_from_pointer(cursor:Option<POINT>){
         Some(if let Some(bar)=dock{start_anchor_for(&s,bar,screen)}else{
             let q=screen.work;
             let point=POINT{x:match side{DockSide::Left=>q.left,DockSide::Right=>q.right-1,_=>q.left+(q.right-q.left)/8},
-                y:if side==DockSide::Bottom{q.bottom-1}else{q.top+(q.bottom-q.top)/2}};
+                y:match side{DockSide::Bottom=>q.bottom-1,DockSide::Top=>q.top,_=>q.top+(q.bottom-q.top)/2}};
             crate::launcher::DockAnchor{point,side}
         })
     });
@@ -2670,6 +2672,7 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
                 let r=layout.slots[index];
                 let (x,y)=match layout.side{
                     DockSide::Bottom=>(r.x+r.w*0.5,layout.glass.y),
+                    DockSide::Top=>(r.x+r.w*0.5,layout.glass.y+layout.glass.h),
                     DockSide::Left=>(layout.glass.x+layout.glass.w,r.y+r.h*0.5),
                     DockSide::Right=>(layout.glass.x,r.y+r.h*0.5),
                 };

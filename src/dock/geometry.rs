@@ -72,7 +72,7 @@ impl Resize {
         let old=old.rebase(union);
         let to=final_layout.rebase(union);
         let mut from=old.clone();
-        let horizontal=to.side==DockSide::Bottom;
+        let horizontal=to.side.horizontal();
         let start=|r:Rect|if horizontal{r.x}else{r.y};
         let end=|r:Rect|if horizontal{r.x+r.w}else{r.y+r.h};
         from.slots=mapping.iter().enumerate().map(|(i,index)|{
@@ -134,16 +134,17 @@ impl Layout {
     }
     pub(super) fn popup_anchor(&self,slot:Rect,leading:bool,openness:f32)->crate::launcher::DockAnchor{
         use windows_sys::Win32::Foundation::POINT;
-        let mut x=if leading&&self.side==DockSide::Bottom{slot.x}else{slot.x+slot.w*0.5};
+        let mut x=if leading&&self.side.horizontal(){slot.x}else{slot.x+slot.w*0.5};
         let mut y=slot.y+slot.h*0.5;
         let (along,mut depth)=Self::collapse_scale(openness);
         let g=self.glass;
         if openness<=0.003{
-            let cross=if self.side==DockSide::Bottom{g.h}else{g.w};
+            let cross=if self.side.horizontal(){g.h}else{g.w};
             depth=(4.0*self.scale/cross.max(1.0)).min(1.0);
         }
         match self.side{
             DockSide::Bottom=>{x=g.x+g.w*0.5+(x-g.x-g.w*0.5)*along;y=g.y+g.h*(1.0-depth);}
+            DockSide::Top=>{x=g.x+g.w*0.5+(x-g.x-g.w*0.5)*along;y=g.y+g.h*depth;}
             DockSide::Left=>{x=g.x+g.w*depth;y=g.y+g.h*0.5+(y-g.y-g.h*0.5)*along;}
             DockSide::Right=>{x=g.x+g.w*(1.0-depth);y=g.y+g.h*0.5+(y-g.y-g.h*0.5)*along;}
         }
@@ -165,7 +166,7 @@ impl Layout {
     }
     pub fn magnification_target(&self,x:f32,y:f32)->Option<f32>{
         let point=self.axis(x,y);
-        let vertical=self.side!=DockSide::Bottom;
+        let vertical=!self.side.horizontal();
         let across=if vertical{x}else{y};
         let first=self.slots.first()?;
         let last=self.slots.last()?;
@@ -191,12 +192,12 @@ impl Layout {
     }
     pub fn is_utility_button(&self,x:f32,y:f32)->bool{self.utility.contains(x,y)}
     pub fn is_launch_button(&self,x:f32,y:f32)->bool { self.scan.contains(x,y) }
-    pub fn axis(&self,x:f32,y:f32)->f32 {if self.side==DockSide::Bottom{x}else{y}}
+    pub fn axis(&self,x:f32,y:f32)->f32 {if self.side.horizontal(){x}else{y}}
     /// Insertion boundaries follow the drawn slots, including gaps and ends.
     pub fn pin_boundary(&self,x:f32,y:f32,pins:usize)->Option<usize>{
         let pins=self.slots.get(..pins)?;
         let (first,last)=(pins.first()?,pins.last()?);
-        let horizontal=self.side==DockSide::Bottom;
+        let horizontal=self.side.horizontal();
         let start=|r:&Rect| if horizontal {r.x}else{r.y};
         let span=|r:&Rect| if horizontal {r.w}else{r.h};
         let p=self.axis(x,y);
@@ -209,7 +210,7 @@ impl Layout {
     }
     pub fn pin_marker(&self,boundary:usize,pins:usize)->Option<Rect>{
         let slots=self.slots.get(..pins)?;
-        let horizontal=self.side==DockSide::Bottom;
+        let horizontal=self.side.horizontal();
         let start=|r:&Rect|if horizontal{r.x}else{r.y};
         let end=|r:&Rect|if horizontal{r.x+r.w}else{r.y+r.h};
         let gap=2.0*self.scale;
@@ -269,7 +270,7 @@ fn measure_widgets(display:&Display,style:&Appearance,count:usize,focus:Option<f
     measure_cluster(display,style,count,focus,amount,pinned,Cluster{side,cell,gap:4,inline_metrics:false,signals:pinned.len()})
 }
 pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,focus:Option<f32>,amount:f32,pinned:&[UtilityWidget],cluster:Cluster)->Layout{
-    let vertical=style.position!=DockSide::Bottom;
+    let vertical=!style.position.horizontal();
     let leading_requested=cluster.side==Some(true);
     let host=cluster.side.is_some();
     let scale=style.pixel_scale(display.dpi);
@@ -339,11 +340,13 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     let offset=center.clamp(edge,(axis-edge-extent).max(edge)).round();
     let (x,y,w,h)=match style.position{
         DockSide::Bottom=>(display.work.left+offset as i32,display.work.bottom-(edge+total_cross).ceil() as i32,extent,total_cross),
+        DockSide::Top=>(display.work.left+offset as i32,display.work.top+edge.ceil() as i32,extent,total_cross),
         DockSide::Left=>(display.work.left+edge.ceil() as i32,display.work.top+offset as i32,total_cross,extent),
         DockSide::Right=>(display.work.right-(edge+total_cross).ceil() as i32,display.work.top+offset as i32,total_cross,extent),
     };
-    let wall=if style.position==DockSide::Left{shadow}else{total_cross-shadow};
-    let panel_base=if style.position==DockSide::Left{wall}else{wall-panel_cross};
+    let leading_edge=matches!(style.position,DockSide::Top|DockSide::Left);
+    let wall=if leading_edge{shadow}else{total_cross-shadow};
+    let panel_base=if leading_edge{wall}else{wall-panel_cross};
     let bar=|major:f32,minor:f32,along:f32,across:f32|if vertical{
         Rect{x:minor,y:major,w:across,h:along}
     }else{Rect{x:major,y:minor,w:along,h:across}};
@@ -377,12 +380,12 @@ pub(super) fn measure_cluster(display:&Display,style:&Appearance,count:usize,foc
     let mut slots=Vec::with_capacity(count);
     let mut indicators=Vec::with_capacity(count);
     for (i,&size) in widths.iter().enumerate(){
-        let minor=if style.position==DockSide::Left{wall+12.0*scale}else{wall-12.0*scale-size};
+        let minor=if leading_edge{wall+12.0*scale}else{wall-12.0*scale-size};
         let slot=bar(cursor,minor,size,size);
         debug_assert!(i<count);
         {
             slots.push(slot);
-            let marker=if style.position==DockSide::Left{wall+5.5*scale}else{wall-5.5*scale};
+            let marker=if leading_edge{wall+5.5*scale}else{wall-5.5*scale};
             let mid=cursor+size/2.0;
             indicators.push(if vertical{(marker,mid)}else{(mid,marker)});
         }
@@ -436,7 +439,7 @@ mod tests{
     fn dynamic_count_resize_keeps_same_hit_geometry_and_union_canvas(){
         let bounds=RECT{left:-1080,top:-731,right:0,bottom:1189};
         let screen=Display{id:"portrait".into(),name:String::new(),bounds,work:bounds,dpi:120,primary:false};
-        for position in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
+        for position in [DockSide::Bottom,DockSide::Top,DockSide::Left,DockSide::Right]{
             let style=Appearance{position,..Default::default()};
             for (before,count,map) in [(3,4,vec![Some(0),None,Some(1),Some(2)]),(4,3,vec![Some(0),Some(2),Some(3)])]{
                 let old=measure(&screen,&style,before,None,0.0);
@@ -460,12 +463,13 @@ mod tests{
     fn dock_edge_gap_keeps_dock_centered_on_all_edges(){
         let bounds=RECT{left:-1500,top:-100,right:0,bottom:1000};
         let screen=Display{id:"negative".into(),name:String::new(),bounds,work:bounds,dpi:144,primary:false};
-        for position in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
+        for position in [DockSide::Bottom,DockSide::Top,DockSide::Left,DockSide::Right]{
             let base=Appearance{position,edge_gap:0,..Default::default()};
             let near=measure(&screen,&base,4,None,0.0);
             let away=measure(&screen,&Appearance{edge_gap:24,..base},4,None,0.0);
             match position{
                 DockSide::Bottom=>assert_eq!((near.window.left,near.window.top-36),(away.window.left,away.window.top)),
+                DockSide::Top=>assert_eq!((near.window.left,near.window.top+36),(away.window.left,away.window.top)),
                 DockSide::Left=>assert_eq!((near.window.left+36,near.window.top),(away.window.left,away.window.top)),
                 DockSide::Right=>assert_eq!((near.window.left-36,near.window.top),(away.window.left,away.window.top)),
             }
@@ -475,13 +479,13 @@ mod tests{
     fn panel_anchors_share_the_capsule_edge_as_dock_scales_and_folds(){
         let bounds=RECT{left:-1440,top:-100,right:0,bottom:1600};
         let screen=Display{id:"portrait".into(),name:String::new(),bounds,work:bounds,dpi:144,primary:false};
-        for position in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
+        for position in [DockSide::Bottom,DockSide::Top,DockSide::Left,DockSide::Right]{
             let mut prior=None;
             for dock_scale in [75,100,140]{
                 let style=Appearance{position,size:dock_scale,..Default::default()};
                 let l=measure_widgets(&screen,&style,5,None,0.0,Some(false),&[],28);
                 let edge=|p:crate::launcher::DockAnchor|match position{
-                    DockSide::Bottom=>-p.point.y,DockSide::Left=>p.point.x,DockSide::Right=>-p.point.x
+                    DockSide::Bottom=>-p.point.y,DockSide::Top=>p.point.y,DockSide::Left=>p.point.x,DockSide::Right=>-p.point.x
                 };
                 let full=edge(l.start_anchor(1.0));
                 assert_eq!(edge(l.hub_anchor(1.0)),full);
@@ -497,11 +501,11 @@ mod tests{
     fn magnification_crosses_the_gap_without_stealing_clicks(){
         let bounds=RECT{left:-1080,top:-700,right:0,bottom:1220};
         let screen=Display{id:"portrait".into(),name:String::new(),bounds,work:bounds,dpi:144,primary:false};
-        for position in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
+        for position in [DockSide::Bottom,DockSide::Top,DockSide::Left,DockSide::Right]{
             let style=Appearance{position,..Default::default()};
             let layout=measure_widgets(&screen,&style,5,None,0.0,Some(false),&[],28);
             let (a,b)=(layout.slots[0],layout.slots[1]);
-            let (x,y)=if position==DockSide::Bottom{((a.x+a.w+b.x)*0.5,a.y+a.h*0.5)}
+            let (x,y)=if position.horizontal(){((a.x+a.w+b.x)*0.5,a.y+a.h*0.5)}
                 else{(a.x+a.w*0.5,(a.y+a.h+b.y)*0.5)};
             assert!(layout.hit(x,y).is_none());
             assert_eq!(layout.magnification_target(x,y),Some(layout.axis(x,y)));
@@ -513,11 +517,11 @@ mod tests{
     fn system_controls_follow_the_arrow_and_do_not_overlap_apps(){
         let bounds=RECT{left:-1080,top:-700,right:0,bottom:1220};
         let work=Display{id:"portrait".into(),name:String::new(),bounds,work:bounds,dpi:144,primary:false};
-        for position in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
+        for position in [DockSide::Bottom,DockSide::Top,DockSide::Left,DockSide::Right]{
             for leading in [true,false]{
                 let style=Appearance{position,..Default::default()};
                 let l=measure_widgets(&work,&style,5,None,0.0,Some(leading),&[UtilityWidget::Network],28);
-                let along=|r:Rect|if position==DockSide::Bottom{(r.x,r.x+r.w)}else{(r.y,r.y+r.h)};
+                let along=|r:Rect|if position.horizontal(){(r.x,r.x+r.w)}else{(r.y,r.y+r.h)};
                 for r in [l.scan].into_iter().chain(l.slots.iter().copied()){
                     assert!(along(l.start).1<=along(r).0&&along(l.tray).0>=along(r).1);
                 }
@@ -535,7 +539,7 @@ mod tests{
     }
     #[test]
     fn insertion_targets_gaps_and_row_ends_at_rest_and_during_zoom(){
-        for side in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
+        for side in [DockSide::Bottom,DockSide::Top,DockSide::Left,DockSide::Right]{
             for amount in [0.0,0.4,1.0]{
                 let screen=Display{id:"test".into(),name:String::new(),bounds:RECT{left:-900,top:0,right:0,bottom:1200},
                     work:RECT{left:-900,top:0,right:0,bottom:1160},primary:false,dpi:144};
@@ -556,7 +560,7 @@ mod tests{
             for dpi in [96,144,192]{
                 let work=RECT{left:-width,top:-200,right:0,bottom:height-200};
                 let screen=Display{id:"test".into(),name:String::new(),bounds:work,work,primary:false,dpi};
-                for position in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
+                for position in [DockSide::Bottom,DockSide::Top,DockSide::Left,DockSide::Right]{
                     for side in [Some(true),Some(false)]{
                         let style=Appearance{position,magnification:55,..Default::default()};
                         let cfg=Cluster{side,cell:28,gap:4,inline_metrics:false,signals:2};
@@ -590,7 +594,7 @@ mod tests{
     #[test]
     fn metric_tile_stays_clickable_during_zoom_and_yields_to_overflow_on_narrow_displays(){
         let pins=[UtilityWidget::Network,UtilityWidget::Sound,UtilityWidget::Bluetooth,UtilityWidget::Metrics];
-        for position in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
+        for position in [DockSide::Bottom,DockSide::Top,DockSide::Left,DockSide::Right]{
             let r=RECT{left:-1080,top:-240,right:0,bottom:1680};
             let screen=Display{id:"display".into(),name:String::new(),bounds:r,work:r,primary:false,dpi:144};
             let style=Appearance{position,magnification:55,..Default::default()};
@@ -615,11 +619,11 @@ mod tests{
         let display=Display{id:"display".into(),name:String::new(),bounds,work,primary:false,dpi:144};
         let cfg=Cluster{side:Some(false),cell:28,gap:4,inline_metrics:true,signals:2};
         let pins=[UtilityWidget::Network,UtilityWidget::Sound,UtilityWidget::Metrics];
-        for position in [DockSide::Bottom,DockSide::Left,DockSide::Right] {
+        for position in [DockSide::Bottom,DockSide::Top,DockSide::Left,DockSide::Right] {
             for leading in [true,false] {
                 let style=Appearance{position,..Default::default()};
                 let layout=measure_cluster(&display,&style,6,None,0.0,&pins,Cluster{side:Some(leading),..cfg});
-                let (actual,expected)=if position==DockSide::Bottom{
+                let (actual,expected)=if position.horizontal(){
                     (layout.window.left as f32+layout.glass.x+layout.glass.w/2.0,-800.0)
                 }else{
                     (layout.window.top as f32+layout.glass.y+layout.glass.h/2.0,-150.0)
@@ -645,7 +649,7 @@ mod tests{
         for dpi in [96,120,144,192] {
             let work=RECT{left:-1080,top:-731,right:0,bottom:1140};
             let display=Display{id:"portrait".into(),name:"Portrait".into(),bounds:work,work,primary:false,dpi};
-            for position in [DockSide::Bottom,DockSide::Left,DockSide::Right] {
+            for position in [DockSide::Bottom,DockSide::Top,DockSide::Left,DockSide::Right] {
                 let style=Appearance{position,icon_size:60,magnification:55,..Default::default()};
                 let layout=measure(&display,&style,10,Some(320.0),1.0);
                 assert!(layout.window.left>=work.left&&layout.window.right<=work.right&&layout.window.top>=work.top&&layout.window.bottom<=work.bottom);

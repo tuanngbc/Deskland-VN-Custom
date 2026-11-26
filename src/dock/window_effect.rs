@@ -235,6 +235,7 @@ unsafe fn target(owner:HWND,path:&str)->Result<(RECT,DockSide),Reason>{
     use super::DockSide::*;
     let (cx,cy,sx,sy)=match side{
         Bottom=>(g.x+g.w/2.0,g.y+g.h,along,depth),
+        Top=>(g.x+g.w/2.0,g.y,along,depth),
         Left=>(g.x,g.y+g.h/2.0,depth,along),
         Right=>(g.x+g.w,g.y+g.h/2.0,depth,along),
     };

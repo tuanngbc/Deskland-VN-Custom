@@ -1163,17 +1163,18 @@ impl DockAnchor {
         self.side==other.side&&self.point.x==other.point.x&&self.point.y==other.point.y
     }
     pub(crate) fn encode(self)->(WPARAM,LPARAM){
-        let side=match self.side{crate::dock::DockSide::Bottom=>0,crate::dock::DockSide::Left=>1,crate::dock::DockSide::Right=>2};
+        let side=match self.side{crate::dock::DockSide::Bottom=>0,crate::dock::DockSide::Top=>3,crate::dock::DockSide::Left=>1,crate::dock::DockSide::Right=>2};
         (((self.point.x as u32 as u64)|((side as u64)<<32)) as WPARAM,self.point.y as LPARAM)
     }
     pub(crate) fn decode(w:WPARAM,l:LPARAM)->Self{
-        let side=match (w as u64)>>32{1=>crate::dock::DockSide::Left,2=>crate::dock::DockSide::Right,_=>Default::default()};
+        let side=match (w as u64)>>32{1=>crate::dock::DockSide::Left,2=>crate::dock::DockSide::Right,3=>crate::dock::DockSide::Top,_=>Default::default()};
         Self{point:POINT{x:w as i32,y:l as i32},side}
     }
     fn position(self,work:RECT,w:i32,h:i32,pad:i32)->(i32,i32){
         use crate::dock::DockSide;
         let (x,y)=match self.side{
             DockSide::Bottom=>(self.point.x,self.point.y-h-pad),
+            DockSide::Top=>(self.point.x,self.point.y+pad),
             DockSide::Left=>(self.point.x+pad,self.point.y-h/2),
             DockSide::Right=>(self.point.x-w-pad,self.point.y-h/2),
         };
@@ -1269,7 +1270,7 @@ mod tests {
     #[test]
     fn dock_anchor_roundtrips_and_stays_on_negative_output(){
         let work=RECT{left:-1080,top:-731,right:0,bottom:1141};
-        for side in [crate::dock::DockSide::Bottom,crate::dock::DockSide::Left,crate::dock::DockSide::Right]{
+        for side in [crate::dock::DockSide::Bottom,crate::dock::DockSide::Top,crate::dock::DockSide::Left,crate::dock::DockSide::Right]{
             let a=DockAnchor{point:POINT{x:-1035,y:-620},side};
             let (w,l)=a.encode();
             let decoded=DockAnchor::decode(w,l);

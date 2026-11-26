@@ -113,6 +113,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::runtime::tests::native_display_targets_filter_hwnds_and_keep_other_module -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::runtime::tests::native_four_edge_dock_keeps_top_popups_inside_the_display -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::runtime::tests::native_startup_never_synchronously_reads_own_settings_title -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release dock::runtime::tests::native_registered_settings_identity_state_and_pins -- --ignored --exact --nocapture --test-threads=1

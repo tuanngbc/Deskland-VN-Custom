@@ -240,7 +240,7 @@
     <label class="setting-row"><b data-i18n="dockTransparency">Độ trong suốt</b><span><input id="dockLook_transparency" type="range" min="4" max="74" value="36"> <output id="dockValue_transparency">36</output></span></label>
     <label class="setting-row"><b data-i18n="dockMagnification">Phóng đại khi rê chuột</b><span><input id="dockLook_magnification" type="range" min="0" max="55" value="38"> <output id="dockValue_magnification">38</output></span></label>
     <label class="setting-row"><b data-i18n="dockPosition">Cạnh màn hình</b><select id="dockLook_position">
-      <option value="bottom" data-i18n="dockBottom">Bên dưới</option><option value="left" data-i18n="dockLeft">Bên trái</option><option value="right" data-i18n="dockRight">Bên phải</option>
+      <option value="bottom" data-i18n="dockBottom">Bên dưới</option><option value="top" data-i18n="dockTop">Bên trên</option><option value="left" data-i18n="dockLeft">Bên trái</option><option value="right" data-i18n="dockRight">Bên phải</option>
     </select></label>
     <label class="setting-row"><b>Màu Dock</b><select id="dockLook_theme"><option value="auto" data-i18n="appearanceSystem">Theo hệ thống</option><option value="light" data-i18n="launcherLight">Sáng</option><option value="dark" data-i18n="launcherDark">Tối</option></select></label>
     <label class="setting-row switch-row"><b data-i18n="dockAutoHide">Ẩn Dock khi cửa sổ phóng tối đa</b><input type="checkbox" id="dockLook_autoHide" role="switch"><i class="switch" aria-hidden="true"></i></label>
@@ -1256,7 +1256,7 @@ function renderDockPlacement(){
   $('dockDisplayPreview').innerHTML=dockDisplays.length?dockDisplays.map(d=>{
     const app=layouts.dockDisplay.has(d.id),stage=layouts.stageDisplay.has(d.id);
     return '<div class="dock-display-card"><div class="dock-display-diagram" aria-hidden="true" style="aspect-ratio:'+Math.max(.5,Math.min(2.5,d.w/d.h))+'">'+
-      (app?'<i class="dock-display-bar '+(["left","right"].includes(dockOptions.appearance?.position)?dockOptions.appearance.position:"")+'"></i>':'')+(stage?'<i class="dock-display-stage '+(stageRight(d.id)?'right':'')+'"></i>':'')+
+      (app?'<i class="dock-display-bar '+(["top","left","right"].includes(dockOptions.appearance?.position)?dockOptions.appearance.position:"")+'"></i>':'')+(stage?'<i class="dock-display-stage '+(stageRight(d.id)?'right':'')+'"></i>':'')+
       '</div><b>'+esc(displayLabel(d))+'</b><small>'+esc([app?'Dock':'',stage?'Stage Manager':''].filter(Boolean).join(' · ')||dockText('dockDisplayOff'))+'</small></div>';
   }).join(''):'<p>'+esc(dockText('dockDisplayNone'))+'</p>';
 }

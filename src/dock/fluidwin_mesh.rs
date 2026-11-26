@@ -79,7 +79,7 @@ impl Layer {
         window: RECT, icon: RECT, side: DockSide, drop_effect: bool, dpi: u32) -> Option<Self> {
         #[cfg(target_env = "msvc")]
         {
-            let side = match side { DockSide::Bottom => 0, DockSide::Left => 2, DockSide::Right => 3 };
+            let side = match side { DockSide::Bottom => 0, DockSide::Top=>1, DockSide::Left => 2, DockSide::Right => 3 };
             // The upstream mesh extends one pixel past the source when the
             // source overlaps the Dock. Include that strip in the canvas.
             let mut canvas = RECT { left: window.left.min(icon.left).checked_sub(2)?,
@@ -115,7 +115,7 @@ impl Layer {
         #[cfg(target_env="msvc")]
         {
             let icon=if effect==super::motion::WindowEffect::Scale{super::window_effect::icon_fit(window,icon)}else{icon};
-            let side=match side{DockSide::Bottom=>0,DockSide::Left=>2,DockSide::Right=>3};
+            let side=match side{DockSide::Bottom=>0,DockSide::Top=>1,DockSide::Left=>2,DockSide::Right=>3};
             let scale=(f64::from(dpi)/96.0).clamp(0.75,4.0);
             let margin=if effect==super::motion::WindowEffect::Drop{5*(icon.right-icon.left)+16}else{2};
             let canvas=canvas.unwrap_or(RECT{left:window.left.min(icon.left).checked_sub(margin)?,top:window.top.min(icon.top).checked_sub(margin)?,

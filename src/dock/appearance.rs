@@ -2,10 +2,11 @@
 use serde_json::{json,Value};
 
 #[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
-pub enum DockSide { #[default] Bottom, Left, Right }
+pub enum DockSide { #[default] Bottom, Top, Left, Right }
 impl DockSide {
-    fn parse(value:&Value)->Self {match value.as_str(){Some("left")=>Self::Left,Some("right")=>Self::Right,_=>Self::Bottom}}
-    fn key(self)->&'static str {match self{Self::Bottom=>"bottom",Self::Left=>"left",Self::Right=>"right"}}
+    pub(crate) fn horizontal(self)->bool{matches!(self,Self::Bottom|Self::Top)}
+    fn parse(value:&Value)->Self {match value.as_str(){Some("top")=>Self::Top,Some("left")=>Self::Left,Some("right")=>Self::Right,_=>Self::Bottom}}
+    fn key(self)->&'static str {match self{Self::Bottom=>"bottom",Self::Top=>"top",Self::Left=>"left",Self::Right=>"right"}}
 }
 #[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
 pub enum Theme { #[default] Auto, Light, Dark }
@@ -92,5 +93,7 @@ mod tests{
             let settings=Appearance{start_icon:icon,size:115,..Default::default()};
             assert_eq!(Appearance::from_json(&settings.json()),settings);
         }
+        let top=Appearance::from_json(&json!({"position":"top","edgeGap":16,"size":120}));
+        assert_eq!(top.position,DockSide::Top);assert_eq!(Appearance::from_json(&top.json()),top);
     }
 }

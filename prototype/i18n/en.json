@@ -21,6 +21,7 @@
     "dockMotionSpeed": "Animation speed",
     "dockPosition": "Screen edge",
     "dockBottom": "Bottom",
+    "dockTop": "Top",
     "dockTheme": "Color",
     "dockReducedMotion": "Reduced motion",
     "dockAlphaHint": "Adjust the transparency of the Dock glass.",

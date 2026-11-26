@@ -41,6 +41,7 @@ fn panel_area(monitor:RECT,work:RECT,point:POINT,side:DockSide,gap:i32)->Option<
     let mut area=RECT{left:monitor.left,right:monitor.right,top:work.top,bottom:work.bottom};
     match side{
         DockSide::Bottom=>area.bottom=monitor.bottom.min(point.y-gap),
+        DockSide::Top=>area.top=monitor.top.max(point.y+gap),
         DockSide::Left=>area.left=area.left.max(point.x+gap),
         DockSide::Right=>area.right=area.right.min(point.x-gap),
     }
@@ -50,6 +51,7 @@ pub(super) fn placement(work:RECT,anchor:Anchor,width:i32,height:i32,gap:i32)->(
     let p=anchor.point;
     let (x,y)=match anchor.side{
         DockSide::Bottom=>(p.x-width/2,p.y-height-gap),
+        DockSide::Top=>(p.x-width/2,p.y+gap),
         DockSide::Left=>(p.x+gap,p.y-height/2),
         DockSide::Right=>(p.x-width-gap,p.y-height/2),
     };
@@ -111,15 +113,16 @@ impl PanelShadow{
         *slot=None;
         let pad=scale(dpi,21);
         let near=(scale(dpi,PANEL_GAP)-1).max(1);
-        let (left,right,bottom)=match side{
-            DockSide::Bottom=>(pad,pad,near),
-            DockSide::Left=>(near,pad,pad),
-            DockSide::Right=>(pad,near,pad),
+        let (left,right,top,bottom)=match side{
+            DockSide::Bottom=>(pad,pad,pad,near),
+            DockSide::Top=>(pad,pad,near,pad),
+            DockSide::Left=>(near,pad,pad,pad),
+            DockSide::Right=>(pad,near,pad,pad),
         };
-        let at=(rect.left-left,rect.top-pad);
-        let (w,h)=(width+left+right,height+pad+bottom);
+        let at=(rect.left-left,rect.top-top);
+        let (w,h)=(width+left+right,height+top+bottom);
         let Some(mut layer)=Layer::new(w,h)else{return;};
-        let card=Rect{x:left as f32,y:pad as f32,w:width as f32,h:height as f32};
+        let card=Rect{x:left as f32,y:top as f32,w:width as f32,h:height as f32};
         let canvas=Rect{x:0.0,y:0.0,w:w as f32,h:h as f32};
         let radius=scale(dpi,16) as f32;
         let data=layer.pixels();data.fill(0);
@@ -127,6 +130,7 @@ impl PanelShadow{
             let d=distance(card,radius,x,y);
             let toward=match side{
                 DockSide::Bottom=>(y-card.y-card.h).max(0.0),
+                DockSide::Top=>(card.y-y).max(0.0),
                 DockSide::Left=>(card.x-x).max(0.0),
                 DockSide::Right=>(x-card.x-card.w).max(0.0),
             };
@@ -139,7 +143,7 @@ impl PanelShadow{
         let hwnd=CreateWindowExW(WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW|WS_EX_TOPMOST,
             name.as_ptr(),ptr::null(),WS_POPUP,at.0,at.1,w,h,owner,ptr::null_mut(),GetModuleHandleW(ptr::null()),ptr::null());
         if hwnd.is_null(){return;}
-        let shadow=Self{hwnd,layer,style,inset:(left,pad),at};
+        let shadow=Self{hwnd,layer,style,inset:(left,top),at};
         disable_system_border(hwnd);
         if shadow.layer.present_at(hwnd,Some(POINT{x:at.0,y:at.1}),255)&&
             SetWindowPos(hwnd,panel,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW)!=0{
@@ -276,9 +280,10 @@ mod tests{
         for dpi in [96,144,192]{
             let gap=scale(dpi,PANEL_GAP);
             for displacement in [52,90,175]{
-                for side in [DockSide::Bottom,DockSide::Left,DockSide::Right]{
+                for side in [DockSide::Bottom,DockSide::Top,DockSide::Left,DockSide::Right]{
                     let point=match side{
                         DockSide::Bottom=>POINT{x:-90,y:monitor.bottom-displacement},
+                        DockSide::Top=>POINT{x:-90,y:monitor.top+displacement},
                         DockSide::Left=>POINT{x:monitor.left+displacement,y:-240},
                         DockSide::Right=>POINT{x:monitor.right-displacement,y:-240},
                     };
@@ -292,6 +297,7 @@ mod tests{
                     assert!(x>=area.left&&x+w<=area.right&&y>=area.top&&y+h<=area.bottom);
                     match side{
                         DockSide::Bottom=>assert_eq!((x+w,point.y-(y+h)),(monitor.right,gap)),
+                        DockSide::Top=>assert_eq!((x+w,y-point.y),(monitor.right,gap)),
                         DockSide::Left=>assert_eq!(x-point.x,gap),
                         DockSide::Right=>assert_eq!(point.x-(x+w),gap),
                     }
@@ -311,7 +317,7 @@ mod tests{
     #[test]
     fn all_anchors_remain_on_the_selected_negative_monitor(){
         let work=RECT{left:-1080,top:-731,right:0,bottom:1141};
-        for side in [DockSide::Bottom,DockSide::Left,DockSide::Right] {
+        for side in [DockSide::Bottom,DockSide::Top,DockSide::Left,DockSide::Right] {
             for point in [POINT{x:-1078,y:-728},POINT{x:-2,y:1139},POINT{x:-500,y:100}] {
                 let (x,y)=placement(work,Anchor{point,side,dark:true,transparency:30},460,450,10);
                 assert!(x>=work.left&&x+460<=work.right&&y>=work.top&&y+450<=work.bottom);
@@ -319,4 +325,3 @@ mod tests{
         }
     }
 }
-

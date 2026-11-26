@@ -92,7 +92,7 @@ pub(super) unsafe fn poll(){
             let anchor=super::dock_app_anchor(owner,Some(&path));
             let Some(area)=anchor.work()else{leave(owner);stop_if_idle();return;};
             let p=anchor.point;let icon=RECT{left:p.x-24,top:p.y-24,right:p.x+24,bottom:p.y+24};
-            let side=match anchor.side{DockSide::Bottom=>0,DockSide::Left=>2,DockSide::Right=>3};
+            let side=match anchor.side{DockSide::Bottom=>0,DockSide::Top=>1,DockSide::Left=>2,DockSide::Right=>3};
             let handles=sources.iter().map(|id|id.hwnd as HWND).collect::<Vec<_>>();
             let text=|vi,en,zh|crate::desktop::wide(crate::launcher::localized(vi,en,zh));
             let native=NonNull::new(tlauncher_previews_open(handles.as_ptr(),handles.len() as u32,&icon,&area,side,owner,

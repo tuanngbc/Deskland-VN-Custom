@@ -29,8 +29,8 @@ pub(super) unsafe fn sample(bounds:RECT,side:DockSide,inside:bool,previous:usize
     // the rail never samples its own color on subsequent refreshes.
     let samples=std::array::from_fn(|i|{
         let n=i as i32+1;
-        let (x,y)=if side==DockSide::Bottom{
-            (bounds.left+(bounds.right-bounds.left)*n/6,if inside{bounds.top-2}else{bounds.bottom+1})
+        let (x,y)=if side.horizontal(){
+            (bounds.left+(bounds.right-bounds.left)*n/6,if (side==DockSide::Bottom)==inside{bounds.top-2}else{bounds.bottom+1})
         }else{
             (if (side==DockSide::Right)==inside{bounds.left-2}else{bounds.right+1},
                 bounds.top+(bounds.bottom-bounds.top)*n/6)

@@ -23,6 +23,7 @@
     "dockMotionSpeed": "动画速度",
     "dockPosition": "屏幕边缘",
     "dockBottom": "底部",
+    "dockTop": "顶部",
     "dockTheme": "颜色",
     "dockReducedMotion": "减少动态效果",
     "dockAlphaHint": "调整程序坞玻璃效果的透明度。",

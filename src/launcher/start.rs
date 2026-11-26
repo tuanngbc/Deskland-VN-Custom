@@ -251,7 +251,7 @@ unsafe fn place(hwnd:HWND){
         let (mut x,mut y)=m.anchor.position(m.work,w,h,chrome::scale(m.dock_dpi,chrome::PANEL_GAP));
         if let Some(t)=START_MOTION.get(){
             let shift=(chrome::scale(m.dock_dpi,14) as f32*(1.0-t.openness())).round() as i32;
-            match m.anchor.side{crate::dock::DockSide::Bottom=>y+=shift,crate::dock::DockSide::Left=>x-=shift,crate::dock::DockSide::Right=>x+=shift}
+            match m.anchor.side{crate::dock::DockSide::Bottom=>y+=shift,crate::dock::DockSide::Top=>y-=shift,crate::dock::DockSide::Left=>x-=shift,crate::dock::DockSide::Right=>x+=shift}
         }
         Some((RECT{left:x,top:y,right:x+w,bottom:y+h},m.dock_dpi,m.anchor.side,m.dark))
     });

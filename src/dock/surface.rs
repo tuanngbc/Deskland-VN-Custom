@@ -223,7 +223,7 @@ impl Surface {
             if item.count>0 {
                 let alert=(attention & (1<<i))!=0;
                 let (a,b)=if front {(5.0,1.9)}else if alert{(3.5,2.0)}else{(1.9,1.9)};
-                let (kx,ky)=if layout.side==super::DockSide::Bottom{(a*scale,b*scale)}else{(b*scale,a*scale)};
+                let (kx,ky)=if layout.side.horizontal(){(a*scale,b*scale)}else{(b*scale,a*scale)};
                 let r=Rect{x:x-kx,y:y-ky,w:kx*2.0,h:ky*2.0};
                 if alert{
                     rounded(data,w,h,r,kx.min(ky),if self.material.dark{[113,200,255]}else{[35,104,174]},255);
@@ -267,7 +267,7 @@ impl Surface {
         if utility.w>0.0{rounded(data,w,h,utility,utility.w*0.31,palette.ink,if self.material.dark{24}else{15});}
         if hover==Some(items.len()+1){rounded(data,w,h,utility,utility.w*0.22,tint,50);}
         let divider=|a:Rect,b:Rect|{
-            if layout.side==super::DockSide::Bottom{
+            if layout.side.horizontal(){
                 Rect{x:(a.x+a.w+b.x)*0.5-0.5*scale,y:layout.glass.y+layout.glass.h*0.22,w:scale,h:layout.glass.h*0.56}
             }else{
                 Rect{x:layout.glass.x+layout.glass.w*0.22,y:(a.y+a.h+b.y)*0.5-0.5*scale,w:layout.glass.w*0.56,h:scale}
@@ -282,7 +282,7 @@ impl Surface {
         for (i,(widget,slot)) in layout.inline.iter().copied().enumerate(){
             if hover==Some(items.len()+2+i){rounded(data,w,h,slot,7.0*scale,tint,50);}
             if let Some(cfg)=metrics.filter(|_|layout.metrics==Some(slot)&&widget==UtilityWidget::Metrics){
-                let vertical=layout.side!=super::DockSide::Bottom;
+                let vertical=!layout.side.horizontal();
                 let line=if vertical{
                     Rect{x:slot.x+slot.w*0.12,y:slot.y-3.0*scale,w:slot.w*0.76,h:scale}
                 }else{
@@ -330,7 +330,7 @@ impl Surface {
         if cw>=24&&ch>=22{
             let font_scale=scale.min(ch as f32/36.0).min(cw as f32/46.0);
             if self.clock.as_ref().is_none_or(|old|old.size!=(cw,ch)){self.clock=ClockInk::new(cw,ch,font_scale);}
-            if let Some(clock)=self.clock.as_mut(){clock.paint(data,w,h,x,y,font_scale,palette,self.material.dark,layout.side!=super::DockSide::Bottom);}
+            if let Some(clock)=self.clock.as_mut(){clock.paint(data,w,h,x,y,font_scale,palette,self.material.dark,!layout.side.horizontal());}
         }
         if let Some(marker)=drop_target.and_then(|i|layout.pin_marker(i,items.iter().take_while(|item|item.pinned).count())){
             let ink=if self.material.dark{[244,219,180]}else{[171,106,44]};
@@ -356,6 +356,7 @@ fn collapse_pixels(dst:&mut[u8],src:&[u8],w:i32,h:i32,glass:Rect,side:super::Doc
     let opacity=(t/0.45).clamp(0.0,1.0);
     let (cx,cy,sx,sy)=match side{
         Bottom=>(glass.x+glass.w/2.0,glass.y+glass.h,along,depth),
+        Top=>(glass.x+glass.w/2.0,glass.y,along,depth),
         Left=>(glass.x,glass.y+glass.h/2.0,depth,along),
         Right=>(glass.x+glass.w,glass.y+glass.h/2.0,depth,along),
     };
@@ -423,6 +424,7 @@ pub(super) fn rail_box(layout:&Layout)->Rect{
     let area=layout.glass;
     match layout.side{
         super::DockSide::Bottom=>Rect{x:area.x+area.w*0.25,y:area.y+area.h-4.0*scale,w:area.w*0.50,h:4.0*scale},
+        super::DockSide::Top=>Rect{x:area.x+area.w*0.25,y:area.y,w:area.w*0.50,h:4.0*scale},
         super::DockSide::Left=>Rect{x:area.x,y:area.y+area.h*0.25,w:4.0*scale,h:area.h*0.50},
         super::DockSide::Right=>Rect{x:area.x+area.w-4.0*scale,y:area.y+area.h*0.25,w:4.0*scale,h:area.h*0.50},
     }

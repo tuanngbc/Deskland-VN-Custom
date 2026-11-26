@@ -687,7 +687,7 @@ unsafe fn display_menu(owner: HWND, button: HWND, stage: bool) {
                 appearance_edits.push(next);
                 AppendMenuW(look,MF_STRING|if checked{MF_CHECKED}else{0},3000+appearance_edits.len()-1,wide(label).as_ptr());
             };
-            for (position,title) in [(DockSide::Bottom,"Cạnh dưới"),(DockSide::Left,"Cạnh trái"),(DockSide::Right,"Cạnh phải")]{
+            for (position,title) in [(DockSide::Bottom,"Cạnh dưới"),(DockSide::Top,"Cạnh trên"),(DockSide::Left,"Cạnh trái"),(DockSide::Right,"Cạnh phải")]{
                 item(title,appearance.position==position,Appearance{position,..appearance.clone()});
             }
             AppendMenuW(look,MF_SEPARATOR,0,std::ptr::null());

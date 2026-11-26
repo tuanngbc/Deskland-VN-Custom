@@ -57,7 +57,7 @@ pub(super) unsafe fn poll(){
                     #[cfg(target_env="msvc")]
                     {
                         let point=p.anchor.point;let icon=RECT{left:point.x-16,top:point.y-16,right:point.x+16,bottom:point.y+16};
-                        let side=match p.anchor.side{DockSide::Bottom=>0,DockSide::Left=>2,DockSide::Right=>3};
+                        let side=match p.anchor.side{DockSide::Bottom=>0,DockSide::Top=>1,DockSide::Left=>2,DockSide::Right=>3};
                         if tlauncher_stack_open(model.0.as_ptr(),&icon,side,wide(&text("Tải xuống","Downloads","下载")).as_ptr(),
                             wide(&text("Thư mục trống","The folder is empty","文件夹为空")).as_ptr(),wide(&text("Mở trong File Explorer","Open in File Explorer","在文件资源管理器中打开")).as_ptr(),
                             f64::from(super::motion::settings().speed)/100.0,!super::motion::allowed()){
