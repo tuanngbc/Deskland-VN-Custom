@@ -7,6 +7,9 @@ namespace {
 using Microsoft::WRL::ComPtr;
 struct Day {int code;wchar_t label[32],temperature[32];};
 struct Forecast {int code,count,ready,focused;wchar_t city[128],temperature[32],detail[256];Day days[5];};
+// Supplied directly by glass_probe::Layer, which creates/owns a top-down BGRA
+// DIB. Do not infer orientation from GetObject's reconstructed header.
+struct Surface {const BYTE* pixels;size_t bytes;int width,height;unsigned stride;};
 struct Canvas {
     unsigned phase=0;
     ComPtr<ID2D1DCRenderTarget> dc;ComPtr<ID2D1SolidColorBrush> pen;
@@ -62,15 +65,15 @@ struct Canvas {
 extern "C" void* tlauncher_forecast_canvas_create()noexcept{try{return new Canvas;}catch(...){return nullptr;}}
 extern "C" void tlauncher_forecast_canvas_free(void* raw)noexcept{delete static_cast<Canvas*>(raw);}
 extern "C" unsigned tlauncher_forecast_canvas_phase(void* raw)noexcept{return raw?static_cast<Canvas*>(raw)->phase:0;}
-extern "C" bool tlauncher_forecast_canvas_draw(void* raw,HDC target,const RECT* logical,float dpi,const Forecast* forecast)noexcept{
-    if(!raw||!target||!logical||!forecast||forecast->count<0||forecast->count>5||!std::isfinite(dpi)||dpi<=0)return false;
+extern "C" bool tlauncher_forecast_canvas_draw(void* raw,HDC target,const Surface* surface,const RECT* logical,float dpi,const Forecast* forecast)noexcept{
+    if(!raw||!target||!surface||!surface->pixels||surface->width<=0||surface->height<=0||surface->stride<size_t(surface->width)*4||surface->bytes<size_t(surface->height)*surface->stride||!logical||!forecast||forecast->count<0||forecast->count>5||!std::isfinite(dpi)||dpi<=0)return false;
     try{
         auto& c=*static_cast<Canvas*>(raw);c.phase=1;
         POINT points[2]={{logical->left,logical->top},{logical->right,logical->bottom}};
         if(!LPtoDP(target,points,2))return false;
         RECT rect={points[0].x,points[0].y,points[1].x,points[1].y};if(IsRectEmpty(&rect))return false;
         const float d=dpi*(rect.bottom-rect.top)/float(logical->bottom-logical->top);
-        c.phase=2;DIBSECTION dib{};if(GetObjectW(GetCurrentObject(target,OBJ_BITMAP),sizeof(dib),&dib)!=sizeof(dib)||!dib.dsBm.bmBits||dib.dsBm.bmBitsPixel!=32||dib.dsBmih.biHeight>=0||rect.left<0||rect.top<0||rect.right>dib.dsBm.bmWidth||rect.bottom>dib.dsBm.bmHeight)return false;
+        c.phase=2;if(rect.left<0||rect.top<0||rect.right>surface->width||rect.bottom>surface->height)return false;
         const int saved=SaveDC(target);if(!saved)return false;
         struct Restore{HDC dc;int saved;~Restore(){RestoreDC(dc,saved);}}restore{target,saved};
         SetMapMode(target,MM_TEXT);SetWindowOrgEx(target,0,0,nullptr);SetViewportOrgEx(target,0,0,nullptr);
@@ -78,8 +81,8 @@ extern "C" bool tlauncher_forecast_canvas_draw(void* raw,HDC target,const RECT* 
         c.phase=4;if(FAILED(c.dc->BindDC(target,&rect)))return false;
         const UINT width=UINT(rect.right-rect.left),height=UINT(rect.bottom-rect.top);
         c.phase=5;if(!c.background||c.width!=width||c.height!=height){c.background.Reset();if(FAILED(c.dc->CreateBitmap(D2D1::SizeU(width,height),nullptr,0,D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE)),&c.background)))return false;c.width=width;c.height=height;}
-        GdiFlush();const auto pixels=static_cast<const BYTE*>(dib.dsBm.bmBits)+size_t(rect.top)*dib.dsBm.bmWidthBytes+size_t(rect.left)*4;
-        c.phase=6;if(FAILED(c.background->CopyFromMemory(nullptr,pixels,UINT(dib.dsBm.bmWidthBytes))))return false;
+        GdiFlush();const auto pixels=surface->pixels+size_t(rect.top)*surface->stride+size_t(rect.left)*4;
+        c.phase=6;if(FAILED(c.background->CopyFromMemory(nullptr,pixels,surface->stride)))return false;
         const float w=float(width),h=float(height);c.dc->BeginDraw();c.dc->DrawBitmap(c.background.Get(),{0,0,w,h});
         // The existing glass remains under the transparent rounded corners.
         ComPtr<ID2D1GradientStopCollection> stops;ComPtr<ID2D1LinearGradientBrush> gradient;

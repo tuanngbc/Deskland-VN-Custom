@@ -252,7 +252,7 @@ impl Panel{
         SelectObject(g,self.fonts[2]);
         chrome::text(g,RECT{left:px(18),top:px(41),right:w-px(14),bottom:px(59)},&self.view.hint,p.muted,SINGLE_LINE);
         let had_forecast=self.forecast.is_some();
-        let forecast_drawn=self.forecast.as_mut().is_some_and(|f|f.draw(g,RECT{left:px(14),top:px(67),right:w-px(14),bottom:px(235)},self.dpi,self.index==Some(0)));
+        let forecast_drawn=if let Some(f)=self.forecast.as_mut(){f.draw(self.ink.as_mut().unwrap_or(&mut self.layer),RECT{left:px(14),top:px(67),right:w-px(14),bottom:px(235)},self.dpi,self.index==Some(0))}else{false};
         if had_forecast&&!forecast_drawn{
             self.forecast=None;
             self.access_token=serial();self.index=None;self.pressed=None;self.pressed_point=None;
