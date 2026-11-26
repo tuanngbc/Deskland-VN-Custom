@@ -5,6 +5,13 @@
   "note": "Section adaptations, not claims that these full headers were imported. Original CRLF worktree byte hashes and canonical Git blobs are recorded; existing notices and original license are preserved.",
   "sections": [
     {
+      "source": "fluidwin.cpp::primoPiano / togliPrimoPiano",
+      "source_git_blob": "17519dee3f8d60b3599b427cbb33a297dd9129cf",
+      "source_worktree_sha256": "e635f67fcce5978aca9d2f79da57529f4c18ff79fd59dee707c961e3b32350ef",
+      "integration": ["window_lease.cpp", "../../src/dock/topmost.rs", "../../src/dock/motion_guard.rs"],
+      "adaptation": "Original nonactivating SetWindowPos topmost behavior, explicit marker-before-mutation and synchronous foreign enable on existing pool. Existing single detached Guardian, process-birth identity, pending-begin acknowledgement, distinct lease kind/key, exact-bit restoration and startup orphan recovery. Refuses pre-existing topmost, elevated, Shell, owned/owner-with-owned windows. Adds native Dock/Control Center routes and opt-in Ctrl+Win+T with vi/en/zh Settings; no global policy, permanent worker or reassertion against another app."
+    },
+    {
       "source": "notch.h::scaffale / Bersaglio / appoggia / trascinaFuori",
       "source_git_blob": "b44082a6634d16983c45d873d7d8db025c90627c",
       "source_worktree_sha256": "c519f89e6f7f5a99aeaee5c2da7f30ddca9e85b0cce5d8792354a38873d1597a",

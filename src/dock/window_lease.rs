@@ -5,6 +5,7 @@ use windows_sys::Win32::{Foundation::*,System::Threading::*};
 extern "C" {
     fn tlauncher_window_lease(hwnd:HWND,guardian:HANDLE,marker:*const u16)->*mut c_void;
     fn tlauncher_window_lease_alpha(hwnd:HWND,guardian:HANDLE,marker:*const u16,alpha:u8)->*mut c_void;
+    fn tlauncher_window_lease_topmost(hwnd:HWND,guardian:HANDLE,marker:*const u16)->*mut c_void;
     fn tlauncher_window_lease_poll(lease:*mut c_void)->i32;
     fn tlauncher_window_lease_restore(lease:*mut c_void);
     fn tlauncher_window_lease_free(lease:*mut c_void);
@@ -20,7 +21,7 @@ fn native_pending_style_begin_keeps_journal_until_worker_acknowledges(){
     if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
     use std::{ptr,time::{Duration,Instant}};
-    unsafe{
+    for topmost in [false,true]{unsafe{
         let h=CreateWindowExW(WS_EX_TOOLWINDOW,crate::desktop::wide("STATIC").as_ptr(),crate::desktop::wide("Synthetic pending lease").as_ptr(),
             WS_POPUP,20,20,180,100,ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),ptr::null());assert!(!h.is_null());ShowWindow(h,SW_SHOWNOACTIVATE);
         struct Window(HWND);impl Drop for Window{fn drop(&mut self){unsafe{DestroyWindow(self.0);}}}let _window=Window(h);
@@ -28,7 +29,8 @@ fn native_pending_style_begin_keeps_journal_until_worker_acknowledges(){
         struct Pause(HANDLE,HANDLE);impl Drop for Pause{fn drop(&mut self){unsafe{SetEvent(self.1);tlauncher_window_lease_fixture_pause(ptr::null_mut(),ptr::null_mut());CloseHandle(self.0);CloseHandle(self.1);}}}
         let pause=Pause(reached,resume);tlauncher_window_lease_fixture_pause(reached,resume);
         let key=format!("TLauncher.Motion.Fixture.Pending.{}",std::process::id());let marker=crate::desktop::wide(&key);let original=GetWindowLongPtrW(h,GWL_EXSTYLE);
-        let lease=Lease(NonNull::new(tlauncher_window_lease(h,GetCurrentProcess(),marker.as_ptr())).unwrap());
+        let begin=if topmost{tlauncher_window_lease_topmost}else{tlauncher_window_lease};
+        let lease=Lease(NonNull::new(begin(h,GetCurrentProcess(),marker.as_ptr())).unwrap());
         let pump=||{let mut msg:MSG=std::mem::zeroed();for _ in 0..64{if PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)==0{break;}TranslateMessage(&msg);DispatchMessageW(&msg);}std::thread::sleep(Duration::from_millis(5));};
         let started=Instant::now();while WaitForSingleObject(reached,0)!=WAIT_OBJECT_0{pump();assert!(started.elapsed()<Duration::from_secs(3),"worker must reach the controlled pre-style boundary");}
         let marker_key=key.clone();let recovery=std::thread::spawn(move||recover(&marker_key));let started=Instant::now();
@@ -36,13 +38,54 @@ fn native_pending_style_begin_keeps_journal_until_worker_acknowledges(){
         assert_eq!(recovery.join().unwrap(),1,"live pending worker must retain an unresolved reserved journal");
         assert_eq!(GetWindowLongPtrW(h,GWL_EXSTYLE),original);
         assert!(!GetPropW(h,marker.as_ptr()).is_null(),"recovery cannot erase a live pending begin");
-        let new=tlauncher_window_lease(h,GetCurrentProcess(),marker.as_ptr());assert!(new.is_null(),"a new lease must not share an old pending operation's identity");
+        let new=begin(h,GetCurrentProcess(),marker.as_ptr());assert!(new.is_null(),"a new lease must not share an old pending operation's identity");
         SetEvent(resume);let started=Instant::now();
         while lease.status()!=2||!GetPropW(h,marker.as_ptr()).is_null(){pump();assert!(started.elapsed()<Duration::from_secs(4),"cancelled begin must acknowledge and finish cleanup");}
         assert_eq!(GetWindowLongPtrW(h,GWL_EXSTYLE),original);assert!(GetPropW(h,crate::desktop::wide(&(key+".pending")).as_ptr()).is_null());
         drop(lease);drop(pause);
+    }}
+    println!("WINDOW_PENDING_STYLE kinds=visibility,topmost guardian_revoke=PASS journal_held_until_ack=PASS new_lease=REFUSED late_begin=CANCELLED original_style=RESTORED journal=CLEARED");
+}
+
+#[cfg(all(test,target_env="msvc"))]
+#[test]
+#[ignore="hosted synthetic HWND topmost lease, exact style preservation and Guardian session cleanup"]
+fn native_topmost_lease_preserves_original_state_and_restores_only_its_bit(){
+    if std::env::var("GITHUB_ACTIONS").as_deref()!=Ok("true"){return;}
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    use std::{ptr,time::{Duration,Instant}};
+    unsafe{
+        let h=CreateWindowExW(WS_EX_LAYERED,crate::desktop::wide("STATIC").as_ptr(),crate::desktop::wide("Synthetic topmost journal").as_ptr(),
+            WS_OVERLAPPEDWINDOW|WS_VISIBLE,60,60,260,140,ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),ptr::null());assert!(!h.is_null());
+        struct Window(HWND);impl Drop for Window{fn drop(&mut self){unsafe{DestroyWindow(self.0);}}}let _window=Window(h);
+        assert_ne!(SetLayeredWindowAttributes(h,0x00030201,173,LWA_ALPHA|LWA_COLORKEY),0);
+        let original=GetWindowLongPtrW(h,GWL_EXSTYLE);let mut rect=std::mem::zeroed();GetWindowRect(h,&mut rect);
+        let pump_until=|condition:&dyn Fn()->bool|{let start=Instant::now();while !condition(){let mut msg:MSG=std::mem::zeroed();for _ in 0..64{if PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)==0{break;}TranslateMessage(&msg);DispatchMessageW(&msg);}assert!(start.elapsed()<Duration::from_secs(5));std::thread::sleep(Duration::from_millis(5));}};
+        for mode in ["release","drop","guardian"]{
+            let marker=format!("TLauncher.Topmost.Fixture.{}.{mode}",std::process::id());let key=crate::desktop::wide(&(marker.clone()+"_Topmost"));
+            let lease=Lease(NonNull::new(tlauncher_window_lease_topmost(h,GetCurrentProcess(),key.as_ptr())).unwrap());
+            pump_until(&||lease.status()!=0);assert_eq!(lease.status(),1);
+            assert_ne!(GetWindowLongPtrW(h,GWL_EXSTYLE)&WS_EX_TOPMOST as isize,0);
+            // An unrelated style change made while pinned must survive release.
+            SetWindowLongPtrW(h,GWL_EXSTYLE,GetWindowLongPtrW(h,GWL_EXSTYLE)|WS_EX_TOOLWINDOW as isize);
+            match mode{
+                "release"=>{lease.restore();pump_until(&||lease.status()==2);drop(lease);},
+                "drop"=>drop(lease),
+                _=>{let helper=std::thread::spawn(move||recover(&marker));pump_until(&||helper.is_finished());assert_eq!(helper.join().unwrap(),0);drop(lease);}
+            }
+            pump_until(&||GetPropW(h,key.as_ptr()).is_null());
+            assert_eq!(GetWindowLongPtrW(h,GWL_EXSTYLE),original|WS_EX_TOOLWINDOW as isize);
+            let mut alpha=0;let mut color=0;let mut flags=0;assert_ne!(GetLayeredWindowAttributes(h,&mut color,&mut alpha,&mut flags),0);
+            assert_eq!((alpha,color,flags),(173,0x00030201,LWA_ALPHA|LWA_COLORKEY));
+            let mut current=std::mem::zeroed();GetWindowRect(h,&mut current);assert!(super::same_rect(rect,current));
+            SetWindowLongPtrW(h,GWL_EXSTYLE,original);
+        }
+        assert_ne!(SetWindowPos(h,HWND_TOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE),0);
+        let key=crate::desktop::wide("TLauncher.Topmost.Fixture.AlreadyTopmost");
+        assert!(tlauncher_window_lease_topmost(h,GetCurrentProcess(),key.as_ptr()).is_null());
+        assert!(GetPropW(h,key.as_ptr()).is_null());assert_ne!(GetWindowLongPtrW(h,GWL_EXSTYLE)&WS_EX_TOPMOST as isize,0);
     }
-    println!("WINDOW_PENDING_STYLE guardian_revoke=PASS journal_held_until_ack=PASS new_lease=REFUSED late_begin=CANCELLED original_style=RESTORED journal=CLEARED");
+    println!("WINDOW_TOPMOST release=PASS drop=PASS guardian_session=PASS original_topmost=PRESERVED layered_alpha=PRESERVED unrelated_style=PRESERVED geometry=PRESERVED journal=CLEARED");
 }
 pub(super) struct Lease(NonNull<c_void>);
 impl Lease{
@@ -50,6 +93,15 @@ impl Lease{
         Self::begin_alpha(hwnd,0)
     }
     pub(super) unsafe fn begin_interactive(hwnd:HWND)->Option<Self>{Self::begin_alpha(hwnd,1)}
+    pub(super) unsafe fn begin_topmost(hwnd:HWND)->Option<Self>{
+        #[cfg(target_env="msvc")]{
+            let (pid,marker)=super::motion_guard::session()?;
+            let process=OpenProcess(0x0010_0000,0,pid);if process.is_null(){return None;}
+            let raw=tlauncher_window_lease_topmost(hwnd,process,crate::desktop::wide(&(marker+"_Topmost")).as_ptr());
+            CloseHandle(process);NonNull::new(raw).map(Self)
+        }
+        #[cfg(not(target_env="msvc"))]{let _=hwnd;None}
+    }
     unsafe fn begin_alpha(hwnd:HWND,alpha:u8)->Option<Self>{
         #[cfg(target_env="msvc")]
         {
@@ -155,14 +207,17 @@ fn native_lease_owner_fixture(){
         let guardian=OpenProcess(0x0010_0000,0,values["guardian"].as_u64().unwrap() as u32);
         let key=crate::desktop::wide(values["marker"].as_str().unwrap());
         let raw=tlauncher_window_lease(values["hwnd"].as_u64().unwrap() as usize as HWND,guardian,key.as_ptr());
+        let topmost_raw=tlauncher_window_lease_topmost(values["hwnd"].as_u64().unwrap() as usize as HWND,guardian,crate::desktop::wide(&(values["marker"].as_str().unwrap().to_owned()+"_Topmost")).as_ptr());
         CloseHandle(guardian);
         let lease=Lease(NonNull::new(raw).unwrap());
+        let topmost=Lease(NonNull::new(topmost_raw).unwrap());
         let start=std::time::Instant::now();
-        while lease.status()==0{
+        while lease.status()==0||topmost.status()==0{
             assert!(start.elapsed()<std::time::Duration::from_secs(5));
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert_eq!(lease.status(),1);
+        assert_eq!(topmost.status(),1);
         std::fs::write(values["ready"].as_str().unwrap(),"hidden-and-journaled").unwrap();
         loop{std::thread::sleep(std::time::Duration::from_secs(1));}
     }
@@ -197,7 +252,9 @@ fn native_crash_recovers_foreign_window_without_owner_memory(){
         }
         owner.0.kill().unwrap();owner.0.wait().unwrap(); // only this known child fixture, never an application
         let key=crate::desktop::wide(&marker);
+        let top_key=crate::desktop::wide(&(marker.clone()+"_Topmost"));
         assert!(!GetPropW(hwnd,key.as_ptr()).is_null(),"recovery journal survives owner process termination");
+        assert!(!GetPropW(hwnd,top_key.as_ptr()).is_null());
         let helper=std::thread::spawn(move||tlauncher_window_restore_orphans());
         let start=Instant::now();
         while !helper.is_finished(){
@@ -207,6 +264,7 @@ fn native_crash_recovers_foreign_window_without_owner_memory(){
         assert_eq!(helper.join().unwrap(),0);
         assert_eq!(GetWindowLongPtrW(hwnd,GWL_EXSTYLE),original);
         assert!(GetPropW(hwnd,key.as_ptr()).is_null());
+        assert!(GetPropW(hwnd,top_key.as_ptr()).is_null());
         assert_ne!(IsWindowVisible(hwnd),0);
         DestroyWindow(hwnd);let _=std::fs::remove_file(ready);
         println!("WINDOW_RECOVERY_JOURNAL abrupt_owner_exit=PASS foreign_style=RESTORED identity=VERIFIED original_visibility=PRESERVED guardian_process_tree=NOT_VERIFIED");

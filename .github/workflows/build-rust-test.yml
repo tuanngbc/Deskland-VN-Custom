@@ -296,6 +296,14 @@ jobs:
           cargo test --release dock::window_lease::native_pending_style_begin_keeps_journal_until_worker_acknowledges -- --ignored --exact --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Verify topmost leases preserve original styles and layered alpha
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test --release dock::window_lease::native_topmost_lease_preserves_original_state_and_restores_only_its_bit -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release dock::stage_capture_lab::native_guarded_topmost_commands -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Package Rust native build
         run: |
           $short = '${{ github.sha }}'.Substring(0, 7)

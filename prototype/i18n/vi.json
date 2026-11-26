@@ -4,6 +4,8 @@
     "shellContextMenu": "Menu chuột phải Desktop và Explorer",
     "altTabOverview": "Tổng quan cửa sổ bằng Alt+Tab",
     "snapLayouts": "Bố cục FluidWin bằng phím Windows",
+    "alwaysOnTop": "Phím tắt Luôn ở trên cùng",
+    "alwaysOnTopHint": "Ctrl+Win+T ghim hoặc bỏ ghim cửa sổ đang dùng. Các cửa sổ do TLauncher ghim được khôi phục khi khóa phiên hoặc thoát.",
     "snapLayoutsHint": "Win+Z mở bố cục; Win+Trái/Phải chia màn hình; Win+Lên phóng to, Win+Xuống khôi phục cửa sổ đang phóng to. Trong bảng: Tab hoặc mũi tên để chọn, Enter để áp dụng, Esc để hủy.",
     "jellyDrag": "Hiệu ứng Jelly khi kéo cửa sổ",
     "jellyDragHint": "Dùng nội dung sống khi kéo cửa sổ thường. Cửa sổ không tương thích tiếp tục dùng Windows.",

@@ -482,6 +482,8 @@ pub(super) fn hub_view(snapshot:&Snapshot,profile:&Profile,dock_mode:bool,live:b
         hint:crate::launcher::localized("Cửa sổ đang mở trên màn hình này","Open windows on this display","此显示器上打开的窗口").into(),icon:None,action:Some(Command::Overview)});
     cards.push(Card{title:crate::launcher::localized("Bố cục cửa sổ","Snap layouts","窗口布局").into(),
         hint:crate::launcher::localized("Chọn cửa sổ và bố cục chia màn hình","Choose a window and a screen layout","选择窗口和屏幕布局").into(),icon:None,action:Some(Command::SnapLayouts)});
+    cards.push(Card{title:crate::launcher::localized("Luôn ở trên cùng","Always on top","窗口置顶").into(),
+        hint:crate::launcher::localized("Ghim cửa sổ cho đến khi bỏ ghim hoặc thoát","Pin a window until unpinned or exit","置顶窗口，直到取消或退出").into(),icon:None,action:Some(Command::Topmost(None))});
     cards.push(Card{title:crate::launcher::localized("Kệ tệp","File Shelf","文件暂存架").into(),
         hint:crate::launcher::localized("Giữ tham chiếu để kéo tệp giữa các ứng dụng","Hold references to drag files between apps","暂存引用以在应用间拖放文件").into(),icon:None,action:Some(Command::Shelf(super::shelf::Action::Open))});
     cards.push(Card{title:crate::launcher::localized("Viền chụp cửa sổ","Window capture border","窗口捕获边框").into(),

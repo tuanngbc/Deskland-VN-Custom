@@ -142,6 +142,7 @@ pub struct Options {
     pub shell_context_menu:bool,
     pub alt_tab_overview:bool,
     pub snap_layouts:bool,
+    pub always_on_top:bool,
     pub jelly_drag:bool,
     pub stage_side: String,
     pub dock_display: DisplayTarget,
@@ -234,7 +235,7 @@ impl Edit {
 }
 impl Default for Options {
     fn default() -> Self {
-        Self { enabled: false, taskbar_default:true, stage_enabled: false, stage_peek:false, stage_peek_delay:350,clipboard_history:false,clipboard_history_limit:20,pinned: Vec::new(), app_icons:Default::default(), all_windows: false, native_shell_buttons:false, start_shortcut:false, win_key_start:false, shell_context_menu:false, alt_tab_overview:false, snap_layouts:false, jelly_drag:false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), stage_perspective:true,stage_card_height:0,stage_card_overrides:BTreeMap::new(),appearance: Appearance::default(),utility_profiles:BTreeMap::new(),window_policies:BTreeMap::new() }
+        Self { enabled: false, taskbar_default:true, stage_enabled: false, stage_peek:false, stage_peek_delay:350,clipboard_history:false,clipboard_history_limit:20,pinned: Vec::new(), app_icons:Default::default(), all_windows: false, native_shell_buttons:false, start_shortcut:false, win_key_start:false, shell_context_menu:false, alt_tab_overview:false, snap_layouts:false, always_on_top:false, jelly_drag:false, stage_side: "left".into(), dock_display: DisplayTarget::default(), stage_display: DisplayTarget::default(), stage_styles: BTreeMap::new(), stage_perspective:true,stage_card_height:0,stage_card_overrides:BTreeMap::new(),appearance: Appearance::default(),utility_profiles:BTreeMap::new(),window_policies:BTreeMap::new() }
     }
 }
 impl Options {
@@ -263,6 +264,7 @@ impl Options {
             shell_context_menu:v["shellContextMenu"].as_bool().unwrap_or(false),
             alt_tab_overview:v["altTabOverview"].as_bool().unwrap_or(false),
             snap_layouts:v["snapLayouts"].as_bool().unwrap_or(false),
+            always_on_top:v["alwaysOnTop"].as_bool().unwrap_or(false),
             jelly_drag:v["jellyDrag"].as_bool().unwrap_or(false),
             dock_display: DisplayTarget::from_json(&v["dockDisplay"]),
             stage_display: DisplayTarget::from_json(&v["stageDisplay"]),
@@ -325,7 +327,7 @@ impl Options {
         json!({"version":2,"enabled":self.enabled,"taskbarDefault":self.taskbar_default,"stageEnabled":self.stage_enabled,
             "stagePeek":self.stage_peek,"stagePeekDelay":self.stage_peek_delay,
             "clipboardHistory":self.clipboard_history,"clipboardHistoryLimit":self.clipboard_history_limit,
-            "pinned":self.pinned,"allWindows":self.all_windows,"nativeShellButtons":self.native_shell_buttons,"startShortcut":self.start_shortcut,"winKeyStart":self.win_key_start,"shellContextMenu":self.shell_context_menu,"altTabOverview":self.alt_tab_overview,"snapLayouts":self.snap_layouts,"jellyDrag":self.jelly_drag,"stageSide":self.stage_side,
+            "pinned":self.pinned,"allWindows":self.all_windows,"nativeShellButtons":self.native_shell_buttons,"startShortcut":self.start_shortcut,"winKeyStart":self.win_key_start,"shellContextMenu":self.shell_context_menu,"altTabOverview":self.alt_tab_overview,"snapLayouts":self.snap_layouts,"alwaysOnTop":self.always_on_top,"jellyDrag":self.jelly_drag,"stageSide":self.stage_side,
             "appIcons":self.app_icons.iter().map(|(app,image)|json!({"app":app,"image":image})).collect::<Vec<_>>(),
             "stagePresentation":if self.stage_perspective{"perspective"}else{"dwm"},"stageCardHeight":self.stage_card_height,"stageCardOverrides":self.stage_card_overrides,
             "dockDisplay":self.dock_display.json(),"stageDisplay":self.stage_display.json(),"appearance":self.appearance.json(),

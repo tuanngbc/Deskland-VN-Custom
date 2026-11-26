@@ -43,6 +43,7 @@ mod snap_layout;
 mod radios;
 mod brightness;
 mod capture_access;
+mod topmost;
 mod show_desktop;
 mod jelly;
 mod shell_menu;
@@ -51,7 +52,7 @@ mod motion_guard;
 mod fluidwin_mesh;
 mod stage_peek;
 mod clipboard_history;
-pub(crate) fn motion_diagnostics()->serde_json::Value{let mut value=window_effect::diagnostics();value["geometry"]=window_geometry::diagnostics();value["captureAccess"]=capture_access::diagnostics();value}
+pub(crate) fn motion_diagnostics()->serde_json::Value{let mut value=window_effect::diagnostics();value["geometry"]=window_geometry::diagnostics();value["captureAccess"]=capture_access::diagnostics();value["topmost"]=topmost::diagnostics();value}
 mod stage_capture_lab;
 pub(crate) fn stage_capture_diagnostic(path:&std::path::Path)->Result<(),String>{stage_capture_lab::inspect(path,true)}
 mod utilities;
@@ -142,6 +143,7 @@ const MENU_APP_ICON_RESET:usize=524;
 const MENU_SHOW_DESKTOP:usize=525;
 const MENU_RESTORE_DESKTOP:usize=526;
 const MENU_SNAP_LAYOUTS:usize=527;
+const MENU_TOPMOST:usize=528;
 const MENU_WINDOW_FIRST:usize=2000;
 const MENU_MOVE_FIRST:usize=2100;
 const STAGE_RAIL_CLASS:&str="TuanpcDeskStageReveal";
@@ -1745,6 +1747,7 @@ unsafe fn perform_control(owner:HWND,command:control_center::Command){
         Command::Media=>{let mut point=POINT{x:0,y:0};GetCursorPos(&mut point);media::open(owner,point);},
         Command::Overview=>overview::show(owner,false,1),
         Command::SnapLayouts=>snap_layout::choose_window(owner),
+        Command::Topmost(id)=>if let Some(id)=id{topmost::toggle(owner,id);}else{topmost::choose(owner);},
         Command::Shelf(action)=>shelf::perform(owner,ptr::null_mut(),action),
         Command::CaptureAccess(action)=>capture_access::perform(owner,action),
         Command::SnapWindow(id)=>{snap_layout::open(owner,id);},
@@ -2187,6 +2190,7 @@ fn win_key_status(status:&'static str){
     }
 }
 fn sync_win_key(){
+    unsafe{topmost::sync_hotkey();}
     overview::refresh();
     snap_layout::refresh_hotkey();
     let (requested,context)=STATE.with(|s|{let s=s.borrow();
@@ -2321,6 +2325,7 @@ unsafe fn show_taskbar(reason:taskbar_guard::Exit,message:&str){
     let before=old.as_ref().map_or(1,taskbar_guard::Watch::restore_count);
     let was_active=old.is_some();
     if let Some(watch)=old{
+        topmost::reset();
         utilities::close_panels();
         UTILITY_ANCHOR.with(|a|a.set(None));
         queue_refresh();
@@ -2583,6 +2588,11 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
             AppendMenuW(menu,MF_STRING,MENU_MINIMIZE,wide("Thu nhỏ cửa sổ").as_ptr());
             AppendMenuW(menu,MF_STRING,MENU_MAXIMIZE,wide("Phóng to theo vùng làm việc").as_ptr());
             AppendMenuW(menu,MF_STRING,MENU_RESTORE,wide("Khôi phục kích thước").as_ptr());
+            let id=WindowIdentity::read(item.hwnd);
+            let owned=id.is_some_and(topmost::owned);
+            let native_topmost=GetWindowLongW(item.hwnd,GWL_EXSTYLE) as u32&WS_EX_TOPMOST!=0;
+            AppendMenuW(menu,MF_STRING|if owned{MF_CHECKED}else if native_topmost{MF_GRAYED}else{0},MENU_TOPMOST,
+                wide(crate::launcher::localized("Luôn ở trên cùng","Always on top","窗口置顶")).as_ptr());
             AppendMenuW(menu,MF_STRING,MENU_SNAP_LEFT,wide("Chia nửa trái").as_ptr());
             AppendMenuW(menu,MF_STRING,MENU_SNAP_RIGHT,wide("Chia nửa phải").as_ptr());
             if GetWindowLongW(item.hwnd,GWL_STYLE) as u32&WS_THICKFRAME!=0{
@@ -2640,6 +2650,7 @@ unsafe fn native_menu(hwnd:HWND,bar_index:usize,item_index:usize) {
     match cmd {
         MENU_SHOW_DESKTOP=>show_desktop::perform(hwnd,false),
         MENU_RESTORE_DESKTOP=>show_desktop::perform(hwnd,true),
+        MENU_TOPMOST=>{if let Some(id)=selected.as_ref().and_then(|i|WindowIdentity::read(i.hwnd)).filter(|id|Some((id.pid,id.tid))==owner){topmost::toggle(hwnd,id);}},
         MENU_SNAP_LAYOUTS=>{if let Some(id)=selected.as_ref().and_then(|item|WindowIdentity::read(item.hwnd)){snap_layout::open(hwnd,id);}},
         MENU_TASK_MANAGER=>open_task_manager(),
         MENU_ADD_APP=>pin_from_file(hwnd),
@@ -3094,6 +3105,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
     }
     match msg {
         appbar::CALLBACK=>{if w as u32==ABN_POSCHANGED{APPBAR_DIRTY.with(|f|f.set(true));queue_refresh();}0},
+        WM_HOTKEY if hwnd==CONTROL.get()&&w==topmost::HOTKEY as usize=>{topmost::hotkey();0},
         WM_HOTKEY if hwnd==CONTROL.with(Cell::get)&&w==START_HOTKEY as usize=>{
             if taskbar_hidden()&&START_BOUND.with(Cell::get){start_from_pointer(win_key::cursor_now());}
             0
@@ -3148,6 +3160,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
         WM_TIMER if w==window_geometry::TIMER&&hwnd==CONTROL.get()=>{window_geometry::tick();0},
         WM_TIMER if w==snap_layout::TIMER&&hwnd==CONTROL.get()=>{snap_layout::poll();0},
         WM_TIMER if w==capture_access::TIMER&&hwnd==CONTROL.get()=>{capture_access::poll();0},
+        WM_TIMER if w==topmost::TIMER&&hwnd==CONTROL.get()=>{topmost::poll();0},
         WM_TIMER if w==show_desktop::TIMER&&hwnd==CONTROL.get()=>{show_desktop::tick();0},
         WM_SHELL_FALLBACK if hwnd==CONTROL.with(Cell::get)=>{
             let owner=w as HWND;
@@ -3408,7 +3421,7 @@ unsafe extern "system" fn proc(hwnd:HWND,msg:u32,w:WPARAM,l:LPARAM)->LRESULT{
             0
         },
         WM_TIMER if w==WORKSPACE_TIMER=>{update_state(|state|{state.workspaces.advance();});0},
-        WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}else{refresh_dock_clock();sync_win_key();request_dock_status();motion_guard::sync();}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
+        WM_TIMER=>{if w==1||w==2{if w==2{KillTimer(hwnd,2);DIRTY.with(|d|d.set(false));}else{refresh_dock_clock();sync_win_key();request_dock_status();topmost::poll();motion_guard::sync();}let changed = DISPLAY_DIRTY.with(|d|d.replace(false));update_state(|s|refresh(s,w==1 || changed));}0},
         WM_TIMECHANGE=>{refresh_dock_clock();0},
         WM_DISPLAYCHANGE|WM_SETTINGCHANGE|WM_THEMECHANGED|WM_DPICHANGED=>{
             snap_layout::close_for(ptr::null_mut());
@@ -3811,6 +3824,7 @@ unsafe fn drain_commands() {
     for command in commands {
         match command {
             Command::Configure(options)=>{
+                if !options.enabled{topmost::reset();}
                 if !options.enabled{capture_access::reset();}
                 if !options.enabled{shelf::reset();}
                 snap_layout::close_for(ptr::null_mut());
@@ -3844,6 +3858,7 @@ unsafe fn drain_commands() {
                 if enable_default&&!cfg!(test)&&!crate::trial::demo_active()&&!crate::trial::benchmark_active(){start_saved_taskbar_mode();}
             },
             Command::Suspend(on)=>{
+                if on{topmost::reset();}
                 if on{capture_access::reset();}
                 if on{shelf::reset();}
                 if on{snap_layout::close_for(ptr::null_mut());}
@@ -3997,7 +4012,7 @@ fn run(options:Options,owner:usize,commands:mpsc::Receiver<Command>,events:mpsc:
                 if !utilities::route_panel_keyboard(&msg){TranslateMessage(&msg);DispatchMessageW(&msg);}
             }
         }
-        snap_layout::close_for(ptr::null_mut());window_geometry::cancel();show_desktop::reset();window_motion::cancel();window_effect::reset();motion_guard::stop();
+        topmost::shutdown();snap_layout::close_for(ptr::null_mut());window_geometry::cancel();show_desktop::reset();window_motion::cancel();window_effect::reset();motion_guard::stop();
         clipboard_history::configure(control,false,0);
         if taskbar_active(){show_taskbar(taskbar_guard::Exit::Requested,"Đã hiện lại thanh tác vụ khi thoát Deskland.");}
         WIN_KEY.with(|s|drop(s.borrow_mut().take()));

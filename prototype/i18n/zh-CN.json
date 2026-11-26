@@ -6,6 +6,8 @@
     "shellContextMenu": "桌面与资源管理器右键菜单",
     "altTabOverview": "使用 Alt+Tab 打开窗口概览",
     "snapLayouts": "使用 Windows 键控制 FluidWin 布局",
+    "alwaysOnTop": "窗口置顶快捷键",
+    "alwaysOnTopHint": "Ctrl+Win+T 置顶或取消置顶当前窗口。锁定会话或退出时，TLauncher 会还原自己置顶的窗口。",
     "snapLayoutsHint": "Win+Z 打开布局；Win+左/右调整窗口；Win+上最大化，Win+下还原已最大化的窗口。在面板中用 Tab 或方向键选择，Enter 应用，Esc 取消。",
     "jellyDrag": "拖动窗口时使用果冻效果",
     "jellyDragHint": "拖动普通窗口时显示实时内容。不兼容的窗口保持 Windows 行为。",

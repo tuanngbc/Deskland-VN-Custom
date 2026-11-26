@@ -994,6 +994,7 @@ pub(super) unsafe fn probe_production_path(ids:&[WindowIdentity]){
         Ok("desktop")=>{super::show_desktop::probe(bar,ids);return;},
         Ok("geometry")=>{super::window_geometry::probe(ids[0]);return;},
         Ok("snap-layout")=>{super::snap_layout::probe(bar,ids[0]);return;},
+        Ok("topmost")=>{super::topmost::probe(bar,ids[0]);return;},
         _=>{},
     }
     let mut pixel_matches=0usize;

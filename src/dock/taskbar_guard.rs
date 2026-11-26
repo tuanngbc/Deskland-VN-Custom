@@ -652,12 +652,14 @@ mod tests{
             let (pid,marker)=watch.motion_session().unwrap();
             super::super::TASKBAR_WATCH.with(|w|w.replace(Some(watch)));
             let lease=super::super::window_lease::Lease::begin(request["hwnd"].as_u64().unwrap() as usize as HWND).unwrap();
+            let topmost=super::super::window_lease::Lease::begin_topmost(request["hwnd"].as_u64().unwrap() as usize as HWND).unwrap();
             let start=Instant::now();
-            while lease.status()==0{
+            while lease.status()==0||topmost.status()==0{
                 super::super::TASKBAR_WATCH.with(|w|w.borrow_mut().as_mut().unwrap().poll().unwrap());
                 assert!(start.elapsed()<Duration::from_secs(5));thread::sleep(Duration::from_millis(10));
             }
             assert_eq!(lease.status(),1);
+            assert_eq!(topmost.status(),1);
             std::fs::write(request["ready"].as_str().unwrap(),serde_json::json!({"guardian":pid,"marker":marker}).to_string()).unwrap();
             // Deliberately stop UI heartbeats to simulate a main-thread hang.
             loop{thread::sleep(Duration::from_secs(1));}
@@ -689,18 +691,21 @@ mod tests{
                 let proof:serde_json::Value=serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
                 let guardian=Handle::from_raw(OpenProcess(SYNC,0,proof["guardian"].as_u64().unwrap() as u32)).unwrap();
                 let marker=wide(proof["marker"].as_str().unwrap());
+                let topmost_marker=wide(&(proof["marker"].as_str().unwrap().to_owned()+"_Topmost"));
                 assert!(!GetPropW(hwnd,marker.as_ptr()).is_null());
+                assert!(!GetPropW(hwnd,topmost_marker.as_ptr()).is_null());
+                assert_ne!(GetWindowLongPtrW(hwnd,GWL_EXSTYLE)&WS_EX_TOPMOST as isize,0);
                 if mode=="tree-exit"{
                     // The only target is this freshly created synthetic test
                     // owner. Production/application processes are never used.
                     let status=Command::new("taskkill.exe").args(["/PID",&owner.0.id().to_string(),"/T","/F"]).status().unwrap();
                     assert!(status.success());owner.0.wait().unwrap();
                 }
-                pump_until(&||GetWindowLongPtrW(hwnd,GWL_EXSTYLE)==original&&GetPropW(hwnd,marker.as_ptr()).is_null()&&guardian.fired());
+                pump_until(&||GetWindowLongPtrW(hwnd,GWL_EXSTYLE)==original&&GetPropW(hwnd,marker.as_ptr()).is_null()&&GetPropW(hwnd,topmost_marker.as_ptr()).is_null()&&guardian.fired());
                 assert_ne!(IsWindowVisible(hwnd),0);
                 if mode=="ui-hang"{assert!(owner.0.try_wait().unwrap().is_none(),"hung owner stays alive while independent Guardian restores");}
                 let _=std::fs::remove_file(&path);
-                println!("WINDOW_GUARDIAN mode={mode} foreign_style=RESTORED journal=CLEARED owner_memory=NOT_REQUIRED");
+                println!("WINDOW_GUARDIAN mode={mode} foreign_style=RESTORED topmost=RESTORED journal=CLEARED owner_memory=NOT_REQUIRED");
             }
             DestroyWindow(hwnd);
         }
