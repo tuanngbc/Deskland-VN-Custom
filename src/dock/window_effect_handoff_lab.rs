@@ -20,12 +20,16 @@ unsafe fn screen(dir:&std::path::Path,name:&str,area:RECT){
 unsafe fn snapshot(dir:&std::path::Path,name:&str,proxy:&Proxy,t:&Transition){
     let (pixels,w,h,canvas)=proxy.evidence().expect("actual mesh before Present rotation");
     assert!(pixels.chunks_exact(4).all(|p|p[..3].iter().all(|c|*c<=p[3])),"complete canvas must remain premultiplied: {name}");
-    if !name.ends_with("-terminal"){assert!(pixels.chunks_exact(4).any(|p|p[3]>0),"empty mesh cannot prove handoff: {name}");}
+    // Genie/Drop intentionally disappear at progress 1. Restore starts at
+    // that exact pose; a transparent first endpoint is valid evidence.
+    let invisible_endpoint=t.req.effect.mesh()&&t.last_progress>=1.0-1e-8;
+    let occupied=pixels.chunks_exact(4).any(|p|p[3]>0);
+    if !invisible_endpoint&&!name.ends_with("-terminal"){assert!(occupied,"empty nonterminal mesh cannot prove handoff: {name}");}
     save(dir,&format!("{name}-mesh"),&pixels,w,h);
     let _=proxy.comp.WaitForCommitCompletion();screen(dir,&format!("{name}-screen"),canvas);
     let source=t.req.source.hwnd as HWND;let mut alpha=0;let mut color=0;let mut flags=0;
     let layered=GetLayeredWindowAttributes(source,&mut color,&mut alpha,&mut flags)!=0;
-    println!("FLUIDWIN_HANDOFF_SNAPSHOT name={name} mesh_progress={} frames={} iconic={} source_layered={layered} alpha={alpha} lease={:?} canvas=[{},{},{},{}] full_canvas_premultiplied=PASS",
+    println!("FLUIDWIN_HANDOFF_SNAPSHOT name={name} occupied={occupied} transparent_endpoint={invisible_endpoint} mesh_progress={} frames={} iconic={} source_layered={layered} alpha={alpha} lease={:?} canvas=[{},{},{},{}] full_canvas_premultiplied=PASS",
         t.last_progress,t.attempt.frames,IsIconic(source),t.lease.as_ref().map(|l|l.status()),canvas.left,canvas.top,canvas.right,canvas.bottom);
 }
 
