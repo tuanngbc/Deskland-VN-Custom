@@ -54,8 +54,15 @@ pub(super) unsafe fn probe(bar:HWND,path:&str,id:WindowIdentity,policy:motion::S
         motion::configure(motion::Settings{window_effect:effect,..policy});fixture_settle_source(source);
         let area=visible_area(source).unwrap();let expanded=RECT{left:area.left-16,top:area.top-16,right:area.right+16,bottom:area.bottom+16};
         screen(&dir,&format!("{role}-{}-source-before",effect.name()),expanded);
-        for action in [Action::Minimize,Action::Restore]{
-            let label=format!("{role}-{}-{}",effect.name(),action.name());
+        let mut complete=[false;2];
+        // GPU/screen readback can stall hosted DWM for an entire late pose.
+        // Preserve that incomplete attempt and repeat the actual native
+        // minimize/restore cycle, never inventing a screenshot from an endpoint
+        // or changing the production animation clock to fill a missing stage.
+        for attempt in 0..3{
+        for (action_index,action) in [Action::Minimize,Action::Restore].into_iter().enumerate(){
+            let suffix=if attempt==0{String::new()}else{format!("-retry{attempt}")};
+            let label=format!("{role}-{}-{}{suffix}",effect.name(),action.name());
             assert!(begin(bar,path,id,action),"real transaction was refused: {label}");
             let mut images=Vec::with_capacity(12);
             let mut stages=[false;4];let mut terminal=false;let mut capture=false;let started=Instant::now();
@@ -89,7 +96,7 @@ pub(super) unsafe fn probe(bar:HWND,path:&str,id:WindowIdentity,policy:motion::S
             // compression must not lengthen animation submission intervals.
             for image in images{image.write(&dir);}
             assert_eq!(result["actualEffect"],effect.name(),"real handoff fallback: {result}");
-            assert!(stages.into_iter().all(|v|v),"missing actual animation stage: {label} {stages:?}");
+            assert!(stages[0],"actual handoff must expose the first proxy: {label}");
             assert!(terminal,"must retain terminal proxy while releasing the journal: {label}");
             assert_eq!(GetWindowLongPtrW(source,GWL_EXSTYLE),style);assert!(GetPropW(source,key.as_ptr()).is_null());
             assert!(super::super::same_rect(placement(source).unwrap().rcNormalPosition,normal));
@@ -100,7 +107,11 @@ pub(super) unsafe fn probe(bar:HWND,path:&str,id:WindowIdentity,policy:motion::S
                 let stage_snapshot::MotionFrame::Gpu(frame)=stage_snapshot::recent_motion(id,revision).unwrap()else{panic!("restore must reuse full-size source");};
                 let pixels=frame.fixture_pixels().unwrap();save(&dir,&format!("{label}-retained-texture"),&pixels,frame.width as u32,frame.height as u32);
             }
-            println!("FLUIDWIN_HANDOFF action={label} actual_transaction=PASS first_early_mid_near_terminal=EXPORTED source_texture=EXPORTED full_compositor_canvas=EXPORTED journal=CLEARED original_style=RESTORED owner_border=UNRESOLVED display_fps=NOT_MEASURED");
+            let all_stages=stages.into_iter().all(|v|v);complete[action_index]|=all_stages;
+            println!("FLUIDWIN_HANDOFF action={label} actual_transaction=PASS first_early_mid_near={stages:?} temporal_images={} terminal=EXPORTED source_texture=EXPORTED full_compositor_canvas=EXPORTED journal=CLEARED original_style=RESTORED owner_border=UNRESOLVED display_fps=NOT_MEASURED",if all_stages{"COMPLETE"}else{"INCOMPLETE_REAL_CYCLE_WILL_REPEAT"});
         }
+        if complete.into_iter().all(|v|v){break;}
+        }
+        assert!(complete.into_iter().all(|v|v),"three actual cycles could not collect every temporal pose: {role} {} minimize_restore={complete:?}",effect.name());
     }
 }
