@@ -56,7 +56,7 @@ pub(super) const CHANGED:u32=windows_sys::Win32::UI::WindowsAndMessaging::WM_APP
     }}
     fn view()->View{
         let items=items();let read_only=crate::trial::active()||cfg!(test);
-        let hint=if let Some(error)=ERROR.get(){format!("{} ({error})",text("Chưa hoàn tất yêu cầu; tệp gốc vẫn do Windows quản lý","Request not completed; Windows manages the original files","请求未完成，原文件由 Windows 管理"))}
+        let hint=if ERROR.get().is_some(){text("Chưa hoàn tất yêu cầu. Hãy kiểm tra tệp nguồn và chỗ trống trên kệ.","Request not completed. Check the source files and shelf capacity.","请求未完成，请检查源文件及暂存架容量。")}
             else{text("Thả tệp vào đây · Kéo một hàng để lấy ra · Tối đa 200 tham chiếu","Drop files here · Drag a row out · Up to 200 references","将文件拖入此处 · 拖出一行即可取出 · 最多 200 个引用")};
         let mut cards=vec![Card{icon:None,title:text("Thêm tệp…","Add files…","添加文件…"),hint:String::new(),action:Some(Command::Shelf(Action::Add))}];
         if !items.is_empty(){
