@@ -680,6 +680,10 @@ fn native_guarded_desktop_cascade(){guarded_motion_fixture(false,Some("desktop")
 fn native_guarded_geometry_commands(){guarded_motion_fixture(true,Some("geometry"));}
 #[cfg(all(test,target_env="msvc"))]
 #[test]
+#[ignore="native maximized drag handoff into live Jelly; hosted foreign HWND and existing Guardian"]
+fn native_guarded_jelly_native_restore(){guarded_motion_fixture(true,Some("jelly"));}
+#[cfg(all(test,target_env="msvc"))]
+#[test]
 #[ignore="original Snap picker keyboard selection and guarded/native geometry on hosted foreign HWND"]
 fn native_original_snap_layout(){guarded_motion_fixture(true,Some("snap-layout"));}
 #[cfg(all(test,target_env="msvc"))]

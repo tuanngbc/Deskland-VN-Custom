@@ -264,6 +264,14 @@ jobs:
           }
           if ($fixtureFailed) { exit 1 }
 
+      - name: Verify maximized native drag handoff and live Jelly recovery
+        if: ${{ !cancelled() }}
+        run: |
+          $env:TUANPC_DESK_STAGE_EVIDENCE = Join-Path $env:RUNNER_TEMP 'stage-fixture-evidence'
+          New-Item -ItemType Directory -Force -Path $env:TUANPC_DESK_STAGE_EVIDENCE | Out-Null
+          cargo test --release dock::stage_capture_lab::native_guarded_jelly_native_restore -- --ignored --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Verify read-only radio provider and mutation refusal boundaries
         if: ${{ !cancelled() }}
         run: |

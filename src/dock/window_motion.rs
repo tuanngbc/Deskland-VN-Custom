@@ -3,7 +3,11 @@ use super::{CONTROL,STATE,WindowIdentity,window_effect::Proxy,window_lease::Leas
 use std::{cell::RefCell,mem,ptr,time::{Instant,Duration},sync::mpsc::TryRecvError};
 use windows_sys::Win32::{Foundation::*,Graphics::Gdi::*,UI::{Accessibility::*,HiDpi::GetDpiForWindow,Input::KeyboardAndMouse::{GetAsyncKeyState,VK_LBUTTON},WindowsAndMessaging::*}};
 pub(super) const TIMER:usize=30;
-thread_local!{static ACTIVE:RefCell<Option<Drag>>=const{RefCell::new(None)};}
+thread_local!{static ACTIVE:RefCell<Option<Drag>>=const{RefCell::new(None)};static DETACH:RefCell<Option<Detach>>=const{RefCell::new(None)};}
+// Windows retains ownership of restoring a maximized titlebar drag. Wait for
+// its actual restored bounds before attaching the existing live Jelly stream.
+// No mouse edge, native restore command or global Snap policy is intercepted.
+struct Detach{id:WindowIdentity,monitor:usize,dpi:u32,started:Instant,last:Option<RECT>,stable:u32}
 #[cfg(test)]thread_local!{static HELD:std::cell::Cell<Option<bool>>=const{std::cell::Cell::new(None)};}
 #[cfg(test)]thread_local!{static PREPARE_TIMEOUT:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
 unsafe fn held()->bool{
@@ -20,15 +24,18 @@ impl Drop for Drag{fn drop(&mut self){
     if let Some(lease)=&self.lease{unsafe{lease.restore();}}
 }}
 pub(super) fn active()->bool{ACTIVE.with(|s|s.borrow().is_some())}
-pub(super) unsafe fn cancel(){let old=ACTIVE.with(|s|s.borrow_mut().take());if old.is_some(){drop(old);super::window_effect::schedule_release();}KillTimer(CONTROL.get(),TIMER);}
+pub(super) unsafe fn cancel(){DETACH.with(|s|s.take());let old=ACTIVE.with(|s|s.borrow_mut().take());if old.is_some(){drop(old);super::window_effect::schedule_release();}KillTimer(CONTROL.get(),TIMER);}
 pub(super) unsafe fn frame_ready()->HANDLE{ACTIVE.with(|s|s.borrow().as_ref().filter(|d|d.revealed.is_none()||d.lease.as_ref().is_some_and(|l|l.status()==2)).and_then(|d|d.proxy.as_ref()).map_or(ptr::null_mut(),|p|p.frame_clock()))}
 pub(super) unsafe fn event(event:u32,h:HWND){
     if event==EVENT_SYSTEM_FOREGROUND{
+        if DETACH.with(|s|s.borrow().as_ref().is_some_and(|d|d.id.hwnd!=h as usize)){cancel();}
         if ACTIVE.with(|s|s.borrow().as_ref().is_some_and(|d|d.id.hwnd!=h as usize)){cancel();}
     }else if event==EVENT_SYSTEM_MOVESIZESTART{start(h);}
     else if event==EVENT_SYSTEM_MOVESIZEEND{
+        if DETACH.with(|s|s.borrow().as_ref().is_some_and(|d|d.id.hwnd==h as usize)){cancel();}
         ACTIVE.with(|s|if let Some(d)=s.borrow_mut().as_mut().filter(|d|d.id.hwnd==h as usize){d.released.get_or_insert_with(Instant::now);});
     }else if event==EVENT_OBJECT_DESTROY||event==EVENT_OBJECT_HIDE{
+        if DETACH.with(|s|s.borrow().as_ref().is_some_and(|d|d.id.hwnd==h as usize)){cancel();}
         if ACTIVE.with(|s|s.borrow().as_ref().is_some_and(|d|d.id.hwnd==h as usize)){cancel();}
     }
 }
@@ -40,6 +47,14 @@ unsafe fn start(h:HWND){
     // exact live session before the general already-layered refusal below.
     if resume(h){return;}
     super::window_geometry::cancel();
+    if IsZoomed(h)!=0{
+        if DETACH.with(|s|s.borrow().as_ref().is_some_and(|d|d.id.hwnd==h as usize&&d.id.matches(h))){return;}
+        if super::window_effect::active()||IsIconic(h)!=0||GetWindowLongW(h,GWL_EXSTYLE) as u32&WS_EX_LAYERED!=0{return;}
+        let Some(id)=WindowIdentity::read(h).filter(|id|super::previews::permitted_pid(h).is_ok()&&super::window_effect::elevation(id.pid)==Some(false))else{return;};
+        let monitor=MonitorFromWindow(h,MONITOR_DEFAULTTONULL);if monitor.is_null(){return;}
+        cancel();DETACH.with(|s|s.replace(Some(Detach{id,monitor:monitor as usize,dpi:GetDpiForWindow(h),started:Instant::now(),last:None,stable:0})));
+        if SetTimer(CONTROL.get(),TIMER,20,None)==0{cancel();}return;
+    }
     if super::window_effect::active()||IsIconic(h)!=0||IsZoomed(h)!=0||GetWindowLongW(h,GWL_EXSTYLE) as u32&WS_EX_LAYERED!=0{return;}
     let Some(id)=WindowIdentity::read(h).filter(|id|super::previews::permitted_pid(h).is_ok()&&super::window_effect::elevation(id.pid)==Some(false))else{return;};
     let Some(area)=super::window_effect::visible_area(h)else{return;};
@@ -126,6 +141,24 @@ impl Drag{
     }
 }
 pub(super) unsafe fn tick(){
+    let detach=DETACH.with(|s|s.borrow_mut().take());
+    if let Some(mut d)=detach{
+        let h=d.id.hwnd as HWND;let enabled=STATE.with(|s|{let s=s.borrow();s.prefs.enabled&&s.prefs.jelly_drag&&!s.suspended});
+        let valid=enabled&&held()&&super::motion::allowed()&&super::motion_guard::session().is_some()&&d.started.elapsed()<Duration::from_secs(4)
+            &&d.id.matches(h)&&IsWindowVisible(h)!=0&&IsIconic(h)==0&&GetDpiForWindow(h)==d.dpi&&MonitorFromWindow(h,MONITOR_DEFAULTTONULL) as usize==d.monitor
+            &&super::previews::permitted_pid(h).is_ok()&&GetWindowLongW(h,GWL_EXSTYLE) as u32&WS_EX_LAYERED==0;
+        if valid{
+            if IsZoomed(h)==0{
+                if let Some(area)=super::window_effect::visible_area(h){
+                    if d.last.is_some_and(|old|old.right-old.left==area.right-area.left&&old.bottom-old.top==area.bottom-area.top){d.stable+=1;}else{d.stable=0;}
+                    d.last=Some(area);
+                    if d.stable>=2{start(h);if !active(){KillTimer(CONTROL.get(),TIMER);}return;}
+                }
+            }else{d.last=None;d.stable=0;}
+            DETACH.with(|s|s.replace(Some(d)));return;
+        }
+        KillTimer(CONTROL.get(),TIMER);
+    }
     let active=ACTIVE.with(|s|s.borrow_mut().take());
     if let Some(mut drag)=active{
         if drag.step(){ACTIVE.with(|s|s.replace(Some(drag)));}else{drop(drag);super::window_effect::schedule_release();KillTimer(CONTROL.get(),TIMER);}
@@ -152,12 +185,44 @@ pub(super) unsafe fn probe_drag(id:WindowIdentity){
         let mut msg:MSG=mem::zeroed();for _ in 0..64{if PeekMessageW(&mut msg,ptr::null_mut(),0,0,PM_REMOVE)==0{break;}TranslateMessage(&msg);DispatchMessageW(&msg);}
         tick();std::thread::sleep(Duration::from_millis(12));
     };
-    for mode in ["release","regrab","cancel","resize","monitor"]{
+    // Pending native detach does not conceal or command the source, and every
+    // cancellation path must end its existing temporary motion timer.
+    for refusal in ["release","end","monitor","dpi","deadline","foreground"]{
+        ShowWindowAsync(h,SW_MAXIMIZE);let until=Instant::now();while IsZoomed(h)==0{pump();assert!(until.elapsed()<Duration::from_secs(4));}
+        HELD.set(Some(true));event(EVENT_SYSTEM_MOVESIZESTART,h);
+        assert!(DETACH.with(|s|s.borrow().is_some()));assert!(!active());
+        for _ in 0..3{pump();}
+        assert_eq!(GetWindowLongPtrW(h,GWL_EXSTYLE),style);assert!(GetPropW(h,marker.as_ptr()).is_null());assert_ne!(IsZoomed(h),0);
+        match refusal{
+            "release"=>HELD.set(Some(false)),"end"=>event(EVENT_SYSTEM_MOVESIZEEND,h),"foreground"=>event(EVENT_SYSTEM_FOREGROUND,ptr::null_mut()),
+            "monitor"=>DETACH.with(|s|s.borrow_mut().as_mut().unwrap().monitor=0),
+            "dpi"=>DETACH.with(|s|s.borrow_mut().as_mut().unwrap().dpi=0),
+            _=>DETACH.with(|s|s.borrow_mut().as_mut().unwrap().started=Instant::now()-Duration::from_secs(5)),
+        }
+        pump();assert!(DETACH.with(|s|s.borrow().is_none()));assert!(!active());
+        assert_eq!(GetWindowLongPtrW(h,GWL_EXSTYLE),style);assert!(GetPropW(h,marker.as_ptr()).is_null());assert_ne!(IsZoomed(h),0);
+        println!("FLUIDWIN_JELLY_NATIVE_DETACH cancellation={refusal} no_native_restore_command=PASS no_visibility_lease=PASS pending_cleared=PASS");
+    }
+    for mode in ["release","native-maximized-detach","regrab","cancel","resize","monitor"]{
         'setup:for attempt in 0..3{
         ShowWindowAsync(h,SW_RESTORE);SetWindowPos(h,ptr::null_mut(),original.left,original.top,original.right-original.left,original.bottom-original.top,SWP_NOACTIVATE|SWP_NOZORDER|SWP_ASYNCWINDOWPOS);
         PostMessageW(h,WM_APP+171,0x00ff0000,0);std::thread::sleep(Duration::from_millis(100));
         super::window_effect::fixture_settle_source(h);
-        let area=super::window_effect::visible_area(h).unwrap();SetCursorPos(area.left+100,area.top+12);HELD.set(Some(true));event(EVENT_SYSTEM_MOVESIZESTART,h);
+        if mode=="native-maximized-detach"{
+            ShowWindowAsync(h,SW_MAXIMIZE);let until=Instant::now();while IsZoomed(h)==0{pump();assert!(until.elapsed()<Duration::from_secs(4));}
+            HELD.set(Some(true));event(EVENT_SYSTEM_MOVESIZESTART,h);assert!(!active());assert!(DETACH.with(|s|s.borrow().is_some()));
+            assert_eq!(GetWindowLongPtrW(h,GWL_EXSTYLE),style);assert!(GetPropW(h,marker.as_ptr()).is_null());
+            // The fixture supplies the native restore normally owned by the
+            // physical Windows titlebar drag; the controller must not issue it.
+            ShowWindowAsync(h,SW_RESTORE);let until=Instant::now();
+            while !active(){
+                if IsZoomed(h)==0{let area=super::window_effect::visible_area(h).unwrap();SetCursorPos(area.left+100,area.top+12);}
+                pump();assert!(until.elapsed()<Duration::from_secs(4),"native restored geometry did not attach existing Jelly");
+            }
+            assert!(DETACH.with(|s|s.borrow().is_none()));
+        }else{
+            let area=super::window_effect::visible_area(h).unwrap();SetCursorPos(area.left+100,area.top+12);HELD.set(Some(true));event(EVENT_SYSTEM_MOVESIZESTART,h);
+        }
         assert!(active(),"global move start must create a real stream request");
         let start=Instant::now();let mut evidence=false;
         loop{
@@ -177,7 +242,7 @@ pub(super) unsafe fn probe_drag(id:WindowIdentity){
         }
         assert!(!GetPropW(h,marker.as_ptr()).is_null());let mut color=0;let mut alpha=0;let mut flags=0;
         assert_ne!(GetLayeredWindowAttributes(h,&mut color,&mut alpha,&mut flags),0);assert_eq!((alpha,flags),(1,LWA_ALPHA),"dragged source remains hit-testable");
-        if mode=="release"{
+        if mode=="release"||mode=="native-maximized-detach"{
             SetWindowPos(h,ptr::null_mut(),original.left+140,original.top+60,0,0,SWP_NOSIZE|SWP_NOACTIVATE|SWP_NOZORDER|SWP_ASYNCWINDOWPOS);
             for _ in 0..4{pump();}
             ACTIVE.with(|s|{
@@ -189,7 +254,7 @@ pub(super) unsafe fn probe_drag(id:WindowIdentity){
                 for p in pixels.chunks_exact(4){assert!(p[..3].iter().all(|&c|c<=p[3]));}
                 if let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
                     let rgba=pixels.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],p[3]]).collect::<Vec<_>>();
-                    image::save_buffer(std::path::PathBuf::from(dir).join("jelly-moving.png"),&rgba,w,height,image::ColorType::Rgba8).unwrap();
+                    image::save_buffer(std::path::PathBuf::from(dir).join(if mode=="release"{"jelly-moving.png"}else{"jelly-native-maximized-detach.png"}),&rgba,w,height,image::ColorType::Rgba8).unwrap();
                 }
             });
         }
@@ -204,11 +269,11 @@ pub(super) unsafe fn probe_drag(id:WindowIdentity){
                 for pixel in pixels.chunks_exact(4){assert!(pixel[..3].iter().all(|&c|c<=pixel[3]),"premultiplied full Jelly canvas");}
                 if let Some(dir)=std::env::var_os("TUANPC_DESK_STAGE_EVIDENCE"){
                     let rgba=pixels.chunks_exact(4).flat_map(|p|[p[2],p[1],p[0],p[3]]).collect::<Vec<_>>();
-                    image::save_buffer(std::path::PathBuf::from(dir).join(format!("jelly-live-{name}.png")),&rgba,w,height,image::ColorType::Rgba8).unwrap();
+                    image::save_buffer(std::path::PathBuf::from(dir).join(if mode=="release"{format!("jelly-live-{name}.png")}else{format!("jelly-native-detach-live-{name}.png")}),&rgba,w,height,image::ColorType::Rgba8).unwrap();
                 }
             });
         };
-        if mode=="release"{
+        if mode=="release"||mode=="native-maximized-detach"{
             sample("blue",0);
             // WGC reports content changes, not a guaranteed stream cadence for
             // a static HWND. Require new pixels and a new GPU copy for each
