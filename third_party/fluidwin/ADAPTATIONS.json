@@ -1,0 +1,34 @@
+{
+  "repository": "https://github.com/clooudfn/FluidWin",
+  "commit": "2f773a8733b84c7dbee88fff6628d14e9ac802b9",
+  "license": "MIT",
+  "note": "Section adaptations, not claims that these full headers were imported. Original CRLF worktree byte hashes and canonical Git blobs are recorded; existing notices and original license are preserved.",
+  "sections": [
+    {
+      "source": "launcher.h::Motore::menuApp",
+      "source_git_blob": "48c76c5d1a72cb8e1990afa37ac5d380b1a5be8c",
+      "source_worktree_sha256": "a8edbd83a2dc1d1cd32461097eee9892ddcd628a1374608f159f2f7de05353fc",
+      "integration": ["app_menu_bridge.cpp", "../../src/launcher/app_menu.rs"],
+      "adaptation": "Retain Shell item/context binding and canonical Uninstall verb discovery; scoped COM/menu/subclass lifetime; native Windows menu on Spotlight thread to preserve Dock-only ownership of imported single-threaded D2D factory; existing TLauncher organization and pin actions remain. No direct uninstall command parsing."
+    },
+    {
+      "source": "sistema.h::Sistema::radio / Sistema::monitor",
+      "source_git_blob": "4292ad2c874d5b0024a6a9e806bcd46ae6d31a2c",
+      "source_worktree_sha256": "68c679ab949975ac596dca891330fbf19486857f29953b60d07f7ec73b390a74",
+      "integration": ["../../src/dock/radios.rs", "../../src/dock/brightness.rs"],
+      "adaptation": "Same normal WinRT radio and DDC/CI APIs, on existing transient utility worker; typed scoped activation factories, consent and result checks, per-device stale-state checks, monitor identity captured at gesture, actual native readback, physical-handle RAII and no optimistic success. Original permanent Sistema worker is not started."
+    },
+    {
+      "source": "wifi.h::profiloAperto",
+      "source_git_blob": "2d949032c3d5530d46579f25125a4aff43fd2804",
+      "source_worktree_sha256": "f952b15d8e2fa6e1951ba5dd0c163bee04d1d6517ffe7a66c89ee50f5d135116",
+      "integration": ["../../src/dock/wifi.rs"],
+      "adaptation": "Hexadecimal SSID in a temporary manual open-network XML profile; revalidate clicked interface and refuse a saved or newly secured network; preserve existing known-profile path and Windows credential UI; TEST builds remain read-only."
+    },
+    {
+      "source": "fluidwin.cpp::suAffiancaTasto / affianca.h::zonaDi / rettZona",
+      "integration": ["stack_bridge.cpp", "upstream/affianca.h", "../../src/dock/snap_layout.rs"],
+      "adaptation": "Original side-key half/center/quarter/adjacent-display geometry; only shared TLauncher guarded/native geometry controller issues foreign commands. No global Windows Snap-policy mutation. Full imported-header provenance is in upstream/IMPORT.json."
+    }
+  ]
+}
