@@ -2,7 +2,7 @@ name: Build TLauncher
 
 on:
   push:
-    branches: [main, codex/rust-dock, codex/unified-spotlight-v1.0.2, codex/fluidwin-integration-v1.0.3, codex/fluidwin-native-base-v1.0.3]
+    branches: [main, codex/rust-dock, codex/unified-spotlight-v1.0.2, codex/fluidwin-integration-v1.0.3, codex/fluidwin-native-base-v1.0.3, codex/native-wallpaper-reengineering-v1.0.3]
     tags: [v*]
   workflow_dispatch:
 
@@ -159,8 +159,36 @@ jobs:
           path: native-evidence/
           retention-days: 30
           if-no-files-found: warn
+  wallpaper-contract:
+    if: github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: mingw-w64-ucrt-x86_64-gcc
+      - name: Compile native wallpaper ownership and topology contracts
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          mkdir -p wallpaper-evidence
+          g++ -O2 -std=gnu++20 -Wall -DUNICODE -D_UNICODE -DNOMINMAX tests/wallpaper-contract.cpp -o wallpaper-evidence/wallpaper-contract.exe -lopengl32 -lgdi32 -luser32 -static
+      - name: Verify native configuration, physical topology and solar contracts
+        shell: pwsh
+        run: |
+          & ./wallpaper-evidence/wallpaper-contract.exe 2>&1 | Tee-Object wallpaper-evidence/contracts.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Wallpaper contracts failed' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wallpaper-reengineering-evidence
+          path: wallpaper-evidence/
+          retention-days: 30
   build-rust:
-    if: github.ref != 'refs/heads/codex/fluidwin-native-base-v1.0.3'
+    if: github.ref != 'refs/heads/codex/fluidwin-native-base-v1.0.3' && github.ref != 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3'
     runs-on: windows-latest
     timeout-minutes: 20
     env:

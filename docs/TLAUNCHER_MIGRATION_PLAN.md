@@ -24,4 +24,8 @@ New branch: `codex/fluidwin-native-base-v1.0.3`, based on preserved old HEAD.
 
 Only Auto Update is excluded. Dynamic Notch is included, reversing the prior
 exclusion. Do not resume the old integration engine or move missing work to 1.0.4.
-No Phase 2 work before explicit owner acceptance of the Native Base TEST.
+Owner accepted Native Base candidate c011c2b11b3d, Actions 45870002906: **11/11 PASS**.
+Phase 2 is authorized on `codex/native-wallpaper-reengineering-v1.0.3`.
+The native re-engineering directive supersedes implementation migration: legacy
+runtime/module copies are forbidden; audited algorithms and existing assets may be
+reused. See WALLPAPER_REENGINEERING.md. Phase 3 still requires Phase 2 owner acceptance.
