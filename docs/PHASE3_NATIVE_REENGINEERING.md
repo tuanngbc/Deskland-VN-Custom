@@ -25,3 +25,19 @@ Owner authorized Stage and Unified Spotlight on top of `564ecd9139ce5d6a75b10c5c
 - [ ] Exact successful artifact SHA/checksum/version verification and combined STAGE & SPOTLIGHT TEST shortcut.
 
 Native Base and Wallpaper TEST shortcuts, production 1.0.2, production profile and owner evidence stay preserved. Candidate execution and final acceptance belong to the owner. Phase 4 remains gated; Dynamic Notch remains included and Auto Update excluded.
+
+## Development checkpoint 2026-11-28
+
+Source remains on `codex/native-stage-spotlight-reengineering-v1.0.3` in `E:\TLauncher-Native-Base-1.0.3`. This is an implementation checkpoint, **not a combined owner UAT handoff or acceptance**.
+
+- `6156676`: native compilation succeeded; profile migration passed. Native UI contract failed at the first Peek hover assertion (67).
+- `3449c2d`: wallpaper and unmodified core baseline jobs passed; native compilation and customized migrated-profile process passed. Native UI contract failed at Peek activation (71). The test retained a stale HWND after synthetic mouse-leave/re-entry; the correction uses the real pointer path and current Peek handle.
+- `8ac4a9a`: real EXE/LNK drops, captured internal drags, persistent folder ordering, actual custom-icon decoding, logical F6 selection, fishing approach/escape routes and disabled-output graphics release. CI pending at this checkpoint.
+- Subsequent correction adds true projective Stage snapshots on the existing native target, D2D target recovery, complete native diagnostics labels and non-partial aggregate timing. Flat cards retain live DWM; perspective cards refresh snapshots on interaction. Perspective is not continuously live.
+- Stage reuses bounded images retained by `stampa`/Genie while Stage is enabled. Existing lifecycle events invalidate HWND generations; Stage adds no global hook or per-window permanent capture.
+- Dock pin writes/removal are profile-owned `DockPins`; migration reads legacy Windows pins once, without modifying them.
+- Native performance report exposes actual adapter/presentation, per-output costs, rolling render-thread CPU time, asynchronous GL timestamp samples, readback bytes/sec, texture/allocation counts and missed deadlines. Cross-API GPU presentation timing is explicitly unavailable. Software CI measurements are not owner GTX 1070 measurements or proof of the resource targets.
+
+Remaining work includes full original cat/character/game fidelity (including Stadium ownership/keepers/scoring), synchronized multi-monitor shared simulation, measured performance optimization, Stage group picker and all interaction/topology regressions, full Vietnamese coverage/layout evidence and live font refresh, four-edge collapsed Dock regression, and complete Spotlight disabled-worker cleanup/shortcut controls. Continue auditing actual legacy algorithms without restoring the legacy runtime. All delivery checklist items above remain open until their full scope and combined verification are satisfied.
+
+Production, baseline UAT packages/profiles/shortcuts and running owner sessions have not been changed. No local compilation, tests, candidate execution, benchmark, shortcut handoff or public release was performed.

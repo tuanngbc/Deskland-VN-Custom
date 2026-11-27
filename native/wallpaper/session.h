@@ -121,7 +121,7 @@ class Session {
     std::shared_ptr<SessionState> state=std::make_shared<SessionState>();std::thread thread;
     static void run(const std::shared_ptr<SessionState>&state){
         HRESULT com=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);graphicsStats={};
-        auto sampleStart=SteadyClock::now();uint64_t sampleFrames=0,sampleReadback=0;
+        auto sampleStart=SteadyClock::now();uint64_t sampleFrames=0,sampleReadback=0,sampleCpu=0;
         auto threadCpu=[](){FILETIME creation{},exit{},kernel{},user{};if(!GetThreadTimes(GetCurrentThread(),&creation,&exit,&kernel,&user))return uint64_t(0);ULARGE_INTEGER k{},u{};k.LowPart=kernel.dwLowDateTime;k.HighPart=kernel.dwHighDateTime;u.LowPart=user.dwLowDateTime;u.HighPart=user.dwHighDateTime;return uint64_t(k.QuadPart+u.QuadPart);};
         try{
             Window hidden;Context context(hidden.h);GL gl;GLuint vao=0;gl.GenVertexArrays(1,&vao);gl.BindVertexArray(vao);
@@ -172,19 +172,19 @@ class Session {
                 // Hidden/disabled scenes release after they cease to be assigned;
                 // paused assigned scenes keep only the resources needed to resume.
                 if(!paused){context.current();for(auto it=worlds.begin();it!=worlds.end();)if(std::find(used.begin(),used.end(),it->first)==used.end())it=worlds.erase(it);else ++it;}
-                {size_t gpu=0,targets=0,activeOutputs=0;uint64_t bytes=0,readback=0;double gpuMs=0,presentMs=0,readbackMs=0;bool timed=false;
+                {size_t gpu=0,targets=0,activeOutputs=0;uint64_t bytes=0,readback=0;double gpuMs=0,presentMs=0,readbackMs=0;bool timed=true;size_t rendered=0;
                     for(size_t i=0;i<outputs.size();i++){const auto&o=outputs[i];if(!o){measured[i].monitor=s.monitors[i].id;continue;}activeOutputs++;if(o->gpu())gpu++;targets+=o->targets();bytes+=o->surfaceBytes();if(measured[i].monitor.empty())measured[i]=o->metrics(false);
-                        readback+=measured[i].readbackBytes;presentMs+=measured[i].presentationMs;readbackMs+=measured[i].readbackMs;if(measured[i].gpuMs>=0){timed=true;gpuMs+=measured[i].gpuMs;}}
-                    sampleFrames+=active?1:0;sampleReadback+=readback;const double seconds=std::chrono::duration<double>(SteadyClock::now()-sampleStart).count();
+                        readback+=measured[i].readbackBytes;presentMs+=measured[i].presentationMs;readbackMs+=measured[i].readbackMs;if(measured[i].cpuMs>0){rendered++;if(measured[i].gpuMs>=0)gpuMs+=measured[i].gpuMs;else timed=false;}}
+                    sampleFrames+=active?1:0;sampleReadback+=readback;sampleCpu+=threadCpu()-cpuStart;const double seconds=std::chrono::duration<double>(SteadyClock::now()-sampleStart).count();
                     std::lock_guard<std::mutex> lock(state->mutex);auto&m=state->metrics;
-                    m.presentation=gpu==activeOutputs&&gpu?"GPU DirectComposition":gpu?"Mixed GPU / asynchronous DIB fallback":"Asynchronous bounded DIB fallback";
+                    m.presentation=!activeOutputs?"Inactive":targets==activeOutputs?"Not initialized":gpu==activeOutputs&&gpu?"GPU DirectComposition":gpu?"Mixed GPU / asynchronous DIB fallback":"Asynchronous bounded DIB fallback";
                     const char*renderer=reinterpret_cast<const char*>(glGetString(GL_RENDERER));m.adapter=bridge&&gpu?bridge->adapter():renderer?std::wstring(renderer,renderer+strlen(renderer)):L"unavailable";
                     m.running=true;m.paused=!active;m.surfaces=activeOutputs;m.scenes=worlds.size();m.targets=targets;m.contexts=1;m.devices=bridge?1:0;if(active)m.frames++;
-                    m.lastFrameMs=std::chrono::duration<double,std::milli>(SteadyClock::now()-frameStart).count();m.renderThreadCpuMs=double(threadCpu()-cpuStart)/10000.;
-                    m.gpuMs=timed?gpuMs:-1;m.presentationMs=presentMs;m.readbackMs=readbackMs;m.textureBytes=graphicsStats.textureBytes;m.textures=graphicsStats.textures;m.surfaceBytes=bytes;m.uploadBytes=graphicsStats.uploadBytes;
+                    m.lastFrameMs=std::chrono::duration<double,std::milli>(SteadyClock::now()-frameStart).count();
+                    m.gpuMs=timed&&rendered?gpuMs:-1;m.presentationMs=presentMs;m.readbackMs=readbackMs;m.textureBytes=graphicsStats.textureBytes;m.textures=graphicsStats.textures;m.surfaceBytes=bytes;m.uploadBytes=graphicsStats.uploadBytes;
                     m.shaderMs=graphicsStats.shaderMs;m.fieldMs=graphicsStats.fieldMs;m.simulationMs=graphicsStats.simulationMs;m.fpsTarget=s.config.fps;m.outputs=std::move(measured);
-                    if(!active){m.fps=0;m.readbackPerSecond=0;sampleStart=SteadyClock::now();sampleFrames=sampleReadback=0;}
-                    else if(seconds>=1){m.fps=sampleFrames/seconds;m.readbackPerSecond=sampleReadback/seconds;sampleStart=SteadyClock::now();sampleFrames=sampleReadback=0;}}
+                    if(!active){m.fps=0;m.readbackPerSecond=0;sampleStart=SteadyClock::now();sampleFrames=sampleReadback=sampleCpu=0;m.renderThreadCpuMs=0;}
+                    else if(seconds>=1){m.fps=sampleFrames/seconds;m.readbackPerSecond=sampleReadback/seconds;m.renderThreadCpuMs=sampleFrames?double(sampleCpu)/sampleFrames/10000.:0;sampleStart=SteadyClock::now();sampleFrames=sampleReadback=sampleCpu=0;}}
                 if(!active){MsgWaitForMultipleObjects(1,&state->event,FALSE,INFINITE,QS_ALLINPUT);last=std::chrono::steady_clock::now();deadline=last;continue;}
                 deadline+=std::chrono::microseconds(1000000/s.config.fps);now=std::chrono::steady_clock::now();if(deadline<now){std::lock_guard<std::mutex> lock(state->mutex);state->metrics.missed++;deadline=now;}
                 DWORD wait=DWORD(std::max<int64_t>(0,std::chrono::duration_cast<std::chrono::milliseconds>(deadline-now).count()));

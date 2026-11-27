@@ -46,6 +46,9 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     if(!IsIconic(source)||!manager.snapshotBytes()||!manager.cachedPreviewCount())return 80;
     if(!phase3Snapshot(rail,evidence/L"phase3-stage-minimized.bmp"))return 81;
     report<<"STAGE_MINIMIZED_SHARED_SNAPSHOT_NO_RESTORE=PASS\n";
+    st.perspective=true;manager.configure(st);ciPump(100);manager.changed();rail=FindWindowW(L"TLauncher.Native.Stage",nullptr);
+    if(!rail||!IsIconic(source)||!manager.cachedPreviewCount()||!phase3Snapshot(rail,evidence/L"phase3-stage-perspective.bmp"))return 93;
+    report<<"STAGE_NATIVE_PROJECTIVE_CARD_RENDER=PASS\n";
     SetCursorPos(previousPointer.x,previousPointer.y);
     DestroyWindow(source);manager.changed();st.enabled=false;manager.configure(st);
     if(manager.railCount()||manager.snapshotBytes()||FindWindowW(L"TLauncher.Native.Stage",nullptr)||FindWindowW(L"TLauncher.Native.StagePeek",nullptr))return 72;

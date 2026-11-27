@@ -147,7 +147,7 @@ inline void carica() {
     v.spotlightEnabled=leggiDword(L"SpotlightEnabled",1);v.spotlightAltSpace=leggiDword(L"SpotlightAltSpace",1);
     v.spotlightMode=std::clamp(int(leggiDword(L"SpotlightMode",1)),0,3);
     v.stage.enabled = leggiDword(L"StageEnabled", 0);
-    v.stage.perspective = leggiDword(L"StagePerspective", 1);
+    v.stage.perspective = leggiDword(L"StagePerspective", 0);
     v.stage.autoHide = leggiDword(L"StageAutoHide", 0);
     v.stage.peek = leggiDword(L"StagePeek", 1);
     v.stage.peekLive = leggiDword(L"StagePeekLive", 1);

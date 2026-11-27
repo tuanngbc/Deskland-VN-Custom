@@ -10,7 +10,7 @@
 
 namespace stage {
 struct Settings {
-    bool enabled = false, perspective = true, autoHide = false, peek = true;
+    bool enabled = false, perspective = false, autoHide = false, peek = true;
     bool peekLive = true, peekAnimation = true, clickActivate = true;
     int monitor = 0, right = 0, height = 126, spacing = 12, opacity = 95;
     int peekDelay = 450, peekSize = 640, edgeGap = 12;
@@ -47,7 +47,7 @@ class Manager {
         ID2D1Bitmap* icon = nullptr;
         HWND registered = nullptr;
         bool minimized = false;
-        unsigned generation = 0;
+        unsigned generation = 0;ULONGLONG snapshotAt=0;
         Window& source() { return windows[current % windows.size()]; }
     };
     struct Rail {
@@ -102,7 +102,7 @@ class Manager {
                         owner->closePeek(); owner->preview(*this,c); owner->draw(*this);
                     } else { page=std::max(0,page+(GET_WHEEL_DELTA_WPARAM(w)>0?-1:1)); owner->rebuild(*this); }
                     return true;
-                case WM_DISPLAYCHANGE: owner->topologyChanged=true; return true;
+                case WM_DISPLAYCHANGE: case WM_DPICHANGED: owner->topologyChanged=true; return true;
                 case WM_CLOSE: return true;
             }
             return false;
@@ -114,7 +114,7 @@ class Manager {
         Window source;
         HTHUMBNAIL thumbnail = nullptr;
         ID2D1Bitmap* bitmap = nullptr;
-        double start = 0;
+        double start = 0;unsigned generation=0;
         explicit Peek(Manager* m): owner(m) {}
         ~Peek() { close(); }
         void close() {
@@ -124,6 +124,7 @@ class Manager {
         }
         void draw() {
             if(!glass.inizia()) return;
+            if(generation!=glass.giroRt){generation=glass.giroRt;if(bitmap){bitmap->Release();bitmap=owner->snapshot(source,glass);}}
             if(bitmap) {
                 const auto sz=bitmap->GetPixelSize();
                 RECT r=aspectFit(sz.width,sz.height,{8,8,glass.W-8,glass.H-8},false);
@@ -245,7 +246,7 @@ private:
         rail.glass.posiziona(rail.hidden?(settings.right?area.right-int(5*d):area.left):x,area.top+std::max(edge,int((area.bottom-area.top-h)/2)),rail.hidden?int(5*d):width,std::max(1,h));
         rail.glass.alfa(settings.opacity/100.0);
         for(size_t i=0;i<rail.cards.size();++i) {
-            auto& c=rail.cards[i];int inset=settings.perspective?int((i%3)*4*d):0;
+            auto& c=rail.cards[i];int inset=0;
             const int top=pad+int(i)*(ch+gap);
             c.rect={pad+inset,top,width-pad-inset,top+ch};
             preview(rail,c);
@@ -292,20 +293,34 @@ private:
         return nullptr;
     }
     void preview(Rail& rail,Card& c) {
-        const Window& w=c.source();
-        if(c.registered==w.hwnd&&c.minimized==bool(IsIconic(w.hwnd))&&c.generation==rail.glass.giroRt&&!rail.hidden&&(c.thumbnail||c.bitmap)) {
+        const Window& w=c.source();auto cached=stampa::lastImage(w.hwnd);const ULONGLONG at=cached?cached->at:0;
+        if(c.registered==w.hwnd&&c.minimized==bool(IsIconic(w.hwnd))&&c.generation==rail.glass.giroRt&&c.snapshotAt==at&&!rail.hidden&&(c.thumbnail||c.bitmap)) {
             if(c.thumbnail){SIZE sz{};DwmQueryThumbnailSourceSize(c.thumbnail,&sz);RECT r=c.rect;r.bottom-=int(25*rail.glass.dpi);r=aspectFit(sz.cx,sz.cy,r);DWM_THUMBNAIL_PROPERTIES p{};p.dwFlags=DWM_TNP_RECTDESTINATION;p.rcDestination=r;DwmUpdateThumbnailProperties(c.thumbnail,&p);}return;
         }
         if(c.generation!=rail.glass.giroRt&&c.icon){c.icon->Release();c.icon=nullptr;}
         if(c.thumbnail)DwmUnregisterThumbnail(c.thumbnail);c.thumbnail=nullptr;
         if(c.bitmap)c.bitmap->Release();c.bitmap=nullptr;
-        c.registered=w.hwnd;c.minimized=IsIconic(w.hwnd);c.generation=rail.glass.giroRt;
+        c.registered=w.hwnd;c.minimized=IsIconic(w.hwnd);c.generation=rail.glass.giroRt;c.snapshotAt=at;
         if(!w.valid()||rail.hidden)return;
-        if(IsIconic(w.hwnd)) c.bitmap=snapshot(w,rail.glass);
+        if(IsIconic(w.hwnd)||settings.perspective){c.bitmap=snapshot(w,rail.glass);if(!IsIconic(w.hwnd))requestCapture(w);}
         else if(SUCCEEDED(DwmRegisterThumbnail(rail.glass.fin,w.hwnd,&c.thumbnail))) {
             SIZE sz{};DwmQueryThumbnailSourceSize(c.thumbnail,&sz);RECT r=c.rect;r.bottom-=int(25*rail.glass.dpi);r=aspectFit(sz.cx,sz.cy,r);
             DWM_THUMBNAIL_PROPERTIES p{};p.dwFlags=DWM_TNP_RECTDESTINATION|DWM_TNP_VISIBLE|DWM_TNP_OPACITY|DWM_TNP_SOURCECLIENTAREAONLY;p.rcDestination=r;p.fVisible=TRUE;p.opacity=255;p.fSourceClientAreaOnly=FALSE;DwmUpdateThumbnailProperties(c.thumbnail,&p);
             requestCapture(w);
+        }
+    }
+    void perspectiveBitmap(vetro::Finestra&v,ID2D1Bitmap*bitmap,RECT dest)const{
+        const auto size=bitmap->GetPixelSize();const float width=float(dest.right-dest.left),height=float(dest.bottom-dest.top);
+        if(width<=0||height<=0)return;
+        const float cx=(dest.left+dest.right)*.5f,cy=(dest.top+dest.bottom)*.5f;
+        // Perspective divide of a plane rotated about Y, sampled in narrow
+        // texture strips. HwndRenderTarget has no projective bitmap transform;
+        // this retains the accepted native target/device and correct aspect.
+        const float angle=settings.right?-.30f:.30f,distance=width*2.8f;
+        auto project=[&](float u){float x=(u-.5f)*width,k=distance/(distance+sin(angle)*x);return std::pair<float,float>{cx+cos(angle)*x*k,k};};
+        for(int strip=0;strip<64;strip++){const float u0=strip/64.f,u1=(strip+1)/64.f;auto a=project(u0),b=project(u1);float k=project((u0+u1)*.5f).second;
+            D2D1_RECT_F source{u0*size.width,0,u1*size.width,float(size.height)};
+            v.rt->DrawBitmap(bitmap,{a.first,cy-height*.5f*k,b.first+.12f,cy+height*.5f*k},1,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,&source);
         }
     }
     void draw(Rail& rail) {
@@ -313,11 +328,11 @@ private:
         if(rail.hidden){v.finisci();return;}
         const float d=v.dpi;
         for(size_t i=0;i<rail.cards.size();++i) {
-            auto& c=rail.cards[i];const auto& w=c.source();if(!w.valid())continue;
+            auto& c=rail.cards[i];if(c.generation!=v.giroRt)preview(rail,c);const auto& w=c.source();if(!w.valid())continue;
             auto r=c.rect;D2D1_RECT_F f{float(r.left),float(r.top),float(r.right),float(r.bottom)};
             v.pen->SetColor(v.inchiostro(i==size_t(rail.hover)?.20f:.07f));v.rt->FillRoundedRectangle({f,8*d,8*d},v.pen);
             if(GetAncestor(GetForegroundWindow(),GA_ROOT)==w.hwnd){v.pen->SetColor(D2D1::ColorF(.1f,.55f,1));v.rt->DrawRoundedRectangle({f,8*d,8*d},v.pen,2*d);}
-            if(c.bitmap){auto size=c.bitmap->GetPixelSize();RECT dest=r;dest.bottom-=int(25*d);dest=aspectFit(size.width,size.height,dest,false);v.rt->DrawBitmap(c.bitmap,{float(dest.left),float(dest.top),float(dest.right),float(dest.bottom)});}
+            if(c.bitmap){auto size=c.bitmap->GetPixelSize();RECT dest=r;dest.bottom-=int(25*d);dest=aspectFit(size.width,size.height,dest,false);if(settings.perspective)perspectiveBitmap(v,c.bitmap,dest);else v.rt->DrawBitmap(c.bitmap,{float(dest.left),float(dest.top),float(dest.right),float(dest.bottom)});}
             if(!c.icon&&icon)c.icon=icon(v.rt,w.icon,96);
             if(c.icon)v.rt->DrawBitmap(c.icon,{f.left+4*d,f.bottom-23*d,f.left+24*d,f.bottom-3*d});
             std::wstring label=w.name;if(c.windows.size()>1)label+=L" ("+std::to_wstring(c.current+1)+L"/"+std::to_wstring(c.windows.size())+L")";

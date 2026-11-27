@@ -4045,7 +4045,7 @@ static std::wstring diagnostica() {
         DWORD ubr = 0, n = sizeof(ubr);
         RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"UBR", RRF_RT_REG_DWORD, nullptr, &ubr, &n);
         riga(L"Windows: %ls %ls, build %ls.%lu", leggi(L"EditionID").c_str(), leggi(L"DisplayVersion").c_str(), leggi(L"CurrentBuildNumber").c_str(), ubr);
-        riga(L"Lingua di Windows: 0x%04x, di TLauncher: %ls", GetUserDefaultUILanguage(), testi::nome(testi::attuale()));
+        riga(testi::t(L"Lingua di Windows: 0x%04x, di TLauncher: %ls",L"Windows language: 0x%04x; TLauncher: %ls"), GetUserDefaultUILanguage(), testi::nome(testi::attuale()));
     }
     // schermi
     struct Ctx { std::wstring* t; } c{&t};
@@ -4053,14 +4053,14 @@ static std::wstring diagnostica() {
         MONITORINFOEXW mi{}; mi.cbSize = sizeof(mi); GetMonitorInfoW(m, &mi);
         DEVMODEW dm{}; dm.dmSize = sizeof(dm); EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm);
         wchar_t s[256];
-        swprintf(s, 256, L"Schermo%ls: %ld x %ld a %ld,%ld, scala %.0f%%, %lu Hz, area di lavoro %ld,%ld-%ld,%ld\r\n",
-                 (mi.dwFlags & MONITORINFOF_PRIMARY) ? L" principale" : L"", mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top,
+        swprintf(s, 256, testi::t(L"Schermo%ls: %ld x %ld a %ld,%ld, scala %.0f%%, %lu Hz, area di lavoro %ld,%ld-%ld,%ld\r\n",L"Display%ls: %ld x %ld at %ld,%ld, scale %.0f%%, %lu Hz, work area %ld,%ld-%ld,%ld\r\n"),
+                 (mi.dwFlags & MONITORINFOF_PRIMARY) ? testi::t(L" principale",L" primary") : L"", mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top,
                  mi.rcMonitor.left, mi.rcMonitor.top, vetro::dpiMonitor(m) * 100, dm.dmDisplayFrequency,
                  mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom);
         *((Ctx*)l)->t += s;
         return TRUE;
     }, (LPARAM)&c);
-    { const RECT& d = vetro::schermoDock(); riga(L"Dock su: %ld,%ld-%ld,%ld", d.left, d.top, d.right, d.bottom); }
+    { const RECT& d = vetro::schermoDock(); riga(testi::t(L"Dock su: %ld,%ld-%ld,%ld",L"Dock bounds: %ld,%ld-%ld,%ld"), d.left, d.top, d.right, d.bottom); }
     // scheda video
     {
         IDXGIFactory1* f = nullptr;
@@ -4071,28 +4071,28 @@ static std::wstring diagnostica() {
                 DXGI_ADAPTER_DESC1 dd{}; a->GetDesc1(&dd); a->Release();
                 if (std::find(viste.begin(), viste.end(), std::wstring(dd.Description)) != viste.end()) continue;
                 viste.push_back(dd.Description);
-                if (!(dd.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) riga(L"Scheda video: %ls (%llu MB)", dd.Description, (unsigned long long)(dd.DedicatedVideoMemory / (1024 * 1024)));
+                if (!(dd.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) riga(testi::t(L"Scheda video: %ls (%llu MB)",L"Graphics adapter: %ls (%llu MB)"), dd.Description, (unsigned long long)(dd.DedicatedVideoMemory / (1024 * 1024)));
             }
             f->Release();
         }
     }
     // stato
     const sensori::Sensori& se = sensori::Sensori::io();
-    if (se.batteria >= 0) riga(L"Batteria: %d%%%ls", se.batteria, se.inCarica ? L", in carica" : L""); else riga(L"Batteria: nessuna (PC fisso)");
-    riga(L"Dock: %d, genio: %d, effetti di animazione di Windows: %d, tema scuro: %d", (int)gDockOk, (int)gGenioOk, (int)gMovimento, (int)vetro::temaScuro());
-    riga(L"Angoli: impostazione %d (0 tondi, 1 poco, 2 squadrati), Windhawk %d px", raggio::stile(), raggio::windhawk());
-    riga(L"Giochi riconosciuti: %zu", giochiNoti().size());
+    if (se.batteria >= 0) riga(testi::t(L"Batteria: %d%%%ls",L"Battery: %d%%%ls"), se.batteria, se.inCarica ? testi::t(L", in carica",L", charging") : L""); else riga(testi::t(L"Batteria: nessuna (PC fisso)",L"Battery: none (desktop PC)"));
+    riga(testi::t(L"Dock: %d, genio: %d, effetti di animazione di Windows: %d, tema scuro: %d",L"Dock: %d, Genie: %d, Windows animations: %d, dark mode: %d"), (int)gDockOk, (int)gGenioOk, (int)gMovimento, (int)vetro::temaScuro());
+    riga(testi::t(L"Angoli: impostazione %d (0 tondi, 1 poco, 2 squadrati), Windhawk %d px",L"Corners: mode %d (0 rounded, 1 slight, 2 square), Windhawk %d px"), raggio::stile(), raggio::windhawk());
+    riga(testi::t(L"Giochi riconosciuti: %zu",L"Recognized games: %zu"), giochiNoti().size());
     const impostazioni::Valori& v = impostazioni::valori();
-    riga(L"Impostazioni: gelatina %d, genio %d, apertura %d, chiusura %d, onda %d, notifiche %d, volume %d, tasto Win %d, Alt+Tab (panoramica) %d, Win+Tab (ricerca) %d, angolo %d, tasto destro %d, notch %d, ora nel dock %d",
+    riga(testi::t(L"Impostazioni: gelatina %d, genio %d, apertura %d, chiusura %d, onda %d, notifiche %d, volume %d, tasto Win %d, Alt+Tab (panoramica) %d, Win+Tab (ricerca) %d, angolo %d, tasto destro %d, notch %d, ora nel dock %d",L"Settings: Jelly %d, Genie %d, open %d, close %d, wave %d, notifications %d, volume %d, Win key %d, Alt+Tab overview %d, Win+Tab search %d, corner %d, context menu %d, Notch %d, Dock clock %d"),
          v.gelatina, v.genio, v.apertura, v.chiusura, v.onda, v.banner, v.volume, v.tastoWin, v.winTab, v.winS, v.angolo, v.menuDestro, v.notch, v.oraDock);
-    riga(L"Dock: a scomparsa %d, opacità %d%%, finestre ingrandite sopra %d, icone %d px, distanza %d px, colore %06lx%ls, altri schermi %d, lato %d (0 basso, 1 alto, 2 sinistra, 3 destra)", v.dockAuto, v.dockOpacita, v.dockSpazio,
-         v.dockIcone, v.dockDistanza,(unsigned long)(v.dockColore & 0xFFFFFF), (v.dockColore & impostazioni::COLORE_SCELTO) ? L"" : L" (automatico)", v.dockSchermi, v.dockLato);
+    riga(testi::t(L"Dock: a scomparsa %d, opacità %d%%, finestre ingrandite sopra %d, icone %d px, distanza %d px, colore %06lx%ls, altri schermi %d, lato %d (0 basso, 1 alto, 2 sinistra, 3 destra)",L"Dock: auto-hide %d, opacity %d%%, maximized overlap %d, icons %d px, spacing %d px, color %06lx%ls, other displays %d, edge %d (0 bottom, 1 top, 2 left, 3 right)"), v.dockAuto, v.dockOpacita, v.dockSpazio,
+         v.dockIcone, v.dockDistanza,(unsigned long)(v.dockColore & 0xFFFFFF), (v.dockColore & impostazioni::COLORE_SCELTO) ? L"" : testi::t(L" (automatico)",L" (automatic)"), v.dockSchermi, v.dockLato);
     // icone fissate del dock (solo conteggi, niente nomi di app): per le segnalazioni di icone doppie, vuote o mancanti
     if (gDockOk) { const auto& f = gDock.diagFissate;
-        riga(L"Dock, app fissate: lista di Windows %ls, collegamenti %d, app di pacchetto %d, Squirrel di versioni cancellate %d, senza destinazione %d, file dell'icona mancante %d, doppie %d, scartate %d",
-             f.lista ? L"letta" : L"non letta (solo la cartella)", f.collegamenti, f.pacchetto, f.squirrel, f.morte, f.iconeRotte, f.doppie, f.scartate); }
+        riga(testi::t(L"Dock, app fissate: lista di Windows %ls, collegamenti %d, app di pacchetto %d, Squirrel di versioni cancellate %d, senza destinazione %d, file dell'icona mancante %d, doppie %d, scartate %d",L"Dock pins: Windows list %ls, shortcuts %d, packaged apps %d, removed Squirrel versions %d, missing targets %d, missing icon files %d, duplicates %d, discarded %d"),
+             f.lista ? testi::t(L"letta",L"read") : testi::t(L"non letta (solo la cartella)",L"not read (profile folder only)"), f.collegamenti, f.pacchetto, f.squirrel, f.morte, f.iconeRotte, f.doppie, f.scartate); }
     if(gWallpaper)t+=wallpaper::diagnostics(gWallpaper->metrics());
-    riga(L"Registro: %ls", gLog ?L"acceso (%TEMP%\\fluidwin.log)" : L"spento (avvio con --log per averlo)");
+    riga(testi::t(L"Registro: %ls",L"Log: %ls"), gLog ?testi::t(L"acceso (%TEMP%\\fluidwin.log)",L"enabled (%TEMP%\\tlauncher-native.log)") : testi::t(L"spento (avvio con --log per averlo)",L"disabled (start with --log to enable)"));
     return t;
 }
 
