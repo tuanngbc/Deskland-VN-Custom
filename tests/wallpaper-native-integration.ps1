@@ -19,6 +19,12 @@ public static class WallpaperIntegration {
 }
 '@
 function Wait-For([scriptblock]$Check,[string]$Label){$until=[DateTime]::UtcNow.AddSeconds(45);do{if(& $Check){return};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow -lt $until);throw "Timeout: $Label"}
+function Persisted-Setting([string]$Path,[string]$Pattern){
+ # Settings saves by atomic replacement. A read can meet the writer's brief
+ # exclusive handle; retry that observation within the existing bounded wait.
+ try{return [IO.File]::ReadAllText($Path) -match $Pattern}
+ catch [IO.IOException]{return $false}
+}
 function Main-Window { [WallpaperIntegration]::Window('TLauncher.Native.Messaggi') }
 function Candidate-Processes([string]$Path){@(Get-CimInstance Win32_Process -Filter "Name='TLauncher.exe'"|Where-Object ExecutablePath -IEQ $Path)}
 function Send-Action([IntPtr]$Window,[int]$Action){[void][WallpaperIntegration]::PostMessage($Window,0x805b,[IntPtr]$Action,[IntPtr]::Zero)}
@@ -82,10 +88,10 @@ foreach($mode in 'accepted-baseline','wallpaper-disabled','wallpaper-enabled'){
    & (Join-Path (Split-Path $Exe) 'wallpaper-accessibility.exe') 2>&1|Tee-Object (Join-Path $Evidence 'wallpaper-accessibility.txt')
    if($LASTEXITCODE -ne 0){throw 'Native wallpaper accessibility contract failed'}
    Send-Action $settings 5103
-   Wait-For {(Get-Content (Join-Path $profile 'wallpaper-v1.ini') -Raw) -match '(?m)^scene=lake\r?$'} 'real Settings scene selection'
+   Wait-For {Persisted-Setting (Join-Path $profile 'wallpaper-v1.ini') '(?m)^scene=lake\r?$'} 'real Settings scene selection'
    Send-Action $settings 5000
    Wait-For {[WallpaperIntegration]::WallpaperCount($false) -eq 0} 'native disable releases windows'
-   Wait-For {(Get-Content (Join-Path $profile 'wallpaper-v1.ini') -Raw) -match '(?m)^enabled=0\r?$'} 'persisted disable'
+   Wait-For {Persisted-Setting (Join-Path $profile 'wallpaper-v1.ini') '(?m)^enabled=0\r?$'} 'persisted disable'
    Send-Action $settings 5000
    Wait-For {[WallpaperIntegration]::WallpaperCount($true) -gt 0} 'native enable recreates presentation'
    Add-Type -AssemblyName System.Windows.Forms,System.Drawing
