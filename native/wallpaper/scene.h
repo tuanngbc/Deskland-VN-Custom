@@ -16,7 +16,7 @@ namespace wallpaper {
 using Vec4=std::array<float,4>;
 inline float wrap(float v,float size){return size>0?v-floor(v/size)*size:0;}
 struct Spring {float x=0,v=0;void step(float dt,float stiffness=180,float damping=17){int n=std::max(1,int(ceil(dt/.012f)));for(int i=0;i<n;i++){float h=dt/n;v+=(-stiffness*x-damping*v)*h;x+=v*h;}}};
-struct Cat {float x=0,y=0,tx=0,ty=0,phase=0,wait=0,happy=0;int pose=0,coat=0;bool right=true;Body body;};
+struct Cat {float x=0,y=0,tx=0,ty=0,phase=0,wait=0,happy=0;int pose=0,previousPose=0,coat=0;float poseBlend=1;bool chasing=false;bool right=true;Body body;};
 struct ClickFx {Vec4 value{0,0,100,0};};
 enum class FishMode {Swim,Approach,Nibble,Bite,Hooked,Caught,Returning,Flee};
 struct NativeFish {float x=0,y=0,heading=0,phase=0,timer=0;FishMode mode=FishMode::Swim;Body body;};
@@ -62,7 +62,7 @@ class SceneRuntime {
     float random(){rng^=rng<<13;rng^=rng>>17;rng^=rng<<5;return float(double(rng)/4294967296.);}
     static std::string source(int id){const auto&s=catalog().at(id);
         if(std::string(s.id)=="cats"){
-            auto artwork=assetText(assetsRoot()/L"wallpaper/shaders/cat_hill.frag");auto main=artwork.find("void main()");if(main==std::string::npos)throw std::runtime_error("Cat artwork contract missing");
+            auto artwork=nativeCatPoses(assetText(assetsRoot()/L"wallpaper/shaders/cat_hill.frag"));auto main=artwork.find("void main()");if(main==std::string::npos)throw std::runtime_error("Cat artwork contract missing");
             artwork.resize(main);artwork+=assetText(assetsRoot()/L"wallpaper/shaders/cats-native.frag");return desktopShader(std::move(artwork));
         }auto text=assetText(assetsRoot()/s.shader);
         // Preserve background composition; actor artwork scale comes from one
@@ -79,7 +79,7 @@ class SceneRuntime {
             replaceAll("max(edgeWake * 0.65, centerFoam * 0.42) * fade","max(edgeWake * 0.65, centerFoam * 0.42) * fade * uYachtMotion[i].x");
         }
         if(std::string(s.id)=="meadow")text=meadowComposition(std::move(text));
-        if(std::string(s.id)=="cat-hill")text=catHillDepthComposition(std::move(text));
+        if(std::string(s.id)=="cat-hill")text=catHillDepthComposition(nativeCatPoses(std::move(text)));
         if(std::string(s.id)=="beach"||std::string(s.id)=="beach-turquoise")text=beachAirComposition(std::move(text));
         auto line=text.find('\n');text.insert(line+1,"uniform float wpActorScale;\nuniform vec4 uBoatMotion[6],uYachtMotion[4],uKayMotion[4];\n");return desktopShader(std::move(text));
     }
@@ -199,6 +199,7 @@ public:
     const PalmLayout& palms()const{return palmLayout;}
     const std::map<std::string,std::vector<Body>>& actors()const{return groups;}
     const Body& meadowBoy()const{return boyBody;}
+    const std::array<Cat,15>& catActors()const{return cats;}
     const std::array<NativeFish,8>& fish()const{return fishActors;}
 #ifdef WALLPAPER_HOSTED_PROBE
     // Synthetic initial conditions exist only in the hosted renderer executable.
@@ -207,6 +208,7 @@ public:
     void probeActor(const char*name,size_t i,V2 p){auto&list=groups[name];if(i>=list.size())list.resize(i+1);auto&b=list[i];b.position=b.target=p;b.velocity={};b.heading=0;b.phase=0;b.initialized=true;}
     void probePalms(std::vector<Palm> trees){probePalmOverride=true;probePalmTrees=std::move(trees);}
     void probeCat(size_t i,V2 p){auto&cat=cats.at(i);cat.x=p.x;cat.y=p.y;cat.pose=0;cat.body.position=cat.body.target=p;cat.body.velocity={};cat.body.initialized=true;}
+    void probeCatState(size_t i,int pose,float seconds){auto&cat=cats.at(i);cat.pose=cat.previousPose=pose;cat.poseBlend=1;cat.wait=seconds;cat.body.aim(cat.body.position);}
     bool probeFishWater(V2 p,float r)const{return fishWater(p,r,true);}
 #endif
     float shore(V2 p)const{return field.sample(p.x,p.y,lastTime);}
@@ -239,7 +241,7 @@ public:
         const std::string id=catalog()[index].id;
         if(id=="meadow"){if(boyBounds().contains({x,y}))boyTug=1;else if(navigable({x,y},70,false)){boyBody.aim({x,y});boyNext=age+18;}}
         if(id=="sky"||id=="meadow"||id=="ocean"||id=="lake")clouds.burst(x,y,lastTime);
-        if(id=="cat-hill"||id=="cats"){bool pet=false;for(auto&cat:cats)if(cat.body.initialized&&Box{cat.x-42*geometry.catScale(),cat.y-65*geometry.catScale(),84*geometry.catScale(),85*geometry.catScale()}.contains({x,y})){cat.happy=2.5f;cat.wait=2;cat.pose=(cat.pose+1)%3;cat.body.target=cat.body.position;pet=true;}if(!pet)toy={x,y,0,10};}
+        if(id=="cat-hill"||id=="cats"){bool pet=false;for(auto&cat:cats)if(cat.body.initialized&&Box{cat.x-42*geometry.catScale(),cat.y-65*geometry.catScale(),84*geometry.catScale(),85*geometry.catScale()}.contains({x,y})){cat.happy=2.5f;cat.wait=3;catPose(cat,4);cat.chasing=false;cat.body.aim(cat.body.position);pet=true;}if(!pet)toy={x,y,0,10};}
         if(id=="lake"||id=="aquarium")clickFishing(x,y,fx);
         if(id=="boxing-ring")clickBoxing(x,y);
         if(id=="stadium"&&previousW>0&&previousH>0){targetX=std::clamp(x/previousW,.08f,.92f);targetY=std::clamp(y/previousH,.2f,.88f);passAge=0;passes++;userChase=4;goalSide=0;
@@ -407,20 +409,35 @@ private:
         if(hypot(x-w*.848f,y-h*.676f)<36*s){birdHop=0;fx.value[3]=0;}
     }
     std::array<Vec4,8> effectsAsFx(){std::array<Vec4,8> values{};for(size_t i=0;i<values.size();i++){values[i]=effects[(effectNext+effects.size()-1-i)%effects.size()].value;if(values[i][2]>5)values[i]={0,0,-1,0};else if(std::string(catalog()[index].id)!="summer-porch")values[i][3]=fishing==4?1.f:0.f;}return values;}
+    static void catPose(Cat&cat,int pose){if(cat.pose==pose)return;cat.previousPose=cat.pose;cat.pose=pose;cat.poseBlend=0;}
     void renderCats(const Config&c,const std::vector<RECT>&icons,float w,float h,float t,float dt){
-        int n=std::clamp(int(p(c,"cats",5)),0,15);std::array<Vec4,15> positions{},meta{};
+        int n=std::clamp(int(p(c,"cats",5)),0,15);std::array<Vec4,15> positions{},meta{};const float scale=geometry.catScale();
+        {CpuMeasure simulation{graphicsStats.simulationMs};
         for(int step=0;step<simulationSteps;step++)for(int i=0;i<n;i++){auto&cat=cats[i];auto&b=cat.body;
-            if(!b.initialized){for(int trial=0;trial<337;trial++){V2 q{w*(.08f+.84f*hash(i*337+trial,index,83)),h*(.37f+.51f*hash(i*337+trial,index,84))};if(navigable(q,42*geometry.catScale(),false)){b.position=b.target=q;b.initialized=true;cat.wait=hash(i,0,2)*8;break;}}}
-            if(!b.initialized)continue;cat.wait-=fixedStep;cat.happy=std::max(0.f,cat.happy-fixedStep);
-            if(cat.wait<=0){cat.pose=random()<p(c,"naps",.5f)?int(random()*3):3;V2 wanted=toy[3]>0?V2{toy[0]+(i%3-1)*60.f,toy[1]+(i%4)*35.f}:V2{w*(.08f+random()*.84f),h*(.37f+random()*.51f)};
-                if(cat.pose==3)b.aim(destination(wanted,42*geometry.catScale(),false,b.position));else b.target=b.position;cat.wait=4+random()*10;}
-            V2 separation{};for(int j=0;j<n;j++)if(j!=i&&cats[j].body.initialized){V2 d=b.position-cats[j].body.position;float distance=d.length(),spacing=75*geometry.catScale();if(distance<spacing&&distance>.01f)separation=separation+unit(d)*((spacing-distance)/spacing*3);}
-            auto valid=[&](V2 q,float r){return navigable(q,r,false)&&q.y>h*.34f;};
-            steer(b,{42*p(c,"speed",1),65,85,2.2f,5,42*geometry.catScale(),false},b.target,fixedStep,valid,separation);
-            cat.x=b.position.x;cat.y=b.position.y;cat.phase=b.phase;cat.right=cos(b.heading)>=0;
-        }
+            if(!b.initialized){for(int trial=0;trial<337;trial++){V2 q{w*(.08f+.84f*hash(i*337+trial,index,83)),h*(.37f+.51f*hash(i*337+trial,index,84))};if(navigable(q,42*scale,false)){b.position=b.target=q;b.initialized=true;cat.wait=hash(i,0,2)*8;break;}}}
+            if(!b.initialized)continue;cat.wait-=fixedStep;cat.happy=std::max(0.f,cat.happy-fixedStep);cat.poseBlend=std::min(1.f,cat.poseBlend+fixedStep/.65f);
+            V2 toyPosition{toy[0],toy[1]};const bool interested=toy[3]>0&&cat.happy<=0&&(b.position-toyPosition).length()<560&&i<3;
+            if(interested){V2 slot=toyPosition+V2{i==0?-40.f:i==1?40.f:-16.f,i==2?-20.f:-3.f}*scale;
+                if(!cat.chasing){b.aim(destination(slot,42*scale,false,b.position));cat.chasing=true;catPose(cat,3);cat.wait=10;}
+                if((b.target-b.position).length()<12*scale&&b.speed()<8){catPose(cat,6);b.aim(b.position);cat.wait=1.3f;}
+            }else if(cat.chasing){cat.chasing=false;cat.wait=0;}
+            if(!interested&&cat.wait<=0){
+                if(cat.pose==0||cat.pose==1){catPose(cat,5);cat.wait=1.8f;b.aim(b.position);}
+                else if(cat.pose==3){int rest=random()<p(c,"naps",.5f)?int(random()*2):random()<.45f?2:4;catPose(cat,rest);cat.wait=rest<2?10+random()*16:3+random()*6;b.aim(b.position);}
+                else{V2 wanted{w*(.08f+random()*.84f),h*(.37f+random()*.51f)};
+                    if(n>1&&random()<.25f){auto&friendCat=cats[(i+1)%n];if(friendCat.body.initialized)wanted=friendCat.body.position+V2{95*scale,0};}
+                    catPose(cat,3);b.aim(destination(wanted,42*scale,false,b.position));cat.wait=12+random()*8;}
+            }
+            if(cat.pose==3&&!interested&&(b.target-b.position).length()<8*scale&&b.speed()<4)cat.wait=0;
+            V2 separation{};for(int j=0;j<n;j++)if(j!=i&&cats[j].body.initialized){V2 d=b.position-cats[j].body.position;float distance=d.length(),spacing=75*scale;if(distance<spacing&&distance>.01f)separation=separation+unit(d)*((spacing-distance)/spacing*3);}
+            auto valid=[&](V2 q,float r){if(!navigable(q,r,false)||q.y<=h*.34f)return false;
+                if(std::string(catalog()[index].id)=="cats")for(int j=0;j<std::clamp(int(p(c,"bushes",4)),0,12);j++){V2 trunk{w*(.06f+hash(j,index,308)*.88f),h*(.4f+hash(j,index,310)*.47f)};if((q-trunk).length()<28*scale)return false;}return true;};
+            const float speed=(cat.pose==3?42.f*(cat.chasing?2.2f:1.f):0.f)*p(c,"speed",1);b.command=true;
+            steer(b,{speed,65,85,2.2f,5,42*scale,false},b.target,fixedStep,valid,separation);
+            cat.x=b.position.x;cat.y=b.position.y;cat.phase+=fixedStep*(b.speed()>2?b.speed()/(12*std::max(.1f,scale)):.9f);if(b.speed()>2&&abs(cos(b.heading))>.15f)cat.right=cos(b.heading)>=0;
+        }}
         for(int i=0;i<n;i++){auto&cat=cats[i];if(!cat.body.initialized){positions[i]={-10000,-10000,1,0};continue;}
-            positions[i]={cat.x,cat.y,geometry.catScale()*(cat.right?1:-1),cat.phase};meta[i]={cat.body.speed()>2?3.f:float(cat.pose==3?2:cat.pose),float(cat.coat),cat.happy,0};}        // Painter order remains stable for actor overlap.
+            positions[i]={cat.x,cat.y,geometry.catScale()*(cat.right?1:-1),cat.phase};meta[i]={cat.body.speed()>5?3.f:float(cat.pose),float(cat.coat),cat.happy,float(cat.previousPose*2)+cat.poseBlend};}        // Painter order remains stable for actor overlap.
         for(int i=0;i<n;i++)for(int j=i+1;j<n;j++)if(positions[j][1]<positions[i][1]){std::swap(positions[i],positions[j]);std::swap(meta[i],meta[j]);}
         program.f("uCatN",float(n));array("uCatPos",positions);array("uCatMeta",meta);program.v4("uToy",toy.data());
         flyers<6>("uBfly","uBflyN",int(p(c,"butterflies",4)),w,h,t,15,.12f,.7f);

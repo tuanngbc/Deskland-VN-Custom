@@ -92,4 +92,26 @@ inline std::string catHillDepthComposition(std::string text){
   }
 )");return text;
 }
+// Extend the audited cat-hill artwork on the new renderer. Only native pose
+// metadata is added; original scenery, coat palettes and depth order are retained.
+inline std::string nativeCatPoses(std::string text){
+    auto replace=[&](const std::string&old,const std::string&next){auto at=text.find(old);if(at==std::string::npos)throw std::runtime_error("Cat pose artwork contract missing");text.replace(at,old.size(),next);};
+    replace("void drawCat(inout vec3 col, vec2 p, vec4 pos, vec4 meta)","void drawCatPose(inout vec3 col, vec2 p, vec4 pos, vec4 meta)");
+    replace("} else if (mode == 2) {","} else if (mode == 2 || mode == 4 || mode == 5 || mode == 6) {");
+    replace("float bob = sin(ph * 4.5) * 1.2;","float bob = mode == 2 ? sin(ph * 4.5) * 1.2 : sin(ph * 1.4) * .4; if(mode == 5){q.x *= .72; q.y += 7.;}");
+    replace("vec2 pq = hq - vec2(7.5, 4.0 - bob * 0.6);","if(mode == 2 || mode == 6) { vec2 pq = hq - vec2(7.5, mode == 6 ? 11. + sin(ph*3.)*4. : 4.0 - bob * 0.6);");
+    replace("float dTongue = length(hq - vec2(4.8, 3.5)) - 1.8;","float dTongue = mode == 2 ? length(hq - vec2(4.8, 3.5)) - 1.8 : 100.;");
+    replace("col = mix(col, vec3(0.96, 0.48, 0.56), ss(0.5, -0.5, dTongue * sc));","col = mix(col, vec3(0.96, 0.48, 0.56), ss(0.5, -0.5, dTongue * sc)); } if(mode != 2) {float blink=mod(ph,5.)<.12?.2:1.;float eye=min(length((hq-vec2(.5,-.5))/vec2(1.,blink)),length((hq-vec2(6.2,-.5))/vec2(1.,blink)))-1.3;col=mix(col,OUTLINE,ss(.5,-.5,eye*sc));}");
+    auto main=text.find("void main()");if(main==std::string::npos)throw std::runtime_error("Cat main contract missing");
+    text.insert(main,R"(
+void drawCat(inout vec3 col,vec2 p,vec4 pos,vec4 meta){
+  if(meta.z>1.95)pos.y-=sin(clamp((2.5-meta.z)/.55,0.,1.)*3.14159265)*8.*abs(pos.z);
+  int previous=int(floor(meta.w*.5));float blend=clamp(meta.w-float(previous)*2.,0.,1.);
+  if(blend>.999||previous==int(meta.x+.5)){drawCatPose(col,p,pos,meta);return;}
+  vec3 a=col,b=col;vec4 old=meta;old.x=float(previous);
+  drawCatPose(a,p,pos,old);drawCatPose(b,p,pos,meta);col=mix(a,b,blend*blend*(3.-2.*blend));
+}
+)");return text;
+}
+
 }

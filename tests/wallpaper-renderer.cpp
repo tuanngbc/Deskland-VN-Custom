@@ -157,6 +157,22 @@ int main(int argc,char**argv){try{
     {
         SceneRuntime scene(gl,sceneIndex("beach"));allocate(320,180);noiseTexture.bind(gl,0);scene.render(config,view,icons,weather,4.,0,stop,.5f,.5f);capture(320,180);report<<"SCALED_SURFACE_COORDINATES=PASS\n";
     }
+    {
+        // Rest is a real stationary state. Previously an uncommanded target at
+        // the current position still accelerated the steering body forward.
+        SceneRuntime cats(gl,sceneIndex("cats"));allocate(192,108);Config cfg=config;
+        cfg.sceneParams["cats"]["cats"]=1;cfg.sceneParams["cats"]["bushes"]=0;
+        View v{0,0,960,540,960,540};noiseTexture.bind(gl,0);cats.render(cfg,v,{},weather,1,0,stop,.2f,.2f);
+        cats.probeCat(0,{480,340});cats.probeCatState(0,4,5);V2 resting=cats.catActors()[0].body.position;
+        for(int frame=0;frame<50;frame++){noiseTexture.bind(gl,0);cats.render(cfg,v,{},weather,1+(frame+1)*.04f,.04f,stop,.2f,.2f);}
+        check((cats.catActors()[0].body.position-resting).length()<.01f&&cats.catActors()[0].pose==4,"Resting cat drifted or lost sit state");
+        png(evidence/"cats-native-sit.png",192,108,capture(192,108));
+        cats.click(resting.x,resting.y);check(cats.catActors()[0].happy>0,"Cat petting reaction missing");
+        cats.click(650,360);bool chased=false,played=false;
+        for(int frame=0;frame<300;frame++){noiseTexture.bind(gl,0);cats.render(cfg,v,{},weather,3+(frame+1)*.04f,.04f,stop,.2f,.2f);const auto&cat=cats.catActors()[0];chased|=cat.body.speed()>45;played|=cat.pose==6;check(cat.poseBlend>=0&&cat.poseBlend<=1,"Invalid pose transition");}
+        check(chased&&played,"Cat did not run to yarn and play");png(evidence/"cats-native-yarn.png",192,108,capture(192,108));
+        report<<"CAT_REST_NO_DRIFT_PET_RUN_AND_YARN_PLAY=PASS\n";
+    }
     for(auto shape:std::array<std::pair<int,int>,2>{{{2560,1080},{1080,1920}}}){
         int w=shape.first,h=shape.second;allocate(w,h);int id=sceneIndex(w>h?"beach":"cat-hill");SceneRuntime scene(gl,id);noiseTexture.bind(gl,0);scene.render(config,{0,0,float(w),float(h),float(w),float(h)},icons,weather,6.,.04f,stop);png(evidence/(w>h?"ultrawide-2560x1080.png":"portrait-1080x1920.png"),w,h,capture(w,h));
     }report<<"ULTRAWIDE_PORTRAIT_RENDER=PASS\n";
