@@ -66,6 +66,7 @@ public:
     void show(bool on){if(on!=visible){ShowWindow(window.h,on?SW_SHOWNOACTIVATE:SW_HIDE);visible=on;}}
     bool intact()const{return IsWindow(window.h)&&IsWindow(host.parent)&&GetParent(window.h)==host.parent;}
     bool matches(const Monitor&m)const{return monitor==m.id&&EqualRect(&rect,&m.rect);}
+    bool gpu()const{return presentation&&presentation->gpu();}
     void draw(Context&context,const Snapshot&s,const View&view,SceneRuntime&runtime,Texture&noise,Program&post,double time,float dt,const std::atomic<bool>&stop){
         if(!context.current())throw std::runtime_error("Wallpaper device/context lost");
         const int w=rect.right-rect.left,h=rect.bottom-rect.top;
@@ -117,9 +118,10 @@ class Session {
                 bool active=false;RECT all=bounds(s.monitors);auto frameStart=now;std::vector<std::wstring> used,advanced;
                 for(size_t i=0;i<outputs.size();i++){
                     auto&o=*outputs[i];const auto&m=s.monitors[i];auto assignment=s.config.displays.find(m.id);bool enabled=assignment==s.config.displays.end()||assignment->second.enabled;
-                    if(!enabled){o.show(false);continue;}if(paused||(s.config.pauseCovered&&covered(m.rect,s.opaqueWindows)))continue;
+                    if(!enabled){o.show(false);continue;}
                     int scene=s.config.layout==Layout::Independent&&assignment!=s.config.displays.end()?assignment->second.scene:s.config.scene;
                     auto view=viewport(m,all,s.config.layout);std::wstring key=s.config.layout==Layout::Panorama?L"panorama":m.id;used.push_back(key);
+                    if(paused||(s.config.pauseCovered&&covered(m.rect,s.opaqueWindows)))continue;
                     auto&world=worlds[key];if(!world||world->scene()!=scene){context.current();world.reset();world=std::make_unique<SceneRuntime>(gl,scene);}
                     bool first=std::find(advanced.begin(),advanced.end(),key)==advanced.end();
                     if(s.click&&s.desktopPointer&&(s.config.layout==Layout::Panorama?first:bool(PtInRect(&m.rect,s.pointer)))){float x=float(s.pointer.x-(s.config.layout==Layout::Panorama?all.left:m.rect.left)),y=float(s.pointer.y-(s.config.layout==Layout::Panorama?all.top:m.rect.top));world->click(x,y);}
@@ -129,7 +131,9 @@ class Session {
                 // paused assigned scenes keep only the resources needed to resume.
                 if(!paused){context.current();for(auto it=worlds.begin();it!=worlds.end();)if(std::find(used.begin(),used.end(),it->first)==used.end())it=worlds.erase(it);else ++it;}
                 if(s.click){std::lock_guard<std::mutex> lock(state->mutex);state->latest.click=false;}
-                {std::lock_guard<std::mutex> lock(state->mutex);state->metrics.running=true;state->metrics.paused=!active;state->metrics.surfaces=outputs.size();state->metrics.scenes=worlds.size();if(active)state->metrics.frames++;state->metrics.lastFrameMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-frameStart).count();}
+                {size_t gpu=0;for(const auto&o:outputs)if(o->gpu())gpu++;
+                    std::lock_guard<std::mutex> lock(state->mutex);state->metrics.presentation=gpu==outputs.size()&&gpu?"GPU DirectComposition":gpu?"Mixed GPU / asynchronous DIB fallback":"Asynchronous bounded DIB fallback";
+                    state->metrics.running=true;state->metrics.paused=!active;state->metrics.surfaces=outputs.size();state->metrics.scenes=worlds.size();if(active)state->metrics.frames++;state->metrics.lastFrameMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-frameStart).count();}
                 if(!active){MsgWaitForMultipleObjects(1,&state->event,FALSE,INFINITE,QS_ALLINPUT);last=std::chrono::steady_clock::now();deadline=last;continue;}
                 deadline+=std::chrono::microseconds(1000000/s.config.fps);now=std::chrono::steady_clock::now();if(deadline<now){std::lock_guard<std::mutex> lock(state->mutex);state->metrics.missed++;deadline=now;}
                 DWORD wait=DWORD(std::max<int64_t>(0,std::chrono::duration_cast<std::chrono::milliseconds>(deadline-now).count()));

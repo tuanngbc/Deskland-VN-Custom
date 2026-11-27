@@ -26,8 +26,11 @@ int main(){try{
     std::filesystem::create_directories(profile);std::ofstream(profile/L".tlauncher-native-trial",std::ios::binary)<<"tlauncher-native isolated profile v1\n";
     SetEnvironmentVariableW(L"TLAUNCHER_NATIVE_TRIAL_DIR",profile.c_str());require(tlauncher::validateTrial(),"Invalid isolated contract profile");
     std::ofstream(profile/L"wallpaper-v1.ini")<<"schema=1\nenabled=1\nscene=lake\nunknown.future=retain\nfps=25\n";
-    Store store(profile);c=store.load();require(c.enabled&&c.scene==sceneIndex("lake"),"Config read");c.fps=30;require(store.save(c),"Atomic configuration save");
+    Store store(profile);c=store.load();require(c.enabled&&c.scene==sceneIndex("lake"),"Config read");c.fps=30;
+    const auto connected=topology();require(!connected.empty(),"Hosted display missing");auto&assignment=c.displays[connected.front().id];assignment.scene=sceneIndex("aquarium");assignment.sceneParams["aquarium"]["plants"]=.85;
+    require(store.save(c),"Atomic configuration save");Store reload(profile);auto roundtrip=reload.load();require(roundtrip.displays[connected.front().id].scene==sceneIndex("aquarium")&&abs(roundtrip.displays[connected.front().id].sceneParams["aquarium"]["plants"]-.85)<.0001,"Monitor parameter roundtrip");
     std::ifstream saved(profile/L"wallpaper-v1.ini");std::string text((std::istreambuf_iterator<char>(saved)),{});require(text.find("unknown.future=retain")!=std::string::npos,"Unknown field lost");require(std::filesystem::exists(profile/L"wallpaper-v1.ini.bak"),"Backup absent");
+    saved.close();std::ofstream(profile/L"wallpaper-v1.ini",std::ios::app)<<"monitor.disconnected.param.aquarium.plants=0.31\n";Store unplugged(profile);auto retained=unplugged.load();require(unplugged.save(retained),"Disconnected save");std::ifstream preserved(profile/L"wallpaper-v1.ini");std::string disconnected((std::istreambuf_iterator<char>(preserved)),{});require(disconnected.find("monitor.disconnected.param.aquarium.plants=0.31")!=std::string::npos,"Disconnected monitor fields lost");preserved.close();
     std::ofstream(profile/L"wallpaper-v1.ini")<<"schema=900\nenabled=1\n";Store future(profile);c=future.load();require(!c.enabled&&future.readOnly()&&!future.save(c),"Future schema must remain intact");
     std::cout<<"CATALOG_16=PASS\nNEGATIVE_PORTRAIT_MIXED_DPI=PASS\nTILED_PANORAMA=PASS\nMULTIWINDOW_OCCLUSION=PASS\nSOLAR_WEATHER=PASS\nATOMIC_CONFIG_BACKUP_UNKNOWN_FIELDS=PASS\nFUTURE_SCHEMA_PROTECTION=PASS\nPHASE_2_COMPLETE=NO\n";return 0;
 }catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}}

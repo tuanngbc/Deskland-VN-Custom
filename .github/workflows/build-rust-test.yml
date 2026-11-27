@@ -67,6 +67,9 @@ jobs:
           retention-days: 14
           if-no-files-found: error
   native-base:
+    permissions:
+      contents: read
+      actions: read
     needs: wallpaper-contract
     if: always() && (github.ref == 'refs/heads/codex/fluidwin-native-base-v1.0.3' || (github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3' && needs.wallpaper-contract.result == 'success'))
     runs-on: windows-latest
@@ -126,6 +129,19 @@ jobs:
         with:
           name: native-wallpaper-assets
           path: native-build/wallpaper
+      - name: Restore hosted-only software GL for full executable verification
+        if: github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/wallpaper-mesa
+          key: hosted-mesa-26.3.1-64e84cf13d67dd35
+          fail-on-cache-miss: true
+      - name: Compare accepted baseline with native wallpaper disabled and enabled
+        if: github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./tests/wallpaper-native-integration.ps1 -Exe (Resolve-Path native-build/TLauncher.exe).Path -Evidence (Resolve-Path native-evidence).Path -Mesa (Join-Path $env:RUNNER_TEMP 'wallpaper-mesa')
       - name: Package immutable Native Base TEST
         shell: pwsh
         run: |
@@ -220,6 +236,7 @@ jobs:
           $env:LIBGL_ALWAYS_SOFTWARE='true'
           & ./wallpaper-evidence/wallpaper-renderer.exe wallpaper-evidence 2>&1 | Tee-Object wallpaper-evidence/renderer.log
           if ($LASTEXITCODE -ne 0) {throw 'Native scene/panorama verification failed'}
+          ./tools/stage-wallpaper-assets.ps1 -Destination wallpaper-evidence
       - uses: actions/upload-artifact@v4
         with:
           name: native-wallpaper-assets
