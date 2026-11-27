@@ -42,6 +42,7 @@
 #include "destro.h"
 // Auto Update excluded by owner: no updater translation unit or call sites.
 #include "affianca.h"
+#include "../wallpaper/controller.h"
 
 // ---------------------------------------------------------------------------------------------
 // Parametri
@@ -360,6 +361,11 @@ static bool gPausa = false;
 // aggiungere altri (apertura dal dock, ingrandimento): un vector riallocandosi li lascerebbe appesi
 static std::list<Anim> gAnim;
 static std::unordered_map<HWND, InfoFinestra> gInfo;
+static std::unique_ptr<wallpaper::Controller> gWallpaper;
+static std::atomic<bool> gWallpaperInput{false};
+static bool gWallpaperLocked = false, gWallpaperDisplayOff = false;
+static HPOWERNOTIFY gWallpaperPower = nullptr;
+static constexpr UINT WM_WALLPAPER_CLICK = WM_APP + 90;
 static std::unordered_set<HWND> gNascoste;
 static double gFreq;
 static FILE* gLog;
@@ -3611,6 +3617,10 @@ static const UINT WM_SINISTRO = WM_APP + 40;
 static const UINT WM_ZOOM_TASTO = WM_APP + 41;   // Win+Su/Giu trattenuto (wParam comando, lParam finestra)
 static UINT_PTR gTimerTr = 0;   // (thread del gancio) scadenza dei trattenuti
 static LRESULT CALLBACK suMouse(int code, WPARAM w, LPARAM l) {
+    if (code == HC_ACTION && w == WM_LBUTTONUP && gWallpaperInput.load(std::memory_order_relaxed)) {
+        const auto* mouse = (const MSLLHOOKSTRUCT*)l;
+        if (!(mouse->flags & LLMHF_INJECTED)) PostMessageW(gMessaggi, WM_WALLPAPER_CLICK, 0, MAKELPARAM(mouse->pt.x, mouse->pt.y));
+    }
     if (code == HC_ACTION && w == WM_MOUSEMOVE) {
         const MSLLHOOKSTRUCT* m = (const MSLLHOOKSTRUCT*)l;
         if (m->dwExtraInfo != FIRMA_SINISTRO) {
@@ -3946,6 +3956,42 @@ static ricerca::Ricerca gRicerca;
 static banner::Banner gBanner;
 static impostazioni::Finestra gImpostazioni;
 
+// Accepted window inventory supplies occlusion; wallpaper installs no new hook.
+static void wallpaperTick() {
+    if (!gWallpaper) return;
+    wallpaper::Snapshot snapshot;
+    snapshot.monitors = wallpaper::topology(); snapshot.locked = gWallpaperLocked; snapshot.displayOff = gWallpaperDisplayOff;
+    GetCursorPos(&snapshot.pointer);
+    if (gWallpaper->enabled()) {
+        for (const auto& [h, info] : gInfo) {
+            if (snapshot.opaqueWindows.size() >= 128) break;
+            if (!info.valida || !IsWindowVisible(h) || IsIconic(h) || GetPropW(h, PROP_NASCOSTA)) continue;
+            DWORD cloaked = 0; if (SUCCEEDED(DwmGetWindowAttribute(h, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) continue;
+            if (GetWindowLongPtrW(h, GWL_EXSTYLE) & WS_EX_LAYERED) { COLORREF key; BYTE alpha = 0; DWORD flags = 0;
+                if (!GetLayeredWindowAttributes(h, &key, &alpha, &flags) || !(flags & LWA_ALPHA) || alpha != 255 || (flags & LWA_COLORKEY)) continue; }
+            snapshot.opaqueWindows.push_back(info.visibile);
+        }
+        if (gDockOk) { double latitude = 0, longitude = 0;
+            auto weather = gDock.wallpaperWeather(latitude, longitude, gWallpaper->settings().weather == wallpaper::WeatherMode::Live);
+            if (weather.meteoOk) snapshot.weather = wallpaper::fromWmo(weather.codice, (float)weather.vento, latitude, longitude); }
+    }
+    gWallpaper->tick(std::move(snapshot));
+}
+static void wallpaperSubscriptions(bool enabled) {
+    static bool registered = false;
+    if (enabled == registered || !gMessaggi) return;
+    registered = enabled;
+    static const GUID displayStatus = {0x2b84c20e,0xad23,0x4ddf,{0x93,0xdb,0x05,0xff,0xbd,0x7e,0xfc,0xa5}};
+    if (enabled) {
+        WTSRegisterSessionNotification(gMessaggi, NOTIFY_FOR_THIS_SESSION);
+        gWallpaperPower = RegisterPowerSettingNotification(gMessaggi, &displayStatus, DEVICE_NOTIFY_WINDOW_HANDLE);
+    } else {
+        WTSUnRegisterSessionNotification(gMessaggi);
+        if (gWallpaperPower) { UnregisterPowerSettingNotification(gWallpaperPower); gWallpaperPower = nullptr; }
+        gWallpaperLocked = gWallpaperDisplayOff = false;
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Diagnostica da copiare (Impostazioni > Generale): quello che serve per capire un problema su un altro PC, senza dati
 // personali: versioni, schermi (risoluzione, scala, frequenza, posizione), scheda video, batteria, impostazioni.
@@ -4130,6 +4176,26 @@ static LRESULT CALLBACK procMessaggi(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_ZOOM_TASTO) { suZoomTasto((UINT)w, (HWND)l); return 0; }
     if (m == WM_AFFIANCA_TASTO) { if (w == 2) riquadroDaTastiera((HWND)l); else suAffiancaTasto(w != 0, (HWND)l); return 0; }
     switch (m) {
+        case WM_WALLPAPER_CLICK: {
+            if (!gWallpaper || !gWallpaper->enabled()) return 0;
+            POINT p{GET_X_LPARAM(l),GET_Y_LPARAM(l)}; HWND under = WindowFromPoint(p);
+            wchar_t cls[64] = L""; GetClassNameW(GetAncestor(under, GA_ROOT), cls, 64);
+            gWallpaper->clicked(p, !wcscmp(cls,L"Progman") || !wcscmp(cls,L"WorkerW")); return 0;
+        }
+        case WM_WTSSESSION_CHANGE:
+            if (w == WTS_SESSION_LOCK) gWallpaperLocked = true;
+            else if (w == WTS_SESSION_UNLOCK) gWallpaperLocked = false;
+            wallpaperTick(); return 0;
+        case WM_POWERBROADCAST:
+            if (w == PBT_POWERSETTINGCHANGE && l) {
+                const auto* setting = (const POWERBROADCAST_SETTING*)l;
+                static const GUID displayStatus = {0x2b84c20e,0xad23,0x4ddf,{0x93,0xdb,0x05,0xff,0xbd,0x7e,0xfc,0xa5}};
+                if (IsEqualGUID(setting->PowerSetting,displayStatus) && setting->DataLength == sizeof(DWORD)) {
+                    DWORD status = 1; memcpy(&status,setting->Data,sizeof(status));gWallpaperDisplayOff = status == 0;wallpaperTick();
+                }
+            } else if (w == PBT_APMSUSPEND) { gWallpaperDisplayOff = true; wallpaperTick(); }
+            else if (w == PBT_APMRESUMEAUTOMATIC) { gWallpaperDisplayOff = false; wallpaperTick(); }
+            return TRUE;
         case WM_TRAY:
             if (LOWORD(l) == WM_RBUTTONUP || LOWORD(l) == WM_LBUTTONUP) {
                 POINT pt; GetCursorPos(&pt);
@@ -4147,6 +4213,7 @@ static LRESULT CALLBACK procMessaggi(HWND h, UINT m, WPARAM w, LPARAM l) {
             }
             return 0;
         case WM_DISPLAYCHANGE:
+            wallpaperTick();
             aggiornaOrigine(); if (gGenioOk) gGenio.aggiornaSchermo();
             SetTimer(h, 12, 800, nullptr);   // la scala nuova si legge quando Windows ha finito di cambiarla
             return 0;
@@ -4231,6 +4298,7 @@ static LRESULT CALLBACK procMessaggi(HWND h, UINT m, WPARAM w, LPARAM l) {
             if (IsWindow((HWND)w)) { preparaChiusura((HWND)w); PostMessageW((HWND)w, WM_SYSCOMMAND, SC_CLOSE, 0); }
             return 0;
         case WM_TIMER:
+            if (w == 1) wallpaperTick();
             if (w == 13) { gBattito = GetTickCount64(); return 0; }   // battito per l'hook della tastiera (uiViva)
             if (w == 24) { affiancaPasso(); return 0; }   // trascinamento: casella sotto il mouse e anteprima
             if (w == 25) { staccaPasso(); return 0; }     // stacco dall'ingrandita trascinata dalla barra
@@ -4670,6 +4738,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     WNDCLASSW wm{}; wm.lpfnWndProc = procMessaggi; wm.hInstance = inst; wm.lpszClassName = L"TLauncher.Native.Messaggi";
     RegisterClassW(&wm);
     gMessaggi = CreateWindowExW(0, wm.lpszClassName, L"TLauncher", 0, 0, 0, 0, 0, nullptr, nullptr, inst, nullptr);
+    gWallpaper = std::make_unique<wallpaper::Controller>();
+    gWallpaperInput = gWallpaper->enabled(); wallpaperSubscriptions(gWallpaper->enabled()); wallpaperTick();
+    gImpostazioni.wallpaperPage.read = [] { return gWallpaper->settings(); };
+    gImpostazioni.wallpaperPage.changed = [](wallpaper::Config config) {
+        gWallpaperInput = config.enabled; wallpaperSubscriptions(config.enabled);
+        gWallpaper->change(std::move(config)); wallpaperTick();
+    };
+    gImpostazioni.wallpaperPage.metrics = [] { return gWallpaper->metrics(); };
     SetTimer(gMessaggi, 1, 500, nullptr);
     appunti::Cronologia::io().avvia(gMessaggi);   // cronologia degli appunti (solo in memoria)
     // Ctrl+Win+T: sempre in primo piano (se un altro programma la usa gia', resta a lui)
@@ -4801,6 +4877,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     }
 
     for (auto h : hooks) if (h) UnhookWinEvent(h);
+    gWallpaperInput = false; wallpaperSubscriptions(false); if (gWallpaper) gWallpaper->stop();
     if (gThreadTasti) PostThreadMessageW(gThreadTasti, WM_QUIT, 0, 0);
     if (gThreadMouse) PostThreadMessageW(gThreadMouse, WM_QUIT, 0, 0);
     // (rimanda i clic trattenuti e toglie il gancio prima che il processo finisca: al massimo mezzo secondo)
@@ -4821,6 +4898,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     gFineStile = true;
     ripristinaTutte();
     Shell_NotifyIconW(NIM_DELETE, &gIcona);
+    if (gWallpaper && !gWallpaper->finish(3000)) logf("wallpaper: shutdown still pending after native recovery; process exit releases session");
     // thread degli aggiornamenti: la richiesta in corso si interrompe e lo si aspetta (al massimo 5 s) prima di chiudere
     // il registro e i dati che usa. Se non finisce (rete appesa), il processo si chiude senza passare dai distruttori
     // statici con il thread ancora vivo: Windows e' gia' rimesso a posto (R20261116-000127-S2)

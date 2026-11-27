@@ -486,6 +486,13 @@ public:
         return a && b && c;
     }
 
+    // Main-thread snapshot of the existing shared weather owner; no second fetcher.
+    widget::Istantanea wallpaperWeather(double& latitude, double& longitude, bool refresh) {
+        if (refresh) widD.aggiorna();
+        latitude = widD.lat; longitude = widD.lon;
+        return widD.copia();
+    }
+
     void chiudi() {
         fermaIcone();
         fermaNotifiche();

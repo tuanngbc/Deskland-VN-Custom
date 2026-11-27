@@ -3,6 +3,7 @@
 #pragma once
 #include "catalog.h"
 #include "field.h"
+#include "images.h"
 #include <memory>
 #include <chrono>
 
@@ -13,7 +14,7 @@ struct Spring {float x=0,v=0;void step(float dt,float stiffness=180,float dampin
 struct Cat {float x=0,y=0,tx=0,ty=0,phase=0,wait=0,happy=0;int pose=0,coat=0;bool right=true;};
 struct ClickFx {Vec4 value{0,0,100,0};};
 class SceneRuntime {
-    GL&g;int index;Program program;Field field;Clouds clouds;
+    GL&g;int index;Program program;Field field;Clouds clouds;std::unique_ptr<Sprites> sprites;
     std::vector<RECT> previousIcons;float previousW=0,previousH=0,previousSigma=-1,previousWarp=-1;
     std::array<Cat,15> cats{};std::array<ClickFx,8> effects{};size_t effectNext=0;float age=0;
     Vec4 toy{0,0,0,0};float fishing=0,fishingAge=0;POINT fishingPoint{};
@@ -91,6 +92,19 @@ public:
         if(id=="stadium")renderStadium(c,w,h,t,dt);
         if(id=="boxing-ring")renderBoxing(c,w,h,t,dt);
         glDrawArrays(GL_TRIANGLES,0,3);
+        if(id=="beach"||id=="beach-turquoise"||id=="meadow"){
+            if(!sprites)sprites=std::make_unique<Sprites>(g);
+            if(id=="meadow"){
+                float actor=std::min(w/1080.f,h/700.f),x=w*.70f+sin(t*.08f)*w*.10f,y=h*.58f;
+                if(p(c,"showBoy",1)>0){sprites->draw(L"wallpaper/assets/meadow-kite-boy-diagonal-run.png",view,x,y,actor*210,actor*240,t,scaleX,scaleY,false,true,shade);sprites->draw(L"wallpaper/assets/meadow-kite-boy-diagonal-run.png",view,x,y,actor*210,actor*240,t,scaleX,scaleY);}
+                if(p(c,"showCat",1)>0){float cx=w*.53f+sin(t*.11f)*w*.08f,cy=h*.72f; sprites->draw(L"wallpaper/assets/meadow-black-kitten.png",view,cx,cy,actor*155,actor*155,t,scaleX,scaleY,false,true,shade);sprites->draw(L"wallpaper/assets/meadow-black-kitten.png",view,cx,cy,actor*155,actor*155,t,scaleX,scaleY,cos(t*.11f)<0);}
+            }else{
+                static const wchar_t*paths[]={L"wallpaper/assets/beach-coconut-palm-v2.png",L"wallpaper/assets/beach-coconut-palm-curved.png",L"wallpaper/assets/beach-coconut-palm-airy.png",L"wallpaper/assets/beach-coconut-palm-windswept.png",L"wallpaper/assets/beach-coconut-palm-arch.png"};
+                int n=std::clamp(int(p(c,"palms",4)),0,10);float size=std::clamp(std::min(w/1080,h/700),.65f,1.6f)*220;
+                for(int i=0;i<n;i++){float x=w*(.08f+hash(i,1,99)*.80f),y=h*(.45f+hash(i,2,99)*.35f);if(!icons.empty()){const auto&r=icons[size_t(i)%icons.size()];x=float(r.right)+15+(i%2)*35;y=float(r.bottom)+25;}
+                    x=std::clamp(x,0.f,std::max(0.f,w-size));y=std::clamp(y-size*.8f,0.f,std::max(0.f,h-size));sprites->draw(paths[i%5],view,x,y,size,size,t,scaleX,scaleY,i%2,true,shade,std::clamp(-sun.east/std::max(sun.up,.18f),-1.15f,1.15f));sprites->draw(paths[i%5],view,x,y,size,size,t,scaleX,scaleY,i%2);}
+            }
+        }
     }
 private:
     std::array<Vec4,8> effectsAsFx(){std::array<Vec4,8> values{};for(size_t i=0;i<values.size();i++){values[i]=effects[i].value;if(values[i][2]>5)values[i]={0,0,-1,0};else values[i][3]=float(i%4);}return values;}

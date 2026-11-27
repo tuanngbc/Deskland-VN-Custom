@@ -8,6 +8,7 @@
 #include "cursori.h"
 #include "pool.h"
 #include "sfondi.h"
+#include "../wallpaper/settings.h"
 #include <shellapi.h>   // DragAcceptFiles: il pacchetto di cursori si trascina nella finestra
 #include <windowsx.h>
 #include <commdlg.h>   // ChooseColorW: il colore del dock scelto a piacere
@@ -168,6 +169,7 @@ inline void salva() {
 // riquadri arrotondati (nome, spiegazione, interruttore) e righe informative. Il cambio di sezione e' animato.
 class Finestra {
 public:
+    wallpaper::SettingsPage wallpaperPage;
     std::function<void()> cambiato;   // dopo ogni cambio (gia' salvato)
     void (*registro)(const char*) = nullptr;
     std::function<bool()> copiaDiagnostica;   // mette negli appunti la diagnostica (fluidwin.cpp); true se riuscito
@@ -358,6 +360,7 @@ public:
                 return true;
             case WM_CAPTURECHANGED: if (trascina >= 0) { trascina = -1; salva(); disegna(); } return true;
             case WM_KEYDOWN:
+                if (sezione == S_WALLPAPER && wallpaperPage.key(w)) { disegna(); return true; }
                 if (w == VK_ESCAPE) chiudi();
                 else if (w == VK_DOWN || w == VK_UP) vaiASezione((sezione + (w == VK_DOWN ? 1 : SEZIONI - 1)) % SEZIONI);   // frecce: sezioni
                 return true;
@@ -427,7 +430,7 @@ public:
 
 private:
     static constexpr float LARGO = 780, ALTO = 500, BARRA = 240;
-    enum { S_GENERALE, S_DOCK, S_ANIMAZIONI, S_NOTCH, S_TASTIERA, S_CURSORE, SEZIONI };
+    enum { S_GENERALE, S_DOCK, S_ANIMAZIONI, S_NOTCH, S_TASTIERA, S_CURSORE, S_WALLPAPER, SEZIONI };
     // nome e spiegazione in italiano e in inglese, sezione
     struct Voce { const wchar_t *nome, *name, *spiega, *explain; bool Valori::*campo; int sezione; };
     const std::vector<Voce> voci = {
@@ -713,6 +716,7 @@ private:
 
     void clic(int id) {
         if (id < 0) return;
+        if (id >= 5000 && wallpaperPage.click(id)) { disegna(); return; }
         if (id == 200) { chiudi(); return; }
         if (id >= Z_CURSORE && id < Z_COLORE) return;   // (i cursori si usano trascinando: WM_LBUTTONDOWN)
         if (id >= Z_COLORE && id <= Z_COLORE_MIO) {
@@ -802,6 +806,7 @@ private:
             case S_NOTCH: return testi::t(L"Notch e notifiche", L"Dynamic Notch");
             case S_TASTIERA: return testi::t(L"Tastiera e mouse", L"Keyboard and mouse");
             case S_CURSORE: return testi::t(L"Cursore", L"Cursor");
+            case S_WALLPAPER: return L"Live Wallpaper";
         }
         return L"";
     }
@@ -1260,6 +1265,7 @@ private:
             riga(testi::t(L"Maiusc+clic destro", L"Shift+right-click"), testi::t(L"Il menu di Windows, anche con il menu di TLauncher acceso", L"The Windows menu, even with the TLauncher menu on"));
         }
         if (sezione == S_CURSORE) disegnaCursori(L, R, y, e, ink, tenue, blu, rr, H);
+        if (sezione == S_WALLPAPER) wallpaperPage.draw(v, L, R, y, fVoce, fSotto, fCentro, inkS, tenueS, blu, (float)e, aggiungiZona, sopra);
         if (scorre) {
             v.rt->PopAxisAlignedClip();
             // quanto si puo' scorrere: l'altezza del contenuto (y senza lo scorrimento) meno lo spazio visibile, con un
