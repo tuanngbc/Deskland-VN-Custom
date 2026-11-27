@@ -13,11 +13,14 @@ inline float wrap(float v,float size){return size>0?v-floor(v/size)*size:0;}
 struct Spring {float x=0,v=0;void step(float dt,float stiffness=180,float damping=17){int n=std::max(1,int(ceil(dt/.012f)));for(int i=0;i<n;i++){float h=dt/n;v+=(-stiffness*x-damping*v)*h;x+=v*h;}}};
 struct Cat {float x=0,y=0,tx=0,ty=0,phase=0,wait=0,happy=0;int pose=0,coat=0;bool right=true;};
 struct ClickFx {Vec4 value{0,0,100,0};};
+enum class FishMode {Swim,Approach,Nibble,Bite,Hooked,Caught,Flee};
+struct NativeFish {float x=0,y=0,heading=0,phase=0,timer=0;FishMode mode=FishMode::Swim;};
 class SceneRuntime {
     GL&g;int index;Program program;Field field;Clouds clouds;std::unique_ptr<Sprites> sprites;
     std::vector<RECT> previousIcons;float previousW=0,previousH=0,previousSigma=-1,previousWarp=-1;
     std::array<Cat,15> cats{};std::array<ClickFx,8> effects{};size_t effectNext=0;float age=0;
     Vec4 toy{0,0,0,0};float fishing=0,fishingAge=0;POINT fishingPoint{};
+    std::array<NativeFish,8> fishActors{};int hookedFish=-1;float castY=0;
     std::array<Spring,2> head{},torso{};Spring ring,bag;
     std::array<float,2> hp{1,1},hpLag{1,1};int hitActor=-1;float hitAge=100,hitX=0,hitY=0,autoPunch=0;int melonBites=0;float fanMultiplier=1;
     float ballX=.5f,ballY=.5f,targetX=.5f,targetY=.5f;int passes=0;float passAge=0;
@@ -51,7 +54,7 @@ public:
         const std::string id=catalog()[index].id;
         if(id=="sky"||id=="meadow"||id=="ocean"||id=="lake")clouds.burst(x,y,lastTime);
         if(id=="cat-hill"||id=="cats"){bool pet=false;for(auto&cat:cats)if(hypot(cat.x-x,cat.y-y)<80){cat.happy=2.5f;cat.wait=2;cat.pose=(cat.pose+1)%3;pet=true;}if(!pet)toy={x,y,0,10};}
-        if(id=="lake"||id=="aquarium"){if(fishing==0){fishing=1;fishingAge=0;fishingPoint={LONG(x),LONG(y)};}else if(fishing==3){fishing=4;fishingAge=0;}else{fishing=5;fishingAge=0;}}
+        if(id=="lake"||id=="aquarium")clickFishing(x,y,fx);
         if(id=="boxing-ring")clickBoxing(x,y);
         if(id=="stadium"&&previousW>0&&previousH>0){targetX=std::clamp(x/previousW,.08f,.92f);targetY=std::clamp(y/previousH,.2f,.88f);passAge=0;passes++;userChase=4;goalSide=0;
             if(abs(y/previousH-.54f)<.13f&&(x<previousW*.12f||x>previousW*.88f)){goalSide=x<previousW*.5f?-1.f:1.f;targetX=goalSide<0?.10f:.90f;targetY=.54f;goalAge=-1;}}
@@ -65,7 +68,8 @@ public:
         bool iconsChanged=icons.size()!=previousIcons.size();if(!iconsChanged)for(size_t i=0;i<icons.size();i++)if(!EqualRect(&icons[i],&previousIcons[i])){iconsChanged=true;break;}
         if(w!=previousW||h!=previousH||sigma!=previousSigma||warp!=previousWarp||iconsChanged){
             field.generate(w,h,icons,sigma,warp,time,stop);if(stop)return;
-            if(previousW==0||previousH==0){for(size_t i=0;i<cats.size();i++){auto&cat=cats[i];cat.x=w*(.12f+random()*.76f);cat.y=h*(.38f+random()*.5f);cat.tx=cat.x;cat.ty=cat.y;cat.coat=int(i%8);cat.wait=random()*8;}}
+            if(previousW==0||previousH==0){for(size_t i=0;i<cats.size();i++){auto&cat=cats[i];cat.x=w*(.12f+random()*.76f);cat.y=h*(.38f+random()*.5f);cat.tx=cat.x;cat.ty=cat.y;cat.coat=int(i%8);cat.wait=random()*8;}
+                for(size_t i=0;i<fishActors.size();i++){auto&fish=fishActors[i];fish.x=w*(.15f+hash(int(i),index,71)*.7f);fish.y=h*(.3f+hash(int(i),index,72)*.5f);fish.phase=float(i);}}
             previousW=w;previousH=h;previousSigma=sigma;previousWarp=warp;previousIcons=icons;
         }
         program.use();program.v2("uRes",w,h);program.v2("wpOrigin",view.x,view.worldH-view.y-view.h);program.v2("wpPixelScale",scaleX,scaleY);
@@ -113,6 +117,18 @@ public:
         }
     }
 private:
+    void clickFishing(float x,float y,ClickFx&fx){
+        const bool aquarium=std::string(catalog()[index].id)=="aquarium";
+        if(fishing==4||(fishing==1&&fishingAge<.22f))return;
+        if(fishing==3){fishing=4;fishingAge=0;if(hookedFish>=0)fishActors[hookedFish].mode=FishMode::Hooked;fx.value[3]=1;return;}
+        if(hookedFish>=0){fishActors[hookedFish].mode=FishMode::Flee;fishActors[hookedFish].timer=1.5f;hookedFish=-1;}
+        if(aquarium&&(y<previousH*.12f||y>previousH-35||obstacle(x,y,previousIcons))){
+            fishing=fishing?5:0;fishingAge=0;fx.value[3]=2;
+            for(auto&fish:fishActors)if(hypot(fish.x-x,fish.y-y)<160){fish.mode=FishMode::Flee;fish.timer=1.5f;fish.heading=float(atan2(fish.y-y,fish.x-x));}return;
+        }
+        if(fishing==2&&hypot(x-fishingPoint.x,y-fishingPoint.y)<42){fishing=5;fishingAge=0;return;}
+        fishing=1;fishingAge=0;fishingPoint={LONG(x),LONG(y)};castY=aquarium?previousH*.12f:previousH;fx.value[3]=0;
+    }
     float sceneScale()const{return std::min(previousW/1080.f,std::max(280.f,previousH-48)/640.f);}
     void clickBoxing(float x,float y){
         const float s=sceneScale(),cx=previousW*.5f,h=previousH-48;
@@ -152,16 +168,34 @@ private:
         program.f("wpMound",p(c,"mound",1));program.f("wpFlowers",p(c,"flowers",1));program.f("wpBushes",p(c,"bushes",4));program.f("wpSun",p(c,"sun",1));
     }
     void renderFishing(const Config&c,const std::string&id,float w,float h,float t,float dt){
-        if(fishing){fishingAge+=dt;if(fishing==1&&fishingAge>.6f){fishing=2;fishingAge=0;}else if(fishing==2&&fishingAge>3){fishing=3;fishingAge=0;}else if((fishing==3&&fishingAge>2.2f)||(fishing>=4&&fishingAge>1.2f)){fishing=0;fishingAge=0;}}
+        const bool aquarium=id=="aquarium";int n=aquarium?std::clamp(int(p(c,"fish",4)),1,8):4;
+        if(fishing){fishingAge+=dt;
+            if(fishing==1&&fishingAge>.6f){fishing=2;fishingAge=0;}
+            else if(fishing==2&&fishingAge>(aquarium?1.4f/std::max(.4f,p(c,"eager",1)):3.f)&&hookedFish<0){
+                float nearest=1e9;for(int i=0;i<n;i++){float d=hypot(fishActors[i].x-fishingPoint.x,fishActors[i].y-fishingPoint.y);if(d<nearest&&fishActors[i].mode==FishMode::Swim){nearest=d;hookedFish=i;}}
+                if(hookedFish>=0){fishActors[hookedFish].mode=FishMode::Approach;fishActors[hookedFish].timer=0;}}
+            else if(fishing==3&&fishingAge>2.2f){fishing=5;fishingAge=0;if(hookedFish>=0){fishActors[hookedFish].mode=FishMode::Flee;fishActors[hookedFish].timer=1.5f;hookedFish=-1;}}
+            else if(fishing>=4&&fishingAge>1.2f){if(fishing==4&&hookedFish>=0){auto&fish=fishActors[hookedFish];fish.mode=FishMode::Caught;fish.timer=0;}fishing=0;fishingAge=0;hookedFish=-1;}}
         float fx=float(fishingPoint.x),fy=float(fishingPoint.y);float k=std::clamp(fishingAge/.6f,0.f,1.f);
         std::array<Vec4,2> rod{{{fx,h,fx,fy},{fishing,k,fx,fy}}};if(fishing==1)rod[0]={fx,h,fx,h+(fy-h)*k-sin(k*3.14159f)*42};if(fishing>=4){k=std::clamp(fishingAge/1.2f,0.f,1.f);rod[0][3]=fy+(h-fy)*k-sin(k*3.14159f)*54;rod[1][1]=k;}array("uRod",rod);
-        if(id=="aquarium"){
-            int n=std::clamp(int(p(c,"fish",4)),0,8);std::array<Vec4,8> fish{},body{};
-            for(int i=0;i<n;i++){float phase=t*(.5f+hash(i,1,90)*.2f)+i;float x=w*(.5f+.32f*sin(phase*.22f)),y=h*(.5f+.2f*cos(phase*.18f));if(fishing){float attract=std::clamp(p(c,"eager",1)*.25f,0.f,.9f);x+=(fx-x)*attract;y+=(fy-y)*attract;}fish[i]={x,y,cos(phase*.22f)>0?0.f:3.14159f,phase*3};body[i]={.65f+hash(i,2,80)*.6f,hash(i,3,70),.4f,1};}
+        std::array<Vec4,8> fish{},body{};
+        for(int i=0;i<n;i++){
+            auto&a=fishActors[i];a.phase+=dt*4;float tx=w*(.5f+.32f*sin(t*.11f+i)),ty=h*(.5f+.2f*cos(t*.09f+i));float speed=22;
+            if(a.mode==FishMode::Approach||a.mode==FishMode::Nibble||a.mode==FishMode::Bite){tx=fx+12;ty=fy;speed=70*p(c,"eager",1);a.timer+=dt;
+                if(a.mode==FishMode::Approach&&hypot(a.x-tx,a.y-ty)<20){a.mode=FishMode::Nibble;a.timer=0;}
+                if(a.mode==FishMode::Nibble&&a.timer>.8f){a.mode=FishMode::Bite;a.timer=0;fishing=3;fishingAge=0;}}
+            if(a.mode==FishMode::Hooked){a.x=fx;a.y=fy+(h*.12f-fy)*std::clamp(fishingAge/1.2f,0.f,1.f);a.heading=-1.5708f;}
+            else if(a.mode==FishMode::Caught){a.timer+=dt;a.y-=dt*(240-320*a.timer);a.x+=dt*45;if(a.timer>1.8f){a.mode=FishMode::Swim;a.x=w*.08f;a.y=h*.5f;}}
+            else if(a.mode==FishMode::Flee){a.timer-=dt;a.x=std::clamp(a.x+cos(a.heading)*dt*130,w*.05f,w*.95f);a.y=std::clamp(a.y+sin(a.heading)*dt*100,h*.22f,h*.88f);if(a.timer<=0)a.mode=FishMode::Swim;}
+            else {float dx=tx-a.x,dy=ty-a.y,d=hypot(dx,dy);if(d>1){float step=std::min(d,dt*speed);a.x+=dx/d*step;a.y+=dy/d*step;a.heading=float(atan2(dy,dx));}}
+            fish[i]={a.x,a.y,a.heading,a.phase+(aquarium?0:100)};body[i]={.65f+hash(i,2,80)*.6f,hash(i,3,70),a.mode==FishMode::Flee?.9f:.4f,1};
+        }
+        if(aquarium){
             program.f("uFishN",float(n));array("uFish",fish);array("uFishB",body);
             int np=std::clamp(int(p(c,"plants",.6f)*32),0,32);std::array<Vec4,32> plants{};for(int i=0;i<np;i++)plants[i]={w*(i+.5f)/std::max(np,1),h-30,70+hash(i,1,20)*120,hash(i,2,30)*100};program.f("uPlantN",float(np));array("uPlant",plants);program.f("uLight",p(c,"light",1));program.f("uBubbles",p(c,"bubbles",1));program.f("uSurf",h*.12f);
-            program.v4("uLine",{fx,fx,fy,fishing?1.f:0.f});program.v4("uLineB",{fishing==3?6.f:0.f,fishing==2||fishing==3?1.f:0.f,fishing==3?1.f:0.f,fishing==4?1.f:0.f});
-        }
+            float hookY=fishing==1?castY+(fy-castY)*k:fishing>=4?fy+(h*.12f-fy)*std::clamp(fishingAge/1.2f,0.f,1.f):fy;
+            program.v4("uLine",{fx,fx,hookY,fishing?1.f:0.f});program.v4("uLineB",{fishing==3?11.f:hookedFish>=0&&fishActors[hookedFish].mode==FishMode::Nibble?2+abs(sin(t*7))*2:0.f,fishing==2||fishing==3?1.f:0.f,fishing==3?1.f:0.f,fishing==4?1.f:0.f});
+        }else{program.f("uFishN",float(n));program.v4("uFish",fish.front().data(),4);}
     }
     void renderPorch(const Config&c,float w,float h,float t,float dt){
         birdHop+=dt;melonRefill-=dt;if(melonRefill<=0)melonBites=0;fanPhase+=dt*p(c,"fanSpeed",1)*fanMultiplier*14;
