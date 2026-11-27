@@ -174,18 +174,16 @@ inline auto Motore::appUtile(const std::wstring& nome, const std::wstring& par) 
 
 inline auto Motore::leggiTutteApp(bool subito) -> void {
     lLetto = adesso();
-    if (subito) { Cronometro cr(this, "leggiTutteApp"); applicaTutteApp(elencaTutteApp()); return; }
-    if (lavoroTutte) return;
+    (void)subito;if (lavoroTutte) return;
+    appcatalog::load();std::vector<AppL> manual;
+    for(const auto& entry:appcatalog::metadata)if(entry.second.manual){AppL a;a.nome=entry.second.name.empty()?std::filesystem::path(entry.first).stem().wstring():entry.second.name;a.avvio=entry.first;manual.push_back(std::move(a));}
     lavoroTutte = true;
     auto ris = std::make_shared<std::vector<AppL>>();
-    inSottofondo([ris] { *ris = elencaTutteApp(); }, [this, ris] { lavoroTutte = false; applicaTutteApp(std::move(*ris)); });
+    inSottofondo([ris,manual=std::move(manual)]()mutable { *ris = elencaTutteApp();for(auto&a:manual){a.canonical=appcatalog::identity(a.avvio);ris->push_back(std::move(a));} }, [this, ris] { lavoroTutte = false; applicaTutteApp(std::move(*ris)); });
 }
 
 inline auto Motore::applicaTutteApp(std::vector<AppL> nuove) -> void {
     appcatalog::load();
-    for(const auto& entry:appcatalog::metadata) if(entry.second.manual) {
-        AppL a;a.nome=entry.second.name.empty()?std::filesystem::path(entry.first).stem().wstring():entry.second.name;a.avvio=entry.first;a.minuscolo=appcatalog::fold(a.nome);nuove.push_back(std::move(a));
-    }
     std::unordered_set<std::wstring> identities;
     nuove.erase(std::remove_if(nuove.begin(),nuove.end(),[&](const AppL& a){return !identities.insert(a.canonical.empty()?appcatalog::fold(a.avvio):a.canonical).second;}),nuove.end());
     for(auto& a:nuove){auto m=appcatalog::get(a.avvio);if(!m.name.empty())a.nome=m.name;a.minuscolo=appcatalog::fold(a.nome);}
@@ -588,25 +586,24 @@ inline auto Motore::menuApp(int i, POINT pt, HWND owner) -> void {
     const AppL a = tutteApp[filtrate[i]];
     HWND ui=owner?owner:launcher;
     IShellItem* it = nullptr;
-    if (FAILED(SHCreateItemFromParsingName(a.avvio.c_str(), nullptr, IID_PPV_ARGS(&it)))) return;
+    SHCreateItemFromParsingName(a.avvio.c_str(), nullptr, IID_PPV_ARGS(&it));
     IContextMenu* cm = nullptr;
-    it->BindToHandler(nullptr, BHID_SFUIObject, IID_PPV_ARGS(&cm));
+    if(it)it->BindToHandler(nullptr, BHID_SFUIObject, IID_PPV_ARGS(&cm));
     // eseguibile e AppUserModelID dell'app, per il collegamento nel dock
     std::wstring exe, id;
     IShellItem2* it2 = nullptr;
-    if (SUCCEEDED(it->QueryInterface(IID_PPV_ARGS(&it2)))) {
+    if (it&&SUCCEEDED(it->QueryInterface(IID_PPV_ARGS(&it2)))) {
         LPWSTR s = nullptr;
         if (SUCCEEDED(it2->GetString(PKEY_Link_TargetParsingPath, &s)) && s) { exe = s; CoTaskMemFree(s); }
         s = nullptr;
         if (SUCCEEDED(it2->GetString(PKEY_AppUserModel_ID, &s)) && s) { id = s; CoTaskMemFree(s); }
         it2->Release();
     }
-    it->Release();
-    if (!cm) return;
+    if(it)it->Release();
     const UINT ID_DOCK = 0x7F00;
     HMENU m = CreatePopupMenu();
-    if (SUCCEEDED(cm->QueryContextMenu(m, 0, 1, ID_DOCK - 1, CMF_NORMAL))) {
-        cm->QueryInterface(IID_PPV_ARGS(&menuShell2)); cm->QueryInterface(IID_PPV_ARGS(&menuShell3));
+    if (!cm||SUCCEEDED(cm->QueryContextMenu(m, 0, 1, ID_DOCK - 1, CMF_NORMAL))) {
+        if(cm){cm->QueryInterface(IID_PPV_ARGS(&menuShell2)); cm->QueryInterface(IID_PPV_ARGS(&menuShell3));}
         // le voci di Windows, disegnate da noi; in cima il nome dell'app e "Aggiungi al dock"
         std::vector<menu::Voce> voci = {menu::titolo(a.nome), menu::voce(testi::t(L"Aggiungi al dock", L"Add to dock"), ID_DOCK)};
         const auto meta=appcatalog::get(a.avvio);
@@ -658,7 +655,7 @@ inline auto Motore::menuApp(int i, POINT pt, HWND owner) -> void {
             appcatalog::save(a.avvio,m);
             if(cmd==0x7F05||cmd==0x7F06)for(auto& existing:tutteApp)if(existing.avvio==a.avvio){if(existing.icona)existing.icona->Release();existing.icona=nullptr;existing.provata=false;}
             catalogChanged();
-        } else if (cmd > 0) {
+        } else if (cmd > 0&&cm) {
             CMINVOKECOMMANDINFOEX ci{}; ci.cbSize = sizeof(ci); ci.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
             ci.hwnd = ui; ci.lpVerb = MAKEINTRESOURCEA(cmd - 1); ci.lpVerbW = MAKEINTRESOURCEW(cmd - 1);
             ci.nShow = SW_SHOWNORMAL; ci.ptInvoke = pt;
@@ -669,7 +666,7 @@ inline auto Motore::menuApp(int i, POINT pt, HWND owner) -> void {
         }
     }
     DestroyMenu(m);
-    cm->Release();
+    if(cm)cm->Release();
 }
 
 inline void Motore::catalogMenu(const std::wstring& command,POINT at,HWND owner) {

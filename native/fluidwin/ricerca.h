@@ -113,12 +113,15 @@ public:
 #ifdef TLAUNCHER_NATIVE_CI
     std::wstring ciQuery() const {return testo;}
     size_t ciResults() const {return risultati.size();}
+    std::wstring ciSelection()const{return sel>=0&&sel<int(risultati.size())?risultati[sel].azione:L"";}
+    size_t ciBitmapCount()const{return icone.size();}
 #endif
 
     void apri() {
         if (apertaOra) { chiudi(); return; }
         if (!v.fin) {
             if (!v.crea(L"TLauncher.Native.Ricerca", vetro::procedura<Ricerca>, this, true)) return;
+            DragAcceptFiles(v.fin,TRUE);
             InitializeCriticalSection(&cs);
             evento = CreateEventW(nullptr, FALSE, FALSE, nullptr);
             CloseHandle(CreateThread(nullptr, 0, lavoratore, this, 0, nullptr));
@@ -127,7 +130,8 @@ public:
         const RECT a = vetro::areaPrincipale();
         v.dpi = vetro::dpiMonitor(MonitorFromPoint({a.left, a.top}, MONITOR_DEFAULTTOPRIMARY));
         const float d = v.dpi;
-        if (!fTesto) {
+        if (!fTesto||fontDpi!=d||fontLanguage!=testi::attuale()) {
+            for(auto f:{fTesto,fTitolo,fSotto,fSezione})if(f)f->Release();fontDpi=d;fontLanguage=testi::attuale();
             fTesto = v.formato(21 * d);
             fTitolo = v.formato(14 * d, DWRITE_FONT_WEIGHT_MEDIUM);
             fSotto = v.formato(11.5f * d);
@@ -226,6 +230,7 @@ public:
             }
             case WM_KEYDOWN: tasto(w); return true;
             case WM_MOUSEMOVE: {
+                if(GetCapture()==hw&&dragFrom>=0&&(abs(GET_X_LPARAM(l)-dragPoint.x)>GetSystemMetrics(SM_CXDRAG)||abs(GET_Y_LPARAM(l)-dragPoint.y)>GetSystemMetrics(SM_CYDRAG)))dragMoved=true;
                 const int s = rigaIn(GET_X_LPARAM(l), GET_Y_LPARAM(l));
                 // (scelta dell'utente solo se il mouse si e' mosso davvero: la finestra che cresce sotto il mouse fermo
                 // manda anche lei WM_MOUSEMOVE)
@@ -235,12 +240,28 @@ public:
                 if (s != sopra) { sopra = s; if (s >= 0) { sel = s; if (mosso) selUtente = true; } disegna(); }
                 return true;
             }
-            case WM_LBUTTONDOWN: dragFrom=rigaIn(GET_X_LPARAM(l),GET_Y_LPARAM(l));return true;
+            case WM_LBUTTONDOWN:
+                dragFrom=rigaIn(GET_X_LPARAM(l),GET_Y_LPARAM(l));dragPoint={GET_X_LPARAM(l),GET_Y_LPARAM(l)};dragMoved=false;
+                if(fullscreen&&dragFrom>=0)SetCapture(hw);return true;
+            case WM_CAPTURECHANGED: if((HWND)l!=hw){dragFrom=-1;dragMoved=false;}return true;
+            case WM_DROPFILES: {
+                HDROP files=reinterpret_cast<HDROP>(w);POINT p{};DragQueryPoint(files,&p);int cell=rigaIn(p.x,p.y);
+                std::wstring to=cell>=0&&cell<int(risultati.size())&&risultati[cell].tipo==T_FOLDER?risultati[cell].azione:folder;
+                const UINT count=std::min(64u,DragQueryFileW(files,0xffffffff,nullptr,0));
+                for(UINT i=0;i<count;i++){UINT n=DragQueryFileW(files,i,nullptr,0);if(n>32767)continue;std::wstring file(n+1,L'\0');DragQueryFileW(files,i,file.data(),n+1);file.resize(n);
+                    auto ext=appcatalog::normalize(std::filesystem::path(file).extension().wstring());const DWORD a=GetFileAttributesW(file.c_str());
+                    if((ext!=L".exe"&&ext!=L".lnk")||a==INVALID_FILE_ATTRIBUTES||(a&FILE_ATTRIBUTE_DIRECTORY))continue;
+                    auto meta=appcatalog::get(file);meta.manual=true;meta.hidden=false;meta.folder=to;if(meta.name.empty())meta.name=std::filesystem::path(file).stem().wstring();appcatalog::save(file,meta);
+                }
+                DragFinish(files);if(catalogChanged)catalogChanged();componi();return true;
+            }
             case WM_LBUTTONUP: {
+                if(fullscreen&&!folder.empty()&&GET_Y_LPARAM(l)>int(80*v.dpi)&&GET_Y_LPARAM(l)<int(110*v.dpi)){folder.clear();page=0;componi();return true;}
                 const int s=rigaIn(GET_X_LPARAM(l),GET_Y_LPARAM(l));
-                if(fullscreen&&dragFrom>=0&&s>=0&&s!=dragFrom)drop(dragFrom,s);
-                else if(s>=0)esegui(s);else if(fullscreen&&GET_Y_LPARAM(l)>int(ALTO_BARRA*v.dpi))chiudi();
-                dragFrom=-1;return true;
+                const int from=dragFrom;const bool moved=dragMoved;dragFrom=-1;dragMoved=false;if(GetCapture()==hw)ReleaseCapture();
+                if(fullscreen&&moved&&from>=0&&s>=0&&s!=from)drop(from,s);
+                else if(!moved&&s>=0)esegui(s);else if(!moved&&fullscreen&&GET_Y_LPARAM(l)>int(ALTO_BARRA*v.dpi))chiudi();
+                return true;
             }
             case WM_RBUTTONUP: context(rigaIn(GET_X_LPARAM(l),GET_Y_LPARAM(l)));return true;
             case WM_MOUSEWHEEL:
@@ -277,7 +298,8 @@ private:
     IDWriteTextFormat *fTesto = nullptr, *fTitolo = nullptr, *fSotto = nullptr, *fSezione = nullptr;
     std::wstring testo;
     std::wstring folder;
-    int page=0,dragFrom=-1;
+    int page=0,dragFrom=-1;POINT dragPoint{};bool dragMoved=false;
+    float fontDpi=0;int fontLanguage=-1;
     bool editing=false;
     std::vector<std::pair<std::wstring, std::wstring>> app;
     std::vector<Risultato> risultati, file;
@@ -364,13 +386,13 @@ private:
 
     void tasto(WPARAM k) {
         const bool ctrl = GetKeyState(VK_CONTROL) & 0x8000;
-        if(k==VK_F6){fullscreen=!fullscreen;page=sel/std::max(1,pageSize());if(modeChanged)modeChanged(fullscreen);onda.chiudi();ridimensiona();componi();return;}
+        if(k==VK_F6){selUtente=true;fullscreen=!fullscreen;if(modeChanged)modeChanged(fullscreen);onda.chiudi();ridimensiona();componi();if(fullscreen){page=sel/pageSize();chiediIcone();disegna();}return;}
         if(k==VK_ESCAPE&&!folder.empty()){folder.clear();componi();return;}
         if(fullscreen&&(k==VK_LEFT||k==VK_RIGHT||k==VK_UP||k==VK_DOWN)&&!risultati.empty()) {
             int delta=k==VK_LEFT?-1:k==VK_RIGHT?1:k==VK_UP?-columns():columns();
             sel=std::clamp(sel+delta,0,int(risultati.size())-1);page=sel/pageSize();selUtente=true;chiediIcone();disegna();return;
         }
-        if (k == VK_ESCAPE) { if (testo.empty()) chiudi(); else { testo.clear(); cambiato(); } }
+        if (k == VK_ESCAPE) chiudi();
         else if (k == VK_BACK && !testo.empty()) {
             if (ctrl) { while (!testo.empty() && testo.back() == L' ') testo.pop_back(); while (!testo.empty() && testo.back() != L' ') testo.pop_back(); }
             else { testo.pop_back(); if (!testo.empty() && IS_HIGH_SURROGATE(testo.back())) testo.pop_back(); }   // (l'emoji intera)
@@ -448,7 +470,11 @@ private:
             std::vector<std::pair<int, size_t>> trovate;
             for (size_t i = 0; i < app.size(); i++) { const int p = punteggio(app[i].first, ql); if (p > 0) trovate.push_back({p, i}); }
             std::stable_sort(trovate.begin(), trovate.end(), [](auto& a, auto& b) { return a.first > b.first; });
-            for (size_t i = 0; i < trovate.size() && (fullscreen || i < 5); i++) {
+            int selectedRank=-1;
+            if(scelta&&tipoScelto==T_APP)for(size_t i=0;i<trovate.size();i++)if(app[trovate[i].second].second==azioneScelta)selectedRank=int(i);
+            for (size_t i = 0; i < trovate.size(); i++) {
+                if(!fullscreen&&i>=5&&int(i)!=selectedRank)continue;
+                if(!fullscreen&&i==4&&selectedRank>=5)continue;
                 const auto& a = app[trovate[i].second];
                 risultati.push_back({T_APP, a.first, testi::t(L"App",L"App"), a.second, appcatalog::iconSource(a.second)});
             }
@@ -464,7 +490,7 @@ private:
                 const bool ok = GetMonitorInfoW(MonitorFromWindow(v.fin, MONITOR_DEFAULTTONEAREST), &mi);
                 const float alto = ok ? (mi.rcWork.bottom - mi.rcWork.top) / v.dpi * 0.75f : 1000;
                 const int righe = std::max(0, (int)((alto - ALTO_BARRA - 18) / ALTO_RIGA));
-                const int posto = std::max(0, righe - (int)risultati.size() - 1);
+                const int posto = fullscreen?int(file.size()):std::max(0, righe - (int)risultati.size() - 1);
                 for (size_t i = 0; i < file.size() && (int)i < posto; i++) risultati.push_back(file[i]);
             }
             risultati.push_back({T_WEB, testi::t(L"Cerca “", L"Search “") + testi::isola(q) + testi::t(L"” sul web", L"” on the web"),
@@ -486,6 +512,10 @@ private:
     void chiediIcone() {
         bool nuove = false;
         EnterCriticalSection(&cs);
+        std::unordered_set<std::wstring> visible;
+        for(size_t i=0;i<risultati.size();i++)if(!fullscreen||(int(i)>=page*pageSize()&&int(i)<(page+1)*pageSize()))if(!risultati[i].icona.empty())visible.insert(risultati[i].icona);
+        if(icone.size()>256){for(auto i=icone.begin();i!=icone.end()&&icone.size()>192;)if(!visible.count(i->first)){if(i->second)i->second->Release();i=icone.erase(i);}else ++i;}
+        iconeDaFare.erase(std::remove_if(iconeDaFare.begin(),iconeDaFare.end(),[&](const auto& k){return !icone.count(k);}),iconeDaFare.end());
         for (size_t i=0;i<risultati.size();++i) {
             if(fullscreen&&(int(i)<page*pageSize()||int(i)>=(page+1)*pageSize()))continue;
             const auto& r=risultati[i];if(!r.icona.empty()&&!icone.count(r.icona)){icone[r.icona]=nullptr;iconeDaFare.push_back(r.icona);nuove=true;}
@@ -514,7 +544,7 @@ private:
         std::vector<Pixel> arrivate;
         EnterCriticalSection(&cs); arrivate.swap(iconePronte); const bool finite = iconeDaFare.empty() && !iconeInCorso; LeaveCriticalSection(&cs);
         for (auto& p : arrivate) {
-            if (p.px.empty() || !v.rt) continue;
+            if (p.px.empty() || !v.rt || !icone.count(p.chiave)) continue;
             ID2D1Bitmap* b = nullptr;
             v.rt->CreateBitmap(D2D1::SizeU(p.w, p.h), p.px.data(), p.w * 4,
                                D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)), &b);
@@ -584,7 +614,7 @@ private:
         const float width=std::min(680*d,v.W-48*d),left=(v.W-width)/2;
         v.pen->SetColor(v.inchiostro(.07f));v.rt->FillRoundedRectangle({{left,24*d,left+width,80*d},22*d,22*d},v.pen);
         v.testo(testo.empty()?testi::t(L"Cerca app, file, impostazioni…",L"Search apps, files, settings…"):testo,fTesto,{left+22*d,24*d,left+width-22*d,80*d},v.inchiostro(testo.empty()?.55f:1.f));
-        if(!folder.empty())v.testo(folder,fSotto,{24*d,80*d,float(v.W)-24*d,108*d},v.inchiostro(.7f));
+        if(!folder.empty())v.testo(std::wstring(L"‹ ")+testi::t(L"Tutte le app",L"All apps")+L" / "+folder,fSotto,{24*d,80*d,float(v.W)-24*d,108*d},v.inchiostro(.7f));
         page=std::clamp(page,0,std::max(0,(int(risultati.size())-1)/pageSize()));
         for(int i=page*pageSize();i<std::min(int(risultati.size()),(page+1)*pageSize());++i) {
             const auto& result=risultati[i];auto r=cell(i);
@@ -602,6 +632,8 @@ private:
     void drop(int from,int to) {
         if(from<0||to<0||from>=int(risultati.size())||to>=int(risultati.size()))return;
         auto a=risultati[from],b=risultati[to];
+        if(a.tipo==T_FOLDER&&b.tipo==T_FOLDER){auto ordered=appcatalog::folders();auto fromIt=std::find(ordered.begin(),ordered.end(),a.azione),toIt=std::find(ordered.begin(),ordered.end(),b.azione);
+            if(fromIt!=ordered.end()&&toIt!=ordered.end()){size_t position=size_t(toIt-ordered.begin());auto name=*fromIt;ordered.erase(fromIt);ordered.insert(ordered.begin()+std::min(position,ordered.size()),name);for(size_t i=0;i<ordered.size();i++)appcatalog::write(appcatalog::root()+L"\\FolderOrder",ordered[i].c_str(),std::to_wstring(i));componi();}return;}
         if(a.tipo!=T_APP)return;
         auto m=appcatalog::get(a.azione);
         if(b.tipo==T_FOLDER)m.folder=b.azione;

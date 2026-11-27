@@ -65,10 +65,11 @@ inline std::vector<std::wstring> folders() {
     HKEY h=nullptr;auto k=root()+L"\\Folders";
     if(RegOpenKeyExW(HKEY_CURRENT_USER,k.c_str(),0,KEY_READ,&h)==ERROR_SUCCESS){for(DWORD i=0;;++i){wchar_t name[512];DWORD n=512;if(RegEnumValueW(h,i,name,&n,nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)break;out.emplace_back(name,n);}RegCloseKey(h);}
     for(const auto& e:metadata)if(!e.second.folder.empty())out.push_back(e.second.folder);
-    std::sort(out.begin(),out.end());out.erase(std::unique(out.begin(),out.end()),out.end());return out;
+    std::sort(out.begin(),out.end());out.erase(std::unique(out.begin(),out.end()),out.end());
+    std::stable_sort(out.begin(),out.end(),[](const auto&a,const auto&b){auto x=read(root()+L"\\FolderOrder",a.c_str()),y=read(root()+L"\\FolderOrder",b.c_str());return (x.empty()?100000:_wtoi(x.c_str()))<(y.empty()?100000:_wtoi(y.c_str()));});return out;
 }
 inline void folder(const std::wstring& oldName,const std::wstring& newName) {
-    if(!newName.empty())write(root()+L"\\Folders",newName.c_str(),L"1");
+    if(!newName.empty()){write(root()+L"\\Folders",newName.c_str(),L"1");if(!oldName.empty()){auto order=read(root()+L"\\FolderOrder",oldName.c_str());if(!order.empty())write(root()+L"\\FolderOrder",newName.c_str(),order);}}
     if(!oldName.empty()&&oldName!=newName){HKEY h=nullptr;if(RegOpenKeyExW(HKEY_CURRENT_USER,(root()+L"\\Folders").c_str(),0,KEY_SET_VALUE,&h)==ERROR_SUCCESS){RegDeleteValueW(h,oldName.c_str());RegCloseKey(h);}}
     for(auto& e:metadata)if(e.second.folder==oldName&&!oldName.empty()){auto m=e.second;m.folder=newName;save(e.first,m);}
 }
@@ -93,7 +94,7 @@ inline bool prompt(HWND owner,const wchar_t* title,std::wstring& value) {
 }
 inline std::wstring choose(HWND owner,bool image) {
     wchar_t file[32768]{};OPENFILENAMEW o{};o.lStructSize=sizeof(o);o.hwndOwner=owner;o.lpstrFile=file;o.nMaxFile=32768;o.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_NOCHANGEDIR;
-    o.lpstrFilter=image?L"Images\0*.ico;*.png;*.jpg;*.bmp\0\0":L"Applications\0*.exe;*.lnk\0\0";
+    std::wstring filter=testi::t(image?L"Immagini":L"Applicazioni",image?L"Images":L"Applications");filter.push_back(0);filter+=image?L"*.ico;*.png;*.jpg;*.bmp":L"*.exe;*.lnk";filter.push_back(0);filter.push_back(0);o.lpstrFilter=filter.c_str();
     return GetOpenFileNameW(&o)?std::wstring(file):std::wstring();
 }
 } // namespace appcatalog

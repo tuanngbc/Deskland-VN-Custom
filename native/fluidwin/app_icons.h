@@ -9,6 +9,7 @@
 #include <memory>
 #include <algorithm>
 #include <cstdint>
+#include <wincodec.h>
 
 namespace appicons {
 struct Pixels {int w=0,h=0;std::vector<UINT> bgra;};
@@ -56,6 +57,23 @@ inline std::shared_ptr<const Pixels> peek(const std::wstring& source,int size) {
     auto a=aliases.find(alias);if(a==aliases.end())return {};
     auto i=memory.find(a->second);if(i==memory.end())return {};i->second.used=GetTickCount64();return i->second.pixels;
 }
+inline bool customImage(const std::wstring& source){auto ext=std::filesystem::path(source).extension().wstring();for(auto&c:ext)c=(wchar_t)towlower(c);return ext==L".png"||ext==L".jpg"||ext==L".jpeg"||ext==L".bmp"||ext==L".ico";}
+inline bool decodeImage(const std::wstring& source,int size,int& w,int& h,std::vector<UINT>& pixels){
+    // Decode user-selected artwork; asking Shell for ICONONLY yields the image
+    // application's generic icon rather than the selected custom bitmap.
+    IWICImagingFactory* factory=nullptr;IWICBitmapDecoder* decoder=nullptr;IWICBitmapFrameDecode* frame=nullptr;IWICBitmapScaler* scaler=nullptr;IWICFormatConverter* converter=nullptr;
+    HRESULT hr=CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&factory));
+    if(SUCCEEDED(hr))hr=factory->CreateDecoderFromFilename(source.c_str(),nullptr,GENERIC_READ,WICDecodeMetadataCacheOnDemand,&decoder);
+    if(SUCCEEDED(hr))hr=decoder->GetFrame(0,&frame);UINT width=0,height=0;if(SUCCEEDED(hr))hr=frame->GetSize(&width,&height);
+    if(!width||!height||uint64_t(width)*height>64*1024*1024)hr=E_FAIL;
+    if(SUCCEEDED(hr)){const double scale=std::min(double(size)/width,double(size)/height);w=std::max(1,int(width*scale));h=std::max(1,int(height*scale));hr=factory->CreateBitmapScaler(&scaler);}
+    if(SUCCEEDED(hr))hr=scaler->Initialize(frame,w,h,WICBitmapInterpolationModeFant);
+    if(SUCCEEDED(hr))hr=factory->CreateFormatConverter(&converter);
+    if(SUCCEEDED(hr))hr=converter->Initialize(scaler,GUID_WICPixelFormat32bppPBGRA,WICBitmapDitherTypeNone,nullptr,0,WICBitmapPaletteTypeCustom);
+    if(SUCCEEDED(hr)){std::vector<UINT> fitted(size_t(w)*h);hr=converter->CopyPixels(nullptr,w*4,UINT(fitted.size()*4),reinterpret_cast<BYTE*>(fitted.data()));
+        if(SUCCEEDED(hr)){pixels.assign(size_t(size)*size,0);const int left=(size-w)/2,top=(size-h)/2;for(int y=0;y<h;y++)std::copy_n(fitted.data()+size_t(y)*w,w,pixels.data()+size_t(y+top)*size+left);w=h=size;}}
+    if(converter)converter->Release();if(scaler)scaler->Release();if(frame)frame->Release();if(decoder)decoder->Release();if(factory)factory->Release();return SUCCEEDED(hr);
+}
 struct Header {uint32_t magic=0x31494354,w=0,h=0,reserved=0;uint64_t checksum=0;};
 template<class Extract> bool load(const std::wstring& source,int size,int& w,int& h,std::vector<UINT>& pixels,Extract extract) {
     if(size<16||size>512||!canRequest(source,size))return false;
@@ -65,7 +83,7 @@ template<class Extract> bool load(const std::wstring& source,int size,int& w,int
     Header head;bool valid=false;
     {std::ifstream in(path(k),std::ios::binary);if(in.read((char*)&head,sizeof(head))&&head.magic==0x31494354&&head.w>0&&head.h>0&&head.w<=512&&head.h<=512){p->w=head.w;p->h=head.h;p->bgra.resize(size_t(head.w)*head.h);valid=bool(in.read((char*)p->bgra.data(),p->bgra.size()*4))&&hash(p->bgra.data(),p->bgra.size()*4)==head.checksum;}}
     if(!valid) {
-        p->bgra.clear();if(!extract(source,size,p->w,p->h,p->bgra)||p->w<=0||p->h<=0||p->w>512||p->h>512||p->bgra.size()!=size_t(p->w)*p->h){failed(source,size);return false;}
+        p->bgra.clear();if(!(customImage(source)?decodeImage(source,size,p->w,p->h,p->bgra):extract(source,size,p->w,p->h,p->bgra))||p->w<=0||p->h<=0||p->w>512||p->h>512||p->bgra.size()!=size_t(p->w)*p->h){failed(source,size);return false;}
         std::error_code ec;const auto dest=path(k);std::filesystem::create_directories(dest.parent_path(),ec);
         // Bound persistent storage too; stale entries are expendable cache, not user assets.
         size_t total=0;std::vector<std::filesystem::directory_entry> files;

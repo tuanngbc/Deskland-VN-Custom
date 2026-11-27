@@ -463,6 +463,8 @@ inline constexpr const wchar_t* RIGHE[][7] = {
     {L"Wallpaper unavailable. See Diagnostics for details.", L"Wallpaper unavailable. See Diagnostics for details.", L"Wallpaper unavailable. See Diagnostics for details.", L"Wallpaper unavailable. See Diagnostics for details.", L"Wallpaper unavailable. See Diagnostics for details.", L"Wallpaper unavailable. See Diagnostics for details.", L"Không mở được hình nền. Xem Chẩn đoán để biết chi tiết."},
     {L"Selected display", L"Selected display", L"Selected display", L"Selected display", L"Selected display", L"Selected display", L"Màn hình được chọn"},
     {L"Choose display", L"Choose display", L"Choose display", L"Choose display", L"Choose display", L"Choose display", L"Chọn màn hình"},
+    {L"Images", L"Images", L"Images", L"Images", L"Images", L"Images", L"Hình ảnh"},
+    {L"Applications", L"Applications", L"Applications", L"Applications", L"Applications", L"Applications", L"Ứng dụng"},
 };
 
 // Testi inglesi con due significati: la chiave e' l'italiano, cercato prima dell'inglese ("Clear" e' sia "Svuota" sia

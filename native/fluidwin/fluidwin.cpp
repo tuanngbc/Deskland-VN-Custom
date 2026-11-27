@@ -4004,6 +4004,8 @@ static void wallpaperTick() {
             if (weather.meteoOk) snapshot.weather = wallpaper::fromWmo(weather.codice, (float)weather.vento, latitude, longitude); }
     }
     gWallpaper->tick(std::move(snapshot));
+    if(gLog&&gWallpaper->enabled()){static ULONGLONG at=0;const auto now=GetTickCount64();if(now-at>=10000){at=now;const auto m=gWallpaper->metrics();
+        logf("wallpaper: mode=%s adapter=%ls monitors=%zu scenes=%zu targets=%zu contexts=%zu devices=%zu fps=%.2f/%d cpu_ms=%.3f gpu_ms=%.3f readback_Bps=%.0f texture_bytes=%llu surface_bytes=%llu missed=%llu",m.presentation.c_str(),m.adapter.c_str(),m.surfaces,m.scenes,m.targets,m.contexts,m.devices,m.fps,m.fpsTarget,m.lastFrameMs,m.gpuMs,m.readbackPerSecond,(unsigned long long)m.textureBytes,(unsigned long long)m.surfaceBytes,(unsigned long long)m.missed);}}
 }
 static void wallpaperSubscriptions(bool enabled) {
     static bool registered = false;

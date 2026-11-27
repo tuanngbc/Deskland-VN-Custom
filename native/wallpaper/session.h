@@ -140,9 +140,8 @@ class Session {
                 // 24 bytes per rendered pixel. Respect explicit quality settings.
                 uint64_t surfaceBytes=0;for(const auto&m:s.monitors){auto a=s.config.displays.find(m.id);if(a!=s.config.displays.end()&&!a->second.enabled)continue;surfaceBytes+=uint64_t(std::max(1,int((m.rect.right-m.rect.left)*s.config.resolution)))*std::max(1,int((m.rect.bottom-m.rect.top)*s.config.resolution))*24;}
                 if(surfaceBytes>192ull*1024*1024)throw std::runtime_error("Wallpaper surfaces exceed 192 MiB budget; select lower resolution or fewer displays");
-                bool topologyChanged=s.monitors!=topologyBefore;bool hostLost=false;for(const auto&o:outputs)if(!o->intact())hostLost=true;
-                if(topologyChanged||hostLost){context.current();worlds.clear();outputs.clear();topologyBefore=s.monitors;ShellHost host=shellHost();
-                    for(const auto&m:s.monitors)outputs.push_back(std::make_unique<Output>(gl,context,bridge.get(),m,host));
+                bool topologyChanged=s.monitors!=topologyBefore;bool hostLost=false;for(const auto&o:outputs)if(o&&!o->intact())hostLost=true;
+                if(topologyChanged||hostLost){context.current();worlds.clear();outputs.clear();topologyBefore=s.monitors;outputs.resize(s.monitors.size());
                 }
                 auto now=std::chrono::steady_clock::now();float dt=std::clamp(std::chrono::duration<float>(now-last).count(),0.f,.1f);last=now;
                 bool paused=s.config.paused||s.locked||s.displayOff;
@@ -150,8 +149,10 @@ class Session {
                 bool active=false;RECT all=bounds(s.monitors);auto frameStart=now;auto cpuStart=threadCpu();std::vector<std::wstring> used,advanced;
                 std::vector<OutputMetrics> measured(outputs.size());graphicsStats.fieldMs=graphicsStats.simulationMs=0;
                 for(size_t i=0;i<outputs.size();i++){
-                    auto&o=*outputs[i];const auto&m=s.monitors[i];auto assignment=s.config.displays.find(m.id);bool enabled=assignment==s.config.displays.end()||assignment->second.enabled;
-                    if(!enabled){o.show(false);continue;}
+                    const auto&m=s.monitors[i];auto assignment=s.config.displays.find(m.id);bool enabled=assignment==s.config.displays.end()||assignment->second.enabled;
+                    if(!enabled){if(outputs[i]){context.current();outputs[i].reset();}continue;}
+                    if(!outputs[i])outputs[i]=std::make_unique<Output>(gl,context,bridge.get(),m,shellHost());
+                    auto&o=*outputs[i];
                     int scene=s.config.layout==Layout::Independent&&assignment!=s.config.displays.end()?assignment->second.scene:s.config.scene;
                     auto view=viewport(m,all,s.config.layout);std::wstring key=s.config.layout==Layout::Panorama?L"panorama":m.id;used.push_back(key);
                     if(paused||(s.config.pauseCovered&&covered(m.rect,s.opaqueWindows)))continue;
@@ -171,14 +172,14 @@ class Session {
                 // Hidden/disabled scenes release after they cease to be assigned;
                 // paused assigned scenes keep only the resources needed to resume.
                 if(!paused){context.current();for(auto it=worlds.begin();it!=worlds.end();)if(std::find(used.begin(),used.end(),it->first)==used.end())it=worlds.erase(it);else ++it;}
-                {size_t gpu=0,targets=0;uint64_t bytes=0,readback=0;double gpuMs=0,presentMs=0,readbackMs=0;bool timed=false;
-                    for(size_t i=0;i<outputs.size();i++){const auto&o=outputs[i];if(o->gpu())gpu++;targets+=o->targets();bytes+=o->surfaceBytes();if(measured[i].monitor.empty())measured[i]=o->metrics(false);
+                {size_t gpu=0,targets=0,activeOutputs=0;uint64_t bytes=0,readback=0;double gpuMs=0,presentMs=0,readbackMs=0;bool timed=false;
+                    for(size_t i=0;i<outputs.size();i++){const auto&o=outputs[i];if(!o){measured[i].monitor=s.monitors[i].id;continue;}activeOutputs++;if(o->gpu())gpu++;targets+=o->targets();bytes+=o->surfaceBytes();if(measured[i].monitor.empty())measured[i]=o->metrics(false);
                         readback+=measured[i].readbackBytes;presentMs+=measured[i].presentationMs;readbackMs+=measured[i].readbackMs;if(measured[i].gpuMs>=0){timed=true;gpuMs+=measured[i].gpuMs;}}
                     sampleFrames+=active?1:0;sampleReadback+=readback;const double seconds=std::chrono::duration<double>(SteadyClock::now()-sampleStart).count();
                     std::lock_guard<std::mutex> lock(state->mutex);auto&m=state->metrics;
-                    m.presentation=gpu==outputs.size()&&gpu?"GPU DirectComposition":gpu?"Mixed GPU / asynchronous DIB fallback":"Asynchronous bounded DIB fallback";
+                    m.presentation=gpu==activeOutputs&&gpu?"GPU DirectComposition":gpu?"Mixed GPU / asynchronous DIB fallback":"Asynchronous bounded DIB fallback";
                     const char*renderer=reinterpret_cast<const char*>(glGetString(GL_RENDERER));m.adapter=bridge&&gpu?bridge->adapter():renderer?std::wstring(renderer,renderer+strlen(renderer)):L"unavailable";
-                    m.running=true;m.paused=!active;m.surfaces=outputs.size();m.scenes=worlds.size();m.targets=targets;m.contexts=1;m.devices=bridge?1:0;if(active)m.frames++;
+                    m.running=true;m.paused=!active;m.surfaces=activeOutputs;m.scenes=worlds.size();m.targets=targets;m.contexts=1;m.devices=bridge?1:0;if(active)m.frames++;
                     m.lastFrameMs=std::chrono::duration<double,std::milli>(SteadyClock::now()-frameStart).count();m.renderThreadCpuMs=double(threadCpu()-cpuStart)/10000.;
                     m.gpuMs=timed?gpuMs:-1;m.presentationMs=presentMs;m.readbackMs=readbackMs;m.textureBytes=graphicsStats.textureBytes;m.textures=graphicsStats.textures;m.surfaceBytes=bytes;m.uploadBytes=graphicsStats.uploadBytes;
                     m.shaderMs=graphicsStats.shaderMs;m.fieldMs=graphicsStats.fieldMs;m.simulationMs=graphicsStats.simulationMs;m.fpsTarget=s.config.fps;m.outputs=std::move(measured);

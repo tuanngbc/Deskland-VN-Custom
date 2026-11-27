@@ -37,11 +37,11 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     GetWindowPlacement(source,&after);if(memcmp(&before,&after,sizeof(before))||focus!=GetForegroundWindow())return 68;
     if(!phase3Snapshot(rail,evidence/L"phase3-stage.bmp")||!phase3Snapshot(peek,evidence/L"phase3-peek.bmp"))return 69;
     // Crossing rail -> Peek must keep the preview clickable; leaving both dismisses it.
-    SendMessageW(rail,WM_MOUSELEAVE,0,0);SendMessageW(peek,WM_MOUSEMOVE,0,MAKELPARAM(12,12));
-    ciPump(220);if(!FindWindowW(L"TLauncher.Native.StagePeek",nullptr))return 70;
+    POINT previewPoint{12,12};ClientToScreen(peek,&previewPoint);SetCursorPos(previewPoint.x,previewPoint.y);
+    ciPump(220);peek=FindWindowW(L"TLauncher.Native.StagePeek",nullptr);if(!peek)return 70;
     SendMessageW(peek,WM_LBUTTONUP,0,MAKELPARAM(12,12));if(!activated)return 71;activated=false;
     report<<"STAGE_PEEK_CLICK_ACTIVATION=PASS\n";
-    SendMessageW(rail,WM_LBUTTONUP,0,MAKELPARAM(45,45));if(!activated)return 71;
+    SendMessageW(rail,WM_LBUTTONUP,0,MAKELPARAM(45,45));if(!activated)return 87;
     ShowWindow(source,SW_MINIMIZE);ciPump(100);manager.changed();ciPump(80);
     if(!IsIconic(source)||!manager.snapshotBytes()||!manager.cachedPreviewCount())return 80;
     if(!phase3Snapshot(rail,evidence/L"phase3-stage-minimized.bmp"))return 81;
@@ -60,6 +60,19 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     if(!phase3Snapshot(search,evidence/L"phase3-fullscreen.bmp"))return 77;
     SendMessageW(search,WM_KEYDOWN,VK_F6,0);if(gRicerca.fullscreen||gRicerca.ciQuery()!=query)return 78;
     gRicerca.chiudi();ciPump(250);
+    gRicerca.elencoApp=[]{std::vector<std::pair<std::wstring,std::wstring>> result;for(int i=0;i<20;i++)result.push_back({L"Tool "+std::to_wstring(i),L"C:\\fixture\\tool"+std::to_wstring(i)+L".exe"});return result;};
+    gRicerca.fullscreen=true;gRicerca.apri();ciPump(450);search=FindWindowW(L"TLauncher.Native.Ricerca",nullptr);
+    SendMessageW(search,WM_CHAR,'t',0);SendMessageW(search,WM_CHAR,'o',0);ciPump(50);
+    for(int i=0;i<8;i++)SendMessageW(search,WM_KEYDOWN,VK_RIGHT,0);const auto selected=gRicerca.ciSelection();
+    SendMessageW(search,WM_KEYDOWN,VK_F6,0);if(gRicerca.ciSelection()!=selected)return 88;
+    SendMessageW(search,WM_KEYDOWN,VK_F6,0);if(gRicerca.ciSelection()!=selected)return 89;
+    wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);std::wstring dropPath=executable;
+    HGLOBAL drop=GlobalAlloc(GMEM_MOVEABLE|GMEM_ZEROINIT,sizeof(DROPFILES)+(dropPath.size()+2)*sizeof(wchar_t));
+    if(!drop)return 90;auto data=static_cast<DROPFILES*>(GlobalLock(drop));data->pFiles=sizeof(DROPFILES);data->fWide=TRUE;
+    memcpy(reinterpret_cast<BYTE*>(data)+sizeof(DROPFILES),dropPath.c_str(),(dropPath.size()+1)*sizeof(wchar_t));GlobalUnlock(drop);
+    SendMessageW(search,WM_DROPFILES,reinterpret_cast<WPARAM>(drop),0);if(!appcatalog::get(dropPath).manual)return 91;
+    SendMessageW(search,WM_KEYDOWN,VK_ESCAPE,0);ciPump(220);if(gRicerca.aperta())return 92;
+    report<<"SPOTLIGHT_F6_LOGICAL_SELECTION_PRESERVED=PASS\nSPOTLIGHT_NATIVE_EXE_DROP_METADATA=PASS\nSPOTLIGHT_ESCAPE_DISMISS=PASS\n";
     report<<"SPOTLIGHT_NATIVE_COMPACT_FULLSCREEN=PASS\nF6_QUERY_PRESERVED=PASS\nOWNER_VISUAL_ACCEPTANCE=PENDING\n";
     return 0;
 }
