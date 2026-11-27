@@ -35,6 +35,8 @@ class SceneRuntime {
     float birdHop=100,melonRefill=0,fanPhase=0,tireAge=100;int roundNumber=1,bagIndex=0,hitZone=0;
     float roundAge=0,roundBell=0;std::array<Spring,3> bags{};
     Body football;std::array<Body,22> players{};
+    std::array<V2,22> formation{};int formationCount=0,ballOwner=-1,ballReceiver=-1,lastKicker=-1;
+    std::array<int,2> footballScore{};float ballHold=.85f,ballPickup=0,ballDrag=2.05f,ballZ=0,ballVZ=0,footballTempo=1;
     float busX=-170,busVelocity=0,busDoors=0,busWheel=0,busWait=0,busHonk=-1;int busState=0;bool busStop=true;
     uint32_t rng=0x731f91u;
     Geometry geometry;bool geometryExplicit=false,placementDirty=true;int lastPalmCount=-1;
@@ -201,6 +203,9 @@ public:
     const Body& meadowBoy()const{return boyBody;}
     const std::array<Cat,15>& catActors()const{return cats;}
     const std::array<NativeFish,8>& fish()const{return fishActors;}
+    const Body& stadiumBall()const{return football;}
+    const std::array<Body,22>& stadiumPlayers()const{return players;}
+    const std::array<int,2>& stadiumScore()const{return footballScore;}
 #ifdef WALLPAPER_HOSTED_PROBE
     // Synthetic initial conditions exist only in the hosted renderer executable.
     // Product builds have no runtime override or owner-facing probe controls.
@@ -208,6 +213,7 @@ public:
     void probeActor(const char*name,size_t i,V2 p){auto&list=groups[name];if(i>=list.size())list.resize(i+1);auto&b=list[i];b.position=b.target=p;b.velocity={};b.heading=0;b.phase=0;b.initialized=true;}
     void probePalms(std::vector<Palm> trees){probePalmOverride=true;probePalmTrees=std::move(trees);}
     void probeCat(size_t i,V2 p){auto&cat=cats.at(i);cat.x=p.x;cat.y=p.y;cat.pose=0;cat.body.position=cat.body.target=p;cat.body.velocity={};cat.body.initialized=true;}
+    void probeStadiumBall(V2 point){football.position=football.target=point;football.velocity={};football.initialized=true;ballOwner=ballReceiver=-1;ballZ=ballVZ=0;goalSide=0;goalAge=100;}
     void probeCatState(size_t i,int pose,float seconds){auto&cat=cats.at(i);cat.pose=cat.previousPose=pose;cat.poseBlend=1;cat.wait=seconds;cat.body.aim(cat.body.position);}
     bool probeFishWater(V2 p,float r)const{return fishWater(p,r,true);}
 #endif
@@ -244,8 +250,14 @@ public:
         if(id=="cat-hill"||id=="cats"){bool pet=false;for(auto&cat:cats)if(cat.body.initialized&&Box{cat.x-42*geometry.catScale(),cat.y-65*geometry.catScale(),84*geometry.catScale(),85*geometry.catScale()}.contains({x,y})){cat.happy=2.5f;cat.wait=3;catPose(cat,4);cat.chasing=false;cat.body.aim(cat.body.position);pet=true;}if(!pet)toy={x,y,0,10};}
         if(id=="lake"||id=="aquarium")clickFishing(x,y,fx);
         if(id=="boxing-ring")clickBoxing(x,y);
-        if(id=="stadium"&&previousW>0&&previousH>0){targetX=std::clamp(x/previousW,.08f,.92f);targetY=std::clamp(y/previousH,.2f,.88f);passAge=0;passes++;userChase=4;goalSide=0;
-            if(abs(y/previousH-.54f)<.13f&&(x<previousW*.12f||x>previousW*.88f)){goalSide=x<previousW*.5f?-1.f:1.f;targetX=goalSide<0?.10f:.90f;targetY=.54f;goalAge=-1;}}
+        if(id=="stadium"&&football.initialized){
+            const float scale=std::min(geometry.referenceW,geometry.referenceH)/900.f;
+            targetX=std::clamp(x/previousW,.08f,.92f);targetY=std::clamp(y/previousH,.2f,.88f);
+            const bool goal=abs(y/previousH-.54f)<.13f&&(x<previousW*.12f||x>previousW*.88f);
+            V2 target{targetX*previousW,targetY*previousH};if(goal)target.x=x<previousW*.5f?previousW*.1f-18*scale:previousW*.9f+18*scale;
+            kickFootball(target,goal?1.55f:2.05f,(goal?680.f:560.f)*scale*sqrt(footballTempo),goal?.16f:.10f);
+            userChase=4;ballReceiver=-1;goalSide=0;goalAge=100;
+        }
         if(id=="summer-porch")clickPorch(x,y,fx);
         if(id=="tet-sakura")for(int i=lanternCount-1;i>=0;i--)if(hypot(x-lanternLayout[i][0],y-lanternLayout[i][1])<20){lanternSwing[i]=1;break;}
         if(id=="commute"){float road=(previousH-48)*.79f;if(abs(x-previousW*.53f)<24&&y>road-80&&y<road+12){busStop=true;if(busState==0)busWait=0;}else if(busState&&abs(x-busX)<126&&y>road-70&&y<road+20)busHonk=0;}
@@ -412,6 +424,8 @@ private:
     static void catPose(Cat&cat,int pose){if(cat.pose==pose)return;cat.previousPose=cat.pose;cat.pose=pose;cat.poseBlend=0;}
     void renderCats(const Config&c,const std::vector<RECT>&icons,float w,float h,float t,float dt){
         int n=std::clamp(int(p(c,"cats",5)),0,15);std::array<Vec4,15> positions{},meta{};const float scale=geometry.catScale();
+        std::array<V2,12> trunks{};const int trunkCount=std::string(catalog()[index].id)=="cats"?std::clamp(int(p(c,"bushes",4)),0,12):0;
+        for(int j=0;j<trunkCount;j++)trunks[j]={w*(.06f+hash(j,index,308)*.88f),h*(.4f+hash(j,index,310)*.47f)};
         {CpuMeasure simulation{graphicsStats.simulationMs};
         for(int step=0;step<simulationSteps;step++)for(int i=0;i<n;i++){auto&cat=cats[i];auto&b=cat.body;
             if(!b.initialized){for(int trial=0;trial<337;trial++){V2 q{w*(.08f+.84f*hash(i*337+trial,index,83)),h*(.37f+.51f*hash(i*337+trial,index,84))};if(navigable(q,42*scale,false)){b.position=b.target=q;b.initialized=true;cat.wait=hash(i,0,2)*8;break;}}}
@@ -431,7 +445,7 @@ private:
             if(cat.pose==3&&!interested&&(b.target-b.position).length()<8*scale&&b.speed()<4)cat.wait=0;
             V2 separation{};for(int j=0;j<n;j++)if(j!=i&&cats[j].body.initialized){V2 d=b.position-cats[j].body.position;float distance=d.length(),spacing=75*scale;if(distance<spacing&&distance>.01f)separation=separation+unit(d)*((spacing-distance)/spacing*3);}
             auto valid=[&](V2 q,float r){if(!navigable(q,r,false)||q.y<=h*.34f)return false;
-                if(std::string(catalog()[index].id)=="cats")for(int j=0;j<std::clamp(int(p(c,"bushes",4)),0,12);j++){V2 trunk{w*(.06f+hash(j,index,308)*.88f),h*(.4f+hash(j,index,310)*.47f)};if((q-trunk).length()<28*scale)return false;}return true;};
+                for(int j=0;j<trunkCount;j++){float next=(q-trunks[j]).length(),current=(b.position-trunks[j]).length();if(next<28*scale&&(current>=28*scale||next<=current))return false;}return true;};
             const float speed=(cat.pose==3?42.f*(cat.chasing?2.2f:1.f):0.f)*p(c,"speed",1);b.command=true;
             steer(b,{speed,65,85,2.2f,5,42*scale,false},b.target,fixedStep,valid,separation);
             cat.x=b.position.x;cat.y=b.position.y;cat.phase+=fixedStep*(b.speed()>2?b.speed()/(12*std::max(.1f,scale)):.9f);if(b.speed()>2&&abs(cos(b.heading))>.15f)cat.right=cos(b.heading)>=0;
@@ -534,27 +548,88 @@ private:
         program.f("uTod",p(c,"time",0)==0?hour/24.f:p(c,"time",0)==1?.5f:p(c,"time",0)==2?.76f:.95f);program.f("uReeds",p(c,"reeds",1));program.f("uLights",p(c,"lights",1));
         program.v4("uBus",{busX,1,busWheel,busState?1.f:0.f});program.v4("uBusB",{busDoors,busHonk,busStop&&w*.53f-busX<180?1.f:0.f,0});program.v4("uStop",{w*.53f,1,0,0});program.v4("uGust",fx[0].data());flyers<24>("uPart","uPartN",18,w,h,t,8);program.v4("uStar",{0,0,-1,0});
     }
+    void kickFootball(V2 target,float drag,float maximum,float loft){
+        V2 delta=target-football.position;float distance=std::max(1.f,delta.length()),speed=distance*drag;
+        if(speed>maximum){speed=maximum;drag=std::max(.95f,speed/distance);}football.velocity=unit(delta)*speed;
+        ballDrag=drag;ballVZ=std::clamp(distance*loft,0.f,105.f);ballOwner=-1;ballPickup=.26f;passAge=0;passes++;
+        targetX=target.x/std::max(1.f,previousW);targetY=target.y/std::max(1.f,previousH);
+    }
     void renderStadium(const Config&c,float w,float h,float t,float dt){
-        int n=std::clamp(int(p(c,"players",6))*2,6,22);float scale=std::min(geometry.referenceW,geometry.referenceH)/900.f;
-        auto pitch=[&](V2 q,float r){return geometry.contains(q,r)&&q.x>w*.08f+r&&q.x<w*.92f-r&&q.y>h*.2f+r&&q.y<h*.88f-r&&iconClear({q.x-r,q.y-r,2*r,2*r},previousIcons);};
-        if(!football.initialized){football.position=destination({w*.5f,h*.54f},8,false,geometry.home({w*.5f,h*.54f}));football.target=football.position;football.initialized=true;}
-        for(int i=0;i<n;i++)if(!players[i].initialized){float x=i<n/2?.2f+float(i%3)*.1f:.8f-float(i%3)*.1f,y=.3f+float(i%5)*.11f;players[i].position=destination({x*w,y*h},12*scale,false,football.position);players[i].target=players[i].position;players[i].initialized=true;}
-        for(int step=0;step<simulationSteps;step++){
-            passAge+=fixedStep;userChase=std::max(0.f,userChase-fixedStep);
-            if(goalSide!=0){if(goalAge<0&&(football.position-V2{targetX*w,targetY*h}).length()<10)goalAge=0;else if(goalAge>=0)goalAge+=fixedStep;
-                if(goalAge>2.2f){goalSide=0;targetX=.5f;targetY=.54f;football.aim({targetX*w,targetY*h});}}
-            if(goalSide==0&&userChase==0&&passAge>std::max(.5f,4-p(c,"passFreq",1))){int receiver=(passes+1)%n;V2 lead=players[receiver].position+players[receiver].velocity*.28f;targetX=lead.x/w;targetY=lead.y/h;passAge=0;passes++;}
-            V2 ballTarget{targetX*w,targetY*h};football.command=true;
-            steer(football,{220*p(c,"speed",1),420,230,7,20,6,false},ballTarget,fixedStep,pitch);
-            ballX=football.position.x/w;ballY=football.position.y/h;
-            for(int i=0;i<n;i++){auto&b=players[i];float baseX=i<n/2?.2f+float(i%3)*.1f:.8f-float(i%3)*.1f,baseY=.3f+float(i%5)*.11f;
-                bool chase=i%3==passes%3;V2 target=chase?football.position:V2{baseX*w,baseY*h}+(football.position-V2{baseX*w,baseY*h})*.16f;
-                b.command=true;steer(b,{(chase?118.f:55.f)*p(c,"speed",1),170,200,4,10,12*scale,false},target,fixedStep,pitch,separate(b,players.data(),n,34*scale));
-            }
+        const int perTeam=std::clamp(int(p(c,"players",6)),3,11),n=perTeam*2;const float scale=std::min(geometry.referenceW,geometry.referenceH)/900.f;
+        const float x0=w*.1f,x1=w*.9f,y0=h*.2f,y1=h*.88f,pw=x1-x0,ph=y1-y0,cy=(y0+y1)*.5f,goalHalf=ph*.11f;
+        footballTempo=p(c,"speed",1);const float tempo=footballTempo,frequency=std::max(.4f,p(c,"passFreq",1));
+        auto pitch=[&](V2 q,float r){return geometry.contains(q,r)&&q.x>x0+r&&q.x<x1-r&&q.y>y0+r&&q.y<y1-r&&iconClear({q.x-r,q.y-r,2*r,2*r},previousIcons);};
+        if(!football.initialized){football.position=destination({w*.5f,cy},8,false,geometry.home({w*.5f,cy}));football.target=football.position;football.initialized=true;ballHold=.85f;}
+        if(formationCount!=n){formationCount=n;const std::array<std::array<int,3>,9> split{{{1,0,1},{1,1,1},{2,1,1},{2,2,1},{2,2,2},{3,2,2},{3,3,2},{4,3,2},{4,3,3}}};
+            for(int team=0;team<2;team++){int slot=team*perTeam;formation[slot++]={team?1.f-.042f:.042f,.5f};const auto lines=split[perTeam-3];
+                for(int line=0;line<3;line++)for(int j=0;j<lines[line];j++){const float base=line==0?.2f:line==1?.36f:.47f,spread=line==0?.62f:line==1?.66f:.54f;
+                    formation[slot++]={team?1-base:base,lines[line]==1?.5f:.5f-spread*.5f+spread*j/(lines[line]-1)};}}
+            for(int i=0;i<n;i++)if(!players[i].initialized){auto&b=players[i];V2 spot{x0+formation[i].x*pw,y0+formation[i].y*ph};b.position=b.target=destination(spot,12*scale,false,football.position);b.heading=i<perTeam?0:3.14159f;b.initialized=true;}
+            if(ballOwner>=n)ballOwner=-1;
         }
-        std::array<Vec4,22> pos{},meta{};for(int i=0;i<n;i++){auto&b=players[i];pos[i]={b.position.x,b.position.y,b.heading,b.phase};meta[i]={float(i==0?2:i==n/2?3:i<n/2?0:1),std::clamp(b.speed()/118.f,0.f,1.f),i==passes%n?1.f:0.f,hash(i,1,101)};}
-        program.v4("uPitch",{w*.1f,h*.2f,w*.9f,h*.88f});program.f("uStripes",p(c,"stripes",.4f));program.f("uLighting",p(c,"lighting",0));program.f("uPlayerN",float(n));array("uPlPos",pos);array("uPlMeta",meta);
-        program.v4("uBall",{football.position.x,football.position.y,sin(std::min(passAge,1.f)*3.14159f)*16,football.phase});program.v4("uBallTrail",{football.position.x-football.velocity.x*.06f,football.position.y-football.velocity.y*.06f,std::clamp(football.speed()/220,0.f,1.f),passAge});program.v4("uTarget",{targetX*w,targetY*h,passAge,userChase>0?1.f:0.f});program.v4("uGoalFx",{targetX*w,h*.54f,goalAge,goalAge>=0?goalSide:0});
+        {CpuMeasure simulation{graphicsStats.simulationMs};
+        for(int step=0;step<simulationSteps;step++){
+            passAge+=fixedStep;userChase=std::max(0.f,userChase-fixedStep);ballPickup=std::max(0.f,ballPickup-fixedStep);
+            if(goalSide!=0){goalAge+=fixedStep;
+                if(goalAge<2.2f){football.velocity=football.velocity*exp(-5*fixedStep);football.position=football.position+football.velocity*fixedStep;ballZ=std::max(0.f,ballZ+ballVZ*fixedStep);ballVZ=ballZ>0?ballVZ-295*fixedStep:0;continue;}
+                goalSide=0;goalAge=100;kickFootball({w*.5f,cy},2.05f,400*scale,0);userChase=1;
+            }
+            std::array<int,2> closest{-1,-1};std::array<float,2> nearest{1e9f,1e9f};
+            for(int i=0;i<n;i++)if(i%perTeam){int team=i/perTeam;float distance=(players[i].position-football.position).length();if(distance<nearest[team]){nearest[team]=distance;closest[team]=i;}}
+            const auto before=players;
+            for(int i=0;i<n;i++){auto&b=players[i];const int team=i/perTeam;const bool keeper=i%perTeam==0;
+                V2 home{x0+formation[i].x*pw,y0+formation[i].y*ph},target=home;float speed=118*scale*tempo*.88f;
+                if(keeper){target={team?x1-18*scale:x0+18*scale,cy+std::clamp(football.position.y-cy,-goalHalf*.88f,goalHalf*.88f)};speed=118*scale*tempo*1.15f;}
+                else if(i==ballOwner){target=b.position+V2{team?-90.f:90.f,sin(float(simulationTime)+i)*16}*scale;speed=72*scale*tempo;}
+                else if(i==ballReceiver||i==closest[team]){target=football.position+football.velocity*(i==ballReceiver?.18f:0.f);speed=118*scale*tempo*(userChase>0?1.45f:1.22f);}
+                else{target=home+V2{(football.position.x-(x0+x1)*.5f)*.36f,(football.position.y-cy)*.22f};
+                    if(ballOwner>=0&&ballOwner/perTeam==team)target.x+=(team?-1.f:1.f)*pw*.12f;
+                    target=target+V2{cos(float(simulationTime)*1.3f+i)*20,sin(float(simulationTime)*1.6f+i*1.3f)*18}*scale;}
+                target.x=std::clamp(target.x,x0+14*scale,x1-14*scale);target.y=std::clamp(target.y,y0+14*scale,y1-14*scale);b.command=true;
+                steer(b,{speed,170*scale,200*scale,4,10,12*scale,false},target,fixedStep,pitch,separate(before[i],before.data(),n,26*scale));
+            }
+            if(ballOwner>=0){auto&owner=players[ballOwner];const int team=ballOwner/perTeam;V2 foot=owner.position+V2{team?-10.6f:10.6f,0}*scale;
+                // Possession attracts the same physical ball toward the foot;
+                // acquiring or losing possession never teleports it.
+                football.command=true;steer(football,{160*scale*tempo,600*scale,650*scale,9,28,5*scale,false},foot,fixedStep,pitch);
+                ballHold-=fixedStep*frequency;
+                if(ballHold<=0){int kicker=ballOwner;lastKicker=kicker;const float goalX=team?x0:x1;
+                    if(kicker%perTeam!=0&&abs(goalX-owner.position.x)<pw*.25f&&abs(owner.position.y-cy)<ph*.3f&&random()<.58f){
+                        kickFootball({goalX+(team?-18.f:18.f)*scale,cy+(random()-.5f)*goalHalf*1.44f},1.55f,680*scale*sqrt(tempo),.16f);ballReceiver=-1;
+                    }else{float best=-1e9f;int receiver=-1;
+                        for(int j=team*perTeam;j<(team+1)*perTeam;j++)if(j!=kicker){V2 to=players[j].position;float distance=(to-owner.position).length();if(distance<42*scale||distance>pw*.68f)continue;
+                            float open=1e9f;for(int k=(1-team)*perTeam;k<(2-team)*perTeam;k++)open=std::min(open,(players[k].position-to).length());
+                            float score=(to.x-owner.position.x)*(team?-.55f:.55f)+std::min(open,140*scale)*.65f-abs(distance-180*scale)*.18f+(random()-.5f)*95*scale;
+                            if(j%perTeam==0)score-=120*scale;if(score>best){best=score;receiver=j;}}
+                        if(receiver>=0){V2 lead=players[receiver].position+players[receiver].velocity*.28f;kickFootball(lead,2.05f,560*scale*sqrt(tempo),.06f);ballReceiver=receiver;}else ballHold=.45f;
+                    }
+                }
+            }else{
+                V2 next=football.position+football.velocity*fixedStep;const float speed=football.speed();
+                if(iconClear({next.x-6*scale,next.y-6*scale,12*scale,12*scale},previousIcons)&&geometry.contains(next,6*scale))football.position=next;
+                else football.velocity=football.velocity*(-.45f);
+                football.velocity=football.velocity*exp(-ballDrag*fixedStep);football.phase+=speed*fixedStep/std::max(1.f,6.8f*scale);
+                if(football.speed()<4)football.velocity={};ballZ+=ballVZ*fixedStep;ballVZ-=295*fixedStep;
+                if(ballZ<=0){ballZ=0;ballVZ=ballVZ<-22?-ballVZ*.42f:0;}
+                const bool mouth=abs(football.position.y-cy)<goalHalf*.96f;
+                if(mouth&&(football.position.x<x0-3.5f*scale||football.position.x>x1+3.5f*scale)){
+                    goalSide=football.position.x<x0?-1.f:1.f;goalAge=0;footballScore[goalSide>0?0:1]++;ballOwner=ballReceiver=-1;userChase=0;continue;}
+                if(football.position.x<x0-22*scale)football.velocity.x=abs(football.velocity.x)*.45f;
+                if(football.position.x>x1+22*scale)football.velocity.x=-abs(football.velocity.x)*.45f;
+                if(football.position.y<y0-18*scale)football.velocity.y=abs(football.velocity.y)*.45f;
+                if(football.position.y>y1+18*scale)football.velocity.y=-abs(football.velocity.y)*.45f;
+                if(ballZ<18*scale){int catcher=-1;float distance=1e9f;
+                    for(int i=0;i<n;i++){bool keeper=i%perTeam==0;if(i==lastKicker&&ballPickup>0)continue;if(!keeper&&(ballPickup>0||(userChase>0&&football.speed()>115*scale)))continue;
+                        float d=(players[i].position-football.position).length();if(d<(keeper?17.5f:13.5f)*scale&&d<distance){catcher=i;distance=d;}}
+                    if(catcher>=0){ballOwner=catcher;ballReceiver=-1;ballHold=catcher%perTeam==0?.55f:(.65f+random()*.75f)/frequency;ballVZ=ballZ=0;userChase=0;}
+                }
+            }
+            ballX=football.position.x/w;ballY=football.position.y/h;
+        }}
+        std::array<Vec4,22> pos{},meta{};for(int i=0;i<n;i++){auto&b=players[i];pos[i]={b.position.x,b.position.y,b.heading,b.phase};meta[i]={float(i==0?2:i==perTeam?3:i<perTeam?0:1),std::clamp(b.speed()/(118*scale),0.f,1.f),i==ballOwner?1.f:0.f,hash(i,1,101)};}
+        program.v4("uPitch",{x0,y0,x1,y1});program.f("uStripes",p(c,"stripes",.4f));program.f("uLighting",p(c,"lighting",0));program.f("uPlayerN",float(n));array("uPlPos",pos);array("uPlMeta",meta);
+        program.v4("uBall",{football.position.x,football.position.y,ballZ,football.phase});program.v4("uBallTrail",{football.position.x-football.velocity.x*.06f,football.position.y-football.velocity.y*.06f,std::clamp(football.speed()/220,0.f,1.f),passAge});
+        program.v4("uTarget",{targetX*w,targetY*h,passAge,userChase>0?1.f:0.f});program.v4("uGoalFx",{goalSide<0?x0:x1,cy,goalAge,goalSide});
     }
     void renderBoxing(const Config&c,float w,float h,float t,float dt){
         roundAge+=dt;roundBell=std::max(0.f,roundBell-dt);tireAge+=dt;if(roundAge>=60){roundAge=0;roundNumber++;roundBell=1;hp={1,1};}

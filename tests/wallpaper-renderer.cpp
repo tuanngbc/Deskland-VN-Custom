@@ -173,6 +173,18 @@ int main(int argc,char**argv){try{
         check(chased&&played,"Cat did not run to yarn and play");png(evidence/"cats-native-yarn.png",192,108,capture(192,108));
         report<<"CAT_REST_NO_DRIFT_PET_RUN_AND_YARN_PLAY=PASS\n";
     }
+    {
+        SceneRuntime match(gl,sceneIndex("stadium"));allocate(192,108);Config cfg=config;cfg.sceneParams["stadium"]["players"]=6;
+        View v{0,0,960,540,960,540};noiseTexture.bind(gl,0);match.render(cfg,v,{},weather,1,0,stop,.2f,.2f);
+        auto before=match.stadiumBall().position;match.click(700,340);
+        check((match.stadiumBall().position-before).length()==0&&match.stadiumBall().speed()>0,"Stadium click teleported ball or supplied no kick");
+        for(int frame=0;frame<40;frame++){noiseTexture.bind(gl,0);match.render(cfg,v,{},weather,1+(frame+1)*.04f,.04f,stop,.2f,.2f);}
+        const auto&players=match.stadiumPlayers();check((players[0].position-players[1].position).length()>20,"Goalkeeper follows identical field-player path");
+        match.probeStadiumBall({960*.9f-4,540*.54f});const auto score=match.stadiumScore();match.click(959,540*.54f);
+        for(int frame=0;frame<30;frame++){noiseTexture.bind(gl,0);match.render(cfg,v,{},weather,3+(frame+1)*.04f,.04f,stop,.2f,.2f);}
+        check(match.stadiumScore()[0]==score[0]+1,"Actual goal-line crossing did not score");png(evidence/"stadium-native-physical-goal.png",192,108,capture(192,108));
+        report<<"STADIUM_PHYSICAL_KICK_KEEPER_FORMATION_GOAL_CROSSING=PASS\n";
+    }
     for(auto shape:std::array<std::pair<int,int>,2>{{{2560,1080},{1080,1920}}}){
         int w=shape.first,h=shape.second;allocate(w,h);int id=sceneIndex(w>h?"beach":"cat-hill");SceneRuntime scene(gl,id);noiseTexture.bind(gl,0);scene.render(config,{0,0,float(w),float(h),float(w),float(h)},icons,weather,6.,.04f,stop);png(evidence/(w>h?"ultrawide-2560x1080.png":"portrait-1080x1920.png"),w,h,capture(w,h));
     }report<<"ULTRAWIDE_PORTRAIT_RENDER=PASS\n";
