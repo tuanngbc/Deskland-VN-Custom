@@ -21,9 +21,14 @@ inline Pixels decode(const std::filesystem::path&path,UINT maxWidth=2048,UINT ma
     pixels.rgba.resize(size_t(pixels.width)*pixels.height*4);if(FAILED(converter->CopyPixels(nullptr,pixels.width*4,UINT(pixels.rgba.size()),pixels.rgba.data())))throw std::runtime_error("Wallpaper image pixels unavailable");return pixels;
 }
 class Sprites {
-    GL&g;Program program;std::map<std::wstring,std::unique_ptr<Texture>> textures;
+    GL&g;Program program;std::unique_ptr<Program> kiteProgram;std::map<std::wstring,std::unique_ptr<Texture>> textures;
     Texture&image(const wchar_t*path){auto i=textures.find(path);if(i!=textures.end())return *i->second;auto pixels=decode(assetsRoot()/path);auto texture=std::make_unique<Texture>();texture->image(g,5,pixels.width,pixels.height,0x8058,GL_RGBA,GL_UNSIGNED_BYTE,pixels.rgba.data());auto&ref=*texture;textures.emplace(path,std::move(texture));return ref;}
 public:
+    void kite(const View&view,float handX,float handY,float x,float y,float scale,float time,float reaction,float scaleX,float scaleY){
+        if(!kiteProgram)kiteProgram=std::make_unique<Program>(g,assetText(assetsRoot()/L"wallpaper/shaders/meadow-kite-native.frag"));
+        auto&p=*kiteProgram;p.use();p.v2("world",view.worldW,view.worldH);p.v2("origin",view.x,-(view.worldH-view.y-view.h));p.v2("pixelScale",scaleX,scaleY);p.v2("hand",handX,handY);p.v2("kite",x,y);p.f("scale",scale);p.f("time",time);p.f("reaction",reaction);
+        glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);glDrawArrays(GL_TRIANGLES,0,3);glDisable(GL_BLEND);
+    }
     explicit Sprites(GL&gl):g(gl),program(gl,R"(#version 330 core
 uniform sampler2D sprite;uniform vec2 origin,world,pixelScale;uniform vec4 rect,uvRect;uniform float time,mirror,shadow,alpha,shear;
 out vec4 o;

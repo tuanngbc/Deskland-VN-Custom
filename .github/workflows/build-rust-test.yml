@@ -201,7 +201,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p wallpaper-evidence
-          g++ -O2 -std=gnu++20 -Wall -DUNICODE -D_UNICODE -DNOMINMAX tests/wallpaper-contract.cpp -o wallpaper-evidence/wallpaper-contract.exe -lopengl32 -lgdi32 -luser32 -static
+          g++ -O2 -std=gnu++20 -Wall -DUNICODE -D_UNICODE -DNOMINMAX tests/wallpaper-contract.cpp -o wallpaper-evidence/wallpaper-contract.exe -lopengl32 -lgdi32 -luser32 -lole32 -loleaut32 -luuid -static
           g++ -O2 -std=gnu++20 -Wall -DUNICODE -D_UNICODE -DNOMINMAX tests/wallpaper-renderer.cpp -o wallpaper-evidence/wallpaper-renderer.exe -lopengl32 -lgdi32 -luser32 -lole32 -loleaut32 -luuid -lwindowscodecs -ldwmapi -ld3d11 -ldxgi -ldcomp -static
       - name: Verify native configuration, physical topology and solar contracts
         shell: pwsh

@@ -43,7 +43,10 @@ class SceneRuntime {
             float phase=hash(i,index,201)*6.283185f,dir=i%2?1.f:-1.f;
             float x=wrap(hash(i,index,210)*(w+160)+t*speed*dir,w+160)-80;
             float y=h*(y0+(y1-y0)*hash(i,index,211))+sin(t*.3f+phase)*std::min(h*.08f,55.f);
-            values[i]={x,y,dir>0?.08f:3.05f,.68f+.32f*cos(t*7+phase)};
+            float angle=dir>0?.08f:3.05f;
+            if(effectNext){const auto&fx=effects[(effectNext-1)%effects.size()].value;bool craft=!strcmp(uniform,"uKay")||!strcmp(uniform,"uBoat")||!strcmp(uniform,"uYacht");bool bird=!strcmp(uniform,"uBird");
+                if(fx[2]<6.5f&&(craft||(bird&&hypot(x-fx[0],y-fx[1])<440&&fx[2]<2))){float blend=(1-exp(-fx[2]*(craft?1.f:2.f)))*std::clamp((6.5f-fx[2])/1.5f,0.f,1.f)*.75f;angle=float(atan2(fx[1]-y,fx[0]-x));x+=(fx[0]-x)*blend;y+=(fx[1]-y)*blend;}}
+            values[i]={x,y,angle,.68f+.32f*cos(t*7+phase)};
         }program.f(count,float(n));array(uniform,values);
     }
     bool obstacle(float x,float y,const std::vector<RECT>&icons)const{for(const auto&r:icons)if(x>r.left-55&&x<r.right+55&&y>r.top-15&&y<r.bottom+65)return true;return false;}
@@ -106,7 +109,7 @@ public:
             if(!sprites)sprites=std::make_unique<Sprites>(g);
             if(id=="meadow"){
                 float actor=std::min(w/1080.f,h/700.f),x=w*.70f+sin(t*.08f)*w*.10f,y=h*.58f;
-                if(p(c,"showBoy",1)>0){int frame=int(t*5)%4;sprites->draw(L"wallpaper/assets/meadow-kite-boy-diagonal-run.png",view,x,y,actor*210,actor*240,t,scaleX,scaleY,false,true,shade,.3f,frame);sprites->draw(L"wallpaper/assets/meadow-kite-boy-diagonal-run.png",view,x,y,actor*210,actor*240,t,scaleX,scaleY,false,false,1,.3f,frame);}
+                if(p(c,"showBoy",1)>0){int frame=int(t*5)%4;float reaction=fx[0][3]>0&&hypot(fx[0][0]-x,fx[0][1]-y)<280?exp(-fx[0][2]*3):0;sprites->kite(view,x+actor*135,y+actor*70,x-actor*170,y-actor*220,actor,t,reaction,scaleX,scaleY);sprites->draw(L"wallpaper/assets/meadow-kite-boy-diagonal-run.png",view,x,y,actor*210,actor*240,t,scaleX,scaleY,false,true,shade,.3f,frame);sprites->draw(L"wallpaper/assets/meadow-kite-boy-diagonal-run.png",view,x,y,actor*210,actor*240,t,scaleX,scaleY,false,false,1,.3f,frame);}
                 if(p(c,"showCat",1)>0){float cx=w*.53f+sin(t*.11f)*w*.08f,cy=h*.72f; sprites->draw(L"wallpaper/assets/meadow-black-kitten.png",view,cx,cy,actor*155,actor*155,t,scaleX,scaleY,false,true,shade);sprites->draw(L"wallpaper/assets/meadow-black-kitten.png",view,cx,cy,actor*155,actor*155,t,scaleX,scaleY,cos(t*.11f)<0);}
             }else{
                 static const wchar_t*paths[]={L"wallpaper/assets/beach-coconut-palm-v2.png",L"wallpaper/assets/beach-coconut-palm-curved.png",L"wallpaper/assets/beach-coconut-palm-airy.png",L"wallpaper/assets/beach-coconut-palm-windswept.png",L"wallpaper/assets/beach-coconut-palm-arch.png"};
