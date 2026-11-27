@@ -262,7 +262,7 @@ public:
                 // All ground shadows precede all canopies: a later tree must
                 // never project its ground shadow onto an earlier canopy.
                 for(bool shadow:{true,false})for(auto&p:palmLayout.trees){auto transform=p.transform();if(!geometry.covers(transform.bounds())||!iconClear(transform.bounds(),icons)||field.sample(p.foot.x,p.foot.y,time)>-6)continue;
-                    sprites->anchored(paths[p.variant],view,transform,t,scaleX,scaleY,shadow,shade,shear);
+                    sprites->anchored(paths[p.variant],view,transform,t,scaleX,scaleY,shadow,shadow?shade:1.f,shear);
                 }
             }
         }
@@ -398,7 +398,13 @@ private:
         if(!aquarium&&fishing==4&&hookedFish>=0){rod[0][2]=fishActors[hookedFish].x;rod[0][3]=fishActors[hookedFish].y;array("uRod",rod);}
         if(aquarium){
             program.f("uFishN",float(n));array("uFish",fish);array("uFishB",body);
-            int np=std::clamp(int(p(c,"plants",.6f)*32),0,32);std::array<Vec4,32> plants{};for(int i=0;i<np;i++){float x=w*(i+.5f)/std::max(np,1),bed=aquariumSand(x);while(bed>h*.12f+12&&field.sample(x,bed-4,lastTime)<0)bed-=4;plants[i]={x,bed+2,70+hash(i,1,20)*120,hash(i,2,30)*100};}program.f("uPlantN",float(np));array("uPlant",plants);program.f("uLight",p(c,"light",1));program.f("uBubbles",p(c,"bubbles",1));program.f("uSurf",h*.12f);
+            int want=std::clamp(int(p(c,"plants",.6f)*32),0,32),np=0;std::array<Vec4,32> plants{};
+            for(int i=0;i<want;i++){float x=w*(i+.5f)/std::max(want,1),bed=aquariumSand(x),height=std::min(70+hash(i,1,20)*120,bed-h*.12f-16);
+                // Bottom plants need open water above their root. Do not lift
+                // roots through an icon sand island or across the waterline.
+                if(height<24||field.sample(x,bed-26,lastTime)<16)continue;
+                plants[np++]={x,bed+3,height,hash(i,2,30)*100};}
+            program.f("uPlantN",float(np));array("uPlant",plants);program.f("uLight",p(c,"light",1));program.f("uBubbles",p(c,"bubbles",1));program.f("uSurf",h*.12f);
             float hookY=fishing==1?castY+(fy-castY)*k:fishing>=4?fy+(h*.12f-fy)*std::clamp(fishingAge/1.2f,0.f,1.f):fy;
             program.v4("uLine",{fx,fx,hookY,fishing?1.f:0.f});program.v4("uLineB",{fishing==3?11.f:hookedFish>=0&&fishActors[hookedFish].mode==FishMode::Nibble?2+abs(sin(t*7))*2:0.f,fishing==2||fishing==3?1.f:0.f,fishing==3?1.f:0.f,fishing==4?1.f:0.f});
         }else{program.f("uFishN",float(n));program.v4("uFish",fish.front().data(),4);}
