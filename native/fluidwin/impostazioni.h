@@ -9,6 +9,8 @@
 #include "pool.h"
 #include "sfondi.h"
 #include "stage.h"
+#include "shortcuts.h"
+#include "app_organization.h"
 #include "../wallpaper/settings.h"
 #include <shellapi.h>   // DragAcceptFiles: il pacchetto di cursori si trascina nella finestra
 #include <windowsx.h>
@@ -26,6 +28,8 @@ struct Valori {
     bool dockBarFullscreen=false;
     bool spotlightEnabled=true,spotlightAltSpace=true;
     int spotlightMode=1;
+    shortcuts::Key spotlightShortcut{},stageShortcut{MOD_CONTROL|MOD_ALT|MOD_WIN,'S'};
+    bool stageShortcutEnabled=true;
     bool avvio = false;           // FluidWin si apre all'accesso a Windows (sta nel registro di Windows, vedi avvioAttivo)
     bool gelatina = true;         // finestre "di gelatina" quando si trascinano
     bool genio = true;            // riduzione e ripristino animati (con il genio o con la caduta, vedi riduzione)
@@ -145,6 +149,11 @@ inline void carica() {
     v.dockBarCloseDelay=std::clamp(int(leggiDword(L"DockBarCloseDelay",650)),100,3000);
     v.dockBarFullscreen=leggiDword(L"DockBarFullscreen",0);
     v.spotlightEnabled=leggiDword(L"SpotlightEnabled",1);v.spotlightAltSpace=leggiDword(L"SpotlightAltSpace",1);
+    v.spotlightShortcut={leggiDword(L"SpotlightHotkeyMods",MOD_ALT),leggiDword(L"SpotlightHotkeyKey",VK_SPACE)};
+    v.stageShortcut={leggiDword(L"StageHotkeyMods",MOD_CONTROL|MOD_ALT|MOD_WIN),leggiDword(L"StageHotkeyKey",'S')};
+    if(!shortcuts::valid(v.spotlightShortcut))v.spotlightShortcut={};
+    if(!shortcuts::valid(v.stageShortcut))v.stageShortcut={MOD_CONTROL|MOD_ALT|MOD_WIN,'S'};
+    v.stageShortcutEnabled=leggiDword(L"StageHotkeyEnabled",1)!=0;
     v.spotlightMode=std::clamp(int(leggiDword(L"SpotlightMode",1)),0,3);
     v.stage.enabled = leggiDword(L"StageEnabled", 0);
     v.stage.perspective = leggiDword(L"StagePerspective", 0);
@@ -184,6 +193,8 @@ inline void salva() {
     const Valori& v = valori();
     scriviDword(L"DockVisibility",v.dockVisibility);scriviDword(L"DockBarLength",v.dockBarLength);scriviDword(L"DockBarThickness",v.dockBarThickness);
     scriviDword(L"DockBarOpacity",v.dockBarOpacity);scriviDword(L"DockBarOpenDelay",v.dockBarOpenDelay);scriviDword(L"DockBarCloseDelay",v.dockBarCloseDelay);scriviDword(L"DockBarFullscreen",v.dockBarFullscreen);
+    scriviDword(L"SpotlightHotkeyMods",v.spotlightShortcut.mods);scriviDword(L"SpotlightHotkeyKey",v.spotlightShortcut.key);
+    scriviDword(L"StageHotkeyMods",v.stageShortcut.mods);scriviDword(L"StageHotkeyKey",v.stageShortcut.key);scriviDword(L"StageHotkeyEnabled",v.stageShortcutEnabled);
     scriviDword(L"SpotlightEnabled",v.spotlightEnabled);scriviDword(L"SpotlightAltSpace",v.spotlightAltSpace);scriviDword(L"SpotlightMode",v.spotlightMode);
     scriviDword(L"StageEnabled",v.stage.enabled); scriviDword(L"StagePerspective",v.stage.perspective);
     scriviDword(L"StageAutoHide",v.stage.autoHide); scriviDword(L"StagePeek",v.stage.peek);
@@ -221,6 +232,7 @@ public:
     std::function<RECT()> iconaCentro;        // icona del centro di controllo nel dock, sullo schermo (clic altrove)
     std::function<std::vector<std::pair<std::wstring, std::wstring>>()> elencoNascoste;
     std::function<void(const std::wstring&)> mostraNascosta;
+    std::function<bool(bool,shortcuts::Key,bool)> shortcutChanged;
 
     // da: rettangolo sullo schermo del vetro del centro di controllo. Le impostazioni non compaiono a parte: il vetro
     // del centro sale e si allarga fino a diventare la loro finestra, al centro dello schermo (dove sono sempre state),
@@ -774,6 +786,24 @@ private:
     }
 
     void clic(int id) {
+        if(id==6306||id==6022||id==6023){
+            auto& settings=valori();const bool stage=id!=6306;
+            auto next=stage?settings.stageShortcut:settings.spotlightShortcut;
+            bool enabled=stage?settings.stageShortcutEnabled:settings.spotlightEnabled&&settings.spotlightAltSpace;
+            if(id==6023)enabled=!enabled;
+            else{
+                auto text=shortcuts::label(next);
+                if(!appcatalog::prompt(v.fin,testi::t(L"Scorciatoia (esempio: Alt+Space)",L"Shortcut (for example Alt+Space)"),text))return;
+                if(!shortcuts::parse(text,next)){
+                    MessageBoxW(v.fin,testi::t(L"Usa Ctrl, Alt, Maiusc o Win con un tasto. F12 è riservato.",L"Use Ctrl, Alt, Shift or Win with a key. F12 is reserved."),L"TLauncher",MB_OK|MB_ICONINFORMATION);return;
+                }
+            }
+            if(!shortcutChanged||!shortcutChanged(stage,next,enabled)){
+                MessageBoxW(v.fin,testi::t(L"Scorciatoia già in uso. La combinazione precedente rimane attiva.",L"Shortcut is already in use. The previous combination remains active."),L"TLauncher",MB_OK|MB_ICONINFORMATION);return;
+            }
+            if(stage){settings.stageShortcut=next;settings.stageShortcutEnabled=enabled;}else settings.spotlightShortcut=next;
+            salva();if(cambiato)cambiato();disegna();return;
+        }
         if(id>=6200&&id<=6202){valori().dockVisibility=id-6200;valori().dockAuto=id!=6200;salva();if(cambiato)cambiato();disegna();return;}
         if(id==6203){valori().dockBarFullscreen=!valori().dockBarFullscreen;salva();if(cambiato)cambiato();disegna();return;}
         if(id>=6300&&id<=6305){
@@ -1372,8 +1402,9 @@ private:
         if (sezione == S_CURSORE) disegnaCursori(L, R, y, e, ink, tenue, blu, rr, H);
         if (sezione == S_WALLPAPER) wallpaperPage.draw(v, L, R, y, fVoce, fSotto, fCentro, inkS, tenueS, blu, (float)e, aggiungiZona, sopra);
         if(sezione==S_SPOTLIGHT){
-            const wchar_t* labels[]={testi::t(L"Attiva Spotlight",L"Enable Spotlight"),testi::t(L"Alt+Spazio",L"Alt+Space"),L"FluidWin Launcher",testi::t(L"Spotlight compatto",L"Compact Spotlight"),testi::t(L"Spotlight a schermo intero",L"Fullscreen Spotlight"),testi::t(L"Start di Windows",L"Windows Start")};
+            const wchar_t* labels[]={testi::t(L"Attiva Spotlight",L"Enable Spotlight"),testi::t(L"Attiva scorciatoia",L"Enable shortcut"),L"FluidWin Launcher",testi::t(L"Spotlight compatto",L"Compact Spotlight"),testi::t(L"Spotlight a schermo intero",L"Fullscreen Spotlight"),testi::t(L"Start di Windows",L"Windows Start")};
             for(int i=0;i<6;++i){D2D1_RECT_F r{L,y,R,y+48*d};riquadro(r,sopra==6300+i);aggiungiZona(r,6300+i);v.testo(labels[i],fVoce,{L+16*d,y,R-74*d,y+48*d},inkS);bool on=i==0?valori().spotlightEnabled:i==1?valori().spotlightAltSpace:valori().spotlightMode==i-2;levetta(R-58*d,y+24*d,on?1.f:0.f,(float)e);y+=54*d;}
+            {D2D1_RECT_F r{L,y,R,y+48*d};riquadro(r,sopra==6306);aggiungiZona(r,6306);v.testo(shortcuts::label(valori().spotlightShortcut),fVoce,{L+16*d,y,R-16*d,y+48*d},inkS);y+=54*d;}
             riga(L"F6",testi::t(L"Alterna Spotlight compatto e schermo intero",L"Switch Compact and Fullscreen Spotlight"));
         }
         if (sezione == S_STAGE) {
@@ -1408,6 +1439,8 @@ private:
             toggle(testi::t(L"Clic per attivare",L"Click to activate"),6006,s.clickActivate);
             adjust(testi::t(L"Ritardo anteprima",L"Peek delay"),6016,s.peekDelay,L" ms");
             adjust(testi::t(L"Misura anteprima",L"Peek size"),6018,s.peekSize,L" px");
+            toggle(testi::t(L"Scorciatoia Stage",L"Stage shortcut"),6023,valori().stageShortcutEnabled);
+            {D2D1_RECT_F r{L,y,R,y+48*d};riquadro(r,sopra==6022);aggiungiZona(r,6022);v.testo(shortcuts::label(valori().stageShortcut),fVoce,{L+16*d,y,R-16*d,y+48*d},inkS);y+=54*d;}
         }
         if (scorre) {
             v.rt->PopAxisAlignedClip();

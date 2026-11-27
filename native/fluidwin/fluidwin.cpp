@@ -3971,8 +3971,8 @@ static void stageEvent(DWORD ev,HWND h){
     switch(ev){case EVENT_SYSTEM_FOREGROUND:case EVENT_SYSTEM_MINIMIZESTART:case EVENT_SYSTEM_MINIMIZEEND:case EVENT_OBJECT_SHOW:case EVENT_OBJECT_HIDE:case EVENT_OBJECT_DESTROY:case EVENT_OBJECT_NAMECHANGE:
         SetTimer(gMessaggi,TIMER_STAGE_CHANGE,60,nullptr);break;}
 }
-static bool gSpotlightHotkey=false;
 static constexpr int TASTO_SPOTLIGHT=0x534c,TASTO_STAGE=0x534d;
+static shortcuts::Binding gSpotlightHotkey{TASTO_SPOTLIGHT,0x536c},gStageHotkey{TASTO_STAGE,0x536d};
 static void apriSpotlight() {
     const auto& s=impostazioni::valori();
     if(!s.spotlightEnabled)return;
@@ -4130,8 +4130,8 @@ static void applicaImpostazioni() {
     gStage.configure(v.stage);
     if(!v.spotlightEnabled||v.spotlightMode==0||v.spotlightMode==3)gRicerca.ferma();
     if(gMessaggi){
-        if(gSpotlightHotkey){UnregisterHotKey(gMessaggi,TASTO_SPOTLIGHT);gSpotlightHotkey=false;}
-        if(v.spotlightEnabled&&v.spotlightAltSpace){gSpotlightHotkey=RegisterHotKey(gMessaggi,TASTO_SPOTLIGHT,MOD_ALT|MOD_NOREPEAT,VK_SPACE)!=FALSE;if(!gSpotlightHotkey)logf("Alt+Space unavailable; native system menu preserved");}
+        if(!gSpotlightHotkey.apply(gMessaggi,v.spotlightShortcut,v.spotlightEnabled&&v.spotlightAltSpace))logf("Spotlight shortcut unavailable; previous binding preserved");
+        if(!gStageHotkey.apply(gMessaggi,v.stageShortcut,v.stageShortcutEnabled))logf("Stage shortcut unavailable; previous binding preserved");
     }
     gTastiVolume = v.volume && gOsdOk;
     gTastoPanoramica = v.winTab;
@@ -4269,8 +4269,8 @@ static LRESULT CALLBACK procMessaggi(HWND h, UINT m, WPARAM w, LPARAM l) {
         case WM_APRI_LAUNCHER: if (gDockOk) gDock.apriLauncher(); return 0;
         case WM_HOTKEY:
             if(w==TASTO_PRIMO_PIANO)primoPiano();
-            else if(w==TASTO_SPOTLIGHT)apriSpotlight();
-            else if(w==TASTO_STAGE){auto& s=impostazioni::valori().stage;s.enabled=!s.enabled;impostazioni::salva();gStage.configure(s);}
+            else if(gSpotlightHotkey.matches(w))apriSpotlight();
+            else if(gStageHotkey.matches(w)){auto& s=impostazioni::valori().stage;s.enabled=!s.enabled;impostazioni::salva();gStage.configure(s);}
             return 0;
         case WM_CLIPBOARDUPDATE: appunti::Cronologia::io().cambiato(); return 0;   // cronologia degli appunti
         case WM_APP + 14: {
@@ -4828,7 +4828,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     gRicerca.appMenu=[](const std::wstring& command,POINT p,HWND owner){if(gDockOk)gDock.catalogMenu(command,p,owner);};
     gRicerca.catalogChanged=[]{if(gDockOk)gDock.catalogChanged();};
     if(gDockOk)gDock.catalogChanged();
-    RegisterHotKey(gMessaggi,TASTO_STAGE,MOD_CONTROL|MOD_ALT|MOD_WIN|MOD_NOREPEAT,'S');
+    gImpostazioni.shortcutChanged=[](bool stage,shortcuts::Key key,bool enabled){
+        const auto& s=impostazioni::valori();
+        if(key==shortcuts::Key{MOD_CONTROL|MOD_WIN,'T'}||key==shortcuts::Key{MOD_CONTROL|MOD_ALT|MOD_SHIFT,VK_F12})return false;
+        if(enabled&&((stage&&s.spotlightEnabled&&s.spotlightAltSpace&&key==s.spotlightShortcut)||(!stage&&s.stageShortcutEnabled&&key==s.stageShortcut)))return false;
+        return (stage?gStageHotkey:gSpotlightHotkey).apply(gMessaggi,key,enabled);
+    };
     gStage.inventory=[] { return gDockOk?gDock.stageWindows():std::vector<stage::Window>{}; };
     gStage.activation=[](HWND h) {if(gDockOk)gDock.activateStageWindow(h);};
     gStage.icon=[](ID2D1RenderTarget* target,const std::wstring& path,int size) {return gDockOk?gDock.sharedIcon(target,path,size):nullptr;};
@@ -4940,7 +4945,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     impostaPausa(true);
     condividi::ferma();   // annulla la preparazione dei file senza aspettare prima di ripristinare Windows
     cursori::togli();   // di nuovo i cursori di Windows
-    gStage.stop();gRicerca.ferma();
+    gStage.stop();gRicerca.ferma();gSpotlightHotkey.stop();gStageHotkey.stop();
     if (gDockOk) gDock.chiudi();
     gBanner.chiudiLettore();
     togliPrimoPiano();

@@ -10,15 +10,42 @@ static bool phase3Snapshot(HWND h,const std::filesystem::path& file) {
         std::ofstream out(file,std::ios::binary);out.write((char*)&head,sizeof(head));out.write((char*)&info.bmiHeader,sizeof(info.bmiHeader));out.write((char*)pixels,size_t(w)*hh*4);ok=ok&&bool(out);SelectObject(dc,old);}
     if(bitmap)DeleteObject(bitmap);if(dc)DeleteDC(dc);ReleaseDC(nullptr,screen);return ok;
 }
+static int phase3ShortcutContracts(std::ostream& report){
+    shortcuts::Key key{};
+    if(!shortcuts::parse(L" Ctrl + Alt + F23 ",key)||key!=shortcuts::Key{MOD_CONTROL|MOD_ALT,VK_F23})return 107;
+    if(shortcuts::parse(L"Ctrl+F12",key)||shortcuts::parse(L"Alt+A+B",key)||shortcuts::parse(L"S",key)||shortcuts::parse(L"Ctrl+F2+",key))return 108;
+    struct Blocker{
+        HANDLE ready=CreateEventW(nullptr,TRUE,FALSE,nullptr),stop=CreateEventW(nullptr,TRUE,FALSE,nullptr);bool ok=false;std::thread thread;
+        Blocker(){thread=std::thread([this]{ok=RegisterHotKey(nullptr,0x5402,MOD_CONTROL|MOD_ALT|MOD_SHIFT|MOD_NOREPEAT,VK_F24)!=FALSE;
+            SetEvent(ready);WaitForSingleObject(stop,10000);if(ok)UnregisterHotKey(nullptr,0x5402);});}
+        void finish(){SetEvent(stop);if(thread.joinable())thread.join();}
+        ~Blocker(){finish();CloseHandle(ready);CloseHandle(stop);}
+    } blocker;
+    if(WaitForSingleObject(blocker.ready,3000)!=WAIT_OBJECT_0||!blocker.ok)return 109;
+    HWND destination=CreateWindowW(L"STATIC",L"Shortcut contract",0,0,0,10,10,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    if(!destination)return 110;
+    struct Cleanup{HWND h;~Cleanup(){DestroyWindow(h);}} cleanup{destination};
+    shortcuts::Binding binding{0x5400,0x5401};const UINT mods=MOD_CONTROL|MOD_ALT|MOD_SHIFT;
+    if(!binding.apply(destination,{mods,VK_F23},true))return 111;
+    if(binding.apply(destination,{mods,VK_F24},true)||!binding.active()||binding.key().key!=VK_F23)return 112;
+    bool oldAvailable=true;std::thread probe([&]{oldAvailable=RegisterHotKey(nullptr,0x5403,mods|MOD_NOREPEAT,VK_F23)!=FALSE;if(oldAvailable)UnregisterHotKey(nullptr,0x5403);});probe.join();
+    if(oldAvailable)return 113;
+    blocker.finish();if(!binding.apply(destination,{mods,VK_F24},true)||binding.key().key!=VK_F24)return 114;
+    std::thread freeProbe([&]{oldAvailable=RegisterHotKey(nullptr,0x5403,mods|MOD_NOREPEAT,VK_F23)!=FALSE;if(oldAvailable)UnregisterHotKey(nullptr,0x5403);});freeProbe.join();
+    if(!oldAvailable)return 115;
+    binding.stop();if(binding.active())return 116;
+    report<<"SHORTCUT_CUSTOM_PARSER=PASS\nSHORTCUT_ACTUAL_WINDOWS_CONFLICT_PRESERVES_OLD=PASS\nSHORTCUT_GAP_FREE_REPLACEMENT_AND_RELEASE=PASS\n";return 0;
+}
 static int phase3Contracts(std::ostream& report,const std::filesystem::path& evidence) {
+    if(int result=phase3ShortcutContracts(report))return result;
     if(appcatalog::fold(L"Tiếng Việt Đặng")!=L"tieng viet dang")return 60;
     std::filesystem::create_directories(tlauncher::dockPins());
     auto pin=tlauncher::dockPins()/L"fixture.lnk";
     if(!tlauncher::ownsDockPin(pin.wstring())||tlauncher::ownsDockPin(L"C:\\Windows\\fixture.lnk"))return 82;
     report<<"DOCK_PIN_WRITE_BOUNDARY=PASS\n";
-    auto& s=impostazioni::valori();s.stage.height=174;s.stage.peekDelay=750;s.stage.peekLive=false;s.dockVisibility=2;s.dockBarCloseDelay=900;s.spotlightMode=2;impostazioni::salva();
+    auto& s=impostazioni::valori();s.stage.height=174;s.stage.peekDelay=750;s.stage.peekLive=false;s.dockVisibility=2;s.dockBarCloseDelay=900;s.spotlightMode=2;s.spotlightShortcut={MOD_CONTROL|MOD_ALT,VK_F22};s.stageShortcut={MOD_ALT|MOD_SHIFT,'S'};s.stageShortcutEnabled=false;impostazioni::salva();
     s.stage.height=72;s.dockVisibility=0;impostazioni::carica();
-    if(s.stage.height!=174||s.stage.peekDelay!=750||s.stage.peekLive||s.dockVisibility!=2||s.dockBarCloseDelay!=900||s.spotlightMode!=2)return 61;
+    if(s.stage.height!=174||s.stage.peekDelay!=750||s.stage.peekLive||s.dockVisibility!=2||s.dockBarCloseDelay!=900||s.spotlightMode!=2||s.spotlightShortcut!=shortcuts::Key{MOD_CONTROL|MOD_ALT,VK_F22}||s.stageShortcut!=shortcuts::Key{MOD_ALT|MOD_SHIFT,'S'}||s.stageShortcutEnabled)return 61;
     appcatalog::Metadata meta;meta.name=L"Ứng dụng thử nghiệm";meta.favorite=true;meta.folder=L"Công việc";meta.manual=true;meta.icon=L"custom.ico";
     appcatalog::save(L"C:\\fixture\\tool.exe",meta);appcatalog::folder(L"",meta.folder);appcatalog::loaded=false;appcatalog::metadata.clear();
     auto restored=appcatalog::get(L"C:\\fixture\\tool.exe");if(restored.name!=meta.name||!restored.favorite||restored.folder!=meta.folder||!restored.manual||restored.icon!=meta.icon)return 62;

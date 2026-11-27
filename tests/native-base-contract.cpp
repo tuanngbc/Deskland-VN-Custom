@@ -20,6 +20,7 @@ int main(int argc,char** argv) {
     if(argc==3&&!strcmp(argv[2],"--verify-migrated")){
         const auto&s=impostazioni::valori();wallpaper::Store store;const auto c=store.load();
         if(testi::attuale()!=testi::VIETNAMITA||s.notchEnabled||s.dockVisibility!=2||s.stage.height!=174||s.stage.peekDelay!=750||s.spotlightMode!=2)return 83;
+        if(s.spotlightShortcut!=shortcuts::Key{MOD_CONTROL|MOD_ALT,VK_F22}||s.stageShortcut!=shortcuts::Key{MOD_ALT|MOD_SHIFT,'S'}||s.stageShortcutEnabled)return 117;
         if(!c.enabled||c.scene!=wallpaper::sceneIndex("lake")||c.fps!=29||c.layout!=wallpaper::Layout::Panorama)return 84;
         gImpostazioni.apri();ciPump(350);if(!FindWindowW(L"TLauncher.Native.Impostazioni",nullptr))return 85;
         if(!phase3Snapshot(FindWindowW(L"TLauncher.Native.Impostazioni",nullptr),std::filesystem::path(argv[1])/L"phase3-migrated-vietnamese-settings.bmp"))return 86;
