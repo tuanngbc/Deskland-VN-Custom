@@ -46,6 +46,13 @@ int main(int argc,char**argv){try{
         noiseTexture.bind(gl,0);clicked.render(config,view,icons,weather,2.12,.12f,stop);auto after=capture(640,360);
         if(animated==after)throw std::runtime_error(std::string(catalog()[i].id)+" has no verified click response");
         png(evidence/(std::string(catalog()[i].id)+"-click.png"),640,360,after);
+        {
+            // Larger untouched frames make ground contacts/props legible for
+            // human review; the catalog thumbnail alone is insufficient.
+            allocate(1280,720);SceneRuntime reference(gl,i);noiseTexture.bind(gl,0);
+            reference.render(config,{0,0,1280,720,1280,720},{{36,130,110,215},{36,235,110,320},{36,340,110,425}},weather,3,.04f,stop);
+            png(evidence/(std::string(catalog()[i].id)+"-reference-1280x720.png"),1280,720,capture(1280,720));
+        }
         report<<catalog()[i].id<<"=RENDER_ANIMATION_AND_ISOLATED_CLICK_PASS\n";std::cout<<catalog()[i].id<<" PASS\n";
     }
     png(evidence/"all-16-contact-sheet.png",2560,1440,sheet);report<<"CATALOG_ORDER=meadow,beach,beach-turquoise,lake,sky,ocean,rainforest,mocchau,tet-sakura,cat-hill,stadium,aquarium,commute,summer-porch,cats,boxing-ring\nINPUT_PRESERVES_ALL_PHYSICAL_STATE=PASS\n";
@@ -72,17 +79,17 @@ int main(int argc,char**argv){try{
         auto draw=[&](){noiseTexture.bind(gl,0);beach.render(cfg,view,island,weather,30,0,stop);return capture(640,360);};
         draw();beach.probeActor("uBird",0,{300,185});beach.probePalms({});auto bird=draw();
         // Anchor on known icon-generated sand, with canopy directly under bird.
-        beach.probePalms({Palm{{300,235},0,0,.496f,false}});check(beach.shore({300,235})<-6,"Palm overlap fixture is not sand");auto overlap=draw();cfg.sceneParams["beach"]["birds"]=0;auto palmOnly=draw();int matched=0,canopy=0;
+        beach.probePalms({Palm{{300,235},0,0,.496f,false}});check(beach.shore({300,235})<-6,"Palm overlap fixture is not sand");auto overlap=draw();cfg.sceneParams["beach"]["birds"]=0;auto palmOnly=draw();beach.probePalms({});auto sandOnly=draw();int matched=0,canopy=0;
         for(int y=180;y<=190;y++)for(int x=293;x<=307;x++){size_t at=(size_t(359-y)*640+x)*4;
-            if(bird[at]>240&&bird[at+1]>240&&bird[at+2]>240&&std::equal(bird.begin()+at,bird.begin()+at+3,overlap.begin()+at)){matched++;if(!std::equal(palmOnly.begin()+at,palmOnly.begin()+at+3,overlap.begin()+at))canopy++;}}
+            if(bird[at]>240&&bird[at+1]>240&&bird[at+2]>240&&std::equal(bird.begin()+at,bird.begin()+at+3,overlap.begin()+at)){matched++;if(!std::equal(palmOnly.begin()+at,palmOnly.begin()+at+3,sandOnly.begin()+at))canopy++;}}
         check(matched>=3&&canopy>=3,"Palm canopy covered opaque airborne gull");png(evidence/"beach-bird-over-palm.png",640,360,overlap);report<<"BEACH_CONTROLLED_BIRD_OVER_PALM=PASS\n";
     }
     {
         SceneRuntime cats(gl,sceneIndex("cats"));allocate(640,360);Config cfg=config;cfg.sceneParams["cats"]["cats"]=1;cfg.sceneParams["cats"]["bushes"]=1;
         float x=640*(.06f+hash(0,sceneIndex("cats"),308)*.88f),y=360*(.4f+hash(0,sceneIndex("cats"),310)*.47f);
         auto draw=[&](){noiseTexture.bind(gl,0);cats.render(cfg,view,{},weather,30,0,stop);return capture(640,360);};
-        draw();cats.probeCat(0,{x,y-40});auto behind=draw();cfg.sceneParams["cats"]["cats"]=0;auto tree=draw();
-        cfg.sceneParams["cats"]["cats"]=1;cfg.sceneParams["cats"]["bushes"]=0;auto cat=draw();cfg.sceneParams["cats"]["cats"]=0;auto ground=draw();
+        draw();cats.probeCat(0,{x,y-40});auto behind=draw();cats.probeCat(0,{-10000,-10000});auto tree=draw();
+        cats.probeCat(0,{x,y-40});cfg.sceneParams["cats"]["bushes"]=0;auto cat=draw();cats.probeCat(0,{-10000,-10000});auto ground=draw();
         int hidden=0;for(size_t at=0;at<ground.size();at+=4){auto eq=[&](auto&a,auto&b){return std::equal(a.begin()+at,a.begin()+at+3,b.begin()+at);};if(!eq(tree,ground)&&!eq(cat,ground)&&eq(behind,tree))hidden++;}
         check(hidden>8,"Cat behind tree was painted in foreground");png(evidence/"cats-behind-tree.png",640,360,behind);
         cfg.sceneParams["cats"]["cats"]=1;cfg.sceneParams["cats"]["bushes"]=1;cats.probeCat(0,{x,y+8});auto front=draw();cfg.sceneParams["cats"]["bushes"]=0;cat=draw();int visible=0;
@@ -129,6 +136,7 @@ int main(int argc,char**argv){try{
                 for(int row=0;row<270;row++)memcpy(sequence.data()+(size_t((2-frame/3)*270+row)*1440+(frame%3)*480)*4,pixels.data()+size_t(row)*480*4,480*4);
                 for(auto&[name,list]:scene.actors())for(size_t j=0;j<list.size();j++)if(list[j].initialized){auto&b=list[j];check(scene.spatial().contains(b.position),"Actor outside physical viewports");if((name=="uKay"||name=="uTurt"||name=="uFish")&&std::string(id)=="beach-turquoise")check(scene.shore(b.position)>12,"Swimmer/craft on land");trace<<id<<','<<frame<<','<<elapsed<<','<<name<<','<<j<<','<<b.position.x<<','<<b.position.y<<','<<b.velocity.x<<','<<b.velocity.y<<','<<b.heading<<'\n';}
                 if(std::string(id)=="meadow"){auto&b=scene.meadowBoy();trace<<id<<','<<frame<<','<<elapsed<<",boy,"<<b.position.x<<','<<b.position.y<<','<<b.speed()<<'\n';}
+                if(std::string(id)=="aquarium")for(auto&f:scene.fish())if(f.body.initialized&&(f.mode==FishMode::Swim||f.mode==FishMode::Approach||f.mode==FishMode::Nibble||f.mode==FishMode::Bite||f.mode==FishMode::Flee))check(scene.probeFishWater(f.body.position,43),"Aquarium fish intersects sand/surface");
             }
             png(evidence/(std::string(id)+"-motion-sequence.png"),1440,810,sequence);
         }

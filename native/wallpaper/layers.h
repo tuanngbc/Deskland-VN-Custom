@@ -51,10 +51,13 @@ inline std::string beachAirComposition(std::string text){
    vec3 c=vec3(0.);float alpha=0.;
    for(int i=0;i<8;i++){if(float(i)>=uBirdN)break;vec4 b=uBird[i];vec2 delta=p-b.xy;
      if(dot(delta,delta)>=400.)continue;vec3 g=gullSD(rot(-b.z)*delta,b.w);
-     vec3 wing=mix(vec3(.86,.90,.94),vec3(.22,.25,.30),ss(.72,.8,g.z));
+     vec3 wing=mix(vec3(.80,.84,.88),vec3(.20,.22,.26),ss(.72,.8,g.z));
      float a=ss(.6,-.6,g.y);c=wing*a+c*(1.-a);alpha=a+alpha*(1.-a);
-     float body=ss(.6,-.6,g.x);c=vec3(.99)*body+c*(1.-body);alpha=body+alpha*(1.-body);
-   }o=vec4(c/max(alpha,.00001),alpha);return;
+     float body=ss(.6,-.6,g.x);c=vec3(.99,.99,.98)*body+c*(1.-body);alpha=body+alpha*(1.-body);
+     float beak=ss(.5,-.5,length(rot(-b.z)*delta-vec2(7.2,0.))-.9);
+     c=vec3(.98,.78,.22)*beak+c*(1.-beak);alpha=beak+alpha*(1.-beak);
+   }float grain=1.+(hash2(floor(p*(.78*max(uScale,1.)))+7.3)-.5)*.035*uGrain;
+   o=vec4(c/max(alpha,.00001)*grain,alpha);return;
  }
 )");return text;
 }

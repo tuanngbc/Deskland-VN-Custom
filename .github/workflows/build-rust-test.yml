@@ -163,6 +163,7 @@ jobs:
           if (Test-Path native-build/wallpaper) {
             Copy-Item docs/WALLPAPER_UAT.md (Join-Path $dir 'WALLPAPER-UAT.md')
             Copy-Item docs/WALLPAPER_REENGINEERING.md (Join-Path $dir 'WALLPAPER-ARCHITECTURE.md')
+            Copy-Item docs/WALLPAPER_LAYER_AUDIT.md (Join-Path $dir 'WALLPAPER_LAYER_AUDIT.md')
           }
           Copy-Item tools/native-owner-uat.ps1 $dir
           Copy-Item tools/legacy-uat-library.ps1 $dir
