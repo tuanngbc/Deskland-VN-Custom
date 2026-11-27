@@ -250,8 +250,8 @@ private:
         fdw = fabbricaTesto();
         if (!fdw) return;
         static const wchar_t* fam = famiglia(fdw);   // (il font scelto non cambia: si cerca una volta sola)
-        fdw->CreateTextFormat(fam, nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.5f * dpi, L"it-it", &fmt);
-        fdw->CreateTextFormat(fam, nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0f * dpi, L"it-it", &fmtTitolo);
+        fdw->CreateTextFormat(fam, nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.5f * dpi, testi::locale(), &fmt);
+        fdw->CreateTextFormat(fam, nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0f * dpi, testi::locale(), &fmtTitolo);
         // (audit FW-AUDIT-004) senza formati o, sotto, senza render target il menu non si apre: esegui() trova fin o rt
         // nulli e torna 0, come un menu annullato. Prima si usavano subito, nulli
         if (!fmt || !fmtTitolo) return;

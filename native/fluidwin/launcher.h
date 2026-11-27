@@ -56,7 +56,7 @@ inline auto Motore::inSottofondo(std::function<void()> fai, std::function<void()
 }
 
 inline auto Motore::chiediIcona(const std::wstring& percorso, int lato) -> void {
-    if (percorso.empty() || !iconeChieste.insert(chiaveIcona(percorso, lato)).second) return;
+    if (percorso.empty() || !appicons::canRequest(percorso,lato) || !iconeChieste.insert(chiaveIcona(percorso, lato)).second) return;
     if (!csIconeOk) {
         InitializeCriticalSection(&csIcone); csIconeOk = true;
         eventoIcone = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -187,7 +187,7 @@ inline auto Motore::applicaTutteApp(std::vector<AppL> nuove) -> void {
         AppL a;a.nome=entry.second.name.empty()?std::filesystem::path(entry.first).stem().wstring():entry.second.name;a.avvio=entry.first;a.minuscolo=appcatalog::fold(a.nome);nuove.push_back(std::move(a));
     }
     std::unordered_set<std::wstring> identities;
-    nuove.erase(std::remove_if(nuove.begin(),nuove.end(),[&](const AppL& a){return !identities.insert(appcatalog::identity(a.avvio)).second;}),nuove.end());
+    nuove.erase(std::remove_if(nuove.begin(),nuove.end(),[&](const AppL& a){return !identities.insert(a.canonical.empty()?appcatalog::fold(a.avvio):a.canonical).second;}),nuove.end());
     for(auto& a:nuove){auto m=appcatalog::get(a.avvio);if(!m.name.empty())a.nome=m.name;a.minuscolo=appcatalog::fold(a.nome);}
     std::stable_sort(nuove.begin(),nuove.end(),[](const AppL& a,const AppL& b){auto x=appcatalog::get(a.avvio),y=appcatalog::get(b.avvio);if(x.favorite!=y.favorite)return x.favorite;if(x.order!=y.order)return x.order<y.order;return a.minuscolo<b.minuscolo;});
     // le icone gia' caricate si conservano
@@ -222,7 +222,8 @@ inline auto Motore::elencaTutteApp() -> std::vector<AppL> {
     }
     cart->Release();
     std::sort(nuove.begin(), nuove.end(), [](const AppL& a, const AppL& b) { return lstrcmpiW(a.nome.c_str(), b.nome.c_str()) < 0; });
-    // Discovery identity, never display name, decides duplicates.
+    // Resolve slow Shell identities in the existing catalog worker, never in UI completion.
+    for(auto& a:nuove)a.canonical=appcatalog::identity(a.avvio);
     return nuove;
 }
 
@@ -488,7 +489,7 @@ inline auto Motore::apriLauncher() -> void {
         scrivi("launcher: riaperto mentre si chiudeva");
         return;
     }
-    if (tutteApp.empty()) leggiTutteApp(true);
+    if (tutteApp.empty()) leggiTutteApp();
     else if (adesso() - lLetto > 600) leggiTutteApp();
     // centro di controllo aperto: prima si chiude lui, poi (TIMER_DOPO) si apre il launcher; mai uno sopra l'altro
     if (!nessunaScheda()) { if (dopo != 1) { chiudiTutte(); apriDopo(1, 0); } return; }
@@ -680,11 +681,12 @@ inline void Motore::catalogMenu(const std::wstring& command,POINT at,HWND owner)
 
 // Collegamento nella cartella delle app fisse della barra (quella che legge il dock)
 inline auto Motore::aggiungiAlDock(const std::wstring& nome, const std::wstring& exe, const std::wstring& id, const std::wstring& avvio) -> void {
-    wchar_t cart[MAX_PATH];
-    if (FAILED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, cart))) return;
+    const auto dir=tlauncher::dockPins();std::error_code ec;
+    std::filesystem::create_directories(dir,ec);
+    if(ec||(GetFileAttributesW(dir.c_str())&FILE_ATTRIBUTE_REPARSE_POINT))return;
     std::wstring n = nome;
     for (auto& c : n) if (wcschr(L"\\/:*?\"<>|", c)) c = L'_';
-    const std::wstring file = std::wstring(cart) + L"\\Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar\\" + n + L".lnk";
+    const std::wstring file = (dir/(n+L".lnk")).wstring();
     if (GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES) return;   // gia' nel dock
     IShellLinkW* sl = nullptr;
     if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&sl)))) return;

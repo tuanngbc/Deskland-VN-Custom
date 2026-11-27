@@ -25,6 +25,14 @@ inline const std::wstring& profile() {
     static const std::wstring value=environment(L"TLAUNCHER_NATIVE_TRIAL_DIR");
     return value;
 }
+// Dock pins belong to this profile. Native TEST never writes Windows Taskbar pins.
+inline std::filesystem::path dockPins() {return std::filesystem::path(profile())/L"DockPins";}
+inline bool ownsDockPin(const std::wstring& file) {
+    const auto dir=dockPins();const auto p=std::filesystem::path(file);
+    const DWORD a=GetFileAttributesW(dir.c_str());
+    return a!=INVALID_FILE_ATTRIBUTES&&!(a&FILE_ATTRIBUTE_REPARSE_POINT)&&
+        !_wcsicmp(p.parent_path().c_str(),dir.c_str())&&!_wcsicmp(p.extension().c_str(),L".lnk");
+}
 inline std::wstring profileName() {
     const auto& path=profile();const auto i=path.find_last_of(L"\\/");
     return i==std::wstring::npos?std::wstring():path.substr(i+1);

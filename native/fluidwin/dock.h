@@ -1252,9 +1252,9 @@ private:
         if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), (IUnknown**)&fdw)) || !fdw) return false;
         bool fontOk = true;   // un formato non creato: niente dock (lo usano tutti i disegni senza controlli)
         auto formato = [&](const wchar_t* font, DWRITE_FONT_WEIGHT peso, float px, IDWriteTextFormat** out) {
-            if (FAILED(fdw->CreateTextFormat(font, nullptr, peso, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, px * dpi, L"it-it", out)) || !*out) {
+            if (FAILED(fdw->CreateTextFormat(font, nullptr, peso, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, px * dpi, testi::locale(), out)) || !*out) {
                 // ripiego su Segoe UI (c'e' sempre): solo se manca anche quello il dock non parte
-                if (FAILED(fdw->CreateTextFormat(L"Segoe UI", nullptr, peso, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, px * dpi, L"it-it", out)) || !*out) { fontOk = false; return; }
+                if (FAILED(fdw->CreateTextFormat(L"Segoe UI", nullptr, peso, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, px * dpi, testi::locale(), out)) || !*out) { fontOk = false; return; }
             }
             testi::allinea(*out, DWRITE_TEXT_ALIGNMENT_CENTER);   // (in arabo da destra a sinistra, vedi testi.h)
             (*out)->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
@@ -1398,20 +1398,13 @@ private:
         { Voce l; l.fissata = true; l.avvio = AVVIO_LAUNCHER; l.nome = L"App"; nuove.push_back(std::move(l)); }
         // 1) aggiunte alla barra, nell'ordine dei collegamenti. Leggerle (ogni .lnk aperto dalla shell) costa: si
         // rileggono solo se la cartella e' cambiata (collegamento aggiunto, tolto o rinominato) o dopo un minuto
-        wchar_t cart[MAX_PATH];
-        if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, cart))) {
-            std::wstring dir = std::wstring(cart) + L"\\Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar\\";
+        {
+            std::wstring dir=tlauncher::dockPins().wstring()+L"\\";
             WIN32_FILE_ATTRIBUTE_DATA ad{};
             const bool letta = GetFileAttributesExW(dir.c_str(), GetFileExInfoStandard, &ad);
             const ULONGLONG tCart = letta ? ((ULONGLONG)ad.ftLastWriteTime.dwHighDateTime << 32) | ad.ftLastWriteTime.dwLowDateTime : 0;
             // (anche la lista di Windows: fissare un'app di pacchetto non tocca la cartella, solo la chiave Taskband)
             ULONGLONG tBand = 0;
-            { HKEY k = nullptr; FILETIME ft{};
-              if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Taskband", 0, KEY_READ, &k) == ERROR_SUCCESS) {
-                  if (RegQueryInfoKeyW(k, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &ft) == ERROR_SUCCESS)
-                      tBand = ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
-                  RegCloseKey(k);
-              } }
             const bool valida = fissateOk && letta && tCart == fissateT && tBand == fissateTBand && adesso() - fissateLette < 60;
             if (valida) for (const Voce& f : fissateCache) nuove.push_back(f);
             // (l'ora dell'ultima lettura cambia solo quando si rileggono davvero i collegamenti: prima ogni consultazione
@@ -1432,7 +1425,7 @@ private:
             struct Candidata { std::wstring lnk, aumid, nome; bool daWindows; };
             std::vector<Candidata> cand;
             std::vector<FissataWindows> win;
-            const bool winOk = !valida && fissateWindows(win);
+            const bool winOk = false; // Owner pins are migrated read-only into DockPins.
             if (winOk)
                 for (auto& f : win) {
                     if (!f.lnk.empty()) {
@@ -2142,7 +2135,7 @@ private:
             D2D1_RECT_F r = {x + (d - dd) / 2, yb - dd - salto, x + (d - dd) / 2 + dd, yb - salto};
             v.rett = {x, yb - d, x + d, yb};
             if (d < 0.5f) continue;
-            const float alfa = (premuto < 1 ? 0.8f : 1.0f) * std::min(1.0f, sc * 1.5f);
+            const float alfa = (1-collapsed)*(premuto < 1 ? 0.8f : 1.0f) * std::min(1.0f, sc * 1.5f);
             dritto((r.left + r.right) / 2, (r.top + r.bottom) / 2);   // (icona e numero dritti anche ai lati e in alto)
             if (v.icona) dc->DrawBitmap(v.icona, r, alfa, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
             else if (v.avvio == AVVIO_LAUNCHER) disegnaIconaApp(r, alfa, scuro);
@@ -2268,8 +2261,8 @@ private:
 
         // la regione della finestra limita i clic al dock (con le icone ingrandite) e all'isola di stato
         float regTop = fondoT;
-        for (auto& v : voci) regTop = std::min(regTop, v.rett.top);
-        if (rettTesta.right > rettTesta.left) regTop = std::min(regTop, rettTesta.top - 6 * dpi);   // (testa ingrandita con la lente)
+        if(collapsed<.999f)for (auto& v : voci) regTop = std::min(regTop, v.rett.top);
+        if (collapsed<.999f&&rettTesta.right > rettTesta.left) regTop = std::min(regTop, rettTesta.top - 6 * dpi);   // (testa ingrandita con la lente)
         // l'icona trascinata e' disegnata 6 px piu' su del suo rett (che resta quello per il mouse): dentro anche lei
         // (R20261120-013029-S3)
         if (trascinando && trascinata >= 0 && trascinata < (int)voci.size()) regTop = std::min(regTop, voci[trascinata].rett.top - 6 * dpi);
@@ -2283,7 +2276,7 @@ private:
             return {(int)std::floor(f.left), (int)std::floor(f.top), (int)std::ceil(f.right), (int)std::ceil(f.bottom)};
         };
         const RECT rd = rettFin(fondoL - 2, std::min(regTop - 2, (float)H), fondoR + 2, (float)H);
-        const RECT rs = isola.right > isola.left ? rettFin(isola.left - 2, std::min(isola.top - 2, (float)H), isola.right + 2, (float)H) : RECT{};
+        const RECT rs = collapsed<.999f&&isola.right > isola.left ? rettFin(isola.left - 2, std::min(isola.top - 2, (float)H), isola.right + 2, (float)H) : RECT{};
         RECT re{};
         if (etichettaAlfa > 0.01) re = {(int)rettEtichetta.left - 2, (int)rettEtichetta.top - 2, (int)rettEtichetta.right + 2, (int)rettEtichetta.bottom + 2};
         if (!EqualRect(&rd, &regioneDock) || !EqualRect(&rs, &regioneIsola) || !EqualRect(&re, &regioneEtichetta)) {
@@ -3438,7 +3431,7 @@ private:
     }
 
     // ---- launcher: tutte le app, con la ricerca (tasto Win o icona "App" del dock) ----
-    struct AppL { std::wstring nome, avvio, minuscolo; ID2D1Bitmap1* icona = nullptr; bool provata = false; };
+    struct AppL { std::wstring nome, avvio, minuscolo, canonical; ID2D1Bitmap1* icona = nullptr; bool provata = false; };
     HWND launcher = nullptr, vetroLauncher = nullptr;
     IDXGISwapChain1* scL = nullptr; IDCompositionTarget* targetL = nullptr; IDCompositionVisual* visualL = nullptr;
     IDCompositionEffectGroup* effettoL = nullptr; ID2D1Bitmap1* bersaglioL = nullptr;
@@ -4176,7 +4169,7 @@ private:
         }
         else if (s == 3) ShellExecuteW(nullptr, L"runas", (collegamento || !exeVero ? v.avvio : v.exe).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         else if (s == 4) ShellExecuteW(nullptr, L"open", L"explorer.exe", (L"/select,\"" + v.exe + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
-        else if (s == 5) { DeleteFileW(v.avvio.c_str()); appDaAggiornare = true; dirty = true; }   // come "Rimuovi dalla barra"
+        else if (s == 5) { if(tlauncher::ownsDockPin(v.avvio))DeleteFileW(v.avvio.c_str()); appDaAggiornare = true; dirty = true; }   // come "Rimuovi dalla barra"
         else if (s == 6) aggiungiAlDock(v.nome, exeVero ? v.exe : L"", v.aumid, v.avvio);
         else if (s == 7) nascondiApp(v.exe, v.aumid, v.nome);
         else if (s >= 100 && s - 100 < (int)elenco.size() && IsWindow(elenco[s - 100])) {

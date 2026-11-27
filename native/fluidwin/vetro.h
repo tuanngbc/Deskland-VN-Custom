@@ -138,7 +138,7 @@ public:
     IDWriteTextFormat* formato(float pt, DWRITE_FONT_WEIGHT peso = DWRITE_FONT_WEIGHT_NORMAL,
                                DWRITE_TEXT_ALIGNMENT al = DWRITE_TEXT_ALIGNMENT_LEADING, bool aCapo = false) {
         IDWriteTextFormat* f = nullptr;
-        fdw->CreateTextFormat(fam, nullptr, peso, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, pt, L"it-it", &f);
+        fdw->CreateTextFormat(fam, nullptr, peso, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, pt, testi::locale(), &f);
         if (!f) return nullptr;
         testi::allinea(f, al);   // (in arabo da destra a sinistra, vedi testi.h)
         f->SetParagraphAlignment(aCapo ? DWRITE_PARAGRAPH_ALIGNMENT_NEAR : DWRITE_PARAGRAPH_ALIGNMENT_CENTER);

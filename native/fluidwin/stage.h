@@ -87,7 +87,7 @@ class Manager {
                     return true;
                 }
                 case WM_MOUSELEAVE:
-                    KillTimer(h,2); hover=-1; owner->closePeek(); owner->draw(*this);
+                    KillTimer(h,2); hover=-1; owner->scheduleClosePeek(); owner->draw(*this);
                     if(owner->settings.autoHide) SetTimer(h,3,650,nullptr);
                     return true;
                 case WM_TIMER:
@@ -136,11 +136,14 @@ class Manager {
             }
             glass.finisci();
         }
-        bool messaggio(HWND,UINT m,WPARAM w,LPARAM,LRESULT& r) {
+        bool messaggio(HWND h,UINT m,WPARAM w,LPARAM,LRESULT& r) {
             r=0;
             if(m==WM_MOUSEACTIVATE) {r=MA_NOACTIVATE;return true;}
             if(m==WM_PAINT) {draw();return true;}
-            if(m==WM_LBUTTONUP) {owner->activate(source);return true;}
+            if(m==WM_LBUTTONUP) {if(owner->settings.clickActivate)owner->activate(source);return true;}
+            if(m==WM_MOUSEMOVE){KillTimer(h,2);TRACKMOUSEEVENT t{sizeof(t),TME_LEAVE,h,0};TrackMouseEvent(&t);return true;}
+            if(m==WM_MOUSELEAVE){owner->scheduleClosePeek();return true;}
+            if(m==WM_TIMER&&w==2){KillTimer(h,2);if(!owner->pointerInside())owner->closePeek();return true;}
             if(m==WM_TIMER&&w==1) {
                 double k=vetro::uscita((vetro::secondi()-start)/.16);
                 glass.alfa(k); if(k>=1) vetro::fermaBattito(glass.fin,1); return true;
@@ -169,7 +172,7 @@ public:
         if(topologyChanged) { rebuildAll(); return; }
         auto next=inventory?inventory():std::vector<Window>{};
         bool same=next.size()==windows.size();
-        if(same) for(size_t i=0;i<next.size();++i) if(next[i].hwnd!=windows[i].hwnd||next[i].pid!=windows[i].pid||next[i].tid!=windows[i].tid||next[i].identity!=windows[i].identity) {same=false;break;}
+        if(same) for(size_t i=0;i<next.size();++i) if(next[i].hwnd!=windows[i].hwnd||next[i].pid!=windows[i].pid||next[i].tid!=windows[i].tid||next[i].identity!=windows[i].identity||next[i].name!=windows[i].name||next[i].icon!=windows[i].icon) {same=false;break;}
         windows=std::move(next);
         for(auto& r:rails) {
             const bool hide=fullscreen&&fullscreen(r->monitor);
@@ -198,6 +201,12 @@ private:
     ULONGLONG captureAt=0;
     void activate(const Window& w) {Window copy=w;closePeek();if(copy.valid()&&activation)activation(copy.hwnd);}
     void closePeek() {peek.close();}
+    bool pointerInside() const {
+        POINT p{};GetCursorPos(&p);HWND h=GetAncestor(WindowFromPoint(p),GA_ROOT);
+        if(peek.glass.fin&&h==peek.glass.fin)return true;
+        for(const auto& r:rails)if(h==r->glass.fin)return true;return false;
+    }
+    void scheduleClosePeek(){if(peek.glass.fin)SetTimer(peek.glass.fin,2,180,nullptr);}
     void rebuildAll() {
         closePeek();rails.clear();topologyChanged=false;
         windows=inventory?inventory():std::vector<Window>{};
@@ -287,6 +296,7 @@ private:
         if(c.registered==w.hwnd&&c.minimized==bool(IsIconic(w.hwnd))&&c.generation==rail.glass.giroRt&&!rail.hidden&&(c.thumbnail||c.bitmap)) {
             if(c.thumbnail){SIZE sz{};DwmQueryThumbnailSourceSize(c.thumbnail,&sz);RECT r=c.rect;r.bottom-=int(25*rail.glass.dpi);r=aspectFit(sz.cx,sz.cy,r);DWM_THUMBNAIL_PROPERTIES p{};p.dwFlags=DWM_TNP_RECTDESTINATION;p.rcDestination=r;DwmUpdateThumbnailProperties(c.thumbnail,&p);}return;
         }
+        if(c.generation!=rail.glass.giroRt&&c.icon){c.icon->Release();c.icon=nullptr;}
         if(c.thumbnail)DwmUnregisterThumbnail(c.thumbnail);c.thumbnail=nullptr;
         if(c.bitmap)c.bitmap->Release();c.bitmap=nullptr;
         c.registered=w.hwnd;c.minimized=IsIconic(w.hwnd);c.generation=rail.glass.giroRt;
@@ -322,9 +332,12 @@ private:
         RECT wr{};GetWindowRect(w.hwnd,&wr);int sw=wr.right-wr.left,sh=wr.bottom-wr.top;
         bool cached=IsIconic(w.hwnd)||!settings.peekLive;
         if(cached){peek.bitmap=snapshot(w,peek.glass);if(!peek.bitmap){closePeek();return;}auto s=peek.bitmap->GetPixelSize();sw=s.width;sh=s.height;}
-        RECT r=aspectFit(sw,sh,{0,0,std::min(int(settings.peekSize*d),int(a.right-a.left-(rr.right-rr.left)-32*d)),int((a.bottom-a.top)*.8)},!cached);
+        const int available=int(a.right-a.left-(rr.right-rr.left)-32*d);
+        if(available<80*d||a.bottom-a.top<96*d||sw<=0||sh<=0){closePeek();return;}
+        peek.glass.dpi=d;
+        RECT r=aspectFit(sw,sh,{0,0,std::min(int(settings.peekSize*d),available),int((a.bottom-a.top)*.8)},!cached);
         int width=r.right-r.left+16,height=r.bottom-r.top+16;
-        int x=settings.right?rr.left-width-int(12*d):rr.right+int(12*d),y=std::clamp(rr.top,int(a.top),std::max(int(a.top),int(a.bottom)-height));
+        int x=std::clamp(int(settings.right?rr.left-width-int(12*d):rr.right+int(12*d)),int(a.left),std::max(int(a.left),int(a.right)-width)),y=std::clamp(int(rr.top),int(a.top),std::max(int(a.top),int(a.bottom)-height));
         peek.glass.posiziona(x,y,width,height);peek.glass.alfa(settings.peekAnimation?0:1);
         if(!cached&&SUCCEEDED(DwmRegisterThumbnail(peek.glass.fin,w.hwnd,&peek.thumbnail))) {
             SIZE sz{};DwmQueryThumbnailSourceSize(peek.thumbnail,&sz);RECT dest=aspectFit(sz.cx,sz.cy,{8,8,width-8,height-8});

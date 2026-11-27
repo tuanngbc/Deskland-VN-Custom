@@ -674,7 +674,7 @@ private:
         fOra = fGiorno = fTitolo = fPiccolo = fTesto = fNumero = fGrande = nullptr;
         const float d = dpi;
         auto crea = [&](const wchar_t* fam, DWRITE_FONT_WEIGHT p, float px, IDWriteTextFormat** f, bool taglia, DWRITE_TEXT_ALIGNMENT al = DWRITE_TEXT_ALIGNMENT_LEADING) {
-            if (FAILED(fdw->CreateTextFormat(fam, nullptr, p, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, px * d, L"it-it", f)) || !*f) return;
+            if (FAILED(fdw->CreateTextFormat(fam, nullptr, p, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, px * d, testi::locale(), f)) || !*f) return;
             testi::allinea(*f, al); (*f)->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER); (*f)->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
             if (taglia) {   // testo troppo lungo: finisce con "…"
                 IDWriteInlineObject* e = nullptr; fdw->CreateEllipsisTrimmingSign(*f, &e);

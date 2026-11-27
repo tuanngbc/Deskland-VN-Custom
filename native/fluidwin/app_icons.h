@@ -16,6 +16,18 @@ struct Entry {std::shared_ptr<const Pixels> pixels;ULONGLONG used=0;};
 inline std::mutex mutex;
 inline std::unordered_map<std::wstring,Entry> memory;
 inline constexpr size_t budget=24*1024*1024;
+inline std::unordered_map<std::wstring,std::wstring> aliases;
+inline std::unordered_map<std::wstring,ULONGLONG> failures;
+inline std::wstring requestKey(const std::wstring& source,int size){
+    std::wstring k=source;for(auto& c:k)c=(wchar_t)towlower(c);return k+L"|"+std::to_wstring(size);
+}
+inline bool canRequest(const std::wstring& source,int size){
+    std::lock_guard<std::mutex> lock(mutex);auto i=failures.find(requestKey(source,size));
+    if(i==failures.end())return true;if(GetTickCount64()<i->second)return false;failures.erase(i);return true;
+}
+inline void failed(const std::wstring& source,int size){
+    std::lock_guard<std::mutex> lock(mutex);if(failures.size()>2048)failures.clear();failures[requestKey(source,size)]=GetTickCount64()+30000;
+}
 inline std::wstring key(const std::wstring& source,int size) {
     std::wstring s=source;for(auto& c:s)c=(wchar_t)towlower(c);
     WIN32_FILE_ATTRIBUTE_DATA a{};
@@ -30,25 +42,30 @@ inline uint64_t hash(const void* data,size_t n) {
 inline std::filesystem::path path(const std::wstring& k) {
     return std::filesystem::path(tlauncher::profile())/L"icon-cache"/(std::to_wstring(hash(k.data(),k.size()*sizeof(wchar_t)))+L".bgra");
 }
-inline void remember(const std::wstring& k,std::shared_ptr<const Pixels> p) {
-    std::lock_guard<std::mutex> lock(mutex);memory[k]={std::move(p),GetTickCount64()};
+inline void remember(const std::wstring& alias,const std::wstring& k,std::shared_ptr<const Pixels> p) {
+    std::lock_guard<std::mutex> lock(mutex);aliases[alias]=k;failures.erase(alias);memory[k]={std::move(p),GetTickCount64()};
     size_t bytes=0;for(auto& e:memory)bytes+=e.second.pixels->bgra.size()*4;
-    while(bytes>budget&&!memory.empty()) {auto old=std::min_element(memory.begin(),memory.end(),[](auto& a,auto& b){return a.second.used<b.second.used;});bytes-=old->second.pixels->bgra.size()*4;memory.erase(old);}
+    while(bytes>budget&&!memory.empty()) {auto old=std::min_element(memory.begin(),memory.end(),[](auto& a,auto& b){return a.second.used<b.second.used;});bytes-=old->second.pixels->bgra.size()*4;const auto evicted=old->first;memory.erase(old);
+        for(auto i=aliases.begin();i!=aliases.end();)if(i->second==evicted)i=aliases.erase(i);else ++i;
+    }
 }
 inline std::shared_ptr<const Pixels> peek(const std::wstring& source,int size) {
-    const auto k=key(source,size);std::unique_lock<std::mutex> lock(mutex,std::try_to_lock);
+    // No filesystem or Shell calls on a draw path. Workers validate file revision.
+    const auto alias=requestKey(source,size);std::unique_lock<std::mutex> lock(mutex,std::try_to_lock);
     if(!lock.owns_lock())return {};
-    auto i=memory.find(k);if(i==memory.end())return {};i->second.used=GetTickCount64();return i->second.pixels;
+    auto a=aliases.find(alias);if(a==aliases.end())return {};
+    auto i=memory.find(a->second);if(i==memory.end())return {};i->second.used=GetTickCount64();return i->second.pixels;
 }
 struct Header {uint32_t magic=0x31494354,w=0,h=0,reserved=0;uint64_t checksum=0;};
 template<class Extract> bool load(const std::wstring& source,int size,int& w,int& h,std::vector<UINT>& pixels,Extract extract) {
-    if(auto p=peek(source,size)){w=p->w;h=p->h;pixels=p->bgra;return true;}
-    if(size<16||size>512)return false;
-    const auto k=key(source,size);auto p=std::make_shared<Pixels>();
+    if(size<16||size>512||!canRequest(source,size))return false;
+    const auto k=key(source,size);
+    {std::lock_guard<std::mutex> lock(mutex);auto i=memory.find(k);if(i!=memory.end()){w=i->second.pixels->w;h=i->second.pixels->h;pixels=i->second.pixels->bgra;aliases[requestKey(source,size)]=k;return true;}}
+    auto p=std::make_shared<Pixels>();
     Header head;bool valid=false;
     {std::ifstream in(path(k),std::ios::binary);if(in.read((char*)&head,sizeof(head))&&head.magic==0x31494354&&head.w>0&&head.h>0&&head.w<=512&&head.h<=512){p->w=head.w;p->h=head.h;p->bgra.resize(size_t(head.w)*head.h);valid=bool(in.read((char*)p->bgra.data(),p->bgra.size()*4))&&hash(p->bgra.data(),p->bgra.size()*4)==head.checksum;}}
     if(!valid) {
-        p->bgra.clear();if(!extract(source,size,p->w,p->h,p->bgra)||p->w<=0||p->h<=0||p->w>512||p->h>512||p->bgra.size()!=size_t(p->w)*p->h)return false;
+        p->bgra.clear();if(!extract(source,size,p->w,p->h,p->bgra)||p->w<=0||p->h<=0||p->w>512||p->h>512||p->bgra.size()!=size_t(p->w)*p->h){failed(source,size);return false;}
         std::error_code ec;const auto dest=path(k);std::filesystem::create_directories(dest.parent_path(),ec);
         // Bound persistent storage too; stale entries are expendable cache, not user assets.
         size_t total=0;std::vector<std::filesystem::directory_entry> files;
@@ -59,6 +76,6 @@ template<class Extract> bool load(const std::wstring& source,int size,int& w,int
         {std::ofstream out(temp,std::ios::binary);out.write((char*)&head,sizeof(head));out.write((char*)p->bgra.data(),p->bgra.size()*4);out.flush();if(!out){out.close();std::filesystem::remove(temp,ec);}}
         MoveFileExW(temp.c_str(),dest.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);
     }
-    w=p->w;h=p->h;pixels=p->bgra;remember(k,p);return true;
+    w=p->w;h=p->h;pixels=p->bgra;remember(requestKey(source,size),k,p);return true;
 }
 } // namespace appicons

@@ -31,7 +31,11 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     HWND peek=FindWindowW(L"TLauncher.Native.StagePeek",nullptr);if(!peek)return 67;
     GetWindowPlacement(source,&after);if(memcmp(&before,&after,sizeof(before))||focus!=GetForegroundWindow())return 68;
     if(!phase3Snapshot(rail,evidence/L"phase3-stage.bmp")||!phase3Snapshot(peek,evidence/L"phase3-peek.bmp"))return 69;
-    SendMessageW(rail,WM_MOUSELEAVE,0,0);if(FindWindowW(L"TLauncher.Native.StagePeek",nullptr))return 70;
+    // Crossing rail -> Peek must keep the preview clickable; leaving both dismisses it.
+    SendMessageW(rail,WM_MOUSELEAVE,0,0);SendMessageW(peek,WM_MOUSEMOVE,0,MAKELPARAM(12,12));
+    ciPump(220);if(!FindWindowW(L"TLauncher.Native.StagePeek",nullptr))return 70;
+    SendMessageW(peek,WM_LBUTTONUP,0,MAKELPARAM(12,12));if(!activated)return 71;activated=false;
+    report<<"STAGE_PEEK_CLICK_ACTIVATION=PASS\n";
     SendMessageW(rail,WM_LBUTTONUP,0,MAKELPARAM(45,45));if(!activated)return 71;
     ShowWindow(source,SW_MINIMIZE);ciPump(60);manager.changed();
     DestroyWindow(source);manager.changed();st.enabled=false;manager.configure(st);

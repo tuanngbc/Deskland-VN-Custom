@@ -23,7 +23,7 @@
 
 namespace testi {
 
-enum Lingua { ITALIANO = 0, INGLESE = 1, SPAGNOLO = 2, FRANCESE = 3, TEDESCO = 4, PORTOGHESE = 5, ARABO = 6, N_LINGUE = 7 };
+enum Lingua { ITALIANO = 0, INGLESE = 1, SPAGNOLO = 2, FRANCESE = 3, TEDESCO = 4, PORTOGHESE = 5, ARABO = 6, VIETNAMITA = 7, N_LINGUE = 8 };
 
 // atomica: la leggono anche i thread di lavoro (aggiornamenti, widget) mentre l'interfaccia la cambia (S12)
 inline std::atomic<int>& lingua() { static std::atomic<int> l{ITALIANO}; return l; }
@@ -34,7 +34,7 @@ inline bool rtl() { return attuale() == ARABO; }
 
 // nome di ogni lingua nella lingua stessa (scelta nelle impostazioni)
 inline const wchar_t* nome(int l) {
-    static const wchar_t* n[N_LINGUE] = {L"Italiano", L"English", L"Español", L"Français", L"Deutsch", L"Português", L"العربية"};
+    static const wchar_t* n[N_LINGUE] = {L"Italiano", L"English", L"Español", L"Français", L"Deutsch", L"Português", L"العربية", L"Tiếng Việt"};
     return l >= 0 && l < N_LINGUE ? n[l] : n[INGLESE];
 }
 
@@ -86,12 +86,12 @@ inline const wchar_t* t(const wchar_t* it, const wchar_t* en) {
 // nome della lingua per date e orari (GetDateFormatEx). Arabo d'Egitto: calendario gregoriano (quello saudita e'
 // l'egiriano, e le date non corrisponderebbero al resto di Windows)
 inline const wchar_t* locale() {
-    static const wchar_t* n[N_LINGUE] = {L"it-IT", L"en-US", L"es-ES", L"fr-FR", L"de-DE", L"pt-BR", L"ar-EG"};
+    static const wchar_t* n[N_LINGUE] = {L"it-IT", L"en-US", L"es-ES", L"fr-FR", L"de-DE", L"pt-BR", L"ar-EG",L"vi-VN"};
     return n[attuale()];
 }
 // codice di due lettere (ricerca delle citta' del meteo)
 inline const wchar_t* codice() {
-    static const wchar_t* n[N_LINGUE] = {L"it", L"en", L"es", L"fr", L"de", L"pt", L"ar"};
+    static const wchar_t* n[N_LINGUE] = {L"it", L"en", L"es", L"fr", L"de", L"pt", L"ar",L"vi"};
     return n[attuale()];
 }
 // separatore dei decimali nei risultati dei calcoli
@@ -99,15 +99,7 @@ inline wchar_t virgola() { const int l = attuale(); return l == INGLESE || l == 
 
 // lingua al primo avvio: quella di Windows se FluidWin la conosce, altrimenti inglese
 inline int predefinita() {
-    switch (PRIMARYLANGID(GetUserDefaultUILanguage())) {
-        case LANG_ITALIAN: return ITALIANO;
-        case LANG_SPANISH: return SPAGNOLO;
-        case LANG_FRENCH: return FRANCESE;
-        case LANG_GERMAN: return TEDESCO;
-        case LANG_PORTUGUESE: return PORTOGHESE;
-        case LANG_ARABIC: return ARABO;
-        default: return INGLESE;
-    }
+    return VIETNAMITA; // Only the fallback for a missing saved language value.
 }
 
 // Testo dell'utente (una ricerca, un nome) dentro una frase: in arabo lo si isola (FSI ... PDI) cosi' l'ordine dei suoi

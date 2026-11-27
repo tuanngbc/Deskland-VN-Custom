@@ -775,6 +775,7 @@ private:
 
     void clic(int id) {
         if(id>=6200&&id<=6202){valori().dockVisibility=id-6200;valori().dockAuto=id!=6200;salva();if(cambiato)cambiato();disegna();return;}
+        if(id==6203){valori().dockBarFullscreen=!valori().dockBarFullscreen;salva();if(cambiato)cambiato();disegna();return;}
         if(id>=6300&&id<=6305){
             if(id==6300)valori().spotlightEnabled=!valori().spotlightEnabled;
             else if(id==6301)valori().spotlightAltSpace=!valori().spotlightAltSpace;
@@ -1096,7 +1097,6 @@ private:
             const float x0 = rl.left + 170 * d, larg = rl.right - 16 * d - x0, h = 34 * d, y0 = rl.top + 15 * d;
             v.pen->SetColor(v.scuro ? D2D1::ColorF(1, 1, 1, 0.08f * (float)e) : D2D1::ColorF(0, 0, 0, 0.06f * (float)e));
             v.rt->FillRoundedRectangle({{x0, y0, x0 + larg, y0 + 2 * h}, h / 2, h / 2}, v.pen);
-            v.testo(L"Coming soon", fPiccolo, {x0 + larg * 3 / 4 + 3 * d, y0 + h + 3 * d, x0 + larg - 3 * d, y0 + 2 * h - 3 * d}, tenueS);
             for (int i = 0; i < testi::N_LINGUE; i++) {
                 const int col = i % 4;
                 const int fila = i / 4;
@@ -1253,6 +1253,9 @@ private:
         if (sezione == S_DOCK) {
             const wchar_t* modes[]={testi::t(L"Sempre visibile",L"Always visible"),testi::t(L"Nascondi automaticamente",L"Auto-hide"),testi::t(L"Barra compatta",L"Collapsed bar")};
             for(int i=0;i<3;++i){D2D1_RECT_F r{L,y,R,y+44*d};riquadro(r,sopra==6200+i);aggiungiZona(r,6200+i);v.testo(modes[i],fVoce,{L+16*d,y,R-74*d,y+44*d},inkS);levetta(R-58*d,y+22*d,valori().dockVisibility==i?1.f:0.f,(float)e);y+=50*d;}
+            {D2D1_RECT_F r{L,y,R,y+48*d};riquadro(r,sopra==6203);aggiungiZona(r,6203);
+             v.testo(testi::t(L"Barra a schermo intero",L"Show collapsed bar in fullscreen"),fVoce,{L+16*d,y,R-74*d,y+48*d},inkS);
+             levetta(R-58*d,y+24*d,valori().dockBarFullscreen?1.f:0.f,(float)e);y+=54*d;}
             {   // posizione (1.3.0, Fase 3): il bordo dello schermo dove sta il dock; quattro scelte
                 const D2D1_RECT_F ra = {L, y, R, y + 64 * d};
                 riquadro(ra, false);
