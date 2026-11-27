@@ -84,3 +84,6 @@ Stage group-menu selection now updates the displayed/current member before using
 
 
 CI 46059056737 passed Boxing renderer and native lifecycle contracts. The migrated runtime now finds the main window, but live log reading still timed out. Verified native evidence archive SHA256 8d888f52d6a081dadb2fc2a680d059ae4042b6e799bb1809cd71ee5c5412086a contains exactly the expected restored native/wallpaper values while main/Guardian were running. The fixture reader must share write/delete access with the active CRT log writer; use an explicitly shared FileStream and remove each previous runner log only between stopped sessions, preventing a stale-log false pass. Hosted verification pending.
+
+
+Meadow kitten restores the audited tail UV mask/pivot and long-rest/short-flick envelope from prototype/meadow-cat.js and meadow.html. The existing texture/cache, physical bounds and layer order stay intact; the body no longer receives generic whole-sprite sway. Petting adds a continuous damped tail impulse and settles without changing position. Hosted shader evidence checks still resting pixels, local-tail deformation, pet continuity and settling; CI pending. The Wallpaper Settings section title now uses its existing Vietnamese translation. This does not close the remaining boy/kite or complete character-quality audit.

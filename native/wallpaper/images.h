@@ -3,6 +3,7 @@
 #include "spatial.h"
 #include <wincodec.h>
 #include <memory>
+#include <string_view>
 
 namespace wallpaper {
 template<class T>class Com {
@@ -20,6 +21,13 @@ inline Pixels decode(const std::filesystem::path&path,UINT maxWidth=2048,UINT ma
     double scale=std::min({1.,double(maxWidth)/w,double(maxHeight)/h});pixels.width=std::max(1u,UINT(w*scale));pixels.height=std::max(1u,UINT(h*scale));
     if(FAILED(factory->CreateBitmapScaler(scaler.put()))||FAILED(scaler->Initialize(frame.get(),pixels.width,pixels.height,WICBitmapInterpolationModeFant))||FAILED(factory->CreateFormatConverter(converter.put()))||FAILED(converter->Initialize(scaler.get(),GUID_WICPixelFormat32bppRGBA,WICBitmapDitherTypeNone,nullptr,0,WICBitmapPaletteTypeCustom)))throw std::runtime_error("Wallpaper image conversion failed");
     pixels.rgba.resize(size_t(pixels.width)*pixels.height*4);if(FAILED(converter->CopyPixels(nullptr,pixels.width*4,UINT(pixels.rgba.size()),pixels.rgba.data())))throw std::runtime_error("Wallpaper image pixels unavailable");return pixels;
+}
+// Audited from prototype/meadow-cat.js: long rests, then a short tail flick.
+inline float meadowKittenTailAngle(float time,int seed=7341){
+    const float period=10+abs(seed%4),age=float(fmod(std::max(0.f,time)+abs(seed%1300)/1000.f,period))-3;
+    if(age<0||age>=1.6f)return 0;
+    const float phase=age/1.6f,envelope=sin(phase*3.14159265f);
+    return sin(phase*12.5663706f)*envelope*envelope*.34f;
 }
 class Sprites {
     GL&g;Program program;std::unique_ptr<Program> kiteProgram,boyProgram;std::map<std::wstring,std::unique_ptr<Texture>> textures;
@@ -55,18 +63,21 @@ public:
         glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
         for(float shadow:{1.f,0.f}){p.f("uShadow",shadow);glDrawArrays(GL_TRIANGLES,0,3);}glDisable(GL_BLEND);
     }
-    void anchored(const wchar_t*path,const View&view,const SpriteTransform&transform,float time,float sx,float sy,bool shadow=false,float alpha=1,float shear=.3f){auto b=transform.bounds();draw(path,view,b.x,b.y,b.w,b.h,time,sx,sy,transform.mirror,shadow,alpha,shear,-1,transform.anchorY);}
+    void anchored(const wchar_t*path,const View&view,const SpriteTransform&transform,float time,float sx,float sy,bool shadow=false,float alpha=1,float shear=.3f,float tailAngle=0){auto b=transform.bounds();draw(path,view,b.x,b.y,b.w,b.h,time,sx,sy,transform.mirror,shadow,alpha,shear,-1,transform.anchorY,tailAngle);}
     void kite(const View&view,float handX,float handY,float x,float y,float scale,float time,float reaction,float scaleX,float scaleY){
         if(!kiteProgram)kiteProgram=std::make_unique<Program>(g,assetText(assetsRoot()/L"wallpaper/shaders/meadow-kite-native.frag"));
         auto&p=*kiteProgram;p.use();p.v2("world",view.worldW,view.worldH);p.v2("origin",view.x,-(view.worldH-view.y-view.h));p.v2("pixelScale",scaleX,scaleY);p.v2("hand",handX,handY);p.v2("kite",x,y);p.f("scale",scale);p.f("time",time);p.f("reaction",reaction);
         glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);glDrawArrays(GL_TRIANGLES,0,3);glDisable(GL_BLEND);
     }
     explicit Sprites(GL&gl):g(gl),program(gl,R"(#version 330 core
-uniform sampler2D sprite;uniform vec2 origin,world,pixelScale;uniform vec4 rect,uvRect;uniform float time,mirror,shadow,alpha,shear,anchorY;
+uniform sampler2D sprite;uniform vec2 origin,world,pixelScale;uniform vec4 rect,uvRect;uniform float time,mirror,shadow,alpha,shear,anchorY,kitten,tailAngle;
 out vec4 o;
-void main(){vec2 p=vec2(gl_FragCoord.x/pixelScale.x,world.y-gl_FragCoord.y/pixelScale.y)+origin;vec2 uv=(p-rect.xy)/rect.zw;if(shadow>.5){float height=(uv.y-anchorY)*2.8;uv.x-=shear*height*rect.w/rect.z;uv.y=anchorY-height;}else uv.x+=sin(time*1.4+uv.y*2.)*.006*pow(1.-uv.y,2.);if(mirror>.5)uv.x=1.-uv.x;if(any(lessThan(uv,vec2(0)))||any(greaterThan(uv,vec2(1))))discard;vec4 c=texture(sprite,uvRect.xy+clamp(uv,.001,.999)*uvRect.zw);o=vec4(shadow>.5?vec3(.12,.20,.18):c.rgb,c.a*alpha);})"){}
-    void draw(const wchar_t*path,const View&view,float x,float y,float w,float h,float time,float scaleX,float scaleY,bool mirror=false,bool shadow=false,float alpha=1,float shear=.3f,int atlasFrame=-1,float anchorY=1){
+float tailMask(vec2 uv){return smoothstep(.635,.665,uv.x)*smoothstep(.715,.75,uv.y);}
+vec4 kittenColor(vec2 uv){vec2 pivot=vec2(.68,.73),delta=uv-pivot;float a=-tailAngle*smoothstep(.025,.16,length(delta));float c=cos(a),s=sin(a);vec2 source=pivot+vec2(c*delta.x-s*delta.y,s*delta.x+c*delta.y);vec4 body=texture(sprite,uv),tail=texture(sprite,source);body.a*=1.-tailMask(uv);tail.a*=tailMask(source);float opacity=body.a+tail.a;return vec4((body.rgb*body.a+tail.rgb*tail.a)/max(opacity,.001),min(opacity,1.));}
+void main(){vec2 p=vec2(gl_FragCoord.x/pixelScale.x,world.y-gl_FragCoord.y/pixelScale.y)+origin;vec2 uv=(p-rect.xy)/rect.zw;if(shadow>.5){float height=(uv.y-anchorY)*2.8;uv.x-=shear*height*rect.w/rect.z;uv.y=anchorY-height;}else if(kitten<.5)uv.x+=sin(time*1.4+uv.y*2.)*.006*pow(1.-uv.y,2.);if(mirror>.5)uv.x=1.-uv.x;if(any(lessThan(uv,vec2(0)))||any(greaterThan(uv,vec2(1))))discard;vec4 c=kitten>.5?kittenColor(clamp(uv,.001,.999)):texture(sprite,uvRect.xy+clamp(uv,.001,.999)*uvRect.zw);o=vec4(shadow>.5?vec3(.12,.20,.18):c.rgb,c.a*alpha);})"){}
+    void draw(const wchar_t*path,const View&view,float x,float y,float w,float h,float time,float scaleX,float scaleY,bool mirror=false,bool shadow=false,float alpha=1,float shear=.3f,int atlasFrame=-1,float anchorY=1,float tailAngle=0){
         auto&texture=image(path);texture.bind(g,5);program.use();program.i("sprite",5);program.v2("world",view.worldW,view.worldH);program.v2("origin",view.x,-(view.worldH-view.y-view.h));program.v2("pixelScale",scaleX,scaleY);program.v4("rect",{x,y,w,h});program.f("time",time);program.f("mirror",mirror?1.f:0.f);program.f("shadow",shadow?1.f:0.f);program.f("alpha",alpha);program.f("shear",shear);
+        program.f("kitten",std::wstring_view(path)==L"wallpaper/assets/meadow-black-kitten.png"?1.f:0.f);program.f("tailAngle",tailAngle);
         program.f("anchorY",anchorY);if(atlasFrame<0)program.v4("uvRect",{0,0,1,1});else program.v4("uvRect",{float(atlasFrame%2)*.5f,float(atlasFrame/2)*.5f,.5f,.5f});
         const float margin=shadow?w:1;int left=int((x-view.x-margin)*scaleX),right=int((x+w-view.x+margin)*scaleX),bottom=int((view.y+view.h-y-h*(shadow?1.5f:1.f)-1)*scaleY),top=int((view.y+view.h-y+1)*scaleY);
         left=std::clamp(left,0,int(view.w*scaleX));right=std::clamp(right,0,int(view.w*scaleX));bottom=std::clamp(bottom,0,int(view.h*scaleY));top=std::clamp(top,0,int(view.h*scaleY));

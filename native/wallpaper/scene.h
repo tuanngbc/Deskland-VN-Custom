@@ -40,7 +40,7 @@ class SceneRuntime {
     std::unique_ptr<BoxingModel> boxing;
     uint32_t rng=0x731f91u;
     Geometry geometry;bool geometryExplicit=false,placementDirty=true;int lastPalmCount=-1;
-    PalmLayout palmLayout;Body boyBody;V2 meadowCat{};bool catPlaced=false;float boyGait=0,boyTug=0,boyNext=7;
+    PalmLayout palmLayout;Body boyBody;V2 meadowCat{};Spring meadowTail;bool catPlaced=false;float boyGait=0,boyTug=0,boyNext=7;
     std::array<Vec4,8> lanternLayout{};std::array<float,8> lanternSwing{};int lanternCount=0,lanternWant=-1;bool lanternDirty=true;
     enum class WaterMood {Cruise,Forage,Startle,Rest,Curious};
     struct SwimState {WaterMood mood=WaterMood::Cruise;float remaining=0,phase=0,wander=0;};
@@ -212,6 +212,8 @@ public:
 #ifdef WALLPAPER_HOSTED_PROBE
     // Synthetic initial conditions exist only in the hosted renderer executable.
     // Product builds have no runtime override or owner-facing probe controls.
+    V2 probeMeadowKitten()const{return meadowCat;}
+    float probeMeadowTail()const{return meadowTail.x;}
     struct PorchStatus {float fanYaw,fanBlade,chimeAngle,chimeVelocity,bird;int bites;std::array<int,4> poses;std::array<float,4> rolls,happy;};
     PorchStatus probePorch()const{return {sin(fanOscillation)*.85f,fanPhase,chime.x,chime.v,birdHop,melonBites,corgiPose,corgiRoll,corgiHappy};}
     void probeCloud(V2 p,float radius){probeCloudCenter=p;probeCloudRadius=radius;}
@@ -250,7 +252,7 @@ public:
                 aimActor(name,i,target,r,water);
             }}
         const std::string id=catalog()[index].id;
-        if(id=="meadow"){if(boyBounds().contains({x,y}))boyTug=1;else if(navigable({x,y},70,false)){boyBody.aim({x,y});boyNext=age+18;}}
+        if(id=="meadow"){float radius=geometry.meadowCatSize()*.5f;if(catPlaced&&Box{meadowCat.x-radius,meadowCat.y-radius,2*radius,2*radius}.contains({x,y}))meadowTail.v+=.9f;else if(boyBounds().contains({x,y}))boyTug=1;else if(navigable({x,y},70,false)){boyBody.aim({x,y});boyNext=age+18;}}
         if(id=="sky"||id=="meadow"||id=="ocean"||id=="lake")clouds.burst(x,y,lastTime);
         if(id=="cat-hill"||id=="cats"){bool pet=false;for(auto&cat:cats)if(cat.body.initialized&&Box{cat.x-42*geometry.catScale(),cat.y-65*geometry.catScale(),84*geometry.catScale(),85*geometry.catScale()}.contains({x,y})){cat.happy=2.5f;cat.wait=3;catPose(cat,4);cat.chasing=false;cat.body.aim(cat.body.position);pet=true;}if(!pet)toy={x,y,0,10};}
         if(id=="lake"||id=="aquarium")clickFishing(x,y,fx);
@@ -370,14 +372,15 @@ private:
                 V2 a=boyBody.position,b=a+V2{-165,-254};V2 d=b-a;float k=std::clamp(((p-a).x*d.x+(p-a).y*d.y)/(d.x*d.x+d.y*d.y),0.f,1.f);
                 if(geometry.covers(bounds)&&iconClear(bounds,previousIcons,18)&&(p-(a+d*k)).length()>catSize*.58f+96*s+14){meadowCat=p;catPlaced=true;break;}}
         }
-        for(int i=0;i<simulationSteps;i++){boyTug=std::max(0.f,boyTug-fixedStep);
+        for(int i=0;i<simulationSteps;i++){meadowTail.step(fixedStep,18,3.8f);boyTug=std::max(0.f,boyTug-fixedStep);
             if(boyBody.initialized){if(age>boyNext&&!boyBody.command){V2 q=boyBody.position+V2{-165,-254};if(!safeBoy(q,0))q=geometry.home(boyBody.position);if(safeBoy(q,0))boyBody.aim(q);boyNext=age+18;}
                 steer(boyBody,{105,150,170,2.5f,7,30,false},boyBody.target,fixedStep,safeBoy);
                 boyGait+=std::clamp(boyBody.speed()/105-boyGait,-fixedStep*8,fixedStep*8);
             }}
         if(p(c,"showBoy",1)>0&&boyBody.initialized&&safeBoy(boyBody.position,0))sprites->boy(view,boyBody.position,s,boyBody.phase,boyGait,t,boyTug,shade,sx,sy);
         if(p(c,"showCat",1)>0&&catPlaced){SpriteTransform cat{meadowCat,catSize,catSize,.5f,.5f,false};if(geometry.covers(cat.bounds())&&iconClear(cat.bounds(),previousIcons)){
-            sprites->anchored(L"wallpaper/assets/meadow-black-kitten.png",view,cat,t,sx,sy,true,shade,shear);sprites->anchored(L"wallpaper/assets/meadow-black-kitten.png",view,cat,t,sx,sy);
+            const float tail=std::clamp(meadowKittenTailAngle(t)+meadowTail.x,-.45f,.45f);
+            sprites->anchored(L"wallpaper/assets/meadow-black-kitten.png",view,cat,t,sx,sy,true,shade,shear,tail);sprites->anchored(L"wallpaper/assets/meadow-black-kitten.png",view,cat,t,sx,sy,false,1,.3f,tail);
         }}
     }
     void fleeFish(NativeFish&fish,V2 origin,bool aquarium){

@@ -938,7 +938,7 @@ private:
             case S_NOTCH: return testi::t(L"Notch e notifiche", L"Dynamic Notch");
             case S_TASTIERA: return testi::t(L"Tastiera e mouse", L"Keyboard and mouse");
             case S_CURSORE: return testi::t(L"Cursore", L"Cursor");
-            case S_WALLPAPER: return L"Live Wallpaper";
+            case S_WALLPAPER: return testi::t(L"Live Wallpaper",L"Live Wallpaper");
             case S_STAGE: return L"Stage Manager";
             case S_SPOTLIGHT: return L"Spotlight";
         }

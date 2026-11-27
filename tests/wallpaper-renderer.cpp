@@ -74,6 +74,23 @@ int main(int argc,char**argv){try{
         report<<"MEADOW_CONTROLLED_CLOUD_OVER_GROUND_ACTOR=PASS\n";
     }
     {
+        allocate(384,384);View v{0,0,384,384,384,384};Sprites sprites(gl);SpriteTransform cat{{192,192},360,360,.5f,.5f,false};
+        auto draw=[&](float angle,float time){glClearColor(1,1,1,1);glClear(GL_COLOR_BUFFER_BIT);sprites.anchored(L"wallpaper/assets/meadow-black-kitten.png",v,cat,time,1,1,false,1,.3f,angle);return capture(384,384);};
+        const auto resting=draw(0,0),laterRest=draw(0,8);check(resting==laterRest,"Resting kitten artwork still sways as a rigid sprite");
+        auto flick=draw(.3f,8);int changed=0;for(int y=0;y<384;++y)for(int x=0;x<384;++x){size_t pixel=(size_t(383-y)*384+x)*4;
+            bool differs=!std::equal(resting.begin()+pixel,resting.begin()+pixel+4,flick.begin()+pixel);if(differs){changed++;check(x>180&&y>220,"Tail deformation moves kitten face or body");}}
+        check(changed>8,"Kitten tail deformation absent");check(meadowKittenTailAngle(0)==0&&meadowKittenTailAngle(8)==0,"Kitten long resting interval absent");
+        bool moved=false;for(int i=0;i<160;++i)moved=moved||abs(meadowKittenTailAngle(2.16f+i*.01f))>.05f;check(moved,"Kitten periodic tail flick absent");
+        png(evidence/"meadow-kitten-tail-flick.png",384,384,flick);
+        SceneRuntime meadow(gl,sceneIndex("meadow"));allocate(96,54);View sceneView{0,0,960,540,960,540};noiseTexture.bind(gl,0);meadow.render(config,sceneView,{},weather,8,0,stop,.1f,.1f);
+        auto position=meadow.probeMeadowKitten();meadow.click(position.x,position.y);check(meadow.probeMeadowTail()==0,"Petting teleported the tail");
+        for(int i=0;i<5;++i){noiseTexture.bind(gl,0);meadow.render(config,sceneView,{},weather,8+(i+1)*.04f,.04f,stop,.1f,.1f);}
+        check(meadow.probeMeadowTail()>.01f&&(meadow.probeMeadowKitten()-position).length()==0,"Kitten pet response lacks continuous local motion");
+        for(int i=0;i<180;++i){noiseTexture.bind(gl,0);meadow.render(config,sceneView,{},weather,8.2f+(i+1)*.04f,.04f,stop,.1f,.1f);}
+        check(abs(meadow.probeMeadowTail())<.001f,"Kitten pet spring did not settle");
+        report<<"MEADOW_KITTEN_LOCAL_TAIL_MASK_AND_REST=PASS\nMEADOW_KITTEN_CONTINUOUS_PET_REACTION=PASS\n";
+    }
+    {
         SceneRuntime beach(gl,sceneIndex("beach"));allocate(640,360);Config cfg=config;cfg.sceneParams["beach"]["birds"]=1;cfg.sceneParams["beach"]["palms"]=0;
         std::vector<RECT> island{{260,280,340,330}};
         auto draw=[&](){noiseTexture.bind(gl,0);beach.render(cfg,view,island,weather,30,0,stop);return capture(640,360);};
