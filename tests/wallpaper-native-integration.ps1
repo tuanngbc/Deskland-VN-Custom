@@ -51,13 +51,14 @@ foreach($mode in 'accepted-baseline','wallpaper-disabled','wallpaper-enabled'){
  $env:TLAUNCHER_NATIVE_TRIAL_DIR=$profile;$env:GALLIUM_DRIVER='llvmpipe';$env:LIBGL_ALWAYS_SOFTWARE='true'
  $key='HKCU:\Software\TLauncher\NativeBase\Profiles\'+[IO.Path]::GetFileName($profile)+'\Impostazioni'
  New-Item -Path $key -Force|Out-Null;New-ItemProperty -Path $key -Name Lingua -PropertyType DWord -Value 1 -Force|Out-Null
- $startup=[Collections.Generic.List[object]]::new();$candidate=$null
+ $startup=[Collections.Generic.List[object]]::new();$candidate=$null;$failed=$false
  try{
   foreach($launch in 'first-observed','warm'){
    if((Main-Window) -ne [IntPtr]::Zero){throw 'Another native shell is running'}
    $watch=[Diagnostics.Stopwatch]::StartNew()
-   $candidate=Start-Process -FilePath $runtimeExe -ArgumentList @('--trial-dir',('"'+$profile+'"')) -WorkingDirectory $runtime -WindowStyle Hidden -PassThru
-   Wait-For { (Main-Window) -ne [IntPtr]::Zero } 'message window'
+   Write-Host "Starting $mode $launch with isolated profile $profile"
+   $candidate=Start-Process -FilePath $runtimeExe -ArgumentList @('--trial-dir',('"'+$profile+'"'),'--log') -WorkingDirectory $runtime -WindowStyle Hidden -PassThru
+   Wait-For { if($candidate.HasExited){throw "Exited before message window: $($candidate.ExitCode)"};(Main-Window) -ne [IntPtr]::Zero } 'message window'
    $startup.Add([pscustomobject]@{launch=$launch;messageWindowMs=$watch.Elapsed.TotalMilliseconds})
    if($mode -eq 'wallpaper-enabled'){Wait-For {[WallpaperIntegration]::WallpaperCount($true) -gt 0} 'visible wallpaper presentation'}
    elseif([WallpaperIntegration]::WallpaperCount($false) -ne 0){throw 'Disabled module created wallpaper windows'}
@@ -88,10 +89,11 @@ foreach($mode in 'accepted-baseline','wallpaper-disabled','wallpaper-enabled'){
    try{$graphics.CopyFromScreen($rect.Left,$rect.Top,0,0,$rect.Size);$bmp.Save((Join-Path $Evidence 'wallpaper-native-settings.png'))}finally{$graphics.Dispose();$bmp.Dispose()}
   }
   $results.Add([pscustomobject]@{mode=$mode;startup=$startup;uiRoundTripMs=$latency;uiRoundTripMaxMs=($latency|Measure-Object -Maximum).Maximum;wallpaperVisible=[WallpaperIntegration]::WallpaperCount($true);resourceReport='See exact main+Guardian JSON';coldStartup='NOT_ESTABLISHED; first-observed does not purge OS caches'})
- }finally{
-  if($candidate -and !$candidate.HasExited){[void][WallpaperIntegration]::PostMessage((Main-Window),0x10,[IntPtr]::Zero,[IntPtr]::Zero);if(!$candidate.WaitForExit(30000)){throw 'Native integration normal shutdown failed'}}
-  Wait-For {(Candidate-Processes $runtimeExe).Count -eq 0} 'all exact candidate processes exited'
-  if([WallpaperIntegration]::WallpaperCount($false) -ne 0){throw 'Wallpaper HWND leaked after shutdown'}
+ }catch{$failed=$true;$_|Out-String|Set-Content (Join-Path $Evidence ($mode+'-failure.txt'));throw}finally{
+  Get-CimInstance Win32_Process -Filter "Name='TLauncher.exe'"|Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine|ConvertTo-Json|Set-Content (Join-Path $Evidence ($mode+'-processes.json'))
+  if(Test-Path "$env:TEMP\tlauncher-native.log"){Copy-Item "$env:TEMP\tlauncher-native.log" (Join-Path $Evidence ($mode+'-native.log'))}
+  if($candidate -and !$candidate.HasExited){[void][WallpaperIntegration]::PostMessage((Main-Window),0x10,[IntPtr]::Zero,[IntPtr]::Zero);if(!$candidate.WaitForExit(30000) -and !$failed){throw 'Native integration normal shutdown failed'}}
+  if(!$failed){Wait-For {(Candidate-Processes $runtimeExe).Count -eq 0} 'all exact candidate processes exited';if([WallpaperIntegration]::WallpaperCount($false) -ne 0){throw 'Wallpaper HWND leaked after shutdown'}}
  }
 }
 $results|ConvertTo-Json -Depth 8|Set-Content (Join-Path $Evidence 'accepted-baseline-comparison.json')

@@ -6,6 +6,7 @@
 #include "images.h"
 #include <memory>
 #include <chrono>
+#include <cstring>
 
 namespace wallpaper {
 using Vec4=std::array<float,4>;
@@ -24,7 +25,7 @@ class SceneRuntime {
     std::array<Spring,2> head{},torso{};Spring ring,bag;
     std::array<float,2> hp{1,1},hpLag{1,1};int hitActor=-1;float hitAge=100,hitX=0,hitY=0,autoPunch=0;int melonBites=0;float fanMultiplier=1;
     float ballX=.5f,ballY=.5f,targetX=.5f,targetY=.5f;int passes=0;float passAge=0;
-    Config lastConfig;double lastTime=0;float goalSide=0,goalAge=100,userChase=0;
+    double lastTime=0;float lastHud=0,lastPower=1;int lastCorgis=3;float goalSide=0,goalAge=100,userChase=0;
     std::array<int,4> corgiPose{};std::array<float,4> corgiHappy{};Spring chime;
     float birdHop=100,melonRefill=0,fanPhase=0,tireAge=100;int roundNumber=1,bagIndex=0,hitZone=0;
     float roundAge=0,roundBell=0;std::array<Spring,3> bags{};
@@ -64,7 +65,7 @@ public:
         if(id=="summer-porch")clickPorch(x,y,fx);
     }
     void render(const Config&c,const View&view,const std::vector<RECT>&icons,const Weather&weather,double time,float dt,const std::atomic<bool>&stop,float scaleX=1,float scaleY=1){
-        const float w=view.worldW,h=view.worldH,t=float(time);lastConfig=c;lastTime=time;age+=dt;hitAge+=dt;toy[2]+=dt;toy[3]=std::max(0.f,toy[3]-dt);
+        const float w=view.worldW,h=view.worldH,t=float(time);lastHud=p(c,"hudMode",0);lastPower=p(c,"punchPower",1);lastCorgis=int(p(c,"corgis",3));lastTime=time;age+=dt;hitAge+=dt;toy[2]+=dt;toy[3]=std::max(0.f,toy[3]-dt);
         for(auto&e:effects)e.value[2]+=dt;
         for(auto&s:torso)s.step(dt);ring.step(dt);bag.step(dt);chime.step(dt,18,2.2f);for(auto&s:bags)s.step(dt,15,1.6f);
         const float sigma=p(c,"sigma",72),warp=p(c,"warp",34);
@@ -135,19 +136,19 @@ private:
     float sceneScale()const{return std::min(previousW/1080.f,std::max(280.f,previousH-48)/640.f);}
     void clickBoxing(float x,float y){
         const float s=sceneScale(),cx=previousW*.5f,h=previousH-48;
-        if(p(lastConfig,"hudMode",0)<2&&abs(x-cx)<54*s&&abs(y-44*s)<36*s){roundNumber++;roundAge=0;roundBell=1;hp={1,1};hpLag=hp;return;}
+        if(lastHud<2&&abs(x-cx)<54*s&&abs(y-44*s)<36*s){roundNumber++;roundAge=0;roundBell=1;hp={1,1};hpLag=hp;return;}
         if(abs(x-(cx-420*s))<78*s&&abs(y-h*.845f)<54*s){tireAge=0;ring.v+=25;return;}
         std::array<Vec4,3> targets{{{cx-388*s,h*.18f+82*s,0,0},{cx-448*s,h*.29f+86*s,0,0},{cx+425*s,h*.24f+88*s,0,0}}};
         for(int i=0;i<3;i++)if(abs(x-targets[i][0])<40*s&&abs(y-targets[i][1])<78*s){bags[i].v+=3;bagIndex=i;hitActor=-1;hitAge=0;hitX=targets[i][0];hitY=targets[i][1];return;}
         hitActor=x<cx?0:1;hitAge=0;hitX=x;hitY=y;autoPunch=2.2f;
         const float foot=h*(hitActor?.766f:.758f),rel=(y-(foot-115*s))/std::max(s,.01f);
         hitZone=rel<-14?0:rel<26?(abs(x-(cx+(hitActor?68:-68)*s))>14*s?1:2):3;
-        const float power=p(lastConfig,"punchPower",1),side=hitActor?1.f:-1.f;
+        const float power=lastPower,side=hitActor?1.f:-1.f;
         if(hitZone==3)torso[hitActor].v+=32*power;else head[hitActor].v+=side*(hitZone==0?70:55)*power;
         ring.v+=5*power;hp[hitActor]=std::max(0.f,hp[hitActor]-(hitZone==3?.035f:.05f)*power);
     }
     void clickPorch(float x,float y,ClickFx&fx){
-        float w=previousW,h=previousH,s=std::min(w/1080.f,std::max(1.f,h-48)/640.f);int n=int(p(lastConfig,"corgis",3));
+        float w=previousW,h=previousH,s=std::min(w/1080.f,std::max(1.f,h-48)/640.f);int n=lastCorgis;
         fx.value[3]=4;
         for(int i=0;i<n;i++)if(hypot(x-w*(.22f+i*.18f),y-h*(.73f+.06f*(i%2)))<78*s){corgiPose[i]=(corgiPose[i]+1)%3;corgiHappy[i]=2.6f;fx.value[3]=0;return;}
         if(hypot(x-w*.704f,y-(h*.518f-58*s))<68*s){fanMultiplier=fanMultiplier==1?1.8f:fanMultiplier>1.4f?.4f:fanMultiplier>.1f?0:1;fx.value[3]=1;return;}

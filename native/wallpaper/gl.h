@@ -83,7 +83,7 @@ public:
     void v4(const char*n,const float*p,int count=1){gl->Uniform4fv(loc(n),count,p);}void v4(const char*n,std::initializer_list<float> p){if(p.size()%4==0)gl->Uniform4fv(loc(n),GLsizei(p.size()/4),p.begin());}
 };
 class Texture {
-    GLuint id=0;
+    GLuint id=0;int allocatedWidth=0,allocatedHeight=0;GLint allocatedFormat=0;
 public:
     Texture(){glGenTextures(1,&id);if(!id)throw std::runtime_error("Texture allocation failed");}
     ~Texture(){if(id)glDeleteTextures(1,&id);}Texture(const Texture&)=delete;
@@ -92,7 +92,9 @@ public:
         if(width<=0||height<=0||uint64_t(width)*height>16*1024*1024)throw std::runtime_error("Texture size exceeds budget");
         bind(g,slot);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,repeat?GL_REPEAT:0x812F);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,repeat?GL_REPEAT:0x812F);
-        glTexImage2D(GL_TEXTURE_2D,0,internal,width,height,0,format,type,data);if(glGetError()!=GL_NO_ERROR)throw std::runtime_error("Texture allocation/upload failed");
+        if(width==allocatedWidth&&height==allocatedHeight&&internal==allocatedFormat){if(data)glTexSubImage2D(GL_TEXTURE_2D,0,0,0,width,height,format,type,data);}
+        else{glTexImage2D(GL_TEXTURE_2D,0,internal,width,height,0,format,type,data);allocatedWidth=width;allocatedHeight=height;allocatedFormat=internal;}
+        if(glGetError()!=GL_NO_ERROR)throw std::runtime_error("Texture allocation/upload failed");
     }
 };
 class Context {
