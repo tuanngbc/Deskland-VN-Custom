@@ -3366,11 +3366,12 @@ static void avviaZoom(HWND h, InfoFinestra& i) {
 }
 
 static void gestisciEvento(DWORD ev, HWND h);
+static void stageEvent(DWORD ev,HWND h);
 
 static void CALLBACK suEvento(HWINEVENTHOOK, DWORD ev, HWND h, LONG obj, LONG figlio, DWORD, DWORD) {
     if (!h || obj != OBJID_WINDOW || figlio != CHILDID_SELF) return;
     const double t = ora();
-    gestisciEvento(ev, h);
+    gestisciEvento(ev, h);stageEvent(ev,h);
     // gli eventi vengono gestiti dentro GetMessage, che pero' non ritorna finche' non arriva un messaggio vero:
     // se e' partita un'animazione, svegliamo subito il ciclo principale (altrimenti aspetterebbe il timer)
     // (anche con l'overlay ancora a schermo: un'animazione annullata qui lo lascia da svuotare)
@@ -3424,6 +3425,7 @@ static void gestisciEvento(DWORD ev, HWND h) {
             suCreata(h);
             break;
         case EVENT_OBJECT_DESTROY:
+            stampa::forget(h);
             avviaChiusura(h);
             annullaAnimDi(h); gInfo.erase(h); gNascoste.erase(h); gDaAdottare.erase(h); liberaFoto(h); gUltimoPosto.erase(h); gNateVelate.erase(h);
             if (auto at = gInAttesa.find(h); at != gInAttesa.end()) { at->second.copertura.libera(); gInAttesa.erase(at); }
@@ -3441,6 +3443,7 @@ static void gestisciEvento(DWORD ev, HWND h) {
             for (auto it = gGelatine.begin(); it != gGelatine.end();)
                 if (it->hwnd == h) { fermaViva(*it); it->viva.libera(); it->foto.libera(); it = gGelatine.erase(it); } else ++it;
             if (gDockOk && GetAncestor(h, GA_ROOT) == h) gDock.segnaCambiamento();
+            stampa::forget(h);
             break;
         case EVENT_OBJECT_LOCATIONCHANGE: {
             if (gDockOk && h == GetForegroundWindow()) gDock.controllaFinestre();   // ingrandita o rimpicciolita
@@ -3962,6 +3965,12 @@ static void altTabVeloce() {
 }
 static ricerca::Ricerca gRicerca;
 static stage::Manager gStage;
+static constexpr UINT_PTR TIMER_STAGE_CHANGE=0x5354;
+static void stageEvent(DWORD ev,HWND h){
+    if(!gStage.settings.enabled)return;DWORD pid=0;GetWindowThreadProcessId(h,&pid);if(pid==GetCurrentProcessId())return;
+    switch(ev){case EVENT_SYSTEM_FOREGROUND:case EVENT_SYSTEM_MINIMIZESTART:case EVENT_SYSTEM_MINIMIZEEND:case EVENT_OBJECT_SHOW:case EVENT_OBJECT_HIDE:case EVENT_OBJECT_DESTROY:case EVENT_OBJECT_NAMECHANGE:
+        SetTimer(gMessaggi,TIMER_STAGE_CHANGE,60,nullptr);break;}
+}
 static bool gSpotlightHotkey=false;
 static constexpr int TASTO_SPOTLIGHT=0x534c,TASTO_STAGE=0x534d;
 static void apriSpotlight() {
@@ -4080,6 +4089,7 @@ static std::wstring diagnostica() {
     if (gDockOk) { const auto& f = gDock.diagFissate;
         riga(L"Dock, app fissate: lista di Windows %ls, collegamenti %d, app di pacchetto %d, Squirrel di versioni cancellate %d, senza destinazione %d, file dell'icona mancante %d, doppie %d, scartate %d",
              f.lista ? L"letta" : L"non letta (solo la cartella)", f.collegamenti, f.pacchetto, f.squirrel, f.morte, f.iconeRotte, f.doppie, f.scartate); }
+    if(gWallpaper)t+=wallpaper::diagnostics(gWallpaper->metrics());
     riga(L"Registro: %ls", gLog ?L"acceso (%TEMP%\\fluidwin.log)" : L"spento (avvio con --log per averlo)");
     return t;
 }
@@ -4327,6 +4337,7 @@ static LRESULT CALLBACK procMessaggi(HWND h, UINT m, WPARAM w, LPARAM l) {
             if (IsWindow((HWND)w)) { preparaChiusura((HWND)w); PostMessageW((HWND)w, WM_SYSCOMMAND, SC_CLOSE, 0); }
             return 0;
         case WM_TIMER:
+            if(w==TIMER_STAGE_CHANGE){KillTimer(h,TIMER_STAGE_CHANGE);if(gStage.settings.enabled){if(gDockOk)gDock.timer();gStage.changed();}return 0;}
             if (w == 1) { wallpaperTick(); gStage.changed(); }
             if (w == 13) { gBattito = GetTickCount64(); return 0; }   // battito per l'hook della tastiera (uiViva)
             if (w == 24) { affiancaPasso(); return 0; }   // trascinamento: casella sotto il mouse e anteprima
@@ -4819,6 +4830,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     gStage.activation=[](HWND h) {if(gDockOk)gDock.activateStageWindow(h);};
     gStage.icon=[](ID2D1RenderTarget* target,const std::wstring& path,int size) {return gDockOk?gDock.sharedIcon(target,path,size):nullptr;};
     gStage.reserved=[](HMONITOR m) {return gDockOk?gDock.fasciaSu(m):RECT{};};
+    gStage.exclusions=[](HMONITOR m){std::vector<RECT> result;
+        for(HWND h:{FindWindowW(L"TLauncher.Native.Notch",nullptr),FindWindowW(L"TLauncher.Native.Impostazioni",nullptr)})if(h&&IsWindowVisible(h)&&MonitorFromWindow(h,MONITOR_DEFAULTTONEAREST)==m){RECT r{};if(GetWindowRect(h,&r))result.push_back(r);}return result;};
     gStage.fullscreen=[](HMONITOR m) {return schermoInteroAttivo()&&MonitorFromWindow(GetForegroundWindow(),MONITOR_DEFAULTTONEAREST)==m;};
     gBanner.isola = []() { return gDockOk ? gDock.rettIsolaSchermo() : vetro::areaPrincipale(true); };
     gBanner.silenzio = []() { return schermoInteroAttivo() || comodita::silenzio(); };   // anche con Non disturbare

@@ -311,6 +311,9 @@ public:
                 bordo((size_t)y * vw + vw - 1, (size_t)y * vw + vw - 2);
             }
         }
+        if(stampa::keepSnapshots){DWORD pid=0;DWORD tid=GetWindowThreadProcessId(h,&pid);
+            try{stampa::remember(h,pid,tid,stampa::generation(h),vw,vh,px.data());}catch(const std::bad_alloc&){}
+        }
         if (ritocco) ritocco(h, visibile, vw, vh, (unsigned int*)px.data());
         out.libera();
         D3D11_TEXTURE2D_DESC td{}; td.Width = vw; td.Height = vh; td.MipLevels = 0; td.ArraySize = 1;

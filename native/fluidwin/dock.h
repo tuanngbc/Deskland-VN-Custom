@@ -3558,7 +3558,7 @@ public:
                 if (!tid || !IsWindow(h)) continue;
                 wchar_t title[512]{}; GetWindowTextW(h,title,512);
                 std::wstring identity=!v.aumid.empty()?v.aumid:!v.exe.empty()?v.exe:v.avvio;
-                result.push_back({h,pid,tid,identity,title[0]?std::wstring(title):v.nome,sorgenteIcona(v)});
+                result.push_back({h,pid,tid,identity,title[0]?std::wstring(title):v.nome,sorgenteIcona(v),stampa::generation(h)});
             }
         }
         return result;

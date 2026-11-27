@@ -28,6 +28,7 @@ public:
     }
     bool settled(double time)const{return !transitioning||time-changed>=1.8;}
     void generate(float w,float h,const std::vector<RECT>&icons,float sigma,float warp,double time,const std::atomic<bool>&stop){
+        CpuMeasure measure{graphicsStats.fieldMs};
         step=std::max(5.f,std::max(w,h)/2048.f);width=int(ceil(w/step))+2;height=int(ceil(h/step))+2;
         if(uint64_t(width)*height>4*1024*1024)throw std::runtime_error("Icon field budget exceeded");
         std::vector<float> mass(size_t(width)*height,0.f);sigma=std::max(20.f,sigma);

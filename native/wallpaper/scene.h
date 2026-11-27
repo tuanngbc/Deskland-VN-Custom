@@ -40,6 +40,10 @@ class SceneRuntime {
     Geometry geometry;bool geometryExplicit=false,placementDirty=true;int lastPalmCount=-1;
     PalmLayout palmLayout;Body boyBody;V2 meadowCat{};bool catPlaced=false;float boyGait=0,boyTug=0,boyNext=7;
     std::array<Vec4,8> lanternLayout{};std::array<float,8> lanternSwing{};int lanternCount=0,lanternWant=-1;bool lanternDirty=true;
+    enum class WaterMood {Cruise,Forage,Startle,Rest,Curious};
+    struct SwimState {WaterMood mood=WaterMood::Cruise;float remaining=0,phase=0,wander=0;};
+    std::array<SwimState,6> schoolState{};std::array<SwimState,4> turtleState{};
+    V2 feedPoint{};float feedAge=100;
     std::map<std::string,std::vector<Body>> groups;double remainder=0,simulationTime=0;int simulationSteps=0;
     struct Route {std::vector<V2> points;size_t next=0;};std::map<std::pair<std::string,size_t>,Route> routes;
     static constexpr float fixedStep=1.f/120.f;
@@ -105,6 +109,7 @@ class SceneRuntime {
                     b.position=b.target=q;b.heading=hash(i,index,201+salt)*6.283185f;b.phase=float(i);b.initialized=true;b.idle=10;break;}
             }
         }
+        {CpuMeasure simulation{graphicsStats.simulationMs};
         for(int step=0;step<simulationSteps;step++)for(int i=0;i<n;i++){auto&b=list[i];if(!b.initialized)continue;
             if((!b.command&&(b.idle>6||((b.target-b.position).length()<40&&b.idle>=0)))||(b.command&&spec.airborne&&b.idle>3)){
                 float tick=float(simulationTime-(simulationSteps-1-step)*fixedStep);
@@ -117,12 +122,70 @@ class SceneRuntime {
             steer(b,spec,waypoint,fixedStep,[&](V2 p,float r){return navigable(p,r,water);},separate(b,list.data(),list.size(),spec.radius*3));
             if(arriving&&(waypoint-b.target).length()>.001f)b.command=true;
         }
+        }
         int visible=0;for(int i=0;i<n;i++){auto&b=list[i];if(!b.initialized)continue;
             float flap=bird?.68f+.32f*cos(b.phase):b.phase;
             float direction=!strcmp(uniform,"uBfly")||!strcmp(uniform,"uBugs")?cos(b.heading):b.heading;
             if(!strcmp(uniform,"uFly")){direction=b.phase;flap=.6f+.4f*sin(t*2+i);}if(!strcmp(uniform,"uPart"))direction=b.phase;
             values[visible]={b.position.x,b.position.y,direction,!strcmp(uniform,"uPart")?float(i%3):flap};motion[visible]={b.speed()/std::max(1.f,spec.speed),b.velocity.x,b.velocity.y,b.angularVelocity};visible++;
         }program.f(count,float(visible));array(uniform,values);array((std::string(uniform)+"Motion").c_str(),motion);
+    }
+    // Species share collision/acceleration mathematics, but have distinct behavior,
+    // timing, propulsion and responses. Each fish entry is an eleven-fish school.
+    template<size_t N>void swimmers(const char*uniform,const char*count,int n,float w,float h,bool turtle){
+        if(program.loc(uniform)<0)return;CpuMeasure simulation{graphicsStats.simulationMs};
+        auto& list=groups[uniform];n=std::clamp(n,0,int(N));list.resize(n);std::array<Vec4,N> values{};
+        const float radius=turtle?20.f:38.f;
+        for(int i=0;i<n;i++){auto& b=list[i];auto& state=turtle?turtleState[i]:schoolState[i];
+            if(!b.initialized){for(int trial=0;trial<768;trial++){V2 q{w*(.05f+.9f*hash(i*773+trial,index,turtle?703:701)),h*(.25f+.6f*hash(i*773+trial,index,turtle?704:702))};
+                if(!navigable(q,radius,true))continue;bool clear=true;for(int j=0;j<i;j++)if(list[j].initialized&&(list[j].position-q).length()<radius*3)clear=false;if(!clear)continue;
+                b.position=b.target=q;b.heading=hash(i,index,705)*6.283185f;b.initialized=true;state.phase=hash(i,index,706)*6.283185f;state.wander=0;state.remaining=12+hash(i,index,707)*10;break;}}
+        }
+        for(int step=0;step<simulationSteps;step++){
+            // Read one coherent flock state so update order cannot favor a leader.
+            const auto before=list;
+            for(int i=0;i<n;i++){auto& b=list[i];auto& state=turtle?turtleState[i]:schoolState[i];if(!b.initialized)continue;
+                state.remaining-=fixedStep;state.wander-=fixedStep;
+                if(state.remaining<=0){
+                    if(turtle&&state.mood==WaterMood::Cruise){state.mood=WaterMood::Rest;state.remaining=2+hash(i,int(simulationTime),708)*4;}
+                    else{state.mood=WaterMood::Cruise;state.remaining=(turtle?14.f:7.f)+hash(i,int(simulationTime),709)*9;state.wander=0;b.command=false;routes.erase({uniform,size_t(i)});}
+                }
+                if(state.wander<=0&&state.mood==WaterMood::Cruise){
+                    const float turn=(hash(i,int(simulationTime/3),710)-.5f)*(turtle?1.2f:2.f);
+                    V2 wanted=b.position+V2{cos(b.heading+turn),sin(b.heading+turn)}*(turtle?130.f:230.f);
+                    b.target=destination(wanted,radius,true,b.position);state.wander=(turtle?9.f:4.f)+hash(i,int(simulationTime),711)*5;b.command=false;
+                }
+                const bool startled=state.mood==WaterMood::Startle,forage=state.mood==WaterMood::Forage;
+                float speed=turtle?(state.mood==WaterMood::Rest?0.f:7.5f*(.85f+.15f*sin(state.phase))):
+                    (startled?72.f:forage?34.f:19.f)*(.8f+.2f*sin(state.phase*.27f+i));
+                MotionSpec spec=turtle?MotionSpec{speed,3.f,4.f,.55f,.8f,radius,false}:MotionSpec{speed,startled?65.f:24.f,36.f,2.f,4.f,radius,false};
+                V2 social=separate(before[i],before.data(),before.size(),turtle?70.f:105.f);
+                if(!turtle&&state.mood==WaterMood::Cruise){V2 center{},velocity{};int neighbors=0;
+                    for(int j=0;j<n;j++)if(i!=j&&before[j].initialized&&(before[j].position-b.position).length()<300){center=center+before[j].position;velocity=velocity+before[j].velocity;neighbors++;}
+                    if(neighbors){social=social+unit(center*(1.f/neighbors)-b.position)*.12f+unit(velocity)*.22f;}
+                }
+                V2 waypoint=b.target;auto route=routes.find({uniform,size_t(i)});const bool commanded=b.command;
+                if(route!=routes.end()){auto& path=route->second;if(path.next<path.points.size()&&(path.points[path.next]-b.position).length()<radius)path.next++;
+                    if(path.next<path.points.size()){waypoint=path.points[path.next];if(path.next+1<path.points.size())b.command=false;}}
+                steer(b,spec,waypoint,fixedStep,[&](V2 q,float r){return navigable(q,r,true);},social);
+                if(commanded&&(waypoint-b.target).length()>.01f)b.command=true;
+                // Fins/tails retain a small idle beat; propulsion increases stroke rate.
+                state.phase+=fixedStep*(turtle?(state.mood==WaterMood::Rest?.22f:1.1f+b.speed()*.08f):2.4f+b.speed()*.095f);
+            }
+        }
+        int visible=0;for(int i=0;i<n;i++)if(list[i].initialized){const auto&b=list[i];const auto&state=turtle?turtleState[i]:schoolState[i];values[visible++]={b.position.x,b.position.y,b.heading,state.phase};}
+        program.f(count,float(visible));array(uniform,values);
+    }
+    void interactSwimmers(const std::string&name,V2 click){
+        auto& list=groups[name];const bool turtle=name=="uTurt";const float radius=turtle?20.f:38.f;
+        for(size_t i=0;i<list.size();i++){auto&b=list[i];if(!b.initialized)continue;float distance=(b.position-click).length();if(distance>(turtle?260.f:520.f))continue;
+            auto&state=turtle?turtleState[i]:schoolState[i];V2 wanted;
+            if(distance<(turtle?40.f:70.f)){state.mood=WaterMood::Startle;state.remaining=turtle?3.f:2.2f;wanted=b.position+unit(b.position-click)*190;}
+            else{state.mood=turtle?WaterMood::Curious:WaterMood::Forage;state.remaining=turtle?9.f:7.f;
+                const float a=6.283185f*(float(i)/std::max(size_t(1),list.size()))+hash(int(i),index,712)*.5f;
+                wanted=click+V2{cos(a),sin(a)}*(turtle?85.f:55.f+float(i%2)*45.f);}
+            aimActor(name,i,wanted,radius,true);
+        }
     }
     bool obstacle(float x,float y,const std::vector<RECT>&icons)const{for(const auto&r:icons)if(x>r.left-55&&x<r.right+55&&y>r.top-15&&y<r.bottom+65)return true;return false;}
     void aimActor(const std::string&name,size_t i,V2 target,float radius,bool water){auto&b=groups[name][i];auto valid=destination(target,radius,water,b.target);if(!navigable(valid,radius,water))return;
@@ -166,7 +229,8 @@ public:
     }
     void click(float x,float y){if(previousW<=0||!geometry.contains({x,y})||!iconClear({x,y,.01f,.01f},previousIcons,0))return;
         auto&fx=effects[effectNext++%effects.size()];fx.value={x,y,0,.1f+random()*.9f};
-        for(auto&[name,list]:groups){bool water=name=="uKay"||name=="uBoat"||name=="uYacht"||name=="uFish"||name=="uTurt";float r=water?(name=="uFish"||name=="uTurt"?20.f:30.f):19.f;
+        feedPoint={x,y};feedAge=0;
+        for(auto&[name,list]:groups){if(name=="uFish"||name=="uTurt"){interactSwimmers(name,{x,y});continue;}bool water=name=="uKay"||name=="uBoat"||name=="uYacht"||name=="uFish"||name=="uTurt";float r=water?(name=="uFish"||name=="uTurt"?20.f:30.f):19.f;
             for(size_t i=0;i<list.size();i++){auto&b=list[i];if(!b.initialized)continue;V2 target{x,y};
                 if(!water){if((b.position-target).length()>440)continue;target=target+V2{float(int(i%3)-1)*30.f,float(i/3)*22.f};}
                 else if(i)target=target+V2{float(i)*72,float(i%2)*70};
@@ -185,7 +249,7 @@ public:
         if(id=="commute"){float road=(previousH-48)*.79f;if(abs(x-previousW*.53f)<24&&y>road-80&&y<road+12){busStop=true;if(busState==0)busWait=0;}else if(busState&&abs(x-busX)<126&&y>road-70&&y<road+20)busHonk=0;}
     }
     void render(const Config&c,const View&view,const std::vector<RECT>&icons,const Weather&weather,double time,float dt,const std::atomic<bool>&stop,float scaleX=1,float scaleY=1){
-        const float w=view.worldW,h=view.worldH,t=float(time);lastHud=p(c,"hudMode",0);lastPower=p(c,"punchPower",1);lastCorgis=int(p(c,"corgis",3));lastTime=time;age+=dt;hitAge+=dt;toy[2]+=dt;toy[3]=std::max(0.f,toy[3]-dt);
+        const float w=view.worldW,h=view.worldH,t=float(time);lastHud=p(c,"hudMode",0);lastPower=p(c,"punchPower",1);lastCorgis=int(p(c,"corgis",3));lastTime=time;age+=dt;feedAge+=dt;hitAge+=dt;toy[2]+=dt;toy[3]=std::max(0.f,toy[3]-dt);
         if(!geometryExplicit&&(w!=previousW||h!=previousH)){geometry={w,h,{{0,0,w,h}}};placementDirty=true;}
         remainder+=std::clamp(double(dt),0.,.25);simulationSteps=int(floor((remainder+1e-7)/fixedStep));remainder-=simulationSteps*fixedStep;simulationTime+=simulationSteps*fixedStep;
         for(auto&e:effects)e.value[2]+=dt;
@@ -221,8 +285,11 @@ public:
         std::array<Vec4,4> sand{};for(size_t i=0;i<sand.size();i++)sand[i]=fx[i];array("uSand",sand);
         flyers<8>("uBird","uBirdN",int(p(c,"birds",3)),w,h,t,id=="sky"?44.f:id=="rainforest"?28.f:id=="mocchau"?26.f:35.f);
         flyers<4>("uKay","uKayN",int(p(c,"kayaks",0)),w,h,t,13,.25f,.8f);
-        flyers<6>("uFish","uFishN",int(p(c,"fishSchools",id=="lake"?3:0)),w,h,t,19,.3f,.85f);
-        flyers<4>("uTurt","uTurtN",int(p(c,"turtles",0)),w,h,t,8,.3f,.8f);
+        if(id!="lake"&&id!="aquarium"){
+            swimmers<6>("uFish","uFishN",int(p(c,"fishSchools",0)),w,h,false);
+            swimmers<4>("uTurt","uTurtN",int(p(c,"turtles",0)),w,h,true);
+        }
+        program.v4("uBait",{feedPoint.x,feedPoint.y,feedAge,feedAge<7?std::max(0.f,1-feedAge/7):0.f});
         flyers<6>("uBoat","uBoatN",int(p(c,"boats",2)),w,h,t,15,.2f,.8f);
         flyers<4>("uYacht","uYachtN",int(p(c,"yachts",1)),w,h,t,22,.3f,.9f);
         flyers<8>("uSwallow","uSwallowN",int(p(c,"swallows",3)),w,h,t,45);
@@ -373,6 +440,7 @@ private:
             auto valid=[&](V2 q,float radius){return fishWater(q,radius,aquarium);};
             if(!b.initialized){for(int trial=0;trial<768;trial++){V2 q{w*(.08f+.84f*hash(i*773+trial,index,71)),h*(.26f+.60f*hash(i*773+trial,index,72))};if(valid(q,aquarium?44.f:12.f)){b.position=b.target=q;b.heading=hash(i,3,4)*6.28f;b.initialized=true;b.idle=10;fishActors[i].x=q.x;fishActors[i].y=q.y;fishActors[i].heading=b.heading;break;}}}
         }
+        {CpuMeasure simulation{graphicsStats.simulationMs};
         for(int step=0;step<simulationSteps;step++)for(int i=0;i<n;i++){
             auto&a=fishActors[i];auto&b=a.body;
             auto valid=[&](V2 q,float radius){return fishWater(q,radius,aquarium);};
@@ -391,6 +459,7 @@ private:
             bool lifted=a.mode==FishMode::Hooked||a.mode==FishMode::Caught||a.mode==FishMode::Returning;
             steer(b,{speed,90,100,2.3f,5,aquarium?44.f:12.f,false},target,fixedStep,[&](V2 q,float r){return lifted?geometry.contains(q,r):valid(q,r);},lifted?V2{}:separation);
             a.x=b.position.x;a.y=b.position.y;a.heading=b.heading;a.phase=b.phase;
+        }
         }
         for(int i=0;i<n;i++){auto&a=fishActors[i];bool hidden=a.mode==FishMode::Returning||(!aquarium&&(a.mode==FishMode::Hooked||a.mode==FishMode::Caught));fish[i]={hidden?-10000.f:a.x,hidden?-10000.f:a.y,a.heading,a.phase+(aquarium?0:100)};body[i]={.65f+hash(i,2,80)*.6f,hash(i,3,70),std::clamp(a.body.speed()/130,.15f,.9f),a.body.initialized&&!hidden?(a.mode==FishMode::Caught?std::clamp(1-a.timer/1.8f,0.f,1.f):1.f):0.f};}
         // One lifted fish, attached to the physical fish body; no duplicate

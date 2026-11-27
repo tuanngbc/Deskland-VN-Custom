@@ -118,7 +118,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
-          ./tests/native-profile-migration.ps1 | Tee-Object native-evidence/profile-migration.txt
+          ./tests/native-profile-migration.ps1 -NativeContract (Resolve-Path native-build/native-contract.exe).Path -Evidence (Resolve-Path native-evidence).Path | Tee-Object native-evidence/profile-migration.txt
           $profile=Join-Path $env:RUNNER_TEMP 'tlauncher-native-trial-ci-contract'
           New-Item -ItemType Directory -Path $profile -Force | Out-Null
           [IO.File]::WriteAllText((Join-Path $profile '.tlauncher-native-trial'),"tlauncher-native isolated profile v1`n")

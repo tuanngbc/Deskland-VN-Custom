@@ -11,12 +11,20 @@ static void ciPump(int ms) {
 }
 #include "native-phase3-contract.h"
 int main(int argc,char** argv) {
-    if(argc!=2||!tlauncher::validateTrial())return 10;
+    if((argc!=2&&argc!=3)||!tlauncher::validateTrial())return 10;
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     OleInitialize(nullptr);
     std::ofstream report(std::filesystem::path(argv[1])/"native-contract.txt");
     if(wcsstr(tlauncher::registry(),L"FluidWin")||!wcsstr(tlauncher::registry(),L"TLauncher\\NativeBase\\Profiles"))return 11;
     impostazioni::carica();
+    if(argc==3&&!strcmp(argv[2],"--verify-migrated")){
+        const auto&s=impostazioni::valori();wallpaper::Store store;const auto c=store.load();
+        if(testi::attuale()!=testi::VIETNAMITA||s.notchEnabled||s.dockVisibility!=2||s.stage.height!=174||s.stage.peekDelay!=750||s.spotlightMode!=2)return 83;
+        if(!c.enabled||c.scene!=wallpaper::sceneIndex("lake")||c.fps!=29||c.layout!=wallpaper::Layout::Panorama)return 84;
+        gImpostazioni.apri();ciPump(350);if(!FindWindowW(L"TLauncher.Native.Impostazioni",nullptr))return 85;
+        if(!phase3Snapshot(FindWindowW(L"TLauncher.Native.Impostazioni",nullptr),std::filesystem::path(argv[1])/L"phase3-migrated-vietnamese-settings.bmp"))return 86;
+        report<<"MIGRATED_CUSTOM_NATIVE_SETTINGS_READ=PASS\nMIGRATED_WALLPAPER_READ=PASS\nVIETNAMESE_NATIVE_SETTINGS_RENDER=PASS\n";report.close();ExitProcess(0);
+    }
     impostazioni::valori().notchEnabled=false;impostazioni::valori().notch=false;impostazioni::salva();
     impostazioni::valori().notchEnabled=true;impostazioni::carica();
     if(impostazioni::valori().notchEnabled||impostazioni::valori().notch)return 12;

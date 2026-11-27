@@ -10,9 +10,17 @@
 #include <sstream>
 #include <map>
 #include <cstring>
+#include <chrono>
+#include <array>
+#include <cstdint>
 
 namespace wallpaper {
 using GLsizeiptr=ptrdiff_t;
+// Written only on the owning render thread and copied into Session metrics.
+struct GraphicsStats {uint64_t textureBytes=0,textures=0,uploadBytes=0;double shaderMs=0,fieldMs=0,simulationMs=0;};
+inline thread_local GraphicsStats graphicsStats;
+using SteadyClock=std::chrono::steady_clock;
+struct CpuMeasure {double& value;SteadyClock::time_point start=SteadyClock::now();~CpuMeasure(){value+=std::chrono::duration<double,std::milli>(SteadyClock::now()-start).count();}};
 class GL {
     HMODULE library=nullptr;
     template<class T>T load(const char*name){auto p=wglGetProcAddress(name);auto i=reinterpret_cast<intptr_t>(p);
@@ -37,6 +45,9 @@ public:
     WP_GL(void,GenBuffers,(GLsizei,GLuint*)) WP_GL(void,DeleteBuffers,(GLsizei,const GLuint*))
     WP_GL(void,BindBuffer,(GLenum,GLuint)) WP_GL(void,BufferData,(GLenum,GLsizeiptr,const void*,GLenum))
     WP_GL(void,GetBufferSubData,(GLenum,ptrdiff_t,GLsizeiptr,void*))
+    WP_GL(void,GenQueries,(GLsizei,GLuint*)) WP_GL(void,DeleteQueries,(GLsizei,const GLuint*))
+    WP_GL(void,QueryCounter,(GLuint,GLenum)) WP_GL(void,GetQueryObjectiv,(GLuint,GLenum,GLint*))
+    WP_GL(void,GetQueryObjectui64v,(GLuint,GLenum,uint64_t*))
     WP_GL(void*,FenceSync,(GLenum,GLbitfield)) WP_GL(GLenum,ClientWaitSync,(void*,GLbitfield,uint64_t)) WP_GL(void,DeleteSync,(void*))
 #undef WP_GL
     GL(){library=LoadLibraryExW(L"opengl32.dll",nullptr,LOAD_LIBRARY_SEARCH_APPLICATION_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);if(!library)throw std::runtime_error("OpenGL loader unavailable");
@@ -51,9 +62,27 @@ public:
         WP_LOAD(GenBuffers) WP_LOAD(DeleteBuffers) WP_LOAD(BindBuffer) WP_LOAD(BufferData) WP_LOAD(GetBufferSubData)
         WP_LOAD(FenceSync) WP_LOAD(ClientWaitSync) WP_LOAD(DeleteSync)
 #undef WP_LOAD
+        // Timing is optional. Unsupported drivers keep the safe presentation path.
+        try{GenQueries=load<GenQueriesFn>("glGenQueries");DeleteQueries=load<DeleteQueriesFn>("glDeleteQueries");
+            QueryCounter=load<QueryCounterFn>("glQueryCounter");GetQueryObjectiv=load<GetQueryObjectivFn>("glGetQueryObjectiv");GetQueryObjectui64v=load<GetQueryObjectui64vFn>("glGetQueryObjectui64v");}
+        catch(...){GenQueries=nullptr;DeleteQueries=nullptr;QueryCounter=nullptr;GetQueryObjectiv=nullptr;GetQueryObjectui64v=nullptr;}
         }catch(...){FreeLibrary(library);library=nullptr;throw;}
     }
     ~GL(){if(library)FreeLibrary(library);}GL(const GL&)=delete;GL&operator=(const GL&)=delete;
+};
+// Three timestamp pairs; an unfinished query is skipped, never waited on.
+class GpuMeasure {
+    GL&g;struct Pair{GLuint ids[2]{};bool pending=false;};std::array<Pair,3> pairs{};size_t next=0;bool recording=false;double last=-1;
+public:
+    explicit GpuMeasure(GL&gl):g(gl){if(g.GenQueries)for(auto& p:pairs)g.GenQueries(2,p.ids);}
+    ~GpuMeasure(){if(g.DeleteQueries)for(auto& p:pairs)if(p.ids[0])g.DeleteQueries(2,p.ids);}
+    void begin(){recording=false;if(!g.QueryCounter)return;auto& p=pairs[next];
+        if(p.pending){GLint ready=0;g.GetQueryObjectiv(p.ids[1],0x8867,&ready);if(!ready)return;
+            uint64_t a=0,b=0;g.GetQueryObjectui64v(p.ids[0],0x8866,&a);g.GetQueryObjectui64v(p.ids[1],0x8866,&b);if(b>=a)last=double(b-a)/1e6;p.pending=false;}
+        g.QueryCounter(p.ids[0],0x8E28);recording=true;
+    }
+    void end(){if(!recording)return;auto& p=pairs[next];g.QueryCounter(p.ids[1],0x8E28);p.pending=true;next=(next+1)%pairs.size();recording=false;}
+    double milliseconds()const{return last;}
 };
 inline std::filesystem::path assetsRoot(){wchar_t p[32768];DWORD n=GetModuleFileNameW(nullptr,p,32768);if(!n||n>=32768)throw std::runtime_error("Executable path unavailable");return std::filesystem::path(p).parent_path();}
 inline std::string assetText(const std::filesystem::path&p){
@@ -78,7 +107,7 @@ class Program {
     GLuint shader(GLenum type,const std::string&s){GLuint sh=gl->CreateShader(type);if(!sh)throw std::runtime_error("Shader allocation failed");const char*p=s.c_str();gl->ShaderSource(sh,1,&p,nullptr);gl->CompileShader(sh);GLint ok=0;gl->GetShaderiv(sh,0x8B81,&ok);
         if(!ok){std::string log(8192,'\0');gl->GetShaderInfoLog(sh,8191,nullptr,log.data());gl->DeleteShader(sh);throw std::runtime_error(log.c_str());}return sh;}
 public:
-    Program(GL&g,const std::string&fragment):gl(&g){
+    Program(GL&g,const std::string&fragment):gl(&g){CpuMeasure measure{graphicsStats.shaderMs};
         const std::string vert="#version 330 core\nvoid main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));gl_Position=vec4(p*2.-1.,0.,1.);}";
         GLuint vs=0,fs=0;try{vs=shader(0x8B31,vert);fs=shader(0x8B30,fragment);id=g.CreateProgram();if(!id)throw std::runtime_error("Program allocation failed");g.AttachShader(id,vs);g.AttachShader(id,fs);g.LinkProgram(id);GLint ok=0;g.GetProgramiv(id,0x8B82,&ok);if(!ok){std::string log(8192,'\0');g.GetProgramInfoLog(id,8191,nullptr,log.data());throw std::runtime_error(log.c_str());}g.DeleteShader(vs);g.DeleteShader(fs);}
         catch(...){if(vs)g.DeleteShader(vs);if(fs)g.DeleteShader(fs);if(id)g.DeleteProgram(id);id=0;throw;}
@@ -89,10 +118,10 @@ public:
     void v4(const char*n,const float*p,int count=1){gl->Uniform4fv(loc(n),count,p);}void v4(const char*n,std::initializer_list<float> p){if(p.size()%4==0)gl->Uniform4fv(loc(n),GLsizei(p.size()/4),p.begin());}
 };
 class Texture {
-    GLuint id=0;int allocatedWidth=0,allocatedHeight=0;GLint allocatedFormat=0;
+    GLuint id=0;int allocatedWidth=0,allocatedHeight=0;GLint allocatedFormat=0;uint64_t bytes=0;
 public:
-    Texture(){glGenTextures(1,&id);if(!id)throw std::runtime_error("Texture allocation failed");}
-    ~Texture(){if(id)glDeleteTextures(1,&id);}Texture(const Texture&)=delete;
+    Texture(){glGenTextures(1,&id);if(!id)throw std::runtime_error("Texture allocation failed");graphicsStats.textures++;}
+    ~Texture(){if(id){glDeleteTextures(1,&id);graphicsStats.textures--;graphicsStats.textureBytes-=bytes;}}Texture(const Texture&)=delete;
     GLuint name()const{return id;}void bind(GL&g,int slot){g.ActiveTexture(0x84C0+slot);glBindTexture(GL_TEXTURE_2D,id);}
     void image(GL&g,int slot,int width,int height,GLint internal,GLenum format,GLenum type,const void*data,bool repeat=false){
         if(width<=0||height<=0||uint64_t(width)*height>16*1024*1024)throw std::runtime_error("Texture size exceeds budget");
@@ -101,6 +130,9 @@ public:
         if(width==allocatedWidth&&height==allocatedHeight&&internal==allocatedFormat){if(data)glTexSubImage2D(GL_TEXTURE_2D,0,0,0,width,height,format,type,data);}
         else{glTexImage2D(GL_TEXTURE_2D,0,internal,width,height,0,format,type,data);allocatedWidth=width;allocatedHeight=height;allocatedFormat=internal;}
         if(glGetError()!=GL_NO_ERROR)throw std::runtime_error("Texture allocation/upload failed");
+        const uint64_t allocated=uint64_t(width)*height*(internal==0x8814?16:4);
+        graphicsStats.textureBytes=graphicsStats.textureBytes-bytes+allocated;bytes=allocated;
+        if(data)graphicsStats.uploadBytes+=allocated;
     }
 };
 class Context {

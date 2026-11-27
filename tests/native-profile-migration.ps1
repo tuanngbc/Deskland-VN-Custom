@@ -1,4 +1,6 @@
 # Hosted-only integration of the real file + registry migration implementation.
+param([string]$NativeContract='', [string]$Evidence='')
+if($env:GITHUB_ACTIONS -ne 'true'){throw 'Hosted verification only.'}
 $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot '../tools/legacy-uat-library.ps1') -LibraryOnly
 . (Join-Path $PSScriptRoot '../tools/native-profile-library.ps1')
@@ -48,6 +50,14 @@ $rollback=Restore-NativeCompatibleSnapshot $root $second.snapshot $commit 1 {}
 if((Get-FileHash (Join-Path $rollback 'wallpaper-v1.ini')).Hash -cne $sourceHash){throw 'Rollback lost settings.'}
 try {$null=Initialize-NativePersistentProfile $root $destination ('3'*40) {} {throw 'Simulated registry write failure'};throw 'Expected migration failure'}catch{if($_.Exception.Message -ne 'Simulated registry write failure'){throw}}
 if((Get-FileHash (Join-Path $destination 'wallpaper-v1.ini')).Hash -cne $sourceHash -or (Get-FileHash (Join-Path $source 'wallpaper-v1.ini')).Hash -cne $sourceHash -or (Get-FileHash $production).Hash -cne $productionHash){throw 'Failure recovery or production preservation failed.'}
+if($NativeContract){
+    $beforeProfile=$env:TLAUNCHER_NATIVE_TRIAL_DIR
+    try{
+        $env:TLAUNCHER_NATIVE_TRIAL_DIR=$destination
+        & $NativeContract $Evidence '--verify-migrated'
+        if($LASTEXITCODE -ne 0){throw "Migrated native profile verification failed: $LASTEXITCODE"}
+    }finally{$env:TLAUNCHER_NATIVE_TRIAL_DIR=$beforeProfile}
+}
 $rejected=$false
 try{$null=Initialize-NativePersistentProfile $root $destination ('4'*40) {throw 'Shell is still active'}}catch{$rejected=$true}
 if(!$rejected){throw 'Live source migration was allowed.'}

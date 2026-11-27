@@ -12,6 +12,10 @@ static bool phase3Snapshot(HWND h,const std::filesystem::path& file) {
 }
 static int phase3Contracts(std::ostream& report,const std::filesystem::path& evidence) {
     if(appcatalog::fold(L"Tiếng Việt Đặng")!=L"tieng viet dang")return 60;
+    std::filesystem::create_directories(tlauncher::dockPins());
+    auto pin=tlauncher::dockPins()/L"fixture.lnk";
+    if(!tlauncher::ownsDockPin(pin.wstring())||tlauncher::ownsDockPin(L"C:\\Windows\\fixture.lnk"))return 82;
+    report<<"DOCK_PIN_WRITE_BOUNDARY=PASS\n";
     auto& s=impostazioni::valori();s.stage.height=174;s.stage.peekDelay=750;s.stage.peekLive=false;s.dockVisibility=2;s.dockBarCloseDelay=900;s.spotlightMode=2;impostazioni::salva();
     s.stage.height=72;s.dockVisibility=0;impostazioni::carica();
     if(s.stage.height!=174||s.stage.peekDelay!=750||s.stage.peekLive||s.dockVisibility!=2||s.dockBarCloseDelay!=900||s.spotlightMode!=2)return 61;
@@ -27,7 +31,8 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     bool activated=false;manager.activation=[&](HWND h){activated=h==source;};stage::Settings st;st.enabled=true;st.peekDelay=100;manager.configure(st);ciPump(180);manager.changed();ciPump(60);
     HWND rail=FindWindowW(L"TLauncher.Native.Stage",nullptr);if(!rail||manager.windowCount()!=1)return 66;
     WINDOWPLACEMENT before{sizeof(before)},after{sizeof(after)};GetWindowPlacement(source,&before);HWND focus=GetForegroundWindow();
-    SendMessageW(rail,WM_MOUSEMOVE,0,MAKELPARAM(45,45));ciPump(180);
+    POINT previousPointer{};GetCursorPos(&previousPointer);POINT hoverPoint{45,45};ClientToScreen(rail,&hoverPoint);
+    if(!SetCursorPos(hoverPoint.x,hoverPoint.y))return 79;ciPump(180);
     HWND peek=FindWindowW(L"TLauncher.Native.StagePeek",nullptr);if(!peek)return 67;
     GetWindowPlacement(source,&after);if(memcmp(&before,&after,sizeof(before))||focus!=GetForegroundWindow())return 68;
     if(!phase3Snapshot(rail,evidence/L"phase3-stage.bmp")||!phase3Snapshot(peek,evidence/L"phase3-peek.bmp"))return 69;
@@ -37,7 +42,11 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     SendMessageW(peek,WM_LBUTTONUP,0,MAKELPARAM(12,12));if(!activated)return 71;activated=false;
     report<<"STAGE_PEEK_CLICK_ACTIVATION=PASS\n";
     SendMessageW(rail,WM_LBUTTONUP,0,MAKELPARAM(45,45));if(!activated)return 71;
-    ShowWindow(source,SW_MINIMIZE);ciPump(60);manager.changed();
+    ShowWindow(source,SW_MINIMIZE);ciPump(100);manager.changed();ciPump(80);
+    if(!IsIconic(source)||!manager.snapshotBytes()||!manager.cachedPreviewCount())return 80;
+    if(!phase3Snapshot(rail,evidence/L"phase3-stage-minimized.bmp"))return 81;
+    report<<"STAGE_MINIMIZED_SHARED_SNAPSHOT_NO_RESTORE=PASS\n";
+    SetCursorPos(previousPointer.x,previousPointer.y);
     DestroyWindow(source);manager.changed();st.enabled=false;manager.configure(st);
     if(manager.railCount()||manager.snapshotBytes()||FindWindowW(L"TLauncher.Native.Stage",nullptr)||FindWindowW(L"TLauncher.Native.StagePeek",nullptr))return 72;
     report<<"STAGE_ACTUAL_NATIVE_WINDOW=PASS\nSTAGE_PEEK_FOCUS_PLACEMENT_UNCHANGED=PASS\nSTAGE_SHARED_ACTIVATION_CALLBACK=PASS\nSTAGE_DESTROY_AND_DISABLE_CLEANUP=PASS\n";

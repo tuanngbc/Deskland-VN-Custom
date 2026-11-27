@@ -14,7 +14,7 @@ class Bridge {
     using Access=BOOL(WINAPI*)(HANDLE,GLint,HANDLE*);
     template<class T>static T extension(const char*name){auto p=wglGetProcAddress(name);auto v=reinterpret_cast<intptr_t>(p);return !p||v==1||v==2||v==3||v==-1?nullptr:reinterpret_cast<T>(p);}
     Com<ID3D11Device> device;Com<ID3D11DeviceContext> context;Com<IDXGIFactory2> factory;Com<IDCompositionDevice> composition;
-    HANDLE handle=nullptr;Close close=nullptr;Register registerObject=nullptr;Remove unregisterObject=nullptr;Access lockObjects=nullptr,unlockObjects=nullptr;
+    std::wstring adapterName;HANDLE handle=nullptr;Close close=nullptr;Register registerObject=nullptr;Remove unregisterObject=nullptr;Access lockObjects=nullptr,unlockObjects=nullptr;
 public:
     Bridge(){auto open=extension<Open>("wglDXOpenDeviceNV");close=extension<Close>("wglDXCloseDeviceNV");registerObject=extension<Register>("wglDXRegisterObjectNV");unregisterObject=extension<Remove>("wglDXUnregisterObjectNV");lockObjects=extension<Access>("wglDXLockObjectsNV");unlockObjects=extension<Access>("wglDXUnlockObjectsNV");
         if(!open||!close||!registerObject||!unregisterObject||!lockObjects||!unlockObjects)throw std::runtime_error("GPU interop unsupported; bounded DIB fallback");
@@ -22,13 +22,14 @@ public:
         for(UINT i=0;i<16&&!handle;i++){Com<IDXGIAdapter1> adapter;if(factory->EnumAdapters1(i,adapter.put())!=S_OK)break;DXGI_ADAPTER_DESC1 desc{};if(FAILED(adapter->GetDesc1(&desc))||(desc.Flags&DXGI_ADAPTER_FLAG_SOFTWARE))continue;
             Com<ID3D11Device> candidate;Com<ID3D11DeviceContext> commands;
             if(FAILED(D3D11CreateDevice(adapter.get(),D3D_DRIVER_TYPE_UNKNOWN,nullptr,D3D11_CREATE_DEVICE_BGRA_SUPPORT,nullptr,0,D3D11_SDK_VERSION,candidate.put(),nullptr,commands.put())))continue;
-            HANDLE shared=open(candidate.get());if(!shared)continue;device=std::move(candidate);context=std::move(commands);handle=shared;
+            HANDLE shared=open(candidate.get());if(!shared)continue;adapterName=desc.Description;device=std::move(candidate);context=std::move(commands);handle=shared;
         }
         if(!handle)throw std::runtime_error("No GL-compatible hardware adapter; bounded DIB fallback");
         try{Com<IDXGIDevice> dxgi;graphicsCheck(device->QueryInterface(IID_PPV_ARGS(dxgi.put())),"DXGI device");graphicsCheck(DCompositionCreateDevice(dxgi.get(),IID_PPV_ARGS(composition.put())),"Wallpaper composition");}
         catch(...){close(handle);handle=nullptr;throw;}
     }
     ~Bridge(){if(handle)close(handle);}Bridge(const Bridge&)=delete;
+    const std::wstring& adapter()const{return adapterName;}
     friend class Presentation;
 };
 class Presentation {
@@ -64,12 +65,14 @@ public:
         }catch(...){clear();throw;}
     }
     ~Presentation(){clear();}Presentation(const Presentation&)=delete;
+    uint64_t readbackBytes=0,copyBytes=0;double readbackMs=0,presentationMs=0;
+    uint64_t surfaceBytes()const{return uint64_t(w)*h*(bridge?12:16);}
     bool gpu()const{return bridge!=nullptr;}
     GLuint begin(){if(bridge){if(locked||!bridge->lockObjects(bridge->handle,1,&object))throw std::runtime_error("Wallpaper device lost during lock");locked=true;}return framebuffer;}
-    bool present(){g.BindFramebuffer(0x8D40,0);
-        if(bridge){unlock();Com<ID3D11Texture2D> back;graphicsCheck(swapchain->GetBuffer(0,IID_PPV_ARGS(back.put())),"Wallpaper back buffer");bridge->context->CopyResource(back.get(),shared.get());graphicsCheck(swapchain->Present(0,0),"Wallpaper Present");return true;}
+    bool present(){readbackBytes=copyBytes=0;readbackMs=presentationMs=0;CpuMeasure measure{presentationMs};g.BindFramebuffer(0x8D40,0);
+        if(bridge){unlock();Com<ID3D11Texture2D> back;graphicsCheck(swapchain->GetBuffer(0,IID_PPV_ARGS(back.put())),"Wallpaper back buffer");bridge->context->CopyResource(back.get(),shared.get());copyBytes=uint64_t(w)*h*4;graphicsCheck(swapchain->Present(0,0),"Wallpaper Present");return true;}
         auto&slot=queue[next];
-        if(slot.fence){GLenum ready=g.ClientWaitSync(slot.fence,0,0);if(ready!=0x911A&&ready!=0x911C)return false;g.DeleteSync(slot.fence);slot.fence=nullptr;g.BindBuffer(0x88EB,slot.buffer);g.GetBufferSubData(0x88EB,0,ptrdiff_t(pixels.size()),pixels.data());g.BindBuffer(0x88EB,0);cached=true;}
+        if(slot.fence){GLenum ready=g.ClientWaitSync(slot.fence,0,0);if(ready!=0x911A&&ready!=0x911C)return false;g.DeleteSync(slot.fence);slot.fence=nullptr;g.BindBuffer(0x88EB,slot.buffer);{CpuMeasure readback{readbackMs};g.GetBufferSubData(0x88EB,0,ptrdiff_t(pixels.size()),pixels.data());readbackBytes=pixels.size();}g.BindBuffer(0x88EB,0);cached=true;}
         g.BindFramebuffer(0x8D40,framebuffer);g.BindBuffer(0x88EB,slot.buffer);glReadPixels(0,0,w,h,0x80E1,GL_UNSIGNED_BYTE,nullptr);slot.fence=g.FenceSync(0x9117,0);glFlush();g.BindBuffer(0x88EB,0);g.BindFramebuffer(0x8D40,0);next=(next+1)%queue.size();
         if(cached){HDC dc=GetDC(hwnd);BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=w;info.bmiHeader.biHeight=h;info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;SetStretchBltMode(dc,HALFTONE);SetBrushOrgEx(dc,0,0,nullptr);int result=StretchDIBits(dc,0,0,physicalW,physicalH,0,0,w,h,pixels.data(),&info,DIB_RGB_COLORS,SRCCOPY);ReleaseDC(hwnd,dc);if(result==GDI_ERROR)throw std::runtime_error("Wallpaper DIB fallback failed");}
         return cached;

@@ -21,10 +21,11 @@ struct Window {
     HWND hwnd = nullptr;
     DWORD pid = 0, tid = 0;
     std::wstring identity, name, icon;
+    uint64_t generation=0;
     bool valid() const {
         DWORD p = 0;
         const DWORD t = GetWindowThreadProcessId(hwnd, &p);
-        return t && p == pid && t == tid && IsWindow(hwnd);
+        return t && p == pid && t == tid && IsWindow(hwnd)&&(!generation||generation==stampa::generation(hwnd));
     }
 };
 inline RECT aspectFit(int width, int height, RECT box, bool enlarge = true) {
@@ -37,12 +38,6 @@ inline RECT aspectFit(int width, int height, RECT box, bool enlarge = true) {
 }
 
 class Manager {
-    struct Snapshot {
-        Window source;
-        int w = 0, h = 0;
-        std::vector<UINT> pixels;
-        ULONGLONG used = 0;
-    };
     struct Card {
         std::vector<Window> windows;
         size_t current = 0;
@@ -83,7 +78,7 @@ class Manager {
                     if(hidden) { hidden=false; owner->layout(*this); }
                     TRACKMOUSEEVENT t{sizeof(t),TME_LEAVE,h,0}; TrackMouseEvent(&t);
                     int i=hit({GET_X_LPARAM(l),GET_Y_LPARAM(l)});
-                    if(i!=hover) { owner->closePeek(); hover=i; hoverAt=GetTickCount64(); KillTimer(h,2); if(i>=0&&owner->settings.peek) SetTimer(h,2,owner->settings.peekDelay,nullptr); owner->draw(*this); }
+                    if(i!=hover) { owner->closePeek(); hover=i; hoverAt=GetTickCount64(); if(i>=0)owner->requestCapture(cards[i].source(),true); KillTimer(h,2); if(i>=0&&owner->settings.peek) SetTimer(h,2,owner->settings.peekDelay,nullptr); owner->draw(*this); }
                     return true;
                 }
                 case WM_MOUSELEAVE:
@@ -156,13 +151,14 @@ public:
     std::function<std::vector<Window>()> inventory;
     std::function<void(HWND)> activation;
     std::function<RECT(HMONITOR)> reserved;
+    std::function<std::vector<RECT>(HMONITOR)> exclusions;
     std::function<bool(HMONITOR)> fullscreen;
     // Reuse the shared background icon provider; target-specific bitmap is owned by Stage.
     std::function<ID2D1Bitmap*(ID2D1RenderTarget*,const std::wstring&,int)> icon;
     bool topologyChanged=false;
     void configure(const Settings& s) {
         if(settings==s&&(!s.enabled||!rails.empty()))return;
-        settings=s;
+        settings=s;stampa::retain(s.enabled);
         if(!s.enabled) { stop(); return; }
         rebuildAll();
     }
@@ -172,29 +168,28 @@ public:
         if(topologyChanged) { rebuildAll(); return; }
         auto next=inventory?inventory():std::vector<Window>{};
         bool same=next.size()==windows.size();
-        if(same) for(size_t i=0;i<next.size();++i) if(next[i].hwnd!=windows[i].hwnd||next[i].pid!=windows[i].pid||next[i].tid!=windows[i].tid||next[i].identity!=windows[i].identity||next[i].name!=windows[i].name||next[i].icon!=windows[i].icon) {same=false;break;}
+        if(same) for(size_t i=0;i<next.size();++i) if(next[i].hwnd!=windows[i].hwnd||next[i].pid!=windows[i].pid||next[i].tid!=windows[i].tid||next[i].generation!=windows[i].generation||next[i].identity!=windows[i].identity||next[i].name!=windows[i].name||next[i].icon!=windows[i].icon) {same=false;break;}
         windows=std::move(next);
         for(auto& r:rails) {
             const bool hide=fullscreen&&fullscreen(r->monitor);
             if(hide) { closePeek(); ShowWindow(r->glass.fin,SW_HIDE); }
             else { if(!same) rebuild(*r); else for(auto& c:r->cards) preview(*r,c); ShowWindow(r->glass.fin,SW_SHOWNOACTIVATE); draw(*r); }
         }
-        for(auto it=snapshots.begin();it!=snapshots.end();) if(!it->second.source.valid()) it=snapshots.erase(it); else ++it;
         pollCapture();
     }
     void stop() {
-        closePeek(); rails.clear(); windows.clear(); snapshots.clear();
+        closePeek(); rails.clear(); windows.clear();stampa::retain(false);
         if(capture) stampa::abbandona(capture); capture=nullptr; capturing={};
     }
     size_t windowCount() const {return windows.size();}
     size_t railCount() const {return rails.size();}
-    size_t snapshotBytes() const {size_t n=0;for(auto& s:snapshots)n+=s.second.pixels.size()*4;return n;}
+    size_t cachedPreviewCount()const{size_t n=0;for(const auto&r:rails)for(const auto&c:r->cards)if(c.minimized&&c.bitmap)n++;return n;}
+    size_t snapshotBytes() const {std::lock_guard<std::mutex> lock(stampa::savedMutex);size_t n=0;for(auto& s:stampa::saved)n+=s.second->pixels.size()*4;return n;}
     ~Manager() {stop();}
     Manager():peek(this) {}
 private:
     std::vector<Window> windows;
     std::vector<std::unique_ptr<Rail>> rails;
-    std::unordered_map<HWND,Snapshot> snapshots;
     Peek peek;
     stampa::Lavoro* capture=nullptr;
     Window capturing;
@@ -231,13 +226,21 @@ private:
             if(r.top<=area.top&&r.bottom<area.bottom) area.top=r.bottom;
             else if(r.bottom>=area.bottom&&r.top>area.top)area.bottom=r.top;
         }}
+        if(exclusions){
+            const int width=int((settings.height*1.55+20)*rail.glass.dpi),gap=int(settings.edgeGap*rail.glass.dpi);
+            RECT side{settings.right?area.right-width-gap:area.left+gap,area.top,settings.right?area.right-gap:area.left+width+gap,area.bottom};
+            for(auto obstacle:exclusions(rail.monitor)){RECT overlap{};if(!IntersectRect(&overlap,&side,&obstacle))continue;
+                if(overlap.top-area.top>area.bottom-overlap.bottom)area.bottom=overlap.top-gap;else area.top=overlap.bottom+gap;
+                side.top=area.top;side.bottom=area.bottom;
+            }
+        }
         return area;
     }
     void layout(Rail& rail) {
         const RECT area=work(rail);const float d=rail.glass.dpi;
         const int pad=int(10*d),ch=int(settings.height*d),gap=int(settings.spacing*d),edge=int(settings.edgeGap*d);
         const int width=int(settings.height*1.55*d)+2*pad;
-        const int h=std::min(int(area.bottom-area.top-2*edge),int(rail.cards.size())*(ch+gap)+2*pad);
+        const int h=std::max(1,std::min(int(area.bottom-area.top-2*edge),int(rail.cards.size())*(ch+gap)+2*pad));
         const int x=settings.right?area.right-width-edge:area.left+edge;
         rail.glass.posiziona(rail.hidden?(settings.right?area.right-int(5*d):area.left):x,area.top+std::max(edge,int((area.bottom-area.top-h)/2)),rail.hidden?int(5*d):width,std::max(1,h));
         rail.glass.alfa(settings.opacity/100.0);
@@ -265,9 +268,9 @@ private:
         for(int i=from;i<to;++i)rail.cards.push_back(std::move(groups[i]));
         layout(rail);
     }
-    void requestCapture(const Window& w) {
+    void requestCapture(const Window& w,bool refresh=false) {
         if(capture||!w.valid()||IsIconic(w.hwnd))return;
-        auto it=snapshots.find(w.hwnd);if(it!=snapshots.end())return;
+        if(!refresh&&stampa::lastImage(w.hwnd))return;
         RECT r{};GetWindowRect(w.hwnd,&r);
         // Bound the shared service input; reject enormous surfaces rather than allocating them.
         if((long long)(r.right-r.left)*(r.bottom-r.top)>12000000)return;
@@ -280,16 +283,13 @@ private:
         const int w=capture->w,h=capture->hh;std::vector<UINT> pixels;
         const bool ok=stampa::prendi(capture,pixels);capture=nullptr;
         if(!ok||!capturing.valid())return;
-        bool nonblack=false;for(size_t i=0;i<pixels.size();i+=127)if(pixels[i]&0xffffff){nonblack=true;break;}if(!nonblack)return;
-        RECT fit=aspectFit(w,h,{0,0,1280,800},false);Snapshot s;s.source=capturing;s.w=fit.right-fit.left;s.h=fit.bottom-fit.top;s.used=GetTickCount64();s.pixels.resize(size_t(s.w)*s.h);
-        for(int y=0;y<s.h;++y)for(int x=0;x<s.w;++x)s.pixels[size_t(y)*s.w+x]=pixels[size_t(y*h/s.h)*w+x*w/s.w]|0xff000000;
-        snapshots[capturing.hwnd]=std::move(s);
-        while(snapshotBytes()>16*1024*1024) {auto old=std::min_element(snapshots.begin(),snapshots.end(),[](auto& a,auto& b){return a.second.used<b.second.used;});if(old==snapshots.end())break;snapshots.erase(old);}
     }
     ID2D1Bitmap* snapshot(const Window& w,vetro::Finestra& v) {
-        auto it=snapshots.find(w.hwnd);if(it==snapshots.end()||!it->second.source.valid()||it->second.source.pid!=w.pid||it->second.source.tid!=w.tid)return nullptr;
-        auto& s=it->second;ID2D1Bitmap* b=nullptr;
-        v.rt->CreateBitmap(D2D1::SizeU(s.w,s.h),s.pixels.data(),s.w*4,D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED)),&b);return b;
+        if(!w.valid())return nullptr;
+        if(auto shared=stampa::lastImage(w.hwnd);shared&&shared->pid==w.pid&&shared->tid==w.tid&&(!w.generation||shared->generation==w.generation)){
+            ID2D1Bitmap* b=nullptr;v.rt->CreateBitmap(D2D1::SizeU(shared->w,shared->h),shared->pixels.data(),shared->w*4,D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED)),&b);return b;
+        }
+        return nullptr;
     }
     void preview(Rail& rail,Card& c) {
         const Window& w=c.source();

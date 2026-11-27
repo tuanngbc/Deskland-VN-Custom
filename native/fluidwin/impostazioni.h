@@ -793,7 +793,10 @@ private:
                 case 6005:s.peekAnimation=!s.peekAnimation;break;
                 case 6006:s.clickActivate=!s.clickActivate;break;
                 case 6007:s.right=!s.right;break;
-                case 6008:s.monitor=(s.monitor+1)%3;break;
+                case 6008:s.monitor=(s.monitor+1)%4;break;
+                case 6009:{std::vector<std::wstring> displays;
+                    EnumDisplayMonitors(nullptr,nullptr,[](HMONITOR m,HDC,LPRECT,LPARAM data)->BOOL{MONITORINFOEXW mi{};mi.cbSize=sizeof(mi);if(GetMonitorInfoW(m,&mi))reinterpret_cast<std::vector<std::wstring>*>(data)->push_back(mi.szDevice);return TRUE;},reinterpret_cast<LPARAM>(&displays));
+                    if(!displays.empty()){auto i=std::find(displays.begin(),displays.end(),s.display);s.display=i==displays.end()||++i==displays.end()?displays.front():*i;s.monitor=3;}break;}
                 case 6010:s.height=std::max(72,s.height-12);break;
                 case 6011:s.height=std::min(240,s.height+12);break;
                 case 6012:s.spacing=std::max(4,s.spacing-4);break;
@@ -1391,8 +1394,10 @@ private:
             toggle(testi::t(L"Nascondi automaticamente",L"Auto-hide"),6002,s.autoHide);
             toggle(testi::t(L"Stage a destra",L"Stage on the right"),6007,s.right);
             {D2D1_RECT_F r{L,y,R,y+48*d};riquadro(r,sopra==6008);aggiungiZona(r,6008);
-             const wchar_t* names[]={testi::t(L"Schermo del dock",L"Dock display"),testi::t(L"Schermo principale",L"Primary display"),testi::t(L"Tutti gli schermi",L"All displays")};
-             v.testo(names[std::clamp(s.monitor,0,2)],fVoce,{L+16*d,y,R-16*d,y+48*d},inkS);y+=54*d;}
+             const wchar_t* names[]={testi::t(L"Schermo del dock",L"Dock display"),testi::t(L"Schermo principale",L"Primary display"),testi::t(L"Tutti gli schermi",L"All displays"),testi::t(L"Schermo selezionato",L"Selected display")};
+             v.testo(names[std::clamp(s.monitor,0,3)],fVoce,{L+16*d,y,R-16*d,y+48*d},inkS);y+=54*d;}
+            if(s.monitor==3){D2D1_RECT_F r{L,y,R,y+48*d};riquadro(r,sopra==6009);aggiungiZona(r,6009);
+                v.testo(s.display.empty()?testi::t(L"Scegli schermo",L"Choose display"):s.display.c_str(),fVoce,{L+16*d,y,R-16*d,y+48*d},inkS);y+=54*d;}
             adjust(testi::t(L"Altezza delle carte",L"Card height"),6010,s.height,L" px");
             adjust(testi::t(L"Spaziatura",L"Spacing"),6012,s.spacing,L" px");
             adjust(testi::t(L"Opacità",L"Opacity"),6014,s.opacity,L"%");

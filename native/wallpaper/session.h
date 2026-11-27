@@ -14,7 +14,28 @@
 #include <dwmapi.h>
 
 namespace wallpaper {
-struct Metrics {uint64_t frames=0,missed=0;double lastFrameMs=0;size_t surfaces=0,scenes=0;bool running=false,paused=false;std::string error,presentation;};
+struct OutputMetrics {std::wstring monitor;int scene=0;bool visible=false,gpu=false;double cpuMs=0,gpuMs=-1,presentationMs=0,readbackMs=0;uint64_t readbackBytes=0,copyBytes=0;};
+struct Metrics {
+    uint64_t frames=0,missed=0,textureBytes=0,textures=0,surfaceBytes=0,uploadBytes=0;
+    double lastFrameMs=0,fps=0,readbackPerSecond=0,gpuMs=-1,presentationMs=0,readbackMs=0,shaderMs=0,fieldMs=0,simulationMs=0,renderThreadCpuMs=0;
+    int fpsTarget=0;size_t surfaces=0,scenes=0,targets=0,contexts=0,devices=0;
+    bool running=false,paused=false;std::string error,presentation;std::wstring adapter;std::vector<OutputMetrics> outputs;
+};
+inline std::wstring diagnostics(const Metrics&m){
+    std::wostringstream s;s.setf(std::ios::fixed);s.precision(3);
+    s<<L"PRESENTATION_MODE="<<std::wstring(m.presentation.begin(),m.presentation.end())<<L"\r\nGPU_ADAPTER="<<m.adapter
+     <<L"\r\nACTIVE_MONITORS="<<m.surfaces<<L"\r\nACTIVE_SCENES="<<m.scenes<<L"\r\nACTIVE_RENDER_TARGETS="<<m.targets
+     <<L"\r\nGL_CONTEXTS="<<m.contexts<<L"\r\nD3D_DEVICES="<<m.devices<<L"\r\nFPS_TARGET="<<m.fpsTarget<<L"\r\nFPS_ACTUAL="<<m.fps
+     <<L"\r\nCPU_FRAME_MS="<<m.lastFrameMs<<L"\r\nRENDER_THREAD_CPU_MS="<<m.renderThreadCpuMs<<L"\r\nGPU_RENDER_MS=";
+    if(m.gpuMs>=0)s<<m.gpuMs;else s<<L"unavailable";
+    s<<L"\r\nGPU_PRESENT_MS=unavailable (cross-API GPU timing)\r\nPRESENT_CPU_MS="<<m.presentationMs<<L"\r\nREADBACK_CPU_MS="<<m.readbackMs
+     <<L"\r\nREADBACK_BYTES_PER_SECOND="<<m.readbackPerSecond<<L"\r\nMISSED_FRAME_DEADLINES="<<m.missed
+     <<L"\r\nGL_TEXTURE_BYTES="<<m.textureBytes<<L"\r\nGL_TEXTURE_COUNT="<<m.textures<<L"\r\nPRESENT_SURFACE_BYTES="<<m.surfaceBytes
+     <<L"\r\nTEXTURE_UPLOAD_BYTES="<<m.uploadBytes<<L"\r\nSHADER_COMPILE_MS="<<m.shaderMs<<L"\r\nICON_FIELD_MS="<<m.fieldMs<<L"\r\nSIMULATION_CPU_MS="<<m.simulationMs<<L"\r\n";
+    for(const auto&o:m.outputs)s<<L"OUTPUT="<<o.monitor<<L" SCENE="<<o.scene<<L" VISIBLE="<<o.visible<<L" GPU="<<o.gpu<<L" CPU_MS="<<o.cpuMs<<L" GPU_MS="<<o.gpuMs<<L" PRESENT_MS="<<o.presentationMs<<L" READBACK_BYTES="<<o.readbackBytes<<L" COPY_BYTES="<<o.copyBytes<<L"\r\n";
+    if(!m.error.empty())s<<L"WALLPAPER_ERROR="<<std::wstring(m.error.begin(),m.error.end())<<L"\r\n";
+    return s.str();
+}
 struct SessionState {
     std::mutex mutex;Snapshot latest;Metrics metrics;uint64_t revision=0;
     std::atomic<bool> stop{false},finished{false};HANDLE event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
@@ -47,7 +68,8 @@ inline ShellHost shellHost(){
 }
 class Output {
     GL&g;Context&contextOwner;Bridge*bridge;Window window{false};GLuint framebuffer=0;Texture color;std::unique_ptr<Presentation> presentation;
-    int bufferWidth=0,bufferHeight=0;RECT rect{};ShellHost host{};
+    int bufferWidth=0,bufferHeight=0;RECT rect{};ShellHost host{};GpuMeasure timing{g};
+    OutputMetrics measured;
 public:
     std::wstring monitor;bool visible=false;
     Output(GL&gl,Context&context,Bridge*gpu,Monitor m,ShellHost shell):g(gl),contextOwner(context),bridge(gpu),rect(m.rect),host(shell),monitor(std::move(m.id)){
@@ -67,7 +89,11 @@ public:
     bool intact()const{return IsWindow(window.h)&&IsWindow(host.parent)&&GetParent(window.h)==host.parent;}
     bool matches(const Monitor&m)const{return monitor==m.id&&EqualRect(&rect,&m.rect);}
     bool gpu()const{return presentation&&presentation->gpu();}
+    uint64_t surfaceBytes()const{return presentation?presentation->surfaceBytes():0;}
+    size_t targets()const{return framebuffer?1+(presentation?1:0):0;}
+    OutputMetrics metrics(bool rendered)const{auto result=measured;result.monitor=monitor;result.visible=visible;result.gpu=gpu();if(!rendered){result.cpuMs=result.presentationMs=result.readbackMs=0;result.readbackBytes=result.copyBytes=0;result.gpuMs=-1;}return result;}
     void draw(Context&context,const Snapshot&s,const View&view,SceneRuntime&runtime,Texture&noise,Program&post,double time,float dt,const std::atomic<bool>&stop){
+        measured={};measured.scene=runtime.scene();CpuMeasure cpu{measured.cpuMs};timing.begin();
         if(!context.current())throw std::runtime_error("Wallpaper device/context lost");
         const int w=rect.right-rect.left,h=rect.bottom-rect.top;
         // Downscale allocation and shader coordinates together; no panorama atlas.
@@ -88,12 +114,15 @@ public:
         SYSTEMTIME st{};GetLocalTime(&st);post.f("hour",s.config.clockLighting?st.wHour+st.wMinute/60.f:s.config.manualHour);post.f("lighting",s.config.solar?1.f:0.f);
         post.f("rain",weather.rain);post.f("snow",weather.snow);post.f("cloud",weather.cloud);post.f("wind",weather.wind);glDrawArrays(GL_TRIANGLES,0,3);
         if(glGetError()!=GL_NO_ERROR)throw std::runtime_error("Wallpaper presentation failed; native core unaffected");if(presentation->present())show(true);
+        timing.end();measured.gpuMs=timing.milliseconds();measured.readbackBytes=presentation->readbackBytes;measured.copyBytes=presentation->copyBytes;measured.readbackMs=presentation->readbackMs;measured.presentationMs=presentation->presentationMs;
     }
 };
 class Session {
     std::shared_ptr<SessionState> state=std::make_shared<SessionState>();std::thread thread;
     static void run(const std::shared_ptr<SessionState>&state){
-        HRESULT com=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);auto start=std::chrono::steady_clock::now();
+        HRESULT com=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);graphicsStats={};
+        auto sampleStart=SteadyClock::now();uint64_t sampleFrames=0,sampleReadback=0;
+        auto threadCpu=[](){FILETIME creation{},exit{},kernel{},user{};if(!GetThreadTimes(GetCurrentThread(),&creation,&exit,&kernel,&user))return uint64_t(0);ULARGE_INTEGER k{},u{};k.LowPart=kernel.dwLowDateTime;k.HighPart=kernel.dwHighDateTime;u.LowPart=user.dwLowDateTime;u.HighPart=user.dwHighDateTime;return uint64_t(k.QuadPart+u.QuadPart);};
         try{
             Window hidden;Context context(hidden.h);GL gl;GLuint vao=0;gl.GenVertexArrays(1,&vao);gl.BindVertexArray(vao);
             struct Vao {GL&g;GLuint id;~Vao(){g.DeleteVertexArrays(1,&id);}}vaoOwner{gl,vao};
@@ -118,7 +147,8 @@ class Session {
                 auto now=std::chrono::steady_clock::now();float dt=std::clamp(std::chrono::duration<float>(now-last).count(),0.f,.1f);last=now;
                 bool paused=s.config.paused||s.locked||s.displayOff;
                 if(!paused)elapsed+=dt;
-                bool active=false;RECT all=bounds(s.monitors);auto frameStart=now;std::vector<std::wstring> used,advanced;
+                bool active=false;RECT all=bounds(s.monitors);auto frameStart=now;auto cpuStart=threadCpu();std::vector<std::wstring> used,advanced;
+                std::vector<OutputMetrics> measured(outputs.size());graphicsStats.fieldMs=graphicsStats.simulationMs=0;
                 for(size_t i=0;i<outputs.size();i++){
                     auto&o=*outputs[i];const auto&m=s.monitors[i];auto assignment=s.config.displays.find(m.id);bool enabled=assignment==s.config.displays.end()||assignment->second.enabled;
                     if(!enabled){o.show(false);continue;}
@@ -136,14 +166,24 @@ class Session {
                     else if(event.action==PointerAction::Up||event.action==PointerAction::Cancel)world->pointer(PointerAction::Cancel,{});
                     bool iconHit=false;for(auto r:s.icons)if(PtInRect(&r,s.pointer)){iconHit=true;break;}
                     if(s.click&&s.desktopPointer&&!iconHit&&(s.config.layout==Layout::Panorama?first:bool(PtInRect(&m.rect,s.pointer)))){float x=float(s.pointer.x-(s.config.layout==Layout::Panorama?all.left:m.rect.left)),y=float(s.pointer.y-(s.config.layout==Layout::Panorama?all.top:m.rect.top));world->click(x,y);}
-                    o.draw(context,s,view,*world,noise,post,elapsed,first?dt:0.f,state->stop);advanced.push_back(key);active=true;
+                    o.draw(context,s,view,*world,noise,post,elapsed,first?dt:0.f,state->stop);measured[i]=o.metrics(true);advanced.push_back(key);active=true;
                 }
                 // Hidden/disabled scenes release after they cease to be assigned;
                 // paused assigned scenes keep only the resources needed to resume.
                 if(!paused){context.current();for(auto it=worlds.begin();it!=worlds.end();)if(std::find(used.begin(),used.end(),it->first)==used.end())it=worlds.erase(it);else ++it;}
-                {size_t gpu=0;for(const auto&o:outputs)if(o->gpu())gpu++;
-                    std::lock_guard<std::mutex> lock(state->mutex);state->metrics.presentation=gpu==outputs.size()&&gpu?"GPU DirectComposition":gpu?"Mixed GPU / asynchronous DIB fallback":"Asynchronous bounded DIB fallback";
-                    state->metrics.running=true;state->metrics.paused=!active;state->metrics.surfaces=outputs.size();state->metrics.scenes=worlds.size();if(active)state->metrics.frames++;state->metrics.lastFrameMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-frameStart).count();}
+                {size_t gpu=0,targets=0;uint64_t bytes=0,readback=0;double gpuMs=0,presentMs=0,readbackMs=0;bool timed=false;
+                    for(size_t i=0;i<outputs.size();i++){const auto&o=outputs[i];if(o->gpu())gpu++;targets+=o->targets();bytes+=o->surfaceBytes();if(measured[i].monitor.empty())measured[i]=o->metrics(false);
+                        readback+=measured[i].readbackBytes;presentMs+=measured[i].presentationMs;readbackMs+=measured[i].readbackMs;if(measured[i].gpuMs>=0){timed=true;gpuMs+=measured[i].gpuMs;}}
+                    sampleFrames+=active?1:0;sampleReadback+=readback;const double seconds=std::chrono::duration<double>(SteadyClock::now()-sampleStart).count();
+                    std::lock_guard<std::mutex> lock(state->mutex);auto&m=state->metrics;
+                    m.presentation=gpu==outputs.size()&&gpu?"GPU DirectComposition":gpu?"Mixed GPU / asynchronous DIB fallback":"Asynchronous bounded DIB fallback";
+                    const char*renderer=reinterpret_cast<const char*>(glGetString(GL_RENDERER));m.adapter=bridge&&gpu?bridge->adapter():renderer?std::wstring(renderer,renderer+strlen(renderer)):L"unavailable";
+                    m.running=true;m.paused=!active;m.surfaces=outputs.size();m.scenes=worlds.size();m.targets=targets;m.contexts=1;m.devices=bridge?1:0;if(active)m.frames++;
+                    m.lastFrameMs=std::chrono::duration<double,std::milli>(SteadyClock::now()-frameStart).count();m.renderThreadCpuMs=double(threadCpu()-cpuStart)/10000.;
+                    m.gpuMs=timed?gpuMs:-1;m.presentationMs=presentMs;m.readbackMs=readbackMs;m.textureBytes=graphicsStats.textureBytes;m.textures=graphicsStats.textures;m.surfaceBytes=bytes;m.uploadBytes=graphicsStats.uploadBytes;
+                    m.shaderMs=graphicsStats.shaderMs;m.fieldMs=graphicsStats.fieldMs;m.simulationMs=graphicsStats.simulationMs;m.fpsTarget=s.config.fps;m.outputs=std::move(measured);
+                    if(!active){m.fps=0;m.readbackPerSecond=0;sampleStart=SteadyClock::now();sampleFrames=sampleReadback=0;}
+                    else if(seconds>=1){m.fps=sampleFrames/seconds;m.readbackPerSecond=sampleReadback/seconds;sampleStart=SteadyClock::now();sampleFrames=sampleReadback=0;}}
                 if(!active){MsgWaitForMultipleObjects(1,&state->event,FALSE,INFINITE,QS_ALLINPUT);last=std::chrono::steady_clock::now();deadline=last;continue;}
                 deadline+=std::chrono::microseconds(1000000/s.config.fps);now=std::chrono::steady_clock::now();if(deadline<now){std::lock_guard<std::mutex> lock(state->mutex);state->metrics.missed++;deadline=now;}
                 DWORD wait=DWORD(std::max<int64_t>(0,std::chrono::duration_cast<std::chrono::milliseconds>(deadline-now).count()));
@@ -153,7 +193,7 @@ class Session {
             }
             context.current();worlds.clear();outputs.clear();
         }catch(const std::exception&e){std::lock_guard<std::mutex> lock(state->mutex);state->metrics.error=e.what();}
-        if(SUCCEEDED(com))CoUninitialize();{std::lock_guard<std::mutex> lock(state->mutex);state->metrics.running=false;state->metrics.surfaces=0;state->metrics.scenes=0;}state->finished=true;SetEvent(state->event);
+        if(SUCCEEDED(com))CoUninitialize();{std::lock_guard<std::mutex> lock(state->mutex);state->metrics.running=false;state->metrics.surfaces=0;state->metrics.scenes=state->metrics.targets=state->metrics.contexts=state->metrics.devices=0;state->metrics.textureBytes=state->metrics.surfaceBytes=state->metrics.textures=0;state->metrics.fps=state->metrics.readbackPerSecond=0;state->metrics.outputs.clear();}state->finished=true;SetEvent(state->event);
     }
 public:
     explicit Session(const Snapshot&s){if(!state->event)throw std::runtime_error("Wallpaper cancellation event unavailable");state->latest=s;thread=std::thread(run,state);}
