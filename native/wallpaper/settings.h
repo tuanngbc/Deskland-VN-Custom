@@ -2,6 +2,7 @@
 #pragma once
 #include "controller.h"
 #include "images.h"
+#include "accessibility.h"
 #include "../fluidwin/vetro.h"
 #include <functional>
 
@@ -9,7 +10,7 @@ namespace wallpaper {
 class SettingsPage {
     struct Gallery {std::atomic<bool> started{false},ready{false};std::array<Pixels,16> images;std::string error;};
     std::shared_ptr<Gallery> gallery=std::make_shared<Gallery>();
-    std::array<ID2D1Bitmap*,16> thumbs{};ID2D1RenderTarget*target=nullptr;int selectedMonitor=0,focus=-1;std::vector<int> focusable;
+    std::array<ID2D1Bitmap*,16> thumbs{};ID2D1RenderTarget*target=nullptr;int selectedMonitor=0,focus=-1;std::vector<int> focusable;std::vector<AccessibleControl> controls;
     std::vector<Monitor> monitors;
     void loadGallery(HWND notify){if(gallery->started.exchange(true))return;auto*g=new std::pair<std::shared_ptr<Gallery>,HWND>(gallery,notify);
         if(!pool::lancia([](void*raw)->DWORD {auto job=std::unique_ptr<std::pair<std::shared_ptr<Gallery>,HWND>>(static_cast<std::pair<std::shared_ptr<Gallery>,HWND>*>(raw));HRESULT com=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
@@ -23,6 +24,10 @@ public:
     std::function<void(Config)> changed;
     std::function<Metrics()> metrics;
     ~SettingsPage(){release();}
+    void close(){release();focus=-1;}
+    LRESULT accessible(HWND h,WPARAM w){auto*provider=new AccessiblePage(h,controls,focus);LRESULT result=LresultFromObject(IID_IAccessible,w,provider);provider->Release();return result;}
+    bool focusAction(int action){for(size_t i=0;i<focusable.size();i++)if(focusable[i]==action){focus=int(i);return true;}return false;}
+    RECT focusRect()const{return focus>=0&&focus<int(controls.size())?controls[size_t(focus)].rect:RECT{};}
     bool key(WPARAM key){if(focusable.empty())return false;if(key==VK_TAB){int step=GetKeyState(VK_SHIFT)<0?-1:1;focus=(focus+step+int(focusable.size()))%int(focusable.size());return true;}if((key==VK_SPACE||key==VK_RETURN)&&focus>=0){click(focusable[size_t(focus)]);return true;}return false;}
     bool click(int action){if(action<5000||!read||!changed)return false;Config c=read();
         if(action==5000)c.enabled=!c.enabled;else if(action==5001)c.paused=!c.paused;
@@ -47,20 +52,20 @@ public:
         if(!read)return;Config c=read();monitors=topology();selectedMonitor=std::clamp(selectedMonitor,0,std::max(0,int(monitors.size())-1));const float d=v.dpi;loadGallery(v.fin);
         if(target!=v.rt){release();target=v.rt;}
         if(gallery->ready){for(size_t i=0;i<thumbs.size();i++)if(!thumbs[i]&&!gallery->images[i].rgba.empty()){const auto&p=gallery->images[i];v.rt->CreateBitmap(D2D1::SizeU(p.width,p.height),p.rgba.data(),p.width*4,D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_IGNORE)),&thumbs[i]);}}
-        focusable.clear();
-        auto button=[&](D2D1_RECT_F r,int id,const std::wstring&label,bool selected=false){zone(r,id);focusable.push_back(id);bool focused=focus>=0&&focus<int(focusable.size())&&focusable[size_t(focus)]==id;
+        focusable.clear();controls.clear();
+        auto button=[&](D2D1_RECT_F r,int id,const std::wstring&label,bool selected=false,const std::wstring&spoken=L""){zone(r,id);focusable.push_back(id);controls.push_back({id,spoken.empty()?label:spoken,{LONG(r.left),LONG(r.top),LONG(r.right),LONG(r.bottom)},selected});bool focused=focus>=0&&focus<int(focusable.size())&&focusable[size_t(focus)]==id;
             v.pen->SetColor(selected?D2D1::ColorF(accent.r,accent.g,accent.b,.22f*alpha):D2D1::ColorF(v.scuro?1.f:0.f,v.scuro?1.f:0.f,v.scuro?1.f:0.f,(hovered==id?.12f:.06f)*alpha));v.rt->FillRoundedRectangle({r,7*d,7*d},v.pen);if(focused||selected){v.pen->SetColor(accent);v.rt->DrawRoundedRectangle({r,7*d,7*d},v.pen,1.3f*d);}v.testo(label,center,r,ink);};
-        auto row=[&](const std::wstring&name,const std::wstring&detail,int id,bool on){D2D1_RECT_F r{left,y,right,y+58*d};v.pen->SetColor(D2D1::ColorF(v.scuro?1.f:0.f,v.scuro?1.f:0.f,v.scuro?1.f:0.f,.045f*alpha));v.rt->FillRoundedRectangle({r,9*d,9*d},v.pen);v.testo(name,font,{left+12*d,y+4*d,right-90*d,y+28*d},ink);v.testo(detail,small,{left+12*d,y+28*d,right-90*d,y+52*d},muted);button({right-78*d,y+12*d,right-10*d,y+46*d},id,on?L"On":L"Off",on);y+=64*d;};
+        auto row=[&](const std::wstring&name,const std::wstring&detail,int id,bool on){D2D1_RECT_F r{left,y,right,y+58*d};v.pen->SetColor(D2D1::ColorF(v.scuro?1.f:0.f,v.scuro?1.f:0.f,v.scuro?1.f:0.f,.045f*alpha));v.rt->FillRoundedRectangle({r,9*d,9*d},v.pen);v.testo(name,font,{left+12*d,y+4*d,right-90*d,y+28*d},ink);v.testo(detail,small,{left+12*d,y+28*d,right-90*d,y+52*d},muted);button({right-78*d,y+12*d,right-10*d,y+46*d},id,on?L"On":L"Off",on,name+(on?L" enabled":L" disabled"));y+=64*d;};
         auto title=[&](const std::wstring&t){v.testo(t,font,{left,y,right,y+28*d},ink);y+=34*d;};
         auto choices=[&](const std::vector<std::wstring>&labels,int base,int selected){float width=(right-left-6*d*(labels.size()-1))/float(labels.size());for(size_t i=0;i<labels.size();i++)button({left+float(i)*(width+6*d),y,left+float(i)*(width+6*d)+width,y+36*d},base+int(i),labels[i],int(i)==selected);y+=44*d;};
-        auto adjust=[&](const std::wstring&name,const std::wstring&value,int base){v.testo(name,font,{left+10*d,y,right-150*d,y+36*d},ink);button({right-134*d,y,right-99*d,y+32*d},base,L"−");v.testo(value,center,{right-98*d,y,right-46*d,y+32*d},ink);button({right-44*d,y,right-9*d,y+32*d},base+1,L"+");y+=42*d;};
+        auto adjust=[&](const std::wstring&name,const std::wstring&value,int base){v.testo(name,font,{left+10*d,y,right-150*d,y+36*d},ink);button({right-134*d,y,right-99*d,y+32*d},base,L"−",false,name+L" decrease; "+value);v.testo(value,center,{right-98*d,y,right-46*d,y+32*d},ink);button({right-44*d,y,right-9*d,y+32*d},base+1,L"+",false,name+L" increase; "+value);y+=42*d;};
         row(L"Live Wallpaper",L"Native renderer · isolated TEST configuration",5000,c.enabled);
         row(L"Pause wallpaper",L"Keeps the last frame; core animations remain available",5001,c.paused);
         title(L"Display layout");choices({L"Independent",L"Synchronized",L"Panorama"},5010,int(c.layout));
         for(size_t i=0;i<monitors.size();i++){const auto&m=monitors[i];std::wstring text=m.id+L" · "+std::to_wstring(m.rect.right-m.rect.left)+L"×"+std::to_wstring(m.rect.bottom-m.rect.top)+L" · "+std::to_wstring(m.dpi*100/96)+L"%";button({left,y,right,y+32*d},5020+int(i),text,int(i)==selectedMonitor);y+=38*d;}
         if(!monitors.empty()){auto i=c.displays.find(monitors[selectedMonitor].id);row(L"Wallpaper on selected display",L"Display coordinates and orientation follow Windows",5040,i==c.displays.end()||i->second.enabled);}
         title(L"Wallpaper gallery · select a scene to preview on Desktop");int selected=scene(c);float gap=8*d,cardW=(right-left-gap*2)/3,cardH=94*d;
-        for(size_t i=0;i<catalog().size();i++){int col=int(i%3);float x=left+col*(cardW+gap);D2D1_RECT_F card{x,y,x+cardW,y+cardH};button(card,5100+int(i),L"",int(i)==selected);if(thumbs[i])v.rt->DrawBitmap(thumbs[i],{x+4*d,y+4*d,x+cardW-4*d,y+65*d},alpha,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);v.testo(catalog()[i].name,small,{x+5*d,y+66*d,x+cardW-5*d,y+cardH},ink);if(col==2||i+1==catalog().size())y+=cardH+gap;}
+        for(size_t i=0;i<catalog().size();i++){int col=int(i%3);float x=left+col*(cardW+gap);D2D1_RECT_F card{x,y,x+cardW,y+cardH};button(card,5100+int(i),L"",int(i)==selected,catalog()[i].name);if(thumbs[i])v.rt->DrawBitmap(thumbs[i],{x+4*d,y+4*d,x+cardW-4*d,y+65*d},alpha,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);v.testo(catalog()[i].name,small,{x+5*d,y+66*d,x+cardW-5*d,y+cardH},ink);if(col==2||i+1==catalog().size())y+=cardH+gap;}
         if(!gallery->ready){v.testo(L"Loading scene thumbnails…",small,{left,y,right,y+26*d},muted);y+=30*d;}
         title(L"Scene customization");const auto&s=catalog()[selected];Config effective=c;if(c.layout==Layout::Independent&&!monitors.empty()){auto a=c.displays.find(monitors[selectedMonitor].id);if(a!=c.displays.end()){auto values=a->second.sceneParams.find(s.id);if(values!=a->second.sceneParams.end())for(const auto&[key,value]:values->second)effective.sceneParams[s.id][key]=value;}}
         for(size_t i=0;i<s.params.size();i++){const auto&p=s.params[i];wchar_t value[48];swprintf(value,48,L"%.2g",parameter(effective,selected,p.key));adjust(p.name,value,5200+int(i)*2);}

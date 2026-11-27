@@ -35,10 +35,19 @@ native Shell, Dock and accepted effects operational.
 
 D3D11 fits the accepted core but translating all audited GLSL and vector artwork
 at once would introduce visual regressions. Phase 2 uses a newly owned C++ WGL
-renderer for existing GLSL assets, without changing the core D3D device. No GL/D3D
-surface sharing or Rust ABI is introduced. Only active scenes compile; programs,
+renderer for existing GLSL assets, without changing the core D3D device. No Rust
+ABI is introduced. Only active scenes compile; programs,
 textures, contexts, DCs and windows have explicit destruction on their owner thread.
 No browser, legacy runtime, legacy module wrapper or additional desktop shell.
+
+Windows 11 desktop composition cannot rely on WGL SwapBuffers into a layered
+child window (the legacy source records this presentation constraint). The new
+C++ presentation owner therefore uses standard WGL_NV_DX_interop with D3D11 and
+DirectComposition when the driver supports it. That API pipeline is audited
+algorithm reuse; no old Rust implementation is linked/copied. A distinct wallpaper
+device is selected to match the GL adapter, so it cannot lock or reset the accepted
+core's device. Unsupported interop uses a bounded three-slot asynchronous readback
+queue and DIB presentation on the wallpaper thread, with its mode reported.
 
 A cancellable wallpaper session owns its render thread, windows and context.
 Core UI publishes bounded configuration/topology/weather/input snapshots and never

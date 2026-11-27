@@ -360,11 +360,18 @@ public:
                 return true;
             case WM_CAPTURECHANGED: if (trascina >= 0) { trascina = -1; salva(); disegna(); } return true;
             case WM_KEYDOWN:
-                if (sezione == S_WALLPAPER && wallpaperPage.key(w)) { disegna(); return true; }
+                if (sezione == S_WALLPAPER && wallpaperPage.key(w)) { wallpaperFocus(); disegna(); return true; }
                 if (w == VK_ESCAPE) chiudi();
                 else if (w == VK_DOWN || w == VK_UP) vaiASezione((sezione + (w == VK_DOWN ? 1 : SEZIONI - 1)) % SEZIONI);   // frecce: sezioni
                 return true;
             case WM_CLOSE: chiudi(); return true;
+            case WM_GETOBJECT:
+                if (sezione == S_WALLPAPER && (LONG)l == OBJID_CLIENT) { r=wallpaperPage.accessible(hw,w); return true; }
+                return false;
+            case wallpaper::ACCESS_ACTION:
+                if (sezione == S_WALLPAPER) { wallpaperPage.click((int)w); disegna(); } return true;
+            case wallpaper::ACCESS_ACTION+1:
+                if (sezione == S_WALLPAPER) { wallpaperPage.focusAction((int)w); wallpaperFocus(); disegna(); } return true;
             case WM_MOUSEWHEEL:   // sezione Cursore: l'elenco dei pacchetti scorre (non ci stanno tutti: R20261114-141207-S7)
                 if (sezione != S_CURSORE && !morph) {   // le altre: tutta la sezione, una riga (60 px) per scatto
                     const float prima = scorriSez;
@@ -708,10 +715,15 @@ private:
     }
 
     void vaiASezione(int s) {
+        if (s != S_WALLPAPER) wallpaperPage.close();
         if (s == sezione) return;
         sezione = s; kSez = 0; tSez = vetro::ms(); scorriSez = 0; massimoSez = 0;
         vetro::battito(v.fin, 1);
         disegna();
+    }
+    void wallpaperFocus() {
+        RECT r=wallpaperPage.focusRect(),client{};GetClientRect(v.fin,&client);float top=72*v.dpi,bottom=client.bottom-16*v.dpi;
+        if(r.top<top)scorriSez=std::max(0.f,scorriSez+r.top-top);else if(r.bottom>bottom)scorriSez=std::min(massimoSez,scorriSez+r.bottom-bottom);
     }
 
     void clic(int id) {
@@ -843,6 +855,7 @@ private:
     }
 
     void nascondi() {
+        wallpaperPage.close();
         if (v.fin) { vetro::fermaBattito(v.fin, 1); ShowWindow(v.fin, SW_HIDE); }
         if (v.fin && fuori) SetWindowPos(v.fin, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         if (daCentro && dockSu) dockSu(false);   // (dopo tornaAlCentro: col pannello gia' aperto il dock non scende)
