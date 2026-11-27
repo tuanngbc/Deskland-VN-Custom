@@ -56,7 +56,16 @@ int main(int argc,char** argv) {
     if(int result=phase3Contracts(report,std::filesystem::path(argv[1])))return result;
     gImpostazioni.apri();ciPump(350);
     if(!FindWindowW(L"TLauncher.Native.Impostazioni",nullptr))return 19;
-    report<<"NATIVE_SETTINGS_WINDOW=PASS\nOWNER_VISUAL_ACCEPTANCE=PENDING\n";
+    const HWND settings=FindWindowW(L"TLauncher.Native.Impostazioni",nullptr);
+    for(int language:{testi::INGLESE,testi::VIETNAMITA,testi::FRANCESE,testi::VIETNAMITA}){
+        POINT point{};if(!gImpostazioni.ciPoint(100+language,point))return 121;
+        SendMessageW(settings,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM(point.x,point.y));
+        SendMessageW(settings,WM_LBUTTONUP,0,MAKELPARAM(point.x,point.y));ciPump(90);
+        if(testi::attuale()!=language||!gImpostazioni.ciLocale())return 122;
+    }
+    impostazioni::carica();if(testi::attuale()!=testi::VIETNAMITA)return 123;
+    if(!phase3Snapshot(settings,std::filesystem::path(argv[1])/L"phase3-live-vietnamese-settings.bmp"))return 124;
+    report<<"NATIVE_SETTINGS_WINDOW=PASS\nLIVE_LANGUAGE_CHANGE_FORMAT_LOCALE_AND_PERSISTENCE=PASS\nOWNER_VISUAL_ACCEPTANCE=PENDING\n";
     report.close();
     // Upstream exits without static teardown after workers; retain that policy.
     ExitProcess(0);

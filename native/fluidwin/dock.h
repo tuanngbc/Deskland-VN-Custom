@@ -514,6 +514,7 @@ public:
 
     // Lingua dell'interfaccia cambiata: date, nomi delle voci fisse e pannelli si rifanno nella lingua nuova
     void linguaCambiata() {
+        for(auto** f:{&testo,&fmtOra,&fmtData,&fmtTitolo,&fmtGrande,&fmtVoce,&fmtSotto,&fmtNotizia,&fmtNome})testi::aggiornaFormato(fdw,*f);
         testoOra.clear();   // le date si ricalcolano anche se l'ora non e' cambiata
         aggiornaStato(true);
         appDaAggiornare = true; dirty = true; pDirty = true; lDirty = true;

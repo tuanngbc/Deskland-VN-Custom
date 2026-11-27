@@ -234,6 +234,10 @@ public:
     std::function<void(const std::wstring&)> mostraNascosta;
     std::function<bool(bool,shortcuts::Key,bool)> shortcutChanged;
 
+#ifdef TLAUNCHER_NATIVE_CI
+    bool ciPoint(int id,POINT& p)const{for(const auto&z:zone)if(z.id==id){p={LONG((z.r.left+z.r.right)/2),LONG((z.r.top+z.r.bottom)/2)};return true;}return false;}
+    bool ciLocale()const{wchar_t name[LOCALE_NAME_MAX_LENGTH]{};return fVoce&&SUCCEEDED(fVoce->GetLocaleName(name,LOCALE_NAME_MAX_LENGTH))&&!wcscmp(name,testi::locale());}
+#endif
     // da: rettangolo sullo schermo del vetro del centro di controllo. Le impostazioni non compaiono a parte: il vetro
     // del centro sale e si allarga fino a diventare la loro finestra, al centro dello schermo (dove sono sempre state),
     // e alla chiusura ci rientra, e il centro ricompare. Un clic fuori (un'altra app prende il primo piano) le chiude
@@ -542,6 +546,7 @@ private:
     };
     vetro::Finestra v;
     IDWriteTextFormat *fTitolo = nullptr, *fVoce = nullptr, *fSotto = nullptr, *fSezione = nullptr, *fCentro = nullptr, *fMarchio = nullptr, *fPiccolo = nullptr;
+    int fLanguage=-1;
     float fDpi = 0;   // scala con cui sono stati fatti i formati qui sopra
     bool aperta = false, dentro = false;
     // crescita dal centro di controllo e rientro (vedi apri): morph 1 cresce, -1 rientra, 0 fermo; mx 0..1 avanzamento
@@ -997,6 +1002,10 @@ private:
 
     void disegna() {
         if (!aperta || !v.inizia()) return;
+        if(fLanguage!=testi::attuale()){
+            bool ready=true;for(auto** f:{&fTitolo,&fVoce,&fSotto,&fSezione,&fCentro,&fMarchio,&fPiccolo})ready=testi::aggiornaFormato(v.fdw,*f)&&ready;
+            if(ready)fLanguage=testi::attuale();
+        }
         float W = (float)v.W, H = (float)v.H;
         // mentre cresce o rientra: il contenuto con le misure finali, rimpicciolito per stare nel vetro, e compare
         // solo nell'ultima parte della crescita (prima il vetro e' troppo stretto per leggerlo)

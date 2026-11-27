@@ -89,6 +89,26 @@ inline const wchar_t* locale() {
     static const wchar_t* n[N_LINGUE] = {L"it-IT", L"en-US", L"es-ES", L"fr-FR", L"de-DE", L"pt-BR", L"ar-EG",L"vi-VN"};
     return n[attuale()];
 }
+// Recreate only the text format on a language change; retain the owner's
+// typography, spacing and trimming. A failed allocation leaves the old format.
+inline bool aggiornaFormato(IDWriteFactory* factory, IDWriteTextFormat*& format) {
+    if(!factory||!format)return false;
+    wchar_t current[LOCALE_NAME_MAX_LENGTH]{};
+    if(SUCCEEDED(format->GetLocaleName(current,LOCALE_NAME_MAX_LENGTH))&&!wcscmp(current,locale()))return true;
+    std::wstring family(format->GetFontFamilyNameLength()+1,L'\0');
+    if(FAILED(format->GetFontFamilyName(family.data(),UINT32(family.size()))))return false;
+    IDWriteFontCollection* collection=nullptr;format->GetFontCollection(&collection);
+    IDWriteTextFormat* next=nullptr;
+    HRESULT result=factory->CreateTextFormat(family.c_str(),collection,format->GetFontWeight(),format->GetFontStyle(),format->GetFontStretch(),format->GetFontSize(),locale(),&next);
+    if(collection)collection->Release();if(FAILED(result)||!next)return false;
+    next->SetTextAlignment(format->GetTextAlignment());next->SetParagraphAlignment(format->GetParagraphAlignment());next->SetWordWrapping(format->GetWordWrapping());
+    next->SetReadingDirection(format->GetReadingDirection());next->SetFlowDirection(format->GetFlowDirection());next->SetIncrementalTabStop(format->GetIncrementalTabStop());
+    DWRITE_LINE_SPACING_METHOD method{};FLOAT spacing=0,baseline=0;
+    if(SUCCEEDED(format->GetLineSpacing(&method,&spacing,&baseline)))next->SetLineSpacing(method,spacing,baseline);
+    DWRITE_TRIMMING trimming{};IDWriteInlineObject* sign=nullptr;
+    if(SUCCEEDED(format->GetTrimming(&trimming,&sign)))next->SetTrimming(&trimming,sign);
+    if(sign)sign->Release();format->Release();format=next;return true;
+}
 // codice di due lettere (ricerca delle citta' del meteo)
 inline const wchar_t* codice() {
     static const wchar_t* n[N_LINGUE] = {L"it", L"en", L"es", L"fr", L"de", L"pt", L"ar",L"vi"};

@@ -75,3 +75,6 @@ CI 46058544456 found four Boxing uniform uploads passing std::array to the exist
 
 
 Summer Porch audit restores the original independently accumulated fan yaw/blade phases (both freeze when switched off), bounded effective speed, wind-target chime spring and click inertia, original bird hop timing and fixed-step melon refill. Petting retains the rolling pose midpoint and original rest delay. Hosted renderer lifecycle assertions cover fan stop/restart, chime/bird settling, refill timing and Corgi roll transitions. CI pending; complete artwork/bug behavior and owner quality acceptance remain open.
+
+
+Live language changes now refresh DirectWrite locale for Settings, Dock/shared Control Center formats, Stage labels and Notch, retaining font family/size/spacing/trimming instead of recreating renderers. Spotlight already rebuilds on language changes; native menus construct current-locale formats on opening. Hosted Settings coverage clicks the actual hit regions through English/Vietnamese/French/Vietnamese, checks format locale and persisted selection, and retains a screenshot. CI pending; complete dynamic-string and clipping evidence remains open.

@@ -305,6 +305,7 @@ private:
     bool sopraVale() const { return sopra && abilitato; }
     static bool aRiposo(int s) { return s == ORA || s == MUSICA || s == TIMER; }
 
+    int fLanguage=-1;
     std::vector<IDWriteTextFormat*> formati() const { return {fOra, fGiorno, fTitolo, fPiccolo, fTesto, fNumero, fGrande}; }
 
     static double adesso() { return vetro::secondi(); }
@@ -669,7 +670,7 @@ private:
 
     void preparaFormati() {
         IDWriteFactory* fdw = fabbriche::testo();
-        if (!fdw || fDpi == dpi) return;
+        if (!fdw || (fDpi == dpi && fLanguage == testi::attuale())) return;
         for (IDWriteTextFormat* f : formati()) if (f) f->Release();
         fOra = fGiorno = fTitolo = fPiccolo = fTesto = fNumero = fGrande = nullptr;
         const float d = dpi;
@@ -689,7 +690,7 @@ private:
         crea(fontTesto, DWRITE_FONT_WEIGHT_NORMAL, 12.0f, &fTesto, true);
         crea(fontTitoli, DWRITE_FONT_WEIGHT_SEMI_BOLD, 12.0f, &fNumero, false, DWRITE_TEXT_ALIGNMENT_TRAILING);
         crea(fontTitoli, DWRITE_FONT_WEIGHT_SEMI_BOLD, 24.0f, &fGrande, false);
-        fDpi = dpi;
+        fDpi = dpi;fLanguage=testi::attuale();
     }
 
     void misuraOra() {

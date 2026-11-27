@@ -354,6 +354,7 @@ private:
     }
     void draw(Rail& rail) {
         auto& v=rail.glass;if(!v.inizia())return;
+        testi::aggiornaFormato(v.fdw,rail.text);
         if(rail.hidden){v.finisci();return;}
         const float d=v.dpi;
         for(size_t i=0;i<rail.cards.size();++i) {
