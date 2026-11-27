@@ -10,6 +10,8 @@
 #include <vector>
 
 namespace wallpaper {
+using std::sin;using std::cos;using std::exp;using std::sqrt;using std::log;
+using std::floor;using std::ceil;using std::abs;using std::hypot;
 struct Param { const char* key; const wchar_t* name; double min, max, step, initial; };
 struct Scene { const char* id; const wchar_t* name; const wchar_t* shader; const wchar_t* thumbnail; std::vector<Param> params; };
 const std::vector<Scene>& catalog();
