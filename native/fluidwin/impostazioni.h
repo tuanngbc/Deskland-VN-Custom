@@ -235,6 +235,7 @@ public:
     std::function<bool(bool,shortcuts::Key,bool)> shortcutChanged;
 
 #ifdef TLAUNCHER_NATIVE_CI
+    bool ciReady()const{return aperta&&morph==0;}
     bool ciPoint(int id,POINT& p)const{for(const auto&z:zone)if(z.id==id){p={LONG((z.r.left+z.r.right)/2),LONG((z.r.top+z.r.bottom)/2)};return true;}return false;}
     bool ciLocale()const{wchar_t name[LOCALE_NAME_MAX_LENGTH]{};return fVoce&&SUCCEEDED(fVoce->GetLocaleName(name,LOCALE_NAME_MAX_LENGTH))&&!wcscmp(name,testi::locale());}
 #endif

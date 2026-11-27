@@ -57,11 +57,14 @@ int main(int argc,char** argv) {
     gImpostazioni.apri();ciPump(350);
     if(!FindWindowW(L"TLauncher.Native.Impostazioni",nullptr))return 19;
     const HWND settings=FindWindowW(L"TLauncher.Native.Impostazioni",nullptr);
+    const ULONGLONG readyUntil=GetTickCount64()+3000;while(!gImpostazioni.ciReady()&&GetTickCount64()<readyUntil)ciPump(20);
+    if(!gImpostazioni.ciReady())return 140;
     for(int language:{testi::INGLESE,testi::VIETNAMITA,testi::FRANCESE,testi::VIETNAMITA}){
-        POINT point{};if(!gImpostazioni.ciPoint(100+language,point))return 121;
+        POINT point{};if(!gImpostazioni.ciPoint(100+language,point))return 141;
         SendMessageW(settings,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM(point.x,point.y));
         SendMessageW(settings,WM_LBUTTONUP,0,MAKELPARAM(point.x,point.y));ciPump(90);
-        if(testi::attuale()!=language||!gImpostazioni.ciLocale())return 122;
+        report<<"LANGUAGE_CLICK requested="<<language<<" actual="<<testi::attuale()<<" format_matches="<<gImpostazioni.ciLocale()<<" ready="<<gImpostazioni.ciReady()<<" point="<<point.x<<","<<point.y<<"\n";report.flush();
+        if(testi::attuale()!=language||!gImpostazioni.ciLocale()){phase3Snapshot(settings,std::filesystem::path(argv[1])/L"phase3-language-failure.bmp");return 142;}
     }
     impostazioni::carica();if(testi::attuale()!=testi::VIETNAMITA)return 123;
     if(!phase3Snapshot(settings,std::filesystem::path(argv[1])/L"phase3-live-vietnamese-settings.bmp"))return 124;
