@@ -9,6 +9,7 @@ static void ciPump(int ms) {
     const ULONGLONG until=GetTickCount64()+ms;
     do {MSG m;while(PeekMessageW(&m,nullptr,0,0,PM_REMOVE)){TranslateMessage(&m);DispatchMessageW(&m);}Sleep(5);}while(GetTickCount64()<until);
 }
+#include "native-phase3-contract.h"
 int main(int argc,char** argv) {
     if(argc!=2||!tlauncher::validateTrial())return 10;
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -41,6 +42,7 @@ int main(int argc,char** argv) {
         n.mostra(false);
         report<<"NOTCH_TRUE_DISABLE=PASS\nNOTCH_LIVE_REENABLE=PASS\nNOTCH_FIXED_AND_ACTIVITY=PASS\nNOTCH_GDI_RELEASE=PASS\n";
     }
+    if(int result=phase3Contracts(report,std::filesystem::path(argv[1])))return result;
     gImpostazioni.apri();ciPump(350);
     if(!FindWindowW(L"TLauncher.Native.Impostazioni",nullptr))return 19;
     report<<"NATIVE_SETTINGS_WINDOW=PASS\nOWNER_VISUAL_ACCEPTANCE=PENDING\n";

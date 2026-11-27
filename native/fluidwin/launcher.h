@@ -2,6 +2,7 @@
 // dichiarati in dock.h (che include questo file).
 #pragma once
 #include "tlauncher_identity.h"
+#include "app_icons.h"
 
 namespace dock {
 
@@ -20,7 +21,7 @@ inline DWORD WINAPI Motore::threadIcone(LPVOID p) {
             LeaveCriticalSection(&m->csIcone);
             if (!c) break;
             IconaPronta ip; ip.percorso = r.first; ip.lato = r.second;
-            ip.ok = pixelIcona(r.first, r.second, ip.w, ip.h, ip.px);
+            ip.ok = appicons::load(r.first,r.second,ip.w,ip.h,ip.px,[](const std::wstring& path,int size,int& w,int& h,std::vector<UINT>& px){return pixelIcona(path,size,w,h,px);});
             EnterCriticalSection(&m->csIcone); m->iconePronte.push_back(std::move(ip)); LeaveCriticalSection(&m->csIcone);
             PostMessageW(m->icone, WM_ICONA_PRONTA, 0, 0);
         }
@@ -102,7 +103,8 @@ inline auto Motore::raccogliIcone() -> bool {
             for (auto& a : appSfondo) if (a.exe == ip.percorso) a.icona = b;
             pDirty = true; altra.pDirty = true;
         } else if (ip.lato == 96) {    // launcher
-            for (auto& a : tutteApp) if (a.avvio == ip.percorso && !a.icona) { a.icona = b; presa = true; lDirty = true; break; }
+            for (auto& a : tutteApp) if (appcatalog::iconSource(a.avvio) == ip.percorso && !a.icona) { a.icona = b; presa = true; lDirty = true; break; }
+            iconeChieste.erase(chiaveIcona(ip.percorso,ip.lato));
         } else if (ip.lato == 48) {    // file e cartelle del launcher (anche "nessuna": non si richiede a ogni ricerca)
             auto& v = iconeFile[ip.percorso];
             if (!v) { v = b; presa = b != nullptr; }
@@ -180,6 +182,14 @@ inline auto Motore::leggiTutteApp(bool subito) -> void {
 }
 
 inline auto Motore::applicaTutteApp(std::vector<AppL> nuove) -> void {
+    appcatalog::load();
+    for(const auto& entry:appcatalog::metadata) if(entry.second.manual) {
+        AppL a;a.nome=entry.second.name.empty()?std::filesystem::path(entry.first).stem().wstring():entry.second.name;a.avvio=entry.first;a.minuscolo=appcatalog::fold(a.nome);nuove.push_back(std::move(a));
+    }
+    std::unordered_set<std::wstring> identities;
+    nuove.erase(std::remove_if(nuove.begin(),nuove.end(),[&](const AppL& a){return !identities.insert(appcatalog::identity(a.avvio)).second;}),nuove.end());
+    for(auto& a:nuove){auto m=appcatalog::get(a.avvio);if(!m.name.empty())a.nome=m.name;a.minuscolo=appcatalog::fold(a.nome);}
+    std::stable_sort(nuove.begin(),nuove.end(),[](const AppL& a,const AppL& b){auto x=appcatalog::get(a.avvio),y=appcatalog::get(b.avvio);if(x.favorite!=y.favorite)return x.favorite;if(x.order!=y.order)return x.order<y.order;return a.minuscolo<b.minuscolo;});
     // le icone gia' caricate si conservano
     for (auto& a : nuove) for (auto& v : tutteApp) if (v.avvio == a.avvio) { a.icona = v.icona; a.provata = v.provata; v.icona = nullptr; break; }
     for (auto& v : tutteApp) if (v.icona) v.icona->Release();
@@ -188,7 +198,7 @@ inline auto Motore::applicaTutteApp(std::vector<AppL> nuove) -> void {
     const int sel = lSel; const double scr = lScrollObj;
     filtra();
     if (lAperto) { lSel = std::clamp(sel, 0, std::max(0, (int)filtrate.size() - 1)); lScrollObj = std::clamp(scr, 0.0, lScrollMax()); }
-    for (auto& a : tutteApp) if (!a.icona && !a.provata) { a.provata = true; chiediIcona(a.avvio, 96); }
+    // Visible cells request icons lazily in the existing draw path.
     if (registro) { char b[64]; snprintf(b, 64, "launcher: %d app", (int)tutteApp.size()); scrivi(b); }
 }
 
@@ -212,7 +222,7 @@ inline auto Motore::elencaTutteApp() -> std::vector<AppL> {
     }
     cart->Release();
     std::sort(nuove.begin(), nuove.end(), [](const AppL& a, const AppL& b) { return lstrcmpiW(a.nome.c_str(), b.nome.c_str()) < 0; });
-    nuove.erase(std::unique(nuove.begin(), nuove.end(), [](const AppL& a, const AppL& b) { return a.minuscolo == b.minuscolo; }), nuove.end());
+    // Discovery identity, never display name, decides duplicates.
     return nuove;
 }
 
@@ -235,9 +245,10 @@ inline auto Motore::sottosequenza(const std::wstring& nome, const std::wstring& 
 
 inline auto Motore::filtra() -> void {
     filtrate.clear();
-    const std::wstring q = minuscolo(query);
+    const std::wstring q = appcatalog::fold(query);
     std::vector<int> livelli[3];   // iniziali, contiene, lettere in ordine
     for (int i = 0; i < (int)tutteApp.size(); i++) {
+        if(appcatalog::get(tutteApp[i].avvio).hidden)continue;
         if (q.empty()) { filtrate.push_back(i); continue; }
         const std::wstring& n = tutteApp[i].minuscolo;
         const size_t p = n.find(q);
@@ -571,9 +582,10 @@ inline auto Motore::avviaApp(int i) -> void {
 inline auto Motore::rettEnergia() const -> D2D1_RECT_F { return {LW - 64 * dpi, 22 * dpi, LW - 24 * dpi, 62 * dpi}; }
 
 // Menu di Windows per l'app (lo stesso dello Start), con in cima "Aggiungi al dock"
-inline auto Motore::menuApp(int i, POINT pt) -> void {
+inline auto Motore::menuApp(int i, POINT pt, HWND owner) -> void {
     if (i < 0 || i >= (int)filtrate.size()) return;
     const AppL a = tutteApp[filtrate[i]];
+    HWND ui=owner?owner:launcher;
     IShellItem* it = nullptr;
     if (FAILED(SHCreateItemFromParsingName(a.avvio.c_str(), nullptr, IID_PPV_ARGS(&it)))) return;
     IContextMenu* cm = nullptr;
@@ -596,6 +608,17 @@ inline auto Motore::menuApp(int i, POINT pt) -> void {
         cm->QueryInterface(IID_PPV_ARGS(&menuShell2)); cm->QueryInterface(IID_PPV_ARGS(&menuShell3));
         // le voci di Windows, disegnate da noi; in cima il nome dell'app e "Aggiungi al dock"
         std::vector<menu::Voce> voci = {menu::titolo(a.nome), menu::voce(testi::t(L"Aggiungi al dock", L"Add to dock"), ID_DOCK)};
+        const auto meta=appcatalog::get(a.avvio);
+        voci.push_back(menu::voce(testi::t(L"Apri",L"Open"),0x7F01));
+        voci.push_back(menu::voce(testi::t(L"Nuova finestra",L"New window"),0x7F02));
+        voci.push_back(menu::voce(testi::t(L"Esegui come amministratore",L"Run as administrator"),0x7F03));
+        voci.push_back(menu::voce(testi::t(L"Rinomina",L"Rename"),0x7F04));
+        voci.push_back(menu::voce(testi::t(L"Cambia icona",L"Change icon"),0x7F05));
+        voci.push_back(menu::voce(testi::t(L"Ripristina icona",L"Restore default icon"),0x7F06));
+        voci.push_back(menu::voce(meta.favorite?testi::t(L"Rimuovi dai preferiti",L"Remove from favorites"):testi::t(L"Aggiungi ai preferiti",L"Add to favorites"),0x7F07));
+        voci.push_back(menu::voce(meta.hidden?testi::t(L"Mostra app",L"Restore app"):testi::t(L"Nascondi app",L"Hide app"),0x7F08));
+        voci.push_back(menu::voce(testi::t(L"Sposta nella cartella…",L"Move to folder…"),0x7F09));
+        if(meta.manual)voci.push_back(menu::voce(testi::t(L"Rimuovi app aggiunta",L"Remove manual app"),0x7F0A));
         // "Disinstalla" (la voce di Windows, per le app dello Store e per le altre) in cima, subito visibile
         UINT idDisinstalla = 0;
         for (int i = 0; i < GetMenuItemCount(m) && !idDisinstalla; i++) {
@@ -612,14 +635,31 @@ inline auto Motore::menuApp(int i, POINT pt) -> void {
             if (menuShell3) { LRESULT r = 0; menuShell3->HandleMenuMsg2(WM_INITMENUPOPUP, (WPARAM)s, 0, &r); }
             else if (menuShell2) menuShell2->HandleMenuMsg(WM_INITMENUPOPUP, (WPARAM)s, 0);
         };
-        const UINT cmd = menu::mostra(voci, pt, launcher, false, prepara);
+        const UINT cmd = menu::mostra(voci, pt, ui, false, prepara);
         if (menuShell3) { menuShell3->Release(); menuShell3 = nullptr; }
         if (menuShell2) { menuShell2->Release(); menuShell2 = nullptr; }
         if (cmd == ID_DOCK) {
             aggiungiAlDock(a.nome, exe, id, a.avvio);
+        } else if(cmd>=0x7F01&&cmd<=0x7F0A) {
+            auto m=meta;
+            if(cmd==0x7F01||cmd==0x7F02||cmd==0x7F03)ShellExecuteW(ui,cmd==0x7F03?L"runas":L"open",a.avvio.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
+            if(cmd==0x7F04){auto name=a.nome;if(appcatalog::prompt(ui,testi::t(L"Rinomina",L"Rename"),name)&&!name.empty())m.name=name;}
+            if(cmd==0x7F05){auto file=appcatalog::choose(ui,true);if(!file.empty()){
+                std::error_code ec;auto dest=std::filesystem::path(tlauncher::profile())/L"assets"/L"app-icons";std::filesystem::create_directories(dest,ec);
+                dest/=std::filesystem::path(appcatalog::key(a.avvio)).filename().wstring()+std::filesystem::path(file).extension().wstring();
+                std::filesystem::copy_file(file,dest,std::filesystem::copy_options::overwrite_existing,ec);if(!ec)m.icon=dest.wstring();
+            }}
+            if(cmd==0x7F06)m.icon.clear();
+            if(cmd==0x7F07)m.favorite=!m.favorite;
+            if(cmd==0x7F08)m.hidden=!m.hidden;
+            if(cmd==0x7F09){auto name=m.folder;if(appcatalog::prompt(ui,testi::t(L"Sposta nella cartella…",L"Move to folder…"),name)){if(!name.empty())appcatalog::folder(L"",name);m.folder=name;}}
+            if(cmd==0x7F0A){m.manual=false;m.hidden=true;}
+            appcatalog::save(a.avvio,m);
+            if(cmd==0x7F05||cmd==0x7F06)for(auto& existing:tutteApp)if(existing.avvio==a.avvio){if(existing.icona)existing.icona->Release();existing.icona=nullptr;existing.provata=false;}
+            catalogChanged();
         } else if (cmd > 0) {
             CMINVOKECOMMANDINFOEX ci{}; ci.cbSize = sizeof(ci); ci.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
-            ci.hwnd = launcher; ci.lpVerb = MAKEINTRESOURCEA(cmd - 1); ci.lpVerbW = MAKEINTRESOURCEW(cmd - 1);
+            ci.hwnd = ui; ci.lpVerb = MAKEINTRESOURCEA(cmd - 1); ci.lpVerbW = MAKEINTRESOURCEW(cmd - 1);
             ci.nShow = SW_SHOWNORMAL; ci.ptInvoke = pt;
             cm->InvokeCommand((CMINVOKECOMMANDINFO*)&ci);
             primaDelLauncher = nullptr;   // ha aperto qualcosa: il primo piano va a quello
@@ -629,6 +669,13 @@ inline auto Motore::menuApp(int i, POINT pt) -> void {
     }
     DestroyMenu(m);
     cm->Release();
+}
+
+inline void Motore::catalogMenu(const std::wstring& command,POINT at,HWND owner) {
+    auto filtered=filtrate;
+    auto it=std::find_if(tutteApp.begin(),tutteApp.end(),[&](const AppL& a){return a.avvio==command;});
+    if(it==tutteApp.end())return;
+    filtrate={int(it-tutteApp.begin())};menuApp(0,at,owner);filtrate=std::move(filtered);
 }
 
 // Collegamento nella cartella delle app fisse della barra (quella che legge il dock)
@@ -804,6 +851,7 @@ inline auto Motore::renderLauncher() -> bool {
         const auto r = lCella(i);
         if (r.bottom < lGrigliaTop() - lCellaH() || r.top > lGrigliaBottom() + lCellaH()) continue;
         AppL& a = tutteApp[filtrate[i]];
+        if(!a.icona&&!a.provata){a.provata=true;chiediIcona(appcatalog::iconSource(a.avvio),96);}
         const bool sopra = i == lSopra, scelta = i == lSel && !query.empty() && lSelFile < 0;   // (con una riga dei file scelta, solo quella)
         if (sopra || scelta) {
             pennello->SetColor(scuro ? D2D1::ColorF(1, 1, 1, sopra ? 0.12f : 0.08f) : D2D1::ColorF(1, 1, 1, sopra ? 0.55f : 0.4f));

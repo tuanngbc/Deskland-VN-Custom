@@ -69,6 +69,9 @@
 #include <ole2.h>
 #include <knownfolders.h>
 #include "testi.h"
+#include "stage.h"
+#include "app_icons.h"
+#include "app_organization.h"
 
 #ifndef DWMWA_SYSTEMBACKDROP_TYPE
 #define DWMWA_SYSTEMBACKDROP_TYPE 38
@@ -763,6 +766,7 @@ public:
         // a scomparsa spento: il dock resta su sopra qualsiasi finestra (le app a schermo intero lo tolgono a parte,
         // vedi schermoIntero)
         if (!autoNascondi) n = false;
+        if(visibilityMode==2)n=true;
         // app a schermo intero (vedi schermoIntero): giu' anche col dock fisso, che altrimenti coprirebbe il video
         if (appSchermoIntero) { n = true; if (!*perche) snprintf(perche, sizeof(perche), "app a schermo intero"); }
         // orario e centro di controllo restano sempre giu' e risalgono solo col mouse sul bordo in basso
@@ -855,6 +859,12 @@ public:
         if (si == autoNascondi) return;
         autoNascondi = si;
         controllaFinestre(true);
+    }
+    void impostaVisibility(int mode,int length,int thickness,int alpha,int openDelay,int closeDelay,bool onFullscreen) {
+        mode=std::clamp(mode,0,2);
+        if(visibilityMode==mode&&barLength==length&&barThickness==thickness&&barOpacity==alpha&&barOpenDelay==openDelay&&barCloseDelay==closeDelay&&barFullscreen==onFullscreen)return;
+        visibilityMode=mode;barLength=length;barThickness=thickness;barOpacity=alpha;barOpenDelay=openDelay;barCloseDelay=closeDelay;barFullscreen=onFullscreen;
+        rivelato=false;barEntered=-1;dirty=true;controllaFinestre(true);
     }
     // impostazione: le finestre ingrandite si fermano sopra il dock (spazio riservato, appbar) o vanno fino in fondo
     void impostaSpazio(bool si) {
@@ -1064,6 +1074,9 @@ private:
     double ultimaMusica = -100;       // quando suonava l'ultima volta (in pausa resta qualche secondo)
     int periodoTesta = 0;             // TIMER_TESTA (ms, 0 spento): 60 con le barrette che ballano, 250 per i secondi del timer
     bool autoNascondi = true;         // impostazione: il dock scende sotto le finestre ingrandite o che lo coprono
+    int visibilityMode=1,barLength=104,barThickness=16,barOpacity=80,barOpenDelay=120,barCloseDelay=650;
+    bool barFullscreen=false;
+    double barEntered=-1;
     float opacita = 1;                // impostazione: opacita' del fondo del dock (vetro e velo), 0.2..1
     int latoIcone = 42;               // impostazione: lato delle icone a riposo, px a 100%
     int distanzaIcone = 6;            // impostazione: distanza fra le icone, px a 100% (GAP)
@@ -1890,7 +1903,11 @@ private:
         // (isola tolta: mai. L'ora nel dock fa da isola per il mouse ma sta nel dock: la fa risalire la zona del dock)
         const bool zonaIsola = !oraNelDock && isola.right > isola.left && x >= isola.left - 10 * dpi;
         const bool zonaDock = x >= zonaDockL - 10 * dpi && x <= zonaDockR + 10 * dpi;
-        if (sulBordo(pt, schermo) && PtInRect(&schermo, pt) && (zonaIsola || zonaDock)) {
+        const bool onBar=visibilityMode==2&&WindowFromPoint(pt)==icone&&x>=zonaDockL&&x<=zonaDockR;
+        const bool reveal=(sulBordo(pt,schermo)||onBar)&&PtInRect(&schermo,pt)&&(zonaIsola||zonaDock);
+        if(reveal&&barEntered<0)barEntered=adesso();
+        if(!reveal)barEntered=-1;
+        if (reveal&&(visibilityMode!=2||adesso()-barEntered>=barOpenDelay/1000.)) {
             bool &r = zonaIsola ? rivelatoI : rivelato;
             // risalendo torna sopra a tutto (anche alle finestre "sempre in primo piano" ingrandite dopo di lui)
             if (!r) {
@@ -1906,9 +1923,9 @@ private:
             // (pannello, impostazioni o anteprime delle finestre aperti: il dock resta su; le anteprime senza il dock
             // sotto restavano sospese a mezz'aria)
             // (anche durante il riordino delle icone: il mouse puo' salire, il dock non deve scendere, R20261120-013029-S2)
-            if (vicino || lAperto || !nessunaScheda() || dockSu || ant.aperta() || trascinando) fuoriDal = -1;
+            if (vicino || menu::aperti || lAperto || !nessunaScheda() || dockSu || ant.aperta() || trascinando) fuoriDal = -1;
             else if (fuoriDal < 0) fuoriDal = adesso();
-            else if (adesso() - fuoriDal > 0.35) { rivelato = false; fuoriDal = -1; dirty = true; }
+            else if (adesso() - fuoriDal > (visibilityMode==2?barCloseDelay/1000.:.35)) { rivelato = false; fuoriDal = -1; dirty = true; }
         }
         if (rivelatoI) {
             const bool vicino = (WindowFromPoint(pt) == icone && !mouseSulDock) || (alto && zonaIsola);
@@ -2039,7 +2056,7 @@ private:
             movimento = true;
         }
         // con un pannello del centro di controllo aperto (anche dal notch) il dock resta su; scende quando si chiude
-        const bool giu = spostamento || (vuoleNascondersi && !rivelato && t > rivelaFino && !lAperto && nessunaScheda() && !dockSu);
+        const bool giu = spostamento || (vuoleNascondersi && !rivelato && t > rivelaFino && !lAperto && nessunaScheda() && !dockSu && !ant.aperta() && !trascinando && !menu::aperti);
         if (giu) movimento |= molla(yNascosto, velNascosto, fuori, 260, 0.9);
         else movimento |= molla(yNascosto, velNascosto, 0, 340, 0.42);
         const bool giuI = spostamento || (vuoleNascondersiI && !rivelatoI && nessunaScheda() && !dockSu);
@@ -2079,11 +2096,17 @@ private:
         // fondo del dock, sopra al vetro acrilico e con la sua stessa forma. Mentre risale si allunga con la
         // velocita' e all'arrivo si schiaccia un poco
         const float allunga = (float)std::clamp(-velNascosto * 0.010, -3.0 * dpi, 7.0 * dpi);
-        const float baseT = std::round(yb - S - PAD - allunga), fondoB = std::round(yb + PAD);
-        const float fondoL = std::round(sinistra - PAD + (float)std::min(0.0, tiroX));
-        const float fondoR = std::round(sinistra + tot + PAD + (float)std::max(0.0, tiroX));
-        const float fondoT = std::round(baseT - (float)tiroY);
-        disegnaFondo({fondoL, fondoT, fondoR, fondoB}, scuro, opacita, coloreAuto ? nullptr : &coloreFondo);
+        const float baseT = std::round(yb - S - PAD - allunga);
+        float fondoB = std::round(yb + PAD);
+        float fondoL = std::round(sinistra - PAD + (float)std::min(0.0, tiroX));
+        float fondoR = std::round(sinistra + tot + PAD + (float)std::max(0.0, tiroX));
+        float fondoT = std::round(baseT - (float)tiroY);
+        const float collapsed=visibilityMode==2&&!spostamento&&(!appSchermoIntero||barFullscreen)?float(std::clamp(yNascosto/fuori,0.,1.)):0.f;
+        const float barW=std::min(float(W-24*dpi),barLength*dpi),barB=H-3*dpi,barT=barB-barThickness*dpi;
+        auto blend=[&](float a,float b){return a+(b-a)*collapsed;};
+        fondoL=blend(fondoL,(W-barW)/2);fondoR=blend(fondoR,(W+barW)/2);
+        fondoT=blend(fondoT,barT);fondoB=blend(fondoB,barB);
+        disegnaFondo({fondoL, fondoT, fondoR, fondoB}, scuro, blend(opacita,barOpacity/100.f), coloreAuto ? nullptr : &coloreFondo);
         aggiornaVetro(vetro, rettVetro, fondoL, fondoT, fondoR, fondoB);
         zonaDockL = fondoL; zonaDockR = fondoR;
 
@@ -3529,6 +3552,34 @@ public:
     void volumeTasto(int verso, float& livello, bool& silenzio);
 
     std::vector<std::pair<std::wstring, std::wstring>> elencoApp();
+    void catalogChanged() { leggiTutteApp(); }
+    void catalogMenu(const std::wstring& command,POINT at,HWND owner);
+
+    // The reconciled Dock inventory is the only source for native Stage.
+    std::vector<stage::Window> stageWindows() const {
+        std::vector<stage::Window> result;
+        for (const auto& v : voci) {
+            if (v.uscente) continue;
+            for (HWND h : v.finestre) {
+                DWORD pid=0; DWORD tid=GetWindowThreadProcessId(h,&pid);
+                if (!tid || !IsWindow(h)) continue;
+                wchar_t title[512]{}; GetWindowTextW(h,title,512);
+                std::wstring identity=!v.aumid.empty()?v.aumid:!v.exe.empty()?v.exe:v.avvio;
+                result.push_back({h,pid,tid,identity,title[0]?std::wstring(title):v.nome,sorgenteIcona(v)});
+            }
+        }
+        return result;
+    }
+    void activateStageWindow(HWND h) {
+        for(const auto& v:voci) if(std::find(v.finestre.begin(),v.finestre.end(),h)!=v.finestre.end()) {portaDavanti(h);return;}
+    }
+    ID2D1Bitmap* sharedIcon(ID2D1RenderTarget* target,const std::wstring& source,int size) {
+        auto pixels=appicons::peek(source,size);
+        if(!pixels){chiediIcona(source,size);return nullptr;}
+        ID2D1Bitmap* b=nullptr;
+        target->CreateBitmap(D2D1::SizeU(pixels->w,pixels->h),pixels->bgra.data(),pixels->w*4,D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED)),&b);
+        return b;
+    }
 
     D2D1_RECT_F rettCentro() const;
     RECT rettIsolaSchermo() const;
@@ -3572,7 +3623,7 @@ private:
 
     D2D1_RECT_F rettEnergia() const;
 
-    void menuApp(int i, POINT pt);
+    void menuApp(int i, POINT pt, HWND owner = nullptr);
 
     void aggiungiAlDock(const std::wstring& nome, const std::wstring& exe, const std::wstring& id, const std::wstring& avvio);
 

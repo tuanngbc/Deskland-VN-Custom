@@ -30,6 +30,7 @@ try {
     $production=$verified.productionExe
     $candidate=Join-Path $PSScriptRoot 'TLauncher.exe'
     $profile=$verified.profile
+    $persistent=($verified.PSObject.Properties.Name -contains 'profilePolicy') -and $verified.profilePolicy -ceq 'persistent-native-1.0.3'
     foreach($path in @($candidate,$production,$profile,$statePath)){Assert-NoReparse $path}
     if((Get-Item -LiteralPath $production).VersionInfo.ProductVersion -cne '1.0.2'){throw 'Expected stable production 1.0.2.'}
     if((Get-Content (Join-Path $PSScriptRoot 'BUILD-COMMIT.txt') -Raw).Trim() -cne $verified.sourceCommit -or
@@ -46,7 +47,7 @@ try {
     if([IO.Path]::GetFileName($trialRoot) -ine 'TLauncher-UAT' -or
        [IO.Path]::GetFileName((Split-Path -Parent $profile)) -ine 'profiles' -or
        [IO.Path]::GetFileName($profile) -notmatch '^tlauncher-native-trial-[a-zA-Z0-9-]+$' -or
-       [IO.File]::ReadAllText((Join-Path $profile '.tlauncher-native-trial')) -cne "tlauncher-native isolated profile v1`n"){throw 'Invalid native TEST profile'}
+       (!$persistent -and [IO.File]::ReadAllText((Join-Path $profile '.tlauncher-native-trial')) -cne "tlauncher-native isolated profile v1`n")){throw 'Invalid native TEST profile'}
     # Do not run alongside original FluidWin or any other TLauncher candidate.
     $session=(Get-Process -Id $PID).SessionId
     if(@(Get-CimInstance Win32_Process -Filter "Name='FluidWin.exe'"|Where-Object SessionId -eq $session).Count){throw 'Exit original FluidWin normally before starting TEST.'}
@@ -68,6 +69,13 @@ try {
             Start-Process -FilePath $production -ArgumentList '--quit' -WorkingDirectory (Split-Path -Parent $production) -WindowStyle Hidden -Wait
         }
         if(!(Wait-NativeVacant 45)){throw 'Previous shell/Guardian has not exited safely. Nothing was force-killed.'}
+        if($persistent) {
+            . (Join-Path $PSScriptRoot 'native-profile-library.ps1')
+            $migration=Initialize-NativePersistentProfile $trialRoot $profile $verified.sourceCommit {
+                if(@(Get-SessionProcesses).Count -or (Native-MutexExists) -or (Test-Singleton)){throw 'Shell identity changed during migration; profile left untouched.'}
+            }
+            Add-Content -LiteralPath (Join-Path $PSScriptRoot 'native-uat-session.log') -Value ("{0:o} profile migration source={1} snapshot={2}" -f [DateTime]::UtcNow,$migration.source,$migration.snapshot)
+        }
         $env:TLAUNCHER_NATIVE_TRIAL_DIR=$profile
         $p=Start-Process -FilePath $candidate -ArgumentList @('--trial-dir',('"'+$profile+'"'),'--log') -WorkingDirectory $PSScriptRoot -PassThru
         Add-Content -LiteralPath (Join-Path $PSScriptRoot 'native-uat-session.log') -Value ("{0:o} owner launch PID={1} commit={2}" -f [DateTime]::UtcNow,$p.Id,$verified.sourceCommit)

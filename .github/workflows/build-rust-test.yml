@@ -2,7 +2,7 @@ name: Build TLauncher
 
 on:
   push:
-    branches: [main, codex/rust-dock, codex/unified-spotlight-v1.0.2, codex/fluidwin-integration-v1.0.3, codex/fluidwin-native-base-v1.0.3, codex/native-wallpaper-reengineering-v1.0.3]
+    branches: [main, codex/rust-dock, codex/unified-spotlight-v1.0.2, codex/fluidwin-integration-v1.0.3, codex/fluidwin-native-base-v1.0.3, codex/native-wallpaper-reengineering-v1.0.3, codex/native-stage-spotlight-reengineering-v1.0.3]
     tags: [v*]
   workflow_dispatch:
 
@@ -71,7 +71,7 @@ jobs:
       contents: read
       actions: read
     needs: wallpaper-contract
-    if: always() && (github.ref == 'refs/heads/codex/fluidwin-native-base-v1.0.3' || (github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3' && needs.wallpaper-contract.result == 'success'))
+    if: always() && (github.ref == 'refs/heads/codex/fluidwin-native-base-v1.0.3' || ((github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3' || github.ref == 'refs/heads/codex/native-stage-spotlight-reengineering-v1.0.3') && needs.wallpaper-contract.result == 'success'))
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -98,7 +98,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p native-build native-evidence
-          libs='-ld3d11 -ldxgi -ldcomp -ld3dcompiler -ld2d1 -ldwrite -ldwmapi -luser32 -lgdi32 -lshell32 -lole32 -loleaut32 -lversion -lpropsys -luuid -liphlpapi -lwindowscodecs -lruntimeobject -lpowrprof -lshlwapi -lshcore -lsetupapi -lwinmm -ldxva2 -lwinhttp -lcomdlg32 -lbcrypt -lopengl32 -lwtsapi32 -loleacc'
+          libs='-ld3d11 -ldxgi -ldcomp -ld3dcompiler -ld2d1 -ldwrite -ldwmapi -luser32 -lgdi32 -lshell32 -lole32 -loleaut32 -lversion -lpropsys -luuid -liphlpapi -lwindowscodecs -lruntimeobject -lpowrprof -lshlwapi -lshcore -lsetupapi -lwinmm -ldxva2 -lwinhttp -lcomdlg32 -lbcrypt -lopengl32 -lwtsapi32 -loleacc -lnormaliz'
           (cd native/fluidwin && windres icona.rc -O coff -o ../../native-build/icon.o)
           g++ -O2 -std=gnu++20 -Wall -municode -mwindows native/fluidwin/fluidwin.cpp native-build/icon.o -o native-build/TLauncher.exe $libs -static
           g++ -O2 -std=gnu++20 -Wall -DUNICODE -D_UNICODE tests/native-base-contract.cpp native-build/icon.o -o native-build/native-contract.exe $libs -static
@@ -118,6 +118,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
+          ./tests/native-profile-migration.ps1 | Tee-Object native-evidence/profile-migration.txt
           $profile=Join-Path $env:RUNNER_TEMP 'tlauncher-native-trial-ci-contract'
           New-Item -ItemType Directory -Path $profile -Force | Out-Null
           [IO.File]::WriteAllText((Join-Path $profile '.tlauncher-native-trial'),"tlauncher-native isolated profile v1`n")
@@ -126,19 +127,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) {throw "Native lifecycle contract failed: $LASTEXITCODE"}
           ./tests/native-runtime-smoke.ps1 -Exe (Resolve-Path native-build/TLauncher.exe).Path -Evidence (Resolve-Path native-evidence).Path
       - uses: actions/download-artifact@v4
-        if: github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3'
+        if: (github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3' || github.ref == 'refs/heads/codex/native-stage-spotlight-reengineering-v1.0.3')
         with:
           name: native-wallpaper-assets
           path: native-build/wallpaper
       - name: Restore hosted-only software GL for full executable verification
-        if: github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3'
+        if: (github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3' || github.ref == 'refs/heads/codex/native-stage-spotlight-reengineering-v1.0.3')
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/wallpaper-mesa
           key: hosted-mesa-26.3.1-64e84cf13d67dd35
           fail-on-cache-miss: true
       - name: Compare accepted baseline with native wallpaper disabled and enabled
-        if: github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3'
+        if: (github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3' || github.ref == 'refs/heads/codex/native-stage-spotlight-reengineering-v1.0.3')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -166,6 +167,8 @@ jobs:
             Copy-Item docs/WALLPAPER_LAYER_AUDIT.md (Join-Path $dir 'WALLPAPER_LAYER_AUDIT.md')
           }
           Copy-Item tools/native-owner-uat.ps1 $dir
+          Copy-Item tools/native-profile-library.ps1 $dir
+          if ('${{ github.ref }}' -eq 'refs/heads/codex/native-stage-spotlight-reengineering-v1.0.3') {'PHASE_3_STAGE_SPOTLIGHT' | Set-Content (Join-Path $dir 'PACKAGE-KIND.txt') -Encoding ascii}
           Copy-Item tools/legacy-uat-library.ps1 $dir
           Copy-Item tools/native-resource-diagnostics.ps1 $dir
           Copy-Item tools/NATIVE-RESOURCE.cmd $dir
@@ -192,7 +195,7 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
   wallpaper-contract:
-    if: github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3'
+    if: (github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3' || github.ref == 'refs/heads/codex/native-stage-spotlight-reengineering-v1.0.3')
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -258,7 +261,7 @@ jobs:
             wallpaper-evidence/*.png
           retention-days: 30
   build-rust:
-    if: github.ref != 'refs/heads/codex/fluidwin-native-base-v1.0.3' && github.ref != 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3'
+    if: github.ref != 'refs/heads/codex/fluidwin-native-base-v1.0.3' && github.ref != 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3' && github.ref != 'refs/heads/codex/native-stage-spotlight-reengineering-v1.0.3'
     runs-on: windows-latest
     timeout-minutes: 20
     env:

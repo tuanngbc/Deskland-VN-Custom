@@ -8,6 +8,7 @@
 #include "cursori.h"
 #include "pool.h"
 #include "sfondi.h"
+#include "stage.h"
 #include "../wallpaper/settings.h"
 #include <shellapi.h>   // DragAcceptFiles: il pacchetto di cursori si trascina nella finestra
 #include <windowsx.h>
@@ -20,6 +21,11 @@
 namespace impostazioni {
 
 struct Valori {
+    stage::Settings stage;
+    int dockVisibility=1,dockBarLength=104,dockBarThickness=16,dockBarOpacity=80,dockBarOpenDelay=120,dockBarCloseDelay=650;
+    bool dockBarFullscreen=false;
+    bool spotlightEnabled=true,spotlightAltSpace=true;
+    int spotlightMode=1;
     bool avvio = false;           // FluidWin si apre all'accesso a Windows (sta nel registro di Windows, vedi avvioAttivo)
     bool gelatina = true;         // finestre "di gelatina" quando si trascinano
     bool genio = true;            // riduzione e ripristino animati (con il genio o con la caduta, vedi riduzione)
@@ -131,6 +137,31 @@ inline void carica() {
     v.notchEnabled = leggiDword(L"NotchEnabled", 1);
     v.notch = leggiDword(L"Notch", 1); v.oraDock = leggiDword(L"OraDock", 0);
     v.dockAuto = leggiDword(L"DockAutoNascosto", 1);
+    v.dockVisibility=std::clamp(int(leggiDword(L"DockVisibility",v.dockAuto?1:0)),0,2);
+    v.dockBarLength=std::clamp(int(leggiDword(L"DockBarLength",104)),48,320);
+    v.dockBarThickness=std::clamp(int(leggiDword(L"DockBarThickness",16)),16,32);
+    v.dockBarOpacity=std::clamp(int(leggiDword(L"DockBarOpacity",80)),20,100);
+    v.dockBarOpenDelay=std::clamp(int(leggiDword(L"DockBarOpenDelay",120)),0,1500);
+    v.dockBarCloseDelay=std::clamp(int(leggiDword(L"DockBarCloseDelay",650)),100,3000);
+    v.dockBarFullscreen=leggiDword(L"DockBarFullscreen",0);
+    v.spotlightEnabled=leggiDword(L"SpotlightEnabled",1);v.spotlightAltSpace=leggiDword(L"SpotlightAltSpace",1);
+    v.spotlightMode=std::clamp(int(leggiDword(L"SpotlightMode",1)),0,3);
+    v.stage.enabled = leggiDword(L"StageEnabled", 0);
+    v.stage.perspective = leggiDword(L"StagePerspective", 1);
+    v.stage.autoHide = leggiDword(L"StageAutoHide", 0);
+    v.stage.peek = leggiDword(L"StagePeek", 1);
+    v.stage.peekLive = leggiDword(L"StagePeekLive", 1);
+    v.stage.peekAnimation = leggiDword(L"StagePeekAnimation", 1);
+    v.stage.clickActivate = leggiDword(L"StageClickActivate", 1);
+    v.stage.monitor = std::clamp(int(leggiDword(L"StageMonitor", 0)),0,3);
+    v.stage.right = std::clamp(int(leggiDword(L"StageRight", 0)),0,1);
+    v.stage.height = std::clamp(int(leggiDword(L"StageHeight", 126)),72,240);
+    v.stage.spacing = std::clamp(int(leggiDword(L"StageSpacing", 12)),4,40);
+    v.stage.opacity = std::clamp(int(leggiDword(L"StageOpacity", 95)),30,100);
+    v.stage.peekDelay = std::clamp(int(leggiDword(L"StagePeekDelay", 450)),100,2000);
+    v.stage.peekSize = std::clamp(int(leggiDword(L"StagePeekSize", 640)),240,1200);
+    v.stage.edgeGap = std::clamp(int(leggiDword(L"StageEdgeGap", 12)),0,100);
+    v.stage.display = leggiTesto(L"StageDisplay");
     { const DWORD l = leggiDword(L"DockLato", 0); v.dockLato = l <= 3 ? (int)l : 0; }
     v.dockOpacita = std::clamp((int)leggiDword(L"DockOpacita", 100), OPACITA_MIN, 100);
     v.dockIcone = std::clamp((int)leggiDword(L"DockIcone", 42), ICONE_MIN, ICONE_MAX);
@@ -151,6 +182,17 @@ inline void carica() {
 
 inline void salva() {
     const Valori& v = valori();
+    scriviDword(L"DockVisibility",v.dockVisibility);scriviDword(L"DockBarLength",v.dockBarLength);scriviDword(L"DockBarThickness",v.dockBarThickness);
+    scriviDword(L"DockBarOpacity",v.dockBarOpacity);scriviDword(L"DockBarOpenDelay",v.dockBarOpenDelay);scriviDword(L"DockBarCloseDelay",v.dockBarCloseDelay);scriviDword(L"DockBarFullscreen",v.dockBarFullscreen);
+    scriviDword(L"SpotlightEnabled",v.spotlightEnabled);scriviDword(L"SpotlightAltSpace",v.spotlightAltSpace);scriviDword(L"SpotlightMode",v.spotlightMode);
+    scriviDword(L"StageEnabled",v.stage.enabled); scriviDword(L"StagePerspective",v.stage.perspective);
+    scriviDword(L"StageAutoHide",v.stage.autoHide); scriviDword(L"StagePeek",v.stage.peek);
+    scriviDword(L"StagePeekLive",v.stage.peekLive); scriviDword(L"StagePeekAnimation",v.stage.peekAnimation);
+    scriviDword(L"StageClickActivate",v.stage.clickActivate); scriviDword(L"StageMonitor",v.stage.monitor);
+    scriviDword(L"StageRight",v.stage.right); scriviDword(L"StageHeight",v.stage.height);
+    scriviDword(L"StageSpacing",v.stage.spacing); scriviDword(L"StageOpacity",v.stage.opacity);
+    scriviDword(L"StagePeekDelay",v.stage.peekDelay); scriviDword(L"StagePeekSize",v.stage.peekSize);
+    scriviDword(L"StageEdgeGap",v.stage.edgeGap); scriviTesto(L"StageDisplay",v.stage.display);
     scriviDword(L"Gelatina", v.gelatina); scriviDword(L"Genio", v.genio); scriviDword(L"Chiusura", v.chiusura);
     scriviDword(L"Apertura", v.apertura); scriviDword(L"OndaRicerca", v.onda); scriviDword(L"Riduzione", (DWORD)v.riduzione); scriviDword(L"Angoli", (DWORD)v.angoli);
     scriviDword(L"Volume", v.volume); scriviDword(L"AngoloPanoramica", v.angolo); scriviDword(L"WinTab", v.winTab);
@@ -437,7 +479,7 @@ public:
 
 private:
     static constexpr float LARGO = 780, ALTO = 500, BARRA = 240;
-    enum { S_GENERALE, S_DOCK, S_ANIMAZIONI, S_NOTCH, S_TASTIERA, S_CURSORE, S_WALLPAPER, SEZIONI };
+    enum { S_GENERALE, S_DOCK, S_ANIMAZIONI, S_NOTCH, S_TASTIERA, S_CURSORE, S_WALLPAPER, S_STAGE, S_SPOTLIGHT, SEZIONI };
     // nome e spiegazione in italiano e in inglese, sezione
     struct Voce { const wchar_t *nome, *name, *spiega, *explain; bool Valori::*campo; int sezione; };
     const std::vector<Voce> voci = {
@@ -509,6 +551,11 @@ private:
     // cursori (valori con un minimo e un massimo): 500+i. Il dock cambia mentre si trascina; si salva quando si lascia
     struct Cursore { const wchar_t *nome, *name, *spiega, *explain, *unita; int Valori::*campo; int min, max, passo; int sezione; };
     const std::vector<Cursore> cursori = {
+        {L"Lunghezza barra",L"Collapsed bar length",L"",L"",L" px",&Valori::dockBarLength,48,320,8,S_DOCK},
+        {L"Spessore barra",L"Collapsed bar thickness",L"",L"",L" px",&Valori::dockBarThickness,16,32,2,S_DOCK},
+        {L"Opacità barra",L"Collapsed bar opacity",L"",L"",L"%",&Valori::dockBarOpacity,20,100,5,S_DOCK},
+        {L"Attesa apertura",L"Expand delay",L"",L"",L" ms",&Valori::dockBarOpenDelay,0,1500,50,S_DOCK},
+        {L"Attesa chiusura",L"Collapse delay",L"",L"",L" ms",&Valori::dockBarCloseDelay,100,3000,100,S_DOCK},
         {L"Dimensione delle icone", L"Icon size", L"Anche l'altezza del dock segue", L"The dock's height follows",
          L" px", &Valori::dockIcone, ICONE_MIN, ICONE_MAX, ICONE_PASSO, S_DOCK},
         {L"Distanza fra le icone", L"Space between icons", L"Anche i separatori seguono", L"Separators follow too",
@@ -727,6 +774,40 @@ private:
     }
 
     void clic(int id) {
+        if(id>=6200&&id<=6202){valori().dockVisibility=id-6200;valori().dockAuto=id!=6200;salva();if(cambiato)cambiato();disegna();return;}
+        if(id>=6300&&id<=6305){
+            if(id==6300)valori().spotlightEnabled=!valori().spotlightEnabled;
+            else if(id==6301)valori().spotlightAltSpace=!valori().spotlightAltSpace;
+            else valori().spotlightMode=id-6302;
+            salva();if(cambiato)cambiato();disegna();return;
+        }
+        if(id>=6000&&id<6100) {
+            auto& s=valori().stage;
+            switch(id) {
+                case 6000:s.enabled=!s.enabled;break;
+                case 6001:s.perspective=!s.perspective;break;
+                case 6002:s.autoHide=!s.autoHide;break;
+                case 6003:s.peek=!s.peek;break;
+                case 6004:s.peekLive=!s.peekLive;break;
+                case 6005:s.peekAnimation=!s.peekAnimation;break;
+                case 6006:s.clickActivate=!s.clickActivate;break;
+                case 6007:s.right=!s.right;break;
+                case 6008:s.monitor=(s.monitor+1)%3;break;
+                case 6010:s.height=std::max(72,s.height-12);break;
+                case 6011:s.height=std::min(240,s.height+12);break;
+                case 6012:s.spacing=std::max(4,s.spacing-4);break;
+                case 6013:s.spacing=std::min(40,s.spacing+4);break;
+                case 6014:s.opacity=std::max(30,s.opacity-5);break;
+                case 6015:s.opacity=std::min(100,s.opacity+5);break;
+                case 6016:s.peekDelay=std::max(100,s.peekDelay-100);break;
+                case 6017:s.peekDelay=std::min(2000,s.peekDelay+100);break;
+                case 6018:s.peekSize=std::max(240,s.peekSize-80);break;
+                case 6019:s.peekSize=std::min(1200,s.peekSize+80);break;
+                case 6020:s.edgeGap=std::max(0,s.edgeGap-4);break;
+                case 6021:s.edgeGap=std::min(100,s.edgeGap+4);break;
+            }
+            salva();if(cambiato)cambiato();disegna();return;
+        }
         if (id < 0) return;
         if (id >= 5000 && wallpaperPage.click(id)) { disegna(); return; }
         if (id == 200) { chiudi(); return; }
@@ -819,6 +900,8 @@ private:
             case S_TASTIERA: return testi::t(L"Tastiera e mouse", L"Keyboard and mouse");
             case S_CURSORE: return testi::t(L"Cursore", L"Cursor");
             case S_WALLPAPER: return L"Live Wallpaper";
+            case S_STAGE: return L"Stage Manager";
+            case S_SPOTLIGHT: return L"Spotlight";
         }
         return L"";
     }
@@ -969,6 +1052,7 @@ private:
         };
         for (size_t i = 0; i < voci.size(); i++) {
             if (voci[i].sezione != sezione) continue;
+            if(voci[i].campo==&Valori::dockAuto)continue;
             const D2D1_RECT_F r = {L, y, R, y + 54 * d};
             aggiungiZona(r, (int)i);
             riquadro(r, sopra == (int)i);
@@ -1167,6 +1251,8 @@ private:
             y += 60 * d;
         }
         if (sezione == S_DOCK) {
+            const wchar_t* modes[]={testi::t(L"Sempre visibile",L"Always visible"),testi::t(L"Nascondi automaticamente",L"Auto-hide"),testi::t(L"Barra compatta",L"Collapsed bar")};
+            for(int i=0;i<3;++i){D2D1_RECT_F r{L,y,R,y+44*d};riquadro(r,sopra==6200+i);aggiungiZona(r,6200+i);v.testo(modes[i],fVoce,{L+16*d,y,R-74*d,y+44*d},inkS);levetta(R-58*d,y+22*d,valori().dockVisibility==i?1.f:0.f,(float)e);y+=50*d;}
             {   // posizione (1.3.0, Fase 3): il bordo dello schermo dove sta il dock; quattro scelte
                 const D2D1_RECT_F ra = {L, y, R, y + 64 * d};
                 riquadro(ra, false);
@@ -1279,6 +1365,42 @@ private:
         }
         if (sezione == S_CURSORE) disegnaCursori(L, R, y, e, ink, tenue, blu, rr, H);
         if (sezione == S_WALLPAPER) wallpaperPage.draw(v, L, R, y, fVoce, fSotto, fCentro, inkS, tenueS, blu, (float)e, aggiungiZona, sopra);
+        if(sezione==S_SPOTLIGHT){
+            const wchar_t* labels[]={testi::t(L"Attiva Spotlight",L"Enable Spotlight"),testi::t(L"Alt+Spazio",L"Alt+Space"),L"FluidWin Launcher",testi::t(L"Spotlight compatto",L"Compact Spotlight"),testi::t(L"Spotlight a schermo intero",L"Fullscreen Spotlight"),testi::t(L"Start di Windows",L"Windows Start")};
+            for(int i=0;i<6;++i){D2D1_RECT_F r{L,y,R,y+48*d};riquadro(r,sopra==6300+i);aggiungiZona(r,6300+i);v.testo(labels[i],fVoce,{L+16*d,y,R-74*d,y+48*d},inkS);bool on=i==0?valori().spotlightEnabled:i==1?valori().spotlightAltSpace:valori().spotlightMode==i-2;levetta(R-58*d,y+24*d,on?1.f:0.f,(float)e);y+=54*d;}
+            riga(L"F6",testi::t(L"Alterna Spotlight compatto e schermo intero",L"Switch Compact and Fullscreen Spotlight"));
+        }
+        if (sezione == S_STAGE) {
+            auto& s=valori().stage;
+            auto toggle=[&](const wchar_t* label,int id,bool on) {
+                D2D1_RECT_F r{L,y,R,y+48*d};riquadro(r,sopra==id);aggiungiZona(r,id);
+                v.testo(label,fVoce,{L+16*d,y,R-74*d,y+48*d},inkS);
+                levetta(R-58*d,y+24*d,on?1.f:0.f,(float)e);y+=54*d;
+            };
+            auto adjust=[&](const wchar_t* label,int id,int value,const wchar_t* unit) {
+                D2D1_RECT_F r{L,y,R,y+48*d};riquadro(r,false);
+                v.testo(label,fVoce,{L+16*d,y,R-170*d,y+48*d},inkS);
+                for(int n=0;n<2;++n){D2D1_RECT_F b{R-(n?42.f:156.f)*d,y+5*d,R-(n?8.f:122.f)*d,y+43*d};aggiungiZona(b,id+n);v.testo(n?L"+":L"−",fCentro,b,inkS);}
+                v.testo(std::to_wstring(value)+unit,fCentro,{R-120*d,y,R-44*d,y+48*d},inkS);y+=54*d;
+            };
+            toggle(testi::t(L"Stage Manager",L"Stage Manager"),6000,s.enabled);
+            toggle(testi::t(L"Carte prospettiche",L"Perspective cards"),6001,s.perspective);
+            toggle(testi::t(L"Nascondi automaticamente",L"Auto-hide"),6002,s.autoHide);
+            toggle(testi::t(L"Stage a destra",L"Stage on the right"),6007,s.right);
+            {D2D1_RECT_F r{L,y,R,y+48*d};riquadro(r,sopra==6008);aggiungiZona(r,6008);
+             const wchar_t* names[]={testi::t(L"Schermo del dock",L"Dock display"),testi::t(L"Schermo principale",L"Primary display"),testi::t(L"Tutti gli schermi",L"All displays")};
+             v.testo(names[std::clamp(s.monitor,0,2)],fVoce,{L+16*d,y,R-16*d,y+48*d},inkS);y+=54*d;}
+            adjust(testi::t(L"Altezza delle carte",L"Card height"),6010,s.height,L" px");
+            adjust(testi::t(L"Spaziatura",L"Spacing"),6012,s.spacing,L" px");
+            adjust(testi::t(L"Opacità",L"Opacity"),6014,s.opacity,L"%");
+            adjust(testi::t(L"Distanza dal bordo",L"Edge gap"),6020,s.edgeGap,L" px");
+            toggle(L"Stage Peek",6003,s.peek);
+            toggle(testi::t(L"Anteprima dal vivo",L"Live preview"),6004,s.peekLive);
+            toggle(testi::t(L"Animazione anteprima",L"Preview animation"),6005,s.peekAnimation);
+            toggle(testi::t(L"Clic per attivare",L"Click to activate"),6006,s.clickActivate);
+            adjust(testi::t(L"Ritardo anteprima",L"Peek delay"),6016,s.peekDelay,L" ms");
+            adjust(testi::t(L"Misura anteprima",L"Peek size"),6018,s.peekSize,L" px");
+        }
         if (scorre) {
             v.rt->PopAxisAlignedClip();
             // quanto si puo' scorrere: l'altezza del contenuto (y senza lo scorrimento) meno lo spazio visibile, con un

@@ -6,6 +6,9 @@
 #include "vetro.h"
 #include "onda.h"
 #include "indice.h"
+#include "app_icons.h"
+#include "app_organization.h"
+#include "menu.h"
 #include <windowsx.h>
 #include <shlobj.h>
 #include <shobjidl.h>
@@ -19,7 +22,7 @@
 
 namespace ricerca {
 
-enum Tipo { T_CALCOLO, T_APP, T_IMPOSTAZIONE, T_FILE, T_WEB };
+enum Tipo { T_CALCOLO, T_APP, T_IMPOSTAZIONE, T_FILE, T_WEB, T_FOLDER };
 
 struct Risultato {
     Tipo tipo = T_APP;
@@ -97,12 +100,20 @@ private:
 
 class Ricerca {
 public:
+    bool fullscreen = false;
+    std::function<void(bool)> modeChanged;
+    std::function<void(const std::wstring&,POINT,HWND)> appMenu;
+    std::function<void()> catalogChanged;
     std::function<std::vector<std::pair<std::wstring, std::wstring>>()> elencoApp;   // nome, comando d'avvio
     std::function<void()> apriImpostazioni;                                          // impostazioni di FluidWin
     std::function<bool()> conOnda;                                                   // onda di luce accesa nelle impostazioni
     void (*registro)(const char*) = nullptr;
 
     bool aperta() const { return apertaOra; }
+#ifdef TLAUNCHER_NATIVE_CI
+    std::wstring ciQuery() const {return testo;}
+    size_t ciResults() const {return risultati.size();}
+#endif
 
     void apri() {
         if (apertaOra) { chiudi(); return; }
@@ -123,7 +134,7 @@ public:
             fSezione = v.formato(11 * d, DWRITE_FONT_WEIGHT_SEMI_BOLD);
         }
         app = elencoApp ? elencoApp() : std::vector<std::pair<std::wstring, std::wstring>>{};
-        testo.clear(); risultati.clear(); file.clear(); sel = 0; sopra = -1; selUtente = false; saltaBasso = false;
+        testo.clear(); risultati.clear(); file.clear(); folder.clear(); page=0; sel = 0; sopra = -1; selUtente = false; saltaBasso = false;
         // (il mouse di adesso: un primo WM_MOUSEMOVE della finestra che cresce sotto il puntatore fermo non e' una
         // scelta, R20261121-124830 su S1 del giro 2)
         { POINT pm{}; GetCursorPos(&pm); ultimoMouse = (DWORD)MAKELONG((short)pm.x, (short)pm.y); }
@@ -144,7 +155,7 @@ public:
         ridimensiona();
         // onda (goccia d'acqua e luce sui bordi), appena sotto la ricerca; i suoi fotogrammi danno anche il ritmo al
         // riquadro. Prima di mostrare la ricerca: l'onda fotografa lo schermo com'e' adesso, senza di lei
-        if (!conOnda || conOnda()) {
+        if (!fullscreen && (!conOnda || conOnda())) {
             const double t1 = adesso();
             onda.avvisa = v.fin; onda.battito = true;
             onda.apri(vetro::areaPrincipale(), {x + larg / 2, y + (int)std::lround(ALTO_BARRA * d / 2)}, d, v.fin);
@@ -155,12 +166,15 @@ public:
         vetro::battito(v.fin, 1);    // animazione del riquadro (se l'onda non c'e', o tra un battito e l'altro)
         SetTimer(v.fin, 2, 530, nullptr);   // cursore lampeggiante
         passoRiquadro();
+        componi();
+        SetTimer(v.fin,5,300,nullptr); // bounded catalog readiness notification; no new discovery
     }
 
     void chiudi(bool restituisciFuoco = true) {
         if (!apertaOra) return;
         apertaOra = false; chiudendo = true; tAnim = adesso();
         KillTimer(v.fin, 2);
+        KillTimer(v.fin,3);KillTimer(v.fin,4);KillTimer(v.fin,5);
         onda.chiudi();
         // il riquadro sfuma salendo un poco e restringendosi (sotto nessun clic: e' gia' chiusa)
         vetro::battito(v.fin, 1);
@@ -182,6 +196,7 @@ public:
                 if (w == 2) cursore = !cursore;
                 if (w == 3) { KillTimer(v.fin, 3); chiediFile(); }
                 if (w == 4) { raccogliIcone(); }
+                if(w==5&&apertaOra&&elencoApp){auto next=elencoApp();if(next!=app){app=std::move(next);componi();}return true;}
                 disegna();
                 return true;
             case WM_PAINT: disegna(); return true;
@@ -220,9 +235,18 @@ public:
                 if (s != sopra) { sopra = s; if (s >= 0) { sel = s; if (mosso) selUtente = true; } disegna(); }
                 return true;
             }
-            case WM_LBUTTONUP: { const int s = rigaIn(GET_X_LPARAM(l), GET_Y_LPARAM(l)); if (s >= 0) esegui(s); return true; }
+            case WM_LBUTTONDOWN: dragFrom=rigaIn(GET_X_LPARAM(l),GET_Y_LPARAM(l));return true;
+            case WM_LBUTTONUP: {
+                const int s=rigaIn(GET_X_LPARAM(l),GET_Y_LPARAM(l));
+                if(fullscreen&&dragFrom>=0&&s>=0&&s!=dragFrom)drop(dragFrom,s);
+                else if(s>=0)esegui(s);else if(fullscreen&&GET_Y_LPARAM(l)>int(ALTO_BARRA*v.dpi))chiudi();
+                dragFrom=-1;return true;
+            }
+            case WM_RBUTTONUP: context(rigaIn(GET_X_LPARAM(l),GET_Y_LPARAM(l)));return true;
+            case WM_MOUSEWHEEL:
+                if(fullscreen){page=std::clamp(page+(GET_WHEEL_DELTA_WPARAM(w)>0?-1:1),0,std::max(0,(int(risultati.size())-1)/pageSize()));chiediIcone();disegna();}return true;
             case WM_ACTIVATE:
-                if (LOWORD(w) == WA_INACTIVE && apertaOra) {
+                if (LOWORD(w) == WA_INACTIVE && apertaOra && !menu::aperti && !editing) {
                     // Appena aperta, il primo piano preso agganciandosi all'app di prima a volte torna a lei subito
                     // dopo lo sgancio (una volta su due nelle prove): non e' l'utente che ha cliccato altrove, si
                     // riprende (una volta sola) invece di chiudersi
@@ -252,6 +276,9 @@ private:
     vetro::Finestra v;
     IDWriteTextFormat *fTesto = nullptr, *fTitolo = nullptr, *fSotto = nullptr, *fSezione = nullptr;
     std::wstring testo;
+    std::wstring folder;
+    int page=0,dragFrom=-1;
+    bool editing=false;
     std::vector<std::pair<std::wstring, std::wstring>> app;
     std::vector<Risultato> risultati, file;
     int sel = 0, sopra = -1, larg = 0, x = 0, y = 0;
@@ -327,6 +354,7 @@ private:
     }
 
     void ridimensiona() {
+        if(fullscreen){RECT a=vetro::areaPrincipale();v.posiziona(a.left,a.top,a.right-a.left,a.bottom-a.top);return;}
         const float d = v.dpi;
         const int righe = (int)risultati.size();
         const int h = (int)std::lround((ALTO_BARRA + (righe ? 10 + righe * ALTO_RIGA + 8 : 0)) * d);
@@ -336,6 +364,12 @@ private:
 
     void tasto(WPARAM k) {
         const bool ctrl = GetKeyState(VK_CONTROL) & 0x8000;
+        if(k==VK_F6){fullscreen=!fullscreen;page=sel/std::max(1,pageSize());if(modeChanged)modeChanged(fullscreen);onda.chiudi();ridimensiona();componi();return;}
+        if(k==VK_ESCAPE&&!folder.empty()){folder.clear();componi();return;}
+        if(fullscreen&&(k==VK_LEFT||k==VK_RIGHT||k==VK_UP||k==VK_DOWN)&&!risultati.empty()) {
+            int delta=k==VK_LEFT?-1:k==VK_RIGHT?1:k==VK_UP?-columns():columns();
+            sel=std::clamp(sel+delta,0,int(risultati.size())-1);page=sel/pageSize();selUtente=true;chiediIcone();disegna();return;
+        }
         if (k == VK_ESCAPE) { if (testo.empty()) chiudi(); else { testo.clear(); cambiato(); } }
         else if (k == VK_BACK && !testo.empty()) {
             if (ctrl) { while (!testo.empty() && testo.back() == L' ') testo.pop_back(); while (!testo.empty() && testo.back() != L' ') testo.pop_back(); }
@@ -378,7 +412,7 @@ private:
         if (testo.size() >= 2) SetTimer(v.fin, 3, 180, nullptr);
     }
 
-    static std::wstring minuscolo(std::wstring s) { for (auto& c : s) c = (wchar_t)towlower(c); return s; }
+    static std::wstring minuscolo(std::wstring s) { return appcatalog::fold(s); }
 
     static int punteggio(const std::wstring& nome, const std::wstring& q) {
         const std::wstring n = minuscolo(nome);
@@ -414,9 +448,9 @@ private:
             std::vector<std::pair<int, size_t>> trovate;
             for (size_t i = 0; i < app.size(); i++) { const int p = punteggio(app[i].first, ql); if (p > 0) trovate.push_back({p, i}); }
             std::stable_sort(trovate.begin(), trovate.end(), [](auto& a, auto& b) { return a.first > b.first; });
-            for (size_t i = 0; i < trovate.size() && i < 5; i++) {
+            for (size_t i = 0; i < trovate.size() && (fullscreen || i < 5); i++) {
                 const auto& a = app[trovate[i].second];
-                risultati.push_back({T_APP, a.first, L"App", a.second, a.second});
+                risultati.push_back({T_APP, a.first, testi::t(L"App",L"App"), a.second, appcatalog::iconSource(a.second)});
             }
             int n = 0;
             for (const auto& s : pagine()) {
@@ -435,6 +469,9 @@ private:
             }
             risultati.push_back({T_WEB, testi::t(L"Cerca “", L"Search “") + testi::isola(q) + testi::t(L"” sul web", L"” on the web"),
                                  testi::t(L"Nel browser predefinito", L"In the default browser"), q, L""});
+        } else if(fullscreen) {
+            if(folder.empty())for(const auto& f:appcatalog::folders())risultati.push_back({T_FOLDER,f,L"",f,L""});
+            for(const auto& a:app)if(appcatalog::get(a.second).folder==folder)risultati.push_back({T_APP,a.first,L"",a.second,appcatalog::iconSource(a.second)});
         }
         sel = std::clamp(sel, 0, std::max(0, (int)risultati.size() - 1));
         if (scelta) for (int i = 0; i < (int)risultati.size(); i++) if ((int)risultati[i].tipo == tipoScelto && risultati[i].azione == azioneScelta) { sel = i; break; }
@@ -449,7 +486,10 @@ private:
     void chiediIcone() {
         bool nuove = false;
         EnterCriticalSection(&cs);
-        for (const auto& r : risultati) if (!r.icona.empty() && !icone.count(r.icona)) { icone[r.icona] = nullptr; iconeDaFare.push_back(r.icona); nuove = true; }
+        for (size_t i=0;i<risultati.size();++i) {
+            if(fullscreen&&(int(i)<page*pageSize()||int(i)>=(page+1)*pageSize()))continue;
+            const auto& r=risultati[i];if(!r.icona.empty()&&!icone.count(r.icona)){icone[r.icona]=nullptr;iconeDaFare.push_back(r.icona);nuove=true;}
+        }
         LeaveCriticalSection(&cs);
         if (nuove) { SetEvent(evento); SetTimer(v.fin, 4, 50, nullptr); }
     }
@@ -490,6 +530,7 @@ private:
     void esegui(int i) {
         if (i < 0 || i >= (int)risultati.size()) return;
         const Risultato r = risultati[i];
+        if(r.tipo==T_FOLDER){folder=r.azione;page=0;sel=0;componi();return;}
         chiudi(false);
         switch (r.tipo) {
             case T_CALCOLO:
@@ -523,16 +564,80 @@ private:
     }
 
     int rigaIn(int px, int py) const {
+        if(fullscreen){for(int i=page*pageSize();i<std::min(int(risultati.size()),(page+1)*pageSize());++i){auto r=cell(i);if(px>=r.left&&px<r.right&&py>=r.top&&py<r.bottom)return i;}return -1;}
         const float d = v.dpi, y0 = (ALTO_BARRA + 10) * d;
         if (py < y0 || px < 8 * d || px > v.W - 8 * d) return -1;
         const int i = (int)((py - y0) / (ALTO_RIGA * d));
         return i < (int)risultati.size() ? i : -1;
     }
 
+    int columns() const {return std::clamp(int(v.W/(136*v.dpi)),3,12);}
+    int rows() const {return std::max(1,int((v.H-160*v.dpi)/(124*v.dpi)));}
+    int pageSize() const {return columns()*rows();}
+    D2D1_RECT_F cell(int index) const {
+        const int col=columns(),i=index%pageSize();const float d=v.dpi,cw=std::min(148*d,(v.W-48*d)/col);
+        const float start=(v.W-cw*col)/2,x=start+(i%col)*cw,y=112*d+(i/col)*124*d;
+        return {x,y,x+cw,y+116*d};
+    }
+    void drawFullscreen() {
+        const float d=v.dpi;
+        const float width=std::min(680*d,v.W-48*d),left=(v.W-width)/2;
+        v.pen->SetColor(v.inchiostro(.07f));v.rt->FillRoundedRectangle({{left,24*d,left+width,80*d},22*d,22*d},v.pen);
+        v.testo(testo.empty()?testi::t(L"Cerca app, file, impostazioni…",L"Search apps, files, settings…"):testo,fTesto,{left+22*d,24*d,left+width-22*d,80*d},v.inchiostro(testo.empty()?.55f:1.f));
+        if(!folder.empty())v.testo(folder,fSotto,{24*d,80*d,float(v.W)-24*d,108*d},v.inchiostro(.7f));
+        page=std::clamp(page,0,std::max(0,(int(risultati.size())-1)/pageSize()));
+        for(int i=page*pageSize();i<std::min(int(risultati.size()),(page+1)*pageSize());++i) {
+            const auto& result=risultati[i];auto r=cell(i);
+            if(i==sel||i==sopra){v.pen->SetColor(v.inchiostro(i==sopra?.13f:.07f));v.rt->FillRoundedRectangle({r,16*d,16*d},v.pen);}
+            const float cx=(r.left+r.right)/2,iy=r.top+10*d,size=58*d;
+            auto image=icone.find(result.icona);
+            if(image!=icone.end()&&image->second)v.rt->DrawBitmap(image->second,{cx-size/2,iy,cx+size/2,iy+size});
+            else if(result.tipo==T_FOLDER){v.pen->SetColor(D2D1::ColorF(.95f,.72f,.25f,.95f));v.rt->FillRoundedRectangle({{cx-28*d,iy+8*d,cx+28*d,iy+52*d},7*d,7*d},v.pen);}
+            else simbolo(result.tipo,cx,iy+size/2,v.inchiostro(.6f));
+            v.testo(result.titolo,fTitolo,{r.left+4*d,iy+size+8*d,r.right-4*d,r.bottom-3*d},v.inchiostro());
+        }
+        const int pages=std::max(1,(int(risultati.size())+pageSize()-1)/pageSize());
+        if(pages>1)for(int i=0;i<pages&&i<30;++i){v.pen->SetColor(v.inchiostro(i==page?.8f:.25f));v.rt->FillEllipse({{v.W/2.f+(i-(pages-1)/2.f)*14*d,v.H-24*d},3*d,3*d},v.pen);}
+    }
+    void drop(int from,int to) {
+        if(from<0||to<0||from>=int(risultati.size())||to>=int(risultati.size()))return;
+        auto a=risultati[from],b=risultati[to];
+        if(a.tipo!=T_APP)return;
+        auto m=appcatalog::get(a.azione);
+        if(b.tipo==T_FOLDER)m.folder=b.azione;
+        else if(b.tipo==T_APP) {
+            for(int i=0;i<int(risultati.size());++i)if(risultati[i].tipo==T_APP){auto x=appcatalog::get(risultati[i].azione);x.order=i==to?from:i;appcatalog::save(risultati[i].azione,x);}m.order=to;
+        }
+        appcatalog::save(a.azione,m);if(catalogChanged)catalogChanged();componi();
+    }
+    void context(int index) {
+        POINT p{};GetCursorPos(&p);editing=true;
+        if(index>=0&&index<int(risultati.size())&&risultati[index].tipo==T_APP) {
+            auto command=risultati[index].azione;if(appMenu)appMenu(command,p,v.fin);
+        } else {
+            std::vector<menu::Voce> items;
+            items.push_back(menu::voce(testi::t(L"Aggiungi app…",L"Add application…"),1));
+            items.push_back(menu::voce(testi::t(L"Nuova cartella…",L"New folder…"),2));
+            std::wstring selectedFolder=index>=0&&index<int(risultati.size())&&risultati[index].tipo==T_FOLDER?risultati[index].azione:folder;
+            if(!selectedFolder.empty()) {items.push_back(menu::voce(testi::t(L"Rinomina cartella…",L"Rename folder…"),3));items.push_back(menu::voce(testi::t(L"Elimina cartella",L"Delete folder"),4));items.push_back(menu::voce(testi::t(L"Tutte le app",L"All apps"),5));}
+            std::vector<std::wstring> hidden;appcatalog::load();for(const auto& e:appcatalog::metadata)if(e.second.hidden){hidden.push_back(e.first);items.push_back(menu::voce(testi::t(L"Mostra: ",L"Restore: ")+(e.second.name.empty()?e.first:e.second.name),UINT(100+hidden.size()-1)));}
+            UINT command=menu::mostra(items,p,v.fin);
+            if(command==1){auto file=appcatalog::choose(v.fin,false);if(!file.empty()){auto m=appcatalog::get(file);m.manual=true;m.hidden=false;m.name=std::filesystem::path(file).stem().wstring();appcatalog::save(file,m);}}
+            if(command==2){std::wstring name;if(appcatalog::prompt(v.fin,testi::t(L"Nuova cartella…",L"New folder…"),name)&&!name.empty())appcatalog::folder(L"",name);}
+            if(command==3){auto name=selectedFolder;if(appcatalog::prompt(v.fin,testi::t(L"Rinomina cartella…",L"Rename folder…"),name)&&!name.empty()){appcatalog::folder(selectedFolder,name);if(folder==selectedFolder)folder=name;}}
+            if(command==4){appcatalog::folder(selectedFolder,L"");if(folder==selectedFolder)folder.clear();}
+            if(command==5)folder.clear();
+            if(command>=100&&command-100<hidden.size()){auto m=appcatalog::get(hidden[command-100]);m.hidden=false;appcatalog::save(hidden[command-100],m);}
+            if(command&&catalogChanged)catalogChanged();
+        }
+        editing=false;app=elencoApp?elencoApp():app;componi();
+    }
+
     void disegna() {
         if (!apertaOra && !chiudendo) return;
         controllaTarget();
         if (!v.inizia()) return;
+        if(fullscreen){drawFullscreen();v.finisci();return;}
         const float d = v.dpi, W = (float)v.W;
         const D2D1_COLOR_F ink = v.inchiostro(), tenue = v.inchiostro(0.55f);
         // lente
@@ -658,7 +763,7 @@ private:
                     if (g != r->generazione || !consegna::posta(r->v.fin, WM_APP + 1, (WPARAM)g, lista)) delete lista;
                 } else if (!ic.empty()) {
                     Pixel px; px.chiave = ic;
-                    pixelIcona(ic, 64, px.w, px.h, px.px);
+                    appicons::load(ic,64,px.w,px.h,px.px,[](const std::wstring& path,int size,int& w,int& h,std::vector<UINT>& pixels){return pixelIcona(path,size,w,h,pixels);});
                     EnterCriticalSection(&r->cs); r->iconePronte.push_back(std::move(px)); r->iconeInCorso--; LeaveCriticalSection(&r->cs);
                 } else break;
             }

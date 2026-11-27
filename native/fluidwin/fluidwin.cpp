@@ -3961,6 +3961,17 @@ static void altTabVeloce() {
     logf("alt+tab veloce (%d): %p %ls", gAltTabPassi, h, c);
 }
 static ricerca::Ricerca gRicerca;
+static stage::Manager gStage;
+static bool gSpotlightHotkey=false;
+static constexpr int TASTO_SPOTLIGHT=0x534c,TASTO_STAGE=0x534d;
+static void apriSpotlight() {
+    const auto& s=impostazioni::valori();
+    if(!s.spotlightEnabled)return;
+    if(s.spotlightMode==0){if(gDockOk)gDock.apriLauncher();return;}
+    if(s.spotlightMode==3){INPUT input[4]{};for(auto& k:input)k.type=INPUT_KEYBOARD;input[0].ki.wVk=VK_CONTROL;input[1].ki.wVk=VK_ESCAPE;input[2].ki.wVk=VK_ESCAPE;input[2].ki.dwFlags=KEYEVENTF_KEYUP;input[3].ki.wVk=VK_CONTROL;input[3].ki.dwFlags=KEYEVENTF_KEYUP;SendInput(4,input,sizeof(INPUT));return;}
+    if(!gRicerca.aperta())gRicerca.fullscreen=s.spotlightMode==2;
+    gRicerca.apri();
+}
 static banner::Banner gBanner;
 static impostazioni::Finestra gImpostazioni;
 
@@ -4104,6 +4115,11 @@ static void apriImpostazioni(bool dalMouse = false) {
 static bool gRtlAvvio = false;   // lingua da destra a sinistra all'avvio (vedi applicaImpostazioni)
 static void applicaImpostazioni() {
     const impostazioni::Valori& v = impostazioni::valori();
+    gStage.configure(v.stage);
+    if(gMessaggi){
+        if(gSpotlightHotkey){UnregisterHotKey(gMessaggi,TASTO_SPOTLIGHT);gSpotlightHotkey=false;}
+        if(v.spotlightEnabled&&v.spotlightAltSpace){gSpotlightHotkey=RegisterHotKey(gMessaggi,TASTO_SPOTLIGHT,MOD_ALT|MOD_NOREPEAT,VK_SPACE)!=FALSE;if(!gSpotlightHotkey)logf("Alt+Space unavailable; native system menu preserved");}
+    }
     gTastiVolume = v.volume && gOsdOk;
     gTastoPanoramica = v.winTab;
     gTastoRicerca = v.winS;
@@ -4118,7 +4134,7 @@ static void applicaImpostazioni() {
         if (gDockOk) gDock.impostaAngoli();
         logf("angoli: %s", v.angoli == 0 ? "arrotondati" : v.angoli == 1 ? "poco arrotondati" : "squadrati");
     }
-    if (gDockOk) { gDock.impostaAutoNascondi(v.dockAuto); gDock.impostaOpacita(v.dockOpacita / 100.0f); gDock.impostaSpazio(v.dockSpazio); gDock.impostaAltriSchermi(v.dockSchermi); gDock.impostaAnteprime(v.dockAnteprime);
+    if (gDockOk) { gDock.impostaVisibility(v.dockVisibility,v.dockBarLength,v.dockBarThickness,v.dockBarOpacity,v.dockBarOpenDelay,v.dockBarCloseDelay,v.dockBarFullscreen);gDock.impostaAutoNascondi(v.dockVisibility!=0); gDock.impostaOpacita(v.dockOpacita / 100.0f); gDock.impostaSpazio(v.dockSpazio); gDock.impostaAltriSchermi(v.dockSchermi); gDock.impostaAnteprime(v.dockAnteprime);
                    gDock.impostaLatoIcone(v.dockIcone); gDock.impostaDistanzaIcone(v.dockDistanza); gDock.impostaColore(v.dockColore); }
     // Arabo acceso o spento: i formati di testo prendono la direzione (da destra a sinistra) quando nascono, e molti
     // vivono quanto FluidWin. Riavviare e' il modo sicuro di rifarli tutti
@@ -4221,6 +4237,7 @@ static LRESULT CALLBACK procMessaggi(HWND h, UINT m, WPARAM w, LPARAM l) {
             }
             return 0;
         case WM_DISPLAYCHANGE:
+            gStage.topologyChanged=true;
             wallpaperTick();
             aggiornaOrigine(); if (gGenioOk) gGenio.aggiornaSchermo();
             SetTimer(h, 12, 800, nullptr);   // la scala nuova si legge quando Windows ha finito di cambiarla
@@ -4237,7 +4254,11 @@ static LRESULT CALLBACK procMessaggi(HWND h, UINT m, WPARAM w, LPARAM l) {
             }
             return 0;
         case WM_APRI_LAUNCHER: if (gDockOk) gDock.apriLauncher(); return 0;
-        case WM_HOTKEY: if (w == TASTO_PRIMO_PIANO) primoPiano(); return 0;
+        case WM_HOTKEY:
+            if(w==TASTO_PRIMO_PIANO)primoPiano();
+            else if(w==TASTO_SPOTLIGHT)apriSpotlight();
+            else if(w==TASTO_STAGE){auto& s=impostazioni::valori().stage;s.enabled=!s.enabled;impostazioni::salva();gStage.configure(s);}
+            return 0;
         case WM_CLIPBOARDUPDATE: appunti::Cronologia::io().cambiato(); return 0;   // cronologia degli appunti
         case WM_APP + 14: {
             const POINT pt = {GET_X_LPARAM(l), GET_Y_LPARAM(l)}; HWND h = WindowFromPoint(pt);
@@ -4306,7 +4327,7 @@ static LRESULT CALLBACK procMessaggi(HWND h, UINT m, WPARAM w, LPARAM l) {
             if (IsWindow((HWND)w)) { preparaChiusura((HWND)w); PostMessageW((HWND)w, WM_SYSCOMMAND, SC_CLOSE, 0); }
             return 0;
         case WM_TIMER:
-            if (w == 1) wallpaperTick();
+            if (w == 1) { wallpaperTick(); gStage.changed(); }
             if (w == 13) { gBattito = GetTickCount64(); return 0; }   // battito per l'hook della tastiera (uiViva)
             if (w == 24) { affiancaPasso(); return 0; }   // trascinamento: casella sotto il mouse e anteprima
             if (w == 25) { staccaPasso(); return 0; }     // stacco dall'ingrandita trascinata dalla barra
@@ -4789,6 +4810,16 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     gRicerca.apriImpostazioni = [] { apriImpostazioni(false); };   // (dalla ricerca: crescono dal centro dello schermo)
     gRicerca.conOnda = []() { return gMovimento && impostazioni::valori().onda; };
     gRicerca.registro = [](const char* s) { logf("%s", s); };
+    gRicerca.modeChanged=[](bool full){impostazioni::valori().spotlightMode=full?2:1;impostazioni::salva();};
+    gRicerca.appMenu=[](const std::wstring& command,POINT p,HWND owner){if(gDockOk)gDock.catalogMenu(command,p,owner);};
+    gRicerca.catalogChanged=[]{if(gDockOk)gDock.catalogChanged();};
+    if(gDockOk)gDock.catalogChanged();
+    RegisterHotKey(gMessaggi,TASTO_STAGE,MOD_CONTROL|MOD_ALT|MOD_WIN|MOD_NOREPEAT,'S');
+    gStage.inventory=[] { return gDockOk?gDock.stageWindows():std::vector<stage::Window>{}; };
+    gStage.activation=[](HWND h) {if(gDockOk)gDock.activateStageWindow(h);};
+    gStage.icon=[](ID2D1RenderTarget* target,const std::wstring& path,int size) {return gDockOk?gDock.sharedIcon(target,path,size):nullptr;};
+    gStage.reserved=[](HMONITOR m) {return gDockOk?gDock.fasciaSu(m):RECT{};};
+    gStage.fullscreen=[](HMONITOR m) {return schermoInteroAttivo()&&MonitorFromWindow(GetForegroundWindow(),MONITOR_DEFAULTTONEAREST)==m;};
     gBanner.isola = []() { return gDockOk ? gDock.rettIsolaSchermo() : vetro::areaPrincipale(true); };
     gBanner.silenzio = []() { return schermoInteroAttivo() || comodita::silenzio(); };   // anche con Non disturbare
     // le notifiche escono dal notch (se si vede; altrimenti il banner di vetro)
@@ -4893,6 +4924,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     impostaPausa(true);
     condividi::ferma();   // annulla la preparazione dei file senza aspettare prima di ripristinare Windows
     cursori::togli();   // di nuovo i cursori di Windows
+    gStage.stop();
     if (gDockOk) gDock.chiudi();
     gBanner.chiudiLettore();
     togliPrimoPiano();

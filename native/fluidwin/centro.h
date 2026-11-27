@@ -2461,10 +2461,10 @@ inline auto Motore::volumeTasto(int verso, float& livello, bool& silenzio) -> vo
 
 // tutte le app (nome, comando d'avvio), per la ricerca rapida
 inline auto Motore::elencoApp() -> std::vector<std::pair<std::wstring, std::wstring>> {
-    if (tutteApp.empty()) leggiTutteApp(true);              // la prima volta serve subito
+    if (tutteApp.empty()) leggiTutteApp();                  // cold discovery never blocks UI
     else if (adesso() - lLetto > 600) leggiTutteApp();      // poi si rinfresca in sottofondo
     std::vector<std::pair<std::wstring, std::wstring>> r;
-    for (const auto& a : tutteApp) r.push_back({a.nome, a.avvio});
+    for (const auto& a : tutteApp) if(!appcatalog::get(a.avvio).hidden)r.push_back({a.nome, a.avvio});
     return r;
 }
 
