@@ -207,7 +207,7 @@ private:
     void renderPorch(const Config&c,float w,float h,float t,float dt){
         birdHop+=dt;melonRefill-=dt;if(melonRefill<=0)melonBites=0;fanPhase+=dt*p(c,"fanSpeed",1)*fanMultiplier*14;
         int n=std::clamp(int(p(c,"corgis",3)),1,4);std::array<Vec4,4> a{},b{};for(int i=0;i<n;i++){corgiHappy[i]=std::max(0.f,corgiHappy[i]-dt);a[i]={w*(.22f+i*.18f),h*(.73f+.06f*(i%2)),float(corgiPose[i]),std::clamp(corgiHappy[i],0.f,1.f)};b[i]={.9f,float(corgiPose[i]),t*1.8f+i,corgiHappy[i]>0?1.f:0};}program.f("uCorgiN",float(n));array("uCorgiA",a);array("uCorgiB",b);
-        float day=p(c,"timeOfDay",0);if(day==0){SYSTEMTIME st{};GetLocalTime(&st);day=st.wHour<6||st.wHour>=19?3:st.wHour>=16?2:1;}
+        float day=p(c,"timeOfDay",0);if(day==3){SYSTEMTIME st{};GetLocalTime(&st);int minutes=st.wHour*60+st.wMinute;day=minutes>=360&&minutes<990?0:minutes>=990&&minutes<1140?1:2;}
         program.f("uDayMode",day);program.f("uSunbeams",p(c,"sunbeams",1));program.f("uFanSpeed",p(c,"fanSpeed",1)*fanMultiplier);program.v4("uFanState",{w*.704f,h*.518f,sin(t*.6f)*.85f,fanPhase});program.v4("uProps",{chime.x,abs(chime.v)>.1f?wrap(age,1.f):-1.f,float(melonBites),birdHop<.7f?birdHop/.7f:0});flyers<10>("uBugs","uBugN",8,w,h,t,6);
     }
     void renderStadium(const Config&c,float w,float h,float t,float dt){
@@ -227,7 +227,7 @@ private:
         float s=std::min(w/1080,std::max(280.f,h-48)/640);std::array<Vec4,2> pos{},heads{},torsos{},expr{},faces{};
         for(int i=0;i<2;i++){float facing=i?-1.f:1.f;pos[i]={w*.5f-facing*68*s,(h-48)*(i?.766f:.758f),abs(sin(t*1.7f+i))*4.2f-2,sin(t*.85f+i)*7.5f};heads[i]={head[i].x,0,head[i].x*.006f,std::clamp(head[i].x*.025f,-.58f,.58f)};torsos[i]={std::clamp(torso[i].x*.08f,-.85f,.85f),0,std::clamp(torso[i].x*.04f,0.f,1.25f),hitAge<.25f&&i!=hitActor?sin(hitAge/.25f*3.14159f):0};expr[i]={wrap(t+i,4)>.0f&&wrap(t+i,4)<.12f?1.f:0.f,hitAge<.4f&&i==hitActor?1.f:0.f,hp[i]<.25f?1.f:0.f,hitAge<.1f&&i==hitActor?1.f:0.f};}
         std::array<Vec4,4> gloves{},gloveMeta{};std::array<Vec4,6> puffs{};
-        if(hitActor>=0&&hitAge<.68f){int j=hitActor;float facing=j?1.f:-1.f,tx=pos[j][0],ty=pos[j][1]-115*s,k=std::clamp(hitAge/.09f,0.f,1.f),tail=std::clamp((hitAge-.21f)/.47f,0.f,1.f);gloves[0]={tx-facing*(1-k)*100*s,ty, j?0.f:3.14159f,(1-tail)*p(c,"punchPower",1)};gloveMeta[0]={tx-facing*100*s,ty,k,hitY>pos[j][1]-80*s?2.f:0.f};puffs[0]={tx,ty,hitAge,.6f};}
+        if(hitActor>=0&&hitAge<.68f){int j=hitActor;float facing=j?1.f:-1.f,tx=pos[j][0]+(hitZone==1?facing*14*s:0),ty=pos[j][1]-(hitZone==3?65:hitZone==0?135:115)*s,k=std::clamp(hitAge/.09f,0.f,1.f),tail=std::clamp((hitAge-.21f)/.47f,0.f,1.f);gloves[0]={tx-facing*(1-k)*100*s,ty-(hitZone==0?(1-k)*70*s:0), j?0.f:3.14159f,(1-tail)*p(c,"punchPower",1)};gloveMeta[0]={tx-facing*100*s,ty,k,hitZone==0?1.f:hitZone==2?2.f:0.f};puffs[0]={tx,ty,hitAge,.6f};}
         if(hitActor<0&&hitAge<.68f){float k=std::min(1.f,hitAge/.09f);gloves[0]={hitX-(1-k)*80*s,hitY,0,1-std::clamp((hitAge-.21f)/.47f,0.f,1.f)};gloveMeta[0]={hitX-80*s,hitY,k,0};puffs[0]={hitX,hitY,hitAge,.6f};}
         program.v4("uScene",{p(c,"gloveStyle",0),p(c,"hudMode",0),ring.x,ring.x*.2f});program.v4("uHud",{hp[0],hpLag[0],hp[1],hpLag[1]});program.v4("uRound",{float(roundNumber),60-roundAge,roundBell,0});program.v4("uGymProps",{bags[0].x,bags[1].x,bags[2].x,tireAge<.8f?sin(tireAge/.8f*3.14159f):0});array("uFPos",pos);array("uFHead",heads);array("uFFace",faces);array("uFTorso",torsos);array("uFExpr",expr);array("uGloves",gloves);array("uGloveMeta",gloveMeta);array("uPuffs",puffs);
     }
