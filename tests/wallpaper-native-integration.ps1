@@ -6,6 +6,7 @@ Add-Type @'
 using System; using System.Runtime.InteropServices;
 public static class WallpaperIntegration {
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string c,string t);
+ public static IntPtr Window(string c) { return FindWindow(c,null); }
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr h,System.Text.StringBuilder s,int n);
  [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr h,EnumProc p,IntPtr l);
  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc p,IntPtr l);
@@ -18,7 +19,7 @@ public static class WallpaperIntegration {
 }
 '@
 function Wait-For([scriptblock]$Check,[string]$Label){$until=[DateTime]::UtcNow.AddSeconds(45);do{if(& $Check){return};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow -lt $until);throw "Timeout: $Label"}
-function Main-Window { [WallpaperIntegration]::FindWindow('TLauncher.Native.Messaggi',$null) }
+function Main-Window { [WallpaperIntegration]::Window('TLauncher.Native.Messaggi') }
 function Candidate-Processes([string]$Path){@(Get-CimInstance Win32_Process -Filter "Name='TLauncher.exe'"|Where-Object ExecutablePath -IEQ $Path)}
 function Send-Action([IntPtr]$Window,[int]$Action){[void][WallpaperIntegration]::PostMessage($Window,0x805b,[IntPtr]$Action,[IntPtr]::Zero)}
 New-Item -ItemType Directory -Path $Evidence -Force|Out-Null
@@ -73,7 +74,7 @@ foreach($mode in 'accepted-baseline','wallpaper-disabled','wallpaper-enabled'){
   Copy-Item (Join-Path $runtime 'diagnostics/*.json') $Evidence
   if($mode -eq 'wallpaper-enabled'){
    [void][WallpaperIntegration]::PostMessage((Main-Window),0x8009,[IntPtr]::Zero,[IntPtr]::Zero)
-   $settings=[WallpaperIntegration]::FindWindow('TLauncher.Native.Impostazioni',$null)
+   $settings=[WallpaperIntegration]::Window('TLauncher.Native.Impostazioni')
    Wait-For {[WallpaperIntegration]::IsWindowVisible($settings)} 'native Settings'
    Start-Sleep -Milliseconds 700
    1..6|ForEach-Object {[void][WallpaperIntegration]::PostMessage($settings,0x100,[IntPtr]0x28,[IntPtr]::Zero);Start-Sleep -Milliseconds 100}
