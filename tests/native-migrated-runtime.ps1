@@ -59,6 +59,9 @@ try{
  }
  'MIGRATED_FULL_PRODUCT_START=PASS','MIGRATED_CUSTOM_WALLPAPER_PRESENT=PASS','MIGRATED_NATIVE_STAGE_AND_SPOTLIGHT=PASS','MIGRATED_NOTCH_DISABLED=PASS','MIGRATED_FULL_PRODUCT_RESTART=PASS','MIGRATED_NORMAL_EXIT_AND_GUARDIAN_EXIT=PASS','OWNER_SETTINGS_RESTORED=NOT_RUN_ON_OWNER'|Set-Content (Join-Path $Evidence 'native-migrated-runtime.txt')
 }finally{
+ Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+ $lastRect=[Windows.Forms.SystemInformation]::VirtualScreen;$lastBmp=[Drawing.Bitmap]::new($lastRect.Width,$lastRect.Height);$lastGraphics=[Drawing.Graphics]::FromImage($lastBmp)
+ try{$lastGraphics.CopyFromScreen($lastRect.Left,$lastRect.Top,0,0,$lastRect.Size);$lastBmp.Save((Join-Path $Evidence 'migrated-runtime-last-screen.png'))}finally{$lastGraphics.Dispose();$lastBmp.Dispose()}
  Get-CimInstance Win32_Process -Filter "Name='TLauncher.exe'"|Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine|ConvertTo-Json|Set-Content (Join-Path $Evidence 'migrated-runtime-processes.json')
  if(Test-Path (Join-Path $env:TEMP 'tlauncher-native.log')){Copy-Item (Join-Path $env:TEMP 'tlauncher-native.log') (Join-Path $Evidence 'migrated-runtime-last.log')}
  if($script:migratedCandidate -and !$script:migratedCandidate.HasExited){[void][MigratedRuntime]::PostMessage([MigratedRuntime]::FindWindow('TLauncher.Native.Messaggi',$null),0x10,[IntPtr]::Zero,[IntPtr]::Zero);$null=$script:migratedCandidate.WaitForExit(30000)}
