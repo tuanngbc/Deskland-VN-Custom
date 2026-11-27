@@ -28,17 +28,69 @@ int main(int argc,char**argv){try{
     auto capture=[&](int w,int h){std::vector<unsigned char> bytes(size_t(w)*h*4);glReadPixels(0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,bytes.data());check(glGetError()==GL_NO_ERROR,"Render/readback error");return bytes;};
     Config config;config.clockLighting=false;config.manualHour=12;Weather weather;std::atomic<bool> stop{false};const std::vector<RECT> icons{{24,65,93,143},{24,170,93,248},{135,65,204,143}};
     View view{0,0,640,360,640,360};
+    std::vector<unsigned char> sheet(size_t(2560)*1440*4,255);
     for(int i=0;i<int(catalog().size());i++){
         allocate(640,360);noiseTexture.bind(gl,0);SceneRuntime scene(gl,i);scene.render(config,view,icons,weather,2.,.04f,stop);auto before=capture(640,360);
         std::set<uint32_t> colors;for(size_t p=0;p<before.size();p+=16){uint32_t value;memcpy(&value,before.data()+p,4);colors.insert(value);}check(colors.size()>30,"Scene is blank/constant");
         png(evidence/(std::string(catalog()[i].id)+".png"),640,360,before);png(assetsRoot()/L"wallpaper/thumbs"/(std::string(catalog()[i].id)+".png"),640,360,before);
+        // Unmodified renderer pixels, ordered row-major exactly as catalog.
+        for(int row=0;row<360;row++)memcpy(sheet.data()+(size_t((3-i/4)*360+row)*2560+(i%4)*640)*4,before.data()+size_t(row)*640*4,640*4);
         noiseTexture.bind(gl,0);scene.render(config,view,icons,weather,2.12,.12f,stop);auto animated=capture(640,360);check(before!=animated,"Scene never animates");
         // Two identically seeded, identically advanced worlds differ only by input.
         SceneRuntime clicked(gl,i);noiseTexture.bind(gl,0);clicked.render(config,view,icons,weather,2.,.04f,stop);
-        clicked.click(320,240);noiseTexture.bind(gl,0);clicked.render(config,view,icons,weather,2.12,.12f,stop);auto after=capture(640,360);
+        auto bodies=clicked.actors();auto boy=clicked.meadowBoy();auto fish=clicked.fish();clicked.click(320,240);
+        for(auto&[name,list]:bodies)for(size_t j=0;j<list.size();j++){auto&a=list[j];auto&b=clicked.actors().at(name)[j];check((a.position-b.position).length()==0&&(a.velocity-b.velocity).length()==0&&a.heading==b.heading,"Input teleported an actor");}
+        check((boy.position-clicked.meadowBoy().position).length()==0,"Input teleported meadow boy");for(size_t j=0;j<fish.size();j++)check(fish[j].x==clicked.fish()[j].x&&fish[j].y==clicked.fish()[j].y,"Input teleported fishing actor");
+        noiseTexture.bind(gl,0);clicked.render(config,view,icons,weather,2.12,.12f,stop);auto after=capture(640,360);
         if(animated==after)throw std::runtime_error(std::string(catalog()[i].id)+" has no verified click response");
         png(evidence/(std::string(catalog()[i].id)+"-click.png"),640,360,after);
         report<<catalog()[i].id<<"=RENDER_ANIMATION_AND_ISOLATED_CLICK_PASS\n";std::cout<<catalog()[i].id<<" PASS\n";
+    }
+    png(evidence/"all-16-contact-sheet.png",2560,1440,sheet);report<<"CATALOG_ORDER=meadow,beach,beach-turquoise,lake,sky,ocean,rainforest,mocchau,tet-sakura,cat-hill,stadium,aquarium,commute,summer-porch,cats,boxing-ring\nINPUT_PRESERVES_ALL_PHYSICAL_STATE=PASS\n";
+    {
+        // Owner geometry fixture, not an inferred arrangement of their screens.
+        std::vector<Monitor> monitors{{L"portrait",{-1080,-500,0,1420},144,false},{L"wide",{0,0,2560,1080},96,true}};
+        auto geometry=sceneGeometry(monitors,monitors[1],Layout::Panorama);
+        std::vector<RECT> islands{{1190,650,1264,736},{1190,760,1264,846},{1190,870,1264,956},{1740,1100,1814,1186},{1800,1100,1874,1186},{2770,850,2844,936},{2800,960,2874,1046},{90,1300,164,1386}};
+        for(const char*id:{"meadow","beach","beach-turquoise"}){
+            SceneRuntime scene(gl,sceneIndex(id));scene.setGeometry(geometry);Config settings=config;settings.sceneParams[id]["palms"]=8;
+            auto all=bounds(monitors);View world{0,0,float(all.right-all.left),float(all.bottom-all.top),float(all.right-all.left),float(all.bottom-all.top)};
+            // Full world includes intentionally unrendered physical gaps. Only
+            // individual actual output captures are evidence of visible scene.
+            for(auto&m:monitors){auto v=viewport(m,all,Layout::Panorama);allocate(int(v.w),int(v.h));noiseTexture.bind(gl,0);scene.render(settings,v,islands,weather,4,0,stop);png(evidence/(std::string(id)+(m.primary?"-panorama-wide.png":"-panorama-portrait.png")),int(v.w),int(v.h),capture(int(v.w),int(v.h)));}
+            if(std::string(id)!="meadow"){
+                std::set<int> planted;auto layout=scene.palms();for(auto&p:layout.trees){auto b=p.transform().bounds();check(geometry.covers(b)&&iconClear(b,islands),"Palm cropped/in gap/icon");check(scene.shore(p.foot)<-6,"Palm trunk in water");check(abs(b.w/b.h-1302.f/1208)<.001f,"Palm artwork aspect changed");planted.insert(p.component);}
+                check(int(planted.size())>=std::min(layout.requested,layout.feasible),"Feasible island starved before repeat planting");check(!layout.trees.empty(),"Multi-island fixture planted no palms");
+                auto revision=layout.revision;allocate(640,360);noiseTexture.bind(gl,0);scene.render(settings,{0,0,640,360,world.worldW,world.worldH},islands,weather,4.1f,0,stop);check(scene.palms().revision==revision,"Idle frame recomputed placement");
+                report<<id<<"_PALMS="<<layout.trees.size()<<"/"<<layout.requested<<" ISLANDS="<<planted.size()<<"/"<<layout.feasible<<" COMPONENTS="<<layout.components<<"\n";
+            }
+            std::ofstream diagnostic(evidence/(std::string(id)+"-bounds.txt"));for(auto b:scene.diagnosticBounds())diagnostic<<b.x<<','<<b.y<<','<<b.w<<','<<b.h<<'\n';
+        }
+        // Reverse primary order and use independent/sync mapping as well.
+        std::reverse(monitors.begin(),monitors.end());for(auto mode:{Layout::Independent,Layout::Synchronized,Layout::Panorama})for(auto&m:monitors){auto v=viewport(m,bounds(monitors),mode);auto g=sceneGeometry(monitors,m,mode);check(g.contains({v.x+v.w*.5f,v.y+v.h*.5f}),"Reversed topology mapping missed display");}
+        report<<"STAGGERED_NEGATIVE_MIXED_DPI_BOTH_ORDERS_AND_LAYOUTS=PASS\nPALM_GEOMETRY_ASPECT_ICON_COMPONENT_ALLOCATION_STABILITY=PASS\n";
+    }
+    {
+        // Real renderer temporal sequences. Each column is a specific time,
+        // including immediately after input (dt=0); no image retouching.
+        std::ofstream trace(evidence/"motion-trace.txt");
+        const std::array<float,9> times{0,.0f,.2f,.6f,1.2f,2.4f,4.8f,8.f,12.f};
+        for(const char*id:{"ocean","beach-turquoise","aquarium","meadow"}){
+            SceneRuntime scene(gl,sceneIndex(id));View v{0,0,960,540,960,540};allocate(480,270);Config cfg=config;std::vector<unsigned char> sequence(size_t(480*3)*270*3*4,255);
+            std::map<std::string,std::vector<Body>> before;float elapsed=0;
+            for(size_t frame=0;frame<times.size();frame++){
+                if(frame==1){before=scene.actors();V2 target{670,330};if(std::string(id)=="meadow"&&scene.meadowBoy().initialized)target=scene.meadowBoy().position+V2{-90,-90};scene.click(target.x,target.y);}
+                while(elapsed+.0001f<times[frame]){float step=std::min(1.f/25,times[frame]-elapsed);elapsed+=step;noiseTexture.bind(gl,0);scene.render(cfg,v,{},weather,20+elapsed,step,stop,.5f,.5f);}
+                noiseTexture.bind(gl,0);scene.render(cfg,v,{},weather,20+elapsed,0,stop,.5f,.5f);auto pixels=capture(480,270);
+                if(frame==1)for(auto&[name,list]:before)for(size_t j=0;j<list.size();j++)check((list[j].position-scene.actors().at(name)[j].position).length()==0,"dt=0 rendered input changed position");
+                png(evidence/(std::string(id)+"-motion-"+std::to_string(frame)+".png"),480,270,pixels);
+                for(int row=0;row<270;row++)memcpy(sequence.data()+(size_t((2-frame/3)*270+row)*1440+(frame%3)*480)*4,pixels.data()+size_t(row)*480*4,480*4);
+                for(auto&[name,list]:scene.actors())for(size_t j=0;j<list.size();j++)if(list[j].initialized){auto&b=list[j];check(scene.spatial().contains(b.position),"Actor outside physical viewports");if((name=="uKay"||name=="uTurt"||name=="uFish")&&std::string(id)=="beach-turquoise")check(scene.shore(b.position)>12,"Swimmer/craft on land");trace<<id<<','<<frame<<','<<elapsed<<','<<name<<','<<j<<','<<b.position.x<<','<<b.position.y<<','<<b.velocity.x<<','<<b.velocity.y<<','<<b.heading<<'\n';}
+                if(std::string(id)=="meadow"){auto&b=scene.meadowBoy();trace<<id<<','<<frame<<','<<elapsed<<",boy,"<<b.position.x<<','<<b.position.y<<','<<b.speed()<<'\n';}
+            }
+            png(evidence/(std::string(id)+"-motion-sequence.png"),1440,810,sequence);
+        }
+        report<<"TEMPORAL_SEQUENCE_TIMES=before,immediate,0.2,0.6,1.2,2.4,4.8,8,12 seconds\nACTUAL_RENDERER_MOTION_SEQUENCES=PASS\n";
     }
     {
         Config night=config;night.sceneParams["sky"]["time"]=3;

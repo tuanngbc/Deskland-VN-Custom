@@ -1,9 +1,9 @@
 // Native scene composition using audited cat-hill GLSL artwork functions.
 // The CPU tiny-skia renderer/runtime is not used. New controls affect composition.
-uniform float wpMound, wpFlowers, wpBushes, wpSun;
+uniform float wpMound, wpFlowers, wpBushes, wpSun, wpActorScale;
 void main() {
   vec2 p=vec2(gl_FragCoord.x,uRes.y-gl_FragCoord.y);
-  float W=uRes.x,H=uRes.y,s=clamp(min(W/1080.,H/700.),.6,1.8);
+  float W=uRes.x,H=uRes.y,s=wpActorScale;
   vec3 col=mix(vec3(.70,.86,.98),vec3(.91,.97,1.),p.y/H);
   col=mix(col,vec3(1.,.94,.63),ss(31.*s,29.*s,length(p-vec2(W*.79,H*.13)))*clamp(wpSun,0.,1.));
   for(int i=0;i<4;i++)drawCloud(col,p,vec2(mod(float(i)*W*.31+uTime*4.,W+160.)-80.,H*(.10+float(i%2)*.08)),.7*s);

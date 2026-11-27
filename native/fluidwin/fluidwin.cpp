@@ -3617,9 +3617,17 @@ static const UINT WM_SINISTRO = WM_APP + 40;
 static const UINT WM_ZOOM_TASTO = WM_APP + 41;   // Win+Su/Giu trattenuto (wParam comando, lParam finestra)
 static UINT_PTR gTimerTr = 0;   // (thread del gancio) scadenza dei trattenuti
 static LRESULT CALLBACK suMouse(int code, WPARAM w, LPARAM l) {
-    if (code == HC_ACTION && w == WM_LBUTTONUP && gWallpaperInput.load(std::memory_order_relaxed)) {
+    if (code == HC_ACTION && gWallpaperInput.load(std::memory_order_relaxed)) {
         const auto* mouse = (const MSLLHOOKSTRUCT*)l;
-        if (!(mouse->flags & LLMHF_INJECTED)) PostMessageW(gMessaggi, WM_WALLPAPER_CLICK, 0, MAKELPARAM(mouse->pt.x, mouse->pt.y));
+        static bool wallpaperDown=false;static ULONGLONG wallpaperMove=0;
+        if (!(mouse->flags & LLMHF_INJECTED)) {
+            UINT message=0;
+            if(w==WM_LBUTTONDOWN){wallpaperDown=true;message=WM_WALLPAPER_CLICK+1;}
+            else if(w==WM_LBUTTONUP){wallpaperDown=false;message=WM_WALLPAPER_CLICK;}
+            else if(w==WM_MOUSEMOVE&&wallpaperDown&&GetTickCount64()-wallpaperMove>=32){wallpaperMove=GetTickCount64();message=WM_WALLPAPER_CLICK+2;}
+            // Observe only; no changes to the accepted core's input decisions.
+            if(message)PostMessageW(gMessaggi,message,WPARAM(uint32_t(mouse->pt.x)),LPARAM(mouse->pt.y));
+        }
     }
     if (code == HC_ACTION && w == WM_MOUSEMOVE) {
         const MSLLHOOKSTRUCT* m = (const MSLLHOOKSTRUCT*)l;
@@ -4176,11 +4184,11 @@ static LRESULT CALLBACK procMessaggi(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_ZOOM_TASTO) { suZoomTasto((UINT)w, (HWND)l); return 0; }
     if (m == WM_AFFIANCA_TASTO) { if (w == 2) riquadroDaTastiera((HWND)l); else suAffiancaTasto(w != 0, (HWND)l); return 0; }
     switch (m) {
-        case WM_WALLPAPER_CLICK: {
+        case WM_WALLPAPER_CLICK: case WM_WALLPAPER_CLICK+1: case WM_WALLPAPER_CLICK+2: {
             if (!gWallpaper || !gWallpaper->enabled()) return 0;
-            POINT p{GET_X_LPARAM(l),GET_Y_LPARAM(l)}; HWND under = WindowFromPoint(p);
+            POINT p{LONG(w),LONG(l)}; HWND under = WindowFromPoint(p);
             wchar_t cls[64] = L""; GetClassNameW(GetAncestor(under, GA_ROOT), cls, 64);
-            gWallpaper->clicked(p, !wcscmp(cls,L"Progman") || !wcscmp(cls,L"WorkerW")); return 0;
+            gWallpaper->pointer(p, !wcscmp(cls,L"Progman") || !wcscmp(cls,L"WorkerW"),m==WM_WALLPAPER_CLICK?wallpaper::PointerAction::Up:m==WM_WALLPAPER_CLICK+1?wallpaper::PointerAction::Down:wallpaper::PointerAction::Move); return 0;
         }
         case WM_WTSSESSION_CHANGE:
             if (w == WTS_SESSION_LOCK) gWallpaperLocked = true;

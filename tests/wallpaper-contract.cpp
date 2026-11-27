@@ -15,6 +15,23 @@ int main(){try{
     RECT all=bounds(monitors);auto a=viewport(monitors[0],all,Layout::Panorama),b=viewport(monitors[1],all,Layout::Panorama);
     require(a.x==0&&a.y==0&&a.w==1080&&a.h==1920,"Portrait/negative topology");require(b.x==1080&&b.y==500&&a.worldW==3640&&a.worldH==1920,"Panorama physical coordinates");
     require(a.x+a.w==b.x,"Adjacent physical edges disagree");
+    auto spatial=sceneGeometry(monitors,monitors[1],Layout::Panorama),single=sceneGeometry({monitors[1]},monitors[1],Layout::Synchronized);
+    require(spatial.meadowBoyScale()==single.meadowBoyScale()&&spatial.meadowCatSize()==single.meadowCatSize()&&spatial.boxingScale()==single.boxingScale(),"Adding a portrait enlarged actors");
+    require(!spatial.covers({1200,100,100,100})&&spatial.covers({1040,700,100,100}),"Physical union/seam coverage");
+    for(auto&m:monitors)m.dpi=192;auto changedDpi=sceneGeometry(monitors,monitors[1],Layout::Panorama);require(changedDpi==spatial,"DPI rescaled physical scene");
+    SpriteTransform transform{{140,160},84,78,.454f,.98f,true};auto anchor=transform.point(.454f,.98f);require(hypot(anchor.x-140,anchor.y-160)<.001f&&transform.hit(anchor),"Sprite foot/render/hit transform diverged");
+    // Exercise real steering, not a reimplementation of its equations. Same
+    // 120 Hz world steps are consumed at all supported presentation rates.
+    std::vector<Body> final;
+    for(int fps:{15,25,30,60}){Body actor;actor.position={120,150};actor.target=actor.position;actor.initialized=true;actor.heading=-.4f;
+        MotionSpec spec{35,12,10,1.4f,2,30,false};double remainder=0;float travelled=0;actor.aim({300,250});
+        for(int frame=0;frame<fps*14;frame++){if(frame==fps*2){auto position=actor.position,velocity=actor.velocity;actor.aim({420,180});require((actor.position-position).length()==0&&(actor.velocity-velocity).length()==0,"Repeated click reset physical state");}
+            remainder+=1./fps;while(remainder+1e-8>=1./120){remainder-=1./120;auto before=actor;steer(actor,spec,actor.target,1.f/120,[](V2 p,float){return p.x>0&&p.y>0&&p.x<800&&p.y<600;});
+                require((actor.position-before.position).length()<=spec.speed/120+.001f,"Discontinuous motion");require((actor.velocity-before.velocity).length()<=spec.accel/120+.001f,"Acceleration exceeded contract");require(abs(angleDelta(before.heading,actor.heading))<=spec.turn/120+.001f,"Instant heading reversal");travelled+=(actor.position-before.position).length();}}
+        require(travelled>150&&actor.speed()<=spec.speed+.01f,"Actor failed to travel");final.push_back(actor);
+    }
+    for(auto&actor:final)require((actor.position-final[0].position).length()<.1f&&(actor.velocity-final[0].velocity).length()<.1f,"15/25/30/60 FPS simulation differs");
+    std::cout<<"PHYSICAL_UNION_SCALE_DPI_ANCHORS=PASS\nTEMPORAL_CONTINUITY_ACCELERATION_TURN_REPEATED_INPUT_FPS=PASS\n";
     require(covered({0,0,100,100},{{0,0,50,100},{50,0,100,100}}),"Multiwindow occlusion");
     require(!covered({0,0,100,100},{{0,0,49,100},{50,0,100,100}}),"Visible gap must render");
     Config c;c.fps=999;c.scene=-10;c.resolution=std::numeric_limits<float>::quiet_NaN();validate(c);require(c.fps==60&&c.scene==0&&c.resolution==1,"Unsafe configuration");

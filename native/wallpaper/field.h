@@ -15,9 +15,18 @@ inline std::vector<unsigned char> noisePixels(){std::vector<unsigned char> pixel
     return pixels;
 }
 class Field {
-    GL&g;Texture a,b;std::vector<float> from,target;int width=0,height=0;float step=5.f;double changed=0;
+    GL&g;Texture a,b;std::vector<float> from,target;int width=0,height=0;float step=5.f;double changed=0;bool transitioning=false;
 public:
     explicit Field(GL&gl):g(gl){}
+    float blend(double time)const{float k=float(std::clamp((time-changed)/1.8,0.,1.));return k*k*(3-2*k);}
+    float sample(float x,float y,double time,bool final=false)const{
+        if(target.empty())return 1000;
+        // Same texel-center bilinear interpolation and clamp as fieldS in GLSL.
+        float gx=std::clamp(x/step,0.f,float(width-1)),gy=std::clamp(y/step,0.f,float(height-1));int ix=int(gx),iy=int(gy),jx=std::min(ix+1,width-1),jy=std::min(iy+1,height-1);float u=gx-ix,v=gy-iy;
+        auto at=[&](const std::vector<float>&a){return (a[size_t(iy)*width+ix]*(1-u)+a[size_t(iy)*width+jx]*u)*(1-v)+(a[size_t(jy)*width+ix]*(1-u)+a[size_t(jy)*width+jx]*u)*v;};
+        float b=at(target);return final?b:at(from)*(1-blend(time))+b*blend(time);
+    }
+    bool settled(double time)const{return !transitioning||time-changed>=1.8;}
     void generate(float w,float h,const std::vector<RECT>&icons,float sigma,float warp,double time,const std::atomic<bool>&stop){
         step=std::max(5.f,std::max(w,h)/2048.f);width=int(ceil(w/step))+2;height=int(ceil(h/step))+2;
         if(uint64_t(width)*height>4*1024*1024)throw std::runtime_error("Icon field budget exceeded");
@@ -30,10 +39,13 @@ public:
                 float dx=std::max(0.f,std::abs(px-cx)-hw),dy=std::max(0.f,std::abs(py-cy)-hh);mass[size_t(y)*width+x]+=exp(-(dx*dx+dy*dy)/(sigma*sigma));}}
         }
         for(auto&v:mass){float f=log(std::max(v,exp(-30.f)));v=sigma*(sqrt(std::max(-f,0.f))-sqrt(-log(.35f)))-sigma*.6f*std::max(f,0.f);}
-        if(from.size()!=mass.size()||target.empty())from=mass;
+        transitioning=from.size()==mass.size()&&!target.empty();
+        if(!transitioning)from=mass;
         else{float mix=float(std::clamp((time-changed)/1.8,0.,1.));mix=mix*mix*(3-2*mix);for(size_t i=0;i<from.size();i++)from[i]+=(target[i]-from[i])*mix;}
         target=std::move(mass);changed=time;
-        a.image(g,1,width,height,0x822D,0x1903,GL_FLOAT,from.data());b.image(g,2,width,height,0x822D,0x1903,GL_FLOAT,target.data());
+        // R32F keeps CPU navigation/planting and the rendered shoreline on the
+        // same field without half-float rounding creating a second coastline.
+        a.image(g,1,width,height,0x822E,0x1903,GL_FLOAT,from.data());b.image(g,2,width,height,0x822E,0x1903,GL_FLOAT,target.data());
     }
     void bind(Program&p,double time){a.bind(g,1);b.bind(g,2);p.i("uFA",1);p.i("uFB",2);p.v2("uGrid",float(width),float(height));p.f("uStep",step);float k=float(std::clamp((time-changed)/1.8,0.,1.));p.f("uMix",k*k*(3-2*k));}
 };

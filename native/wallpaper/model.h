@@ -96,10 +96,13 @@ inline Weather fromWmo(int code,float wind,double lat,double lon) {
     w.rain=((code>=51&&code<=67)||(code>=80&&code<=82)||code>=95)?1.f:0;
     w.cloud=code==0?0.f:code==1?.2f:code==2?.55f:1.f;return w;
 }
+enum class PointerAction {Up,Down,Move,Cancel};
+struct PointerEvent {POINT point{};PointerAction action=PointerAction::Up;bool desktop=false;};
 struct Snapshot {
     Config config;std::vector<Monitor> monitors;Weather weather;
     std::vector<RECT> opaqueWindows,icons;
     POINT pointer{};bool desktopPointer=false,click=false,locked=false,displayOff=false;
+    std::vector<PointerEvent> input;
 };
 struct View { float x=0,y=0,w=0,h=0,worldW=0,worldH=0; };
 inline View viewport(const Monitor& monitor,const RECT& all,Layout layout) {

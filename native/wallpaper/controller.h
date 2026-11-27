@@ -43,6 +43,7 @@ public:
         else if(session)session->publish(current);
     }
     void clicked(POINT point,bool desktop){if(!config.enabled)return;current.pointer=point;current.desktopPointer=desktop;current.click=true;if(session)session->publish(current);current.click=false;}
+    void pointer(POINT point,bool desktop,PointerAction action){if(!config.enabled)return;current.input={{point,action,desktop}};if(session)session->publish(current);current.input.clear();}
     void stop(){stopping=true;if(session)session->stop();}
     bool finish(DWORD ms){stop();auto until=GetTickCount64()+ms;while(session&&!session->finished()&&GetTickCount64()<until)WaitForSingleObject(GetCurrentProcess(),10);if(session&&session->finished())session.reset();return !session&&persistence.finish(DWORD(std::max<int64_t>(0,int64_t(until-GetTickCount64()))));}
     Metrics metrics(){auto m=session?session->metrics():last;if(persistence.failed())m.error="Wallpaper settings could not be saved; previous file retained";return m;}

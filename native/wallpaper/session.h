@@ -105,7 +105,7 @@ class Session {
             auto deadline=std::chrono::steady_clock::now(),last=deadline;double elapsed=0;
             while(!state->stop){
                 MSG message;while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}
-                Snapshot s;{std::lock_guard<std::mutex> lock(state->mutex);s=state->latest;}
+                Snapshot s;{std::lock_guard<std::mutex> lock(state->mutex);s=state->latest;state->latest.input.clear();state->latest.click=false;}
                 if(!s.config.enabled)break;s.icons=icons.poll(state->stop);
                 // Worst presentation path: scene + fallback + 3 PBOs + CPU readback,
                 // 24 bytes per rendered pixel. Respect explicit quality settings.
@@ -127,13 +127,20 @@ class Session {
                     if(paused||(s.config.pauseCovered&&covered(m.rect,s.opaqueWindows)))continue;
                     auto&world=worlds[key];if(!world||world->scene()!=scene){context.current();world.reset();world=std::make_unique<SceneRuntime>(gl,scene);}
                     bool first=std::find(advanced.begin(),advanced.end(),key)==advanced.end();
-                    if(s.click&&s.desktopPointer&&(s.config.layout==Layout::Panorama?first:bool(PtInRect(&m.rect,s.pointer)))){float x=float(s.pointer.x-(s.config.layout==Layout::Panorama?all.left:m.rect.left)),y=float(s.pointer.y-(s.config.layout==Layout::Panorama?all.top:m.rect.top));world->click(x,y);}
+                    world->setGeometry(sceneGeometry(s.monitors,m,s.config.layout));
+                    for(auto event:s.input)if(s.config.layout==Layout::Panorama?first:bool(PtInRect(&m.rect,event.point))){
+                        bool blocked=!event.desktop;for(auto r:s.icons)if(PtInRect(&r,event.point)){blocked=true;break;}
+                        V2 point{float(event.point.x-(s.config.layout==Layout::Panorama?all.left:m.rect.left)),float(event.point.y-(s.config.layout==Layout::Panorama?all.top:m.rect.top))};
+                        world->pointer(blocked?PointerAction::Cancel:event.action,point);
+                    }
+                    else if(event.action==PointerAction::Up||event.action==PointerAction::Cancel)world->pointer(PointerAction::Cancel,{});
+                    bool iconHit=false;for(auto r:s.icons)if(PtInRect(&r,s.pointer)){iconHit=true;break;}
+                    if(s.click&&s.desktopPointer&&!iconHit&&(s.config.layout==Layout::Panorama?first:bool(PtInRect(&m.rect,s.pointer)))){float x=float(s.pointer.x-(s.config.layout==Layout::Panorama?all.left:m.rect.left)),y=float(s.pointer.y-(s.config.layout==Layout::Panorama?all.top:m.rect.top));world->click(x,y);}
                     o.draw(context,s,view,*world,noise,post,elapsed,first?dt:0.f,state->stop);advanced.push_back(key);active=true;
                 }
                 // Hidden/disabled scenes release after they cease to be assigned;
                 // paused assigned scenes keep only the resources needed to resume.
                 if(!paused){context.current();for(auto it=worlds.begin();it!=worlds.end();)if(std::find(used.begin(),used.end(),it->first)==used.end())it=worlds.erase(it);else ++it;}
-                if(s.click){std::lock_guard<std::mutex> lock(state->mutex);state->latest.click=false;}
                 {size_t gpu=0;for(const auto&o:outputs)if(o->gpu())gpu++;
                     std::lock_guard<std::mutex> lock(state->mutex);state->metrics.presentation=gpu==outputs.size()&&gpu?"GPU DirectComposition":gpu?"Mixed GPU / asynchronous DIB fallback":"Asynchronous bounded DIB fallback";
                     state->metrics.running=true;state->metrics.paused=!active;state->metrics.surfaces=outputs.size();state->metrics.scenes=worlds.size();if(active)state->metrics.frames++;state->metrics.lastFrameMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-frameStart).count();}
@@ -151,7 +158,10 @@ class Session {
 public:
     explicit Session(const Snapshot&s){if(!state->event)throw std::runtime_error("Wallpaper cancellation event unavailable");state->latest=s;thread=std::thread(run,state);}
     ~Session(){stop();if(thread.joinable())thread.join();}Session(const Session&)=delete;
-    void publish(Snapshot s){std::lock_guard<std::mutex> lock(state->mutex);s.click=s.click||state->latest.click;state->latest=std::move(s);state->revision++;SetEvent(state->event);}
+    void publish(Snapshot s){std::lock_guard<std::mutex> lock(state->mutex);s.click=s.click||state->latest.click;
+        auto pending=std::move(state->latest.input);pending.insert(pending.end(),s.input.begin(),s.input.end());
+        if(pending.size()>32)pending={{POINT{},PointerAction::Cancel,false}};s.input=std::move(pending);
+        state->latest=std::move(s);state->revision++;SetEvent(state->event);}
     void stop(){state->stop=true;SetEvent(state->event);}bool finished()const{return state->finished.load();}
     Metrics metrics(){std::lock_guard<std::mutex> lock(state->mutex);return state->metrics;}
 };
