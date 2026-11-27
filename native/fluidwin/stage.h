@@ -88,12 +88,16 @@ class Manager {
                 case WM_TIMER:
                     KillTimer(h,(UINT_PTR)w);
                     if(w==2&&hover>=0&&hover<int(cards.size())) owner->openPeek(*this,cards[hover].source());
-                    if(w==3&&hover<0&&menu::aperti==0) { hidden=true; owner->closePeek(); owner->layout(*this); }
+                    if(w==3&&hover<0){if(menu::aperti||owner->pointerInside())SetTimer(h,3,350,nullptr);else{hidden=true;owner->closePeek();owner->layout(*this);}}
                     return true;
                 case WM_LBUTTONUP: {
                     const int i=hit({GET_X_LPARAM(l),GET_Y_LPARAM(l)});
                     if(i>=0&&owner->settings.clickActivate) owner->activate(cards[i].source());
                     return true;
+                }
+                case WM_RBUTTONUP: {
+                    int i=hit({GET_X_LPARAM(l),GET_Y_LPARAM(l)});POINT p{GET_X_LPARAM(l),GET_Y_LPARAM(l)};ClientToScreen(h,&p);
+                    if(i>=0)owner->groupMenu(*this,i,p);return true;
                 }
                 case WM_MOUSEWHEEL:
                     if(hover>=0&&hover<int(cards.size())&&cards[hover].windows.size()>1) {
@@ -254,7 +258,14 @@ private:
         if(!(fullscreen&&fullscreen(rail.monitor)))ShowWindow(rail.glass.fin,SW_SHOWNOACTIVATE);
         draw(rail);
     }
+    void groupMenu(Rail&rail,int index,POINT at){
+        closePeek();const auto choices=rail.cards[index].windows;const HWND selected=rail.cards[index].source().hwnd;
+        std::vector<menu::Voce> items{menu::titolo(testi::t(L"Finestre dell'app",L"Application windows"))};
+        for(size_t i=0;i<choices.size();i++){auto item=menu::voce(choices[i].name,UINT(i+1));item.spuntata=choices[i].hwnd==selected;item.disattivata=!choices[i].valid();items.push_back(std::move(item));}
+        UINT choice=menu::mostra(items,at,rail.glass.fin);if(choice&&choice<=choices.size())activate(choices[choice-1]);
+    }
     void rebuild(Rail& rail) {
+        std::unordered_map<std::wstring,HWND> selection;for(auto&c:rail.cards)selection[c.source().identity]=c.source().hwnd;
         closePeek();rail.clear();rail.hover=-1;
         std::vector<Card> groups;
         for(const auto& w:windows) {
@@ -262,6 +273,7 @@ private:
             auto it=std::find_if(groups.begin(),groups.end(),[&](Card& c){return c.source().identity==w.identity;});
             if(it==groups.end()) {Card c;c.windows.push_back(w);groups.push_back(std::move(c));}else it->windows.push_back(w);
         }
+        for(auto&c:groups){auto old=selection.find(c.source().identity);if(old!=selection.end())for(size_t i=0;i<c.windows.size();i++)if(c.windows[i].hwnd==old->second){c.current=i;break;}}
         const RECT a=work(rail);const float d=rail.glass.dpi;
         rail.capacity=std::max(1,int((a.bottom-a.top-2*(settings.edgeGap+10)*d)/((settings.height+settings.spacing)*d)));
         rail.page=std::clamp(rail.page,0,std::max(0,(int(groups.size())-1)/rail.capacity));
