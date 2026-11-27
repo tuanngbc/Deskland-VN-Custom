@@ -90,7 +90,9 @@ jobs:
           install: mingw-w64-ucrt-x86_64-gcc git
       - name: Audit native source boundaries and provenance
         shell: pwsh
-        run: ./tests/native-source-audit.ps1
+        run: |
+          ./tests/native-source-audit.ps1
+          ./tests/native-localization-contract.ps1
       - name: Compile complete upstream-based application and lifecycle contract
         id: native-compile
         if: steps.native-cache.outputs.cache-hit != 'true'
