@@ -78,3 +78,6 @@ Summer Porch audit restores the original independently accumulated fan yaw/blade
 
 
 Live language changes now refresh DirectWrite locale for Settings, Dock/shared Control Center formats, Stage labels and Notch, retaining font family/size/spacing/trimming instead of recreating renderers. Spotlight already rebuilds on language changes; native menus construct current-locale formats on opening. Hosted Settings coverage clicks the actual hit regions through English/Vietnamese/French/Vietnamese, checks format locale and persisted selection, and retains a screenshot. CI pending; complete dynamic-string and clipping evidence remains open.
+
+
+Stage group-menu selection now updates the displayed/current member before using the shared activation route, and survives inventory refresh. Menu choices are copied and validated after the nested shared event loop; the rail is reacquired by HWND rather than dereferencing a potentially rebuilt rail. Hosted coverage right-clicks an actual two-window group, drives the real native menu, verifies selected HWND/activation/persistence and removal fallback. CI pending.

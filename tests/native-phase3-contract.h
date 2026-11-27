@@ -119,6 +119,26 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     fullscreen=true;manager.changed();if(IsWindowVisible(rail)||manager.ciThumbnailCount())return 125;
     fullscreen=false;manager.changed();if(!IsWindowVisible(rail))return 126;
     report<<"STAGE_FOUR_EDGE_RESERVED_GEOMETRY=PASS\nSTAGE_DYNAMIC_EXCLUSION_HIDE_RESUME=PASS\nSTAGE_FULLSCREEN_PREVIEW_RELEASE_RESUME=PASS\nWINDOWS_WORK_AREA_UNCHANGED=PASS\n";
+    HWND second=CreateWindowW(L"STATIC",L"Stage second grouped window",WS_OVERLAPPEDWINDOW|WS_VISIBLE,380,200,560,360,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    if(!second)return 128;DWORD secondPid=0;const DWORD secondTid=GetWindowThreadProcessId(second,&secondPid);HWND groupActivated=nullptr;
+    manager.inventory=[&]{return std::vector<stage::Window>{{source,pid,tid,L"fixture",L"Cửa sổ thứ nhất",L""},{second,secondPid,secondTid,L"fixture",L"Cửa sổ thứ hai",L""}};};
+    manager.activation=[&](HWND h){groupActivated=h;};manager.changed();
+    const DWORD uiThread=GetCurrentThreadId();std::atomic<bool> menuClicked{false};
+    std::thread menuDriver([&]{const ULONGLONG until=GetTickCount64()+4000;
+        while(GetTickCount64()<until){HWND popup=FindWindowW(L"TLauncher.Native.Menu",nullptr);
+            if(popup){RECT client{};GetClientRect(popup,&client);int x=(client.right-client.left)/2,y=client.bottom-int(16*vetro::dpiMonitor(MonitorFromWindow(popup,MONITOR_DEFAULTTONEAREST)));
+                PostMessageW(popup,WM_MOUSEMOVE,0,MAKELPARAM(x,y));PostMessageW(popup,WM_LBUTTONUP,0,MAKELPARAM(x,y));menuClicked=true;return;}
+            Sleep(10);
+        }
+        PostThreadMessageW(uiThread,WM_KEYDOWN,VK_ESCAPE,0);
+    });
+    SendMessageW(rail,WM_RBUTTONUP,0,MAKELPARAM(45,45));menuDriver.join();
+    if(!menuClicked||groupActivated!=second||manager.ciSelected()!=second)return 129;
+    manager.changed();if(manager.ciSelected()!=second)return 130;
+    if(!phase3Snapshot(rail,evidence/L"phase3-stage-group-selection.bmp"))return 131;
+    DestroyWindow(second);manager.inventory=[&]{return std::vector<stage::Window>{{source,pid,tid,L"fixture",L"Cửa sổ thứ nhất",L""}};};manager.changed();
+    if(manager.ciSelected()!=source)return 132;
+    report<<"STAGE_ACTUAL_GROUP_MENU_ACTIVATION_AND_PERSISTENCE=PASS\nSTAGE_DESTROYED_GROUP_MEMBER_FALLBACK=PASS\n";
     SetCursorPos(previousPointer.x,previousPointer.y);
     DestroyWindow(source);manager.changed();st.enabled=false;manager.configure(st);
     if(manager.railCount()||manager.snapshotBytes()||FindWindowW(L"TLauncher.Native.Stage",nullptr)||FindWindowW(L"TLauncher.Native.StagePeek",nullptr))return 72;

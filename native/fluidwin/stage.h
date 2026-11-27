@@ -279,7 +279,19 @@ private:
         closePeek();const auto choices=rail.cards[index].windows;const HWND selected=rail.cards[index].source().hwnd;
         std::vector<menu::Voce> items{menu::titolo(testi::t(L"Finestre dell'app",L"Application windows"))};
         for(size_t i=0;i<choices.size();i++){auto item=menu::voce(choices[i].name,UINT(i+1));item.spuntata=choices[i].hwnd==selected;item.disattivata=!choices[i].valid();items.push_back(std::move(item));}
-        UINT choice=menu::mostra(items,at,rail.glass.fin);if(choice&&choice<=choices.size())activate(choices[choice-1]);
+        const HWND destination=rail.glass.fin;
+        UINT choice=menu::mostra(items,at,destination);
+        // The shared menu pumps core events: topology/inventory may rebuild or
+        // destroy this rail while it is open. Reacquire it before selecting.
+        if(!settings.enabled||!choice||choice>choices.size()||!choices[choice-1].valid())return;
+        const auto chosen=choices[choice-1];
+        for(auto& currentRail:rails)if(currentRail->glass.fin==destination){
+            for(auto& card:currentRail->cards)for(size_t i=0;i<card.windows.size();++i)
+                if(card.windows[i].hwnd==chosen.hwnd&&card.windows[i].valid()){
+                    card.current=i;preview(*currentRail,card);draw(*currentRail);
+                }
+        }
+        activate(chosen);
     }
     void rebuild(Rail& rail) {
         std::unordered_map<std::wstring,HWND> selection;for(auto&c:rail.cards)selection[c.source().identity]=c.source().hwnd;
