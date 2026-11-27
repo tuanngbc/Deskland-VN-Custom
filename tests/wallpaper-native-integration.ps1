@@ -74,8 +74,8 @@ foreach($mode in 'accepted-baseline','wallpaper-disabled','wallpaper-enabled'){
   Copy-Item (Join-Path $runtime 'diagnostics/*.json') $Evidence
   if($mode -eq 'wallpaper-enabled'){
    [void][WallpaperIntegration]::PostMessage((Main-Window),0x8009,[IntPtr]::Zero,[IntPtr]::Zero)
+   Wait-For {[WallpaperIntegration]::IsWindowVisible([WallpaperIntegration]::Window('TLauncher.Native.Impostazioni'))} 'native Settings'
    $settings=[WallpaperIntegration]::Window('TLauncher.Native.Impostazioni')
-   Wait-For {[WallpaperIntegration]::IsWindowVisible($settings)} 'native Settings'
    Start-Sleep -Milliseconds 700
    1..6|ForEach-Object {[void][WallpaperIntegration]::PostMessage($settings,0x100,[IntPtr]0x28,[IntPtr]::Zero);Start-Sleep -Milliseconds 100}
    Start-Sleep -Milliseconds 500
