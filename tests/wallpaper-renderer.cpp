@@ -12,13 +12,15 @@ static void png(const std::filesystem::path&file,int w,int h,const std::vector<u
     check(SUCCEEDED(factory->CreateStream(stream.put()))&&SUCCEEDED(stream->InitializeFromFilename(file.c_str(),GENERIC_WRITE)),"PNG stream");
     check(SUCCEEDED(factory->CreateEncoder(GUID_ContainerFormatPng,nullptr,encoder.put()))&&SUCCEEDED(encoder->Initialize(stream.get(),WICBitmapEncoderNoCache)),"PNG encoder");
     check(SUCCEEDED(encoder->CreateNewFrame(frame.put(),properties.put()))&&SUCCEEDED(frame->Initialize(properties.get()))&&SUCCEEDED(frame->SetSize(w,h)),"PNG frame");
-    WICPixelFormatGUID format=GUID_WICPixelFormat32bppRGBA;check(SUCCEEDED(frame->SetPixelFormat(&format)),"PNG pixel format");
+    WICPixelFormatGUID format=GUID_WICPixelFormat32bppBGRA;check(SUCCEEDED(frame->SetPixelFormat(&format))&&IsEqualGUID(format,GUID_WICPixelFormat32bppBGRA),"PNG BGRA pixel format");
+    for(size_t i=0;i<top.size();i+=4)std::swap(top[i],top[i+2]);
     check(SUCCEEDED(frame->WritePixels(h,w*4,UINT(top.size()),top.data()))&&SUCCEEDED(frame->Commit())&&SUCCEEDED(encoder->Commit()),"PNG write");
 }
 int main(int argc,char**argv){try{
     wchar_t hosted[16]{};GetEnvironmentVariableW(L"GITHUB_ACTIONS",hosted,16);check(!wcscmp(hosted,L"true"),"Hosted verification only");check(argc==2,"Evidence path required");
     using namespace wallpaper;CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     std::filesystem::path evidence=argv[1];std::filesystem::create_directories(evidence);std::filesystem::create_directories(assetsRoot()/L"wallpaper/thumbs");
+    const auto patch=evidence/"color-contract.png";const std::vector<unsigned char> red{255,0,0,255};png(patch,1,1,red);check(decode(patch).rgba==red,"PNG color channels changed");
     std::ofstream report(evidence/"renderer.txt");Window hidden;Context context(hidden.h);GL gl;std::cout<<"GL_VERSION="<<glGetString(GL_VERSION)<<'\n';std::cout<<"GL_RENDERER="<<glGetString(GL_RENDERER)<<'\n';
     GLuint vao=0,fbo=0;gl.GenVertexArrays(1,&vao);gl.BindVertexArray(vao);gl.GenFramebuffers(1,&fbo);
     Texture target,noiseTexture;auto noise=noisePixels();noiseTexture.image(gl,0,256,256,0x8058,GL_RGBA,GL_UNSIGNED_BYTE,noise.data(),true);
@@ -30,8 +32,13 @@ int main(int argc,char**argv){try{
         allocate(640,360);noiseTexture.bind(gl,0);SceneRuntime scene(gl,i);scene.render(config,view,icons,weather,2.,.04f,stop);auto before=capture(640,360);
         std::set<uint32_t> colors;for(size_t p=0;p<before.size();p+=16){uint32_t value;memcpy(&value,before.data()+p,4);colors.insert(value);}check(colors.size()>30,"Scene is blank/constant");
         png(evidence/(std::string(catalog()[i].id)+".png"),640,360,before);png(assetsRoot()/L"wallpaper/thumbs"/(std::string(catalog()[i].id)+".png"),640,360,before);
-        scene.click(320,240);noiseTexture.bind(gl,0);scene.render(config,view,icons,weather,2.12,.12f,stop);auto after=capture(640,360);check(before!=after,"Scene never animates or responds");
-        report<<catalog()[i].id<<"=RENDER_ANIMATION_CLICK_PASS\n";std::cout<<catalog()[i].id<<" PASS\n";
+        noiseTexture.bind(gl,0);scene.render(config,view,icons,weather,2.12,.12f,stop);auto animated=capture(640,360);check(before!=animated,"Scene never animates");
+        // Two identically seeded, identically advanced worlds differ only by input.
+        SceneRuntime clicked(gl,i);noiseTexture.bind(gl,0);clicked.render(config,view,icons,weather,2.,.04f,stop);
+        clicked.click(320,240);noiseTexture.bind(gl,0);clicked.render(config,view,icons,weather,2.12,.12f,stop);auto after=capture(640,360);
+        if(animated==after)throw std::runtime_error(std::string(catalog()[i].id)+" has no verified click response");
+        png(evidence/(std::string(catalog()[i].id)+"-click.png"),640,360,after);
+        report<<catalog()[i].id<<"=RENDER_ANIMATION_AND_ISOLATED_CLICK_PASS\n";std::cout<<catalog()[i].id<<" PASS\n";
     }
     {
         SceneRuntime scene(gl,sceneIndex("beach"));allocate(640,360);noiseTexture.bind(gl,0);scene.render(config,view,icons,weather,4.,0,stop);auto full=capture(640,360);

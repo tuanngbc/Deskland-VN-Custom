@@ -40,15 +40,19 @@ public:
 // Spatial bins contain at most 36 circles per cell, matching the existing assets.
 class Clouds {
     GL&g;Texture texture;std::vector<float> bins;int columns=0,rows=0;double last=-100;
+    struct Puff {float x=0,y=0;double born=-100;};std::array<Puff,4> puffs{};size_t nextPuff=0;
 public:
     explicit Clouds(GL&gl):g(gl){}
+    void burst(float x,float y,double time){puffs[nextPuff++%puffs.size()]={x,y,time};last=-100;}
     void update(float w,float h,float cover,float flow,double time){if(time-last<.10)return;last=time;
         columns=int(ceil(w/48))+8;rows=int(ceil(h/48))+8;
         if(columns*36>16384||uint64_t(columns)*rows*36>2*1024*1024)throw std::runtime_error("Cloud field budget exceeded");
         bins.assign(size_t(columns)*rows*36*4,0);std::vector<unsigned char> count(size_t(columns)*rows,0);
         const int n=std::clamp(int(w*h/180000*cover),0,48);
-        for(int i=0;i<n;i++){float x=fmod(hash(i,1,81)*(w+500)+float(time)*flow*(7+hash(i,2,92)*10),w+500)-250,y=h*(.12f+.66f*hash(i,3,81));
-            for(int j=0;j<5;j++){float r=38+hash(i,j,71)*42,cx=x+(j-2)*42,cy=y-sin(j*1.7f)*18;
+        for(int i=0;i<n+4;i++){float x=0,y=0,life=1;
+            if(i<n){x=fmod(hash(i,1,81)*(w+500)+float(time)*flow*(7+hash(i,2,92)*10),w+500)-250;y=h*(.12f+.66f*hash(i,3,81));}
+            else {auto&p=puffs[size_t(i-n)];double age=time-p.born;if(age<0||age>7)continue;life=float(std::min(age/.35,1.)*std::min((7-age)/2,1.));x=p.x+float(age)*flow*8;y=p.y-float(age)*3;}
+            for(int j=0;j<5;j++){float r=(38+hash(i,j,71)*42)*life,cx=x+(j-2)*42*life,cy=y-sin(j*1.7f)*18*life;
                 int x0=std::clamp(int(floor((cx-r)/48))+4,0,columns-1),x1=std::clamp(int(floor((cx+r)/48))+4,0,columns-1),y0=std::clamp(int(floor((cy-r)/48))+4,0,rows-1),y1=std::clamp(int(floor((cy+r)/48))+4,0,rows-1);
                 for(int gy=y0;gy<=y1;gy++)for(int gx=x0;gx<=x1;gx++){size_t cell=size_t(gy)*columns+gx;if(count[cell]>=36)continue;size_t k=(cell*36+count[cell]++)*4;bins[k]=cx;bins[k+1]=cy;bins[k+2]=r;bins[k+3]=hash(i,j,91);}
             }
