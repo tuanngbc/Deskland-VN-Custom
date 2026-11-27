@@ -14,7 +14,7 @@ class SettingsPage {
     std::vector<Monitor> monitors;
     void loadGallery(HWND notify){if(gallery->started.exchange(true))return;auto*g=new std::pair<std::shared_ptr<Gallery>,HWND>(gallery,notify);
         if(!pool::lancia([](void*raw)->DWORD {auto job=std::unique_ptr<std::pair<std::shared_ptr<Gallery>,HWND>>(static_cast<std::pair<std::shared_ptr<Gallery>,HWND>*>(raw));HRESULT com=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
-            for(size_t i=0;i<catalog().size();i++){try{job->first->images[i]=decode(assetsRoot()/catalog()[i].thumbnail,180,102);}catch(const std::exception&e){job->first->error=e.what();}}
+            for(size_t i=0;i<catalog().size();i++){try{auto&p=job->first->images[i];p=decode(assetsRoot()/catalog()[i].thumbnail,180,102);for(size_t k=0;k<p.rgba.size();k+=4)std::swap(p.rgba[k],p.rgba[k+2]);}catch(const std::exception&e){job->first->error=e.what();}}
             if(SUCCEEDED(com))CoUninitialize();job->first->ready=true;PostMessageW(job->second,WM_PAINT,0,0);return 0;
         },g,THREAD_PRIORITY_BELOW_NORMAL)){delete g;gallery->error="Wallpaper gallery could not load";gallery->ready=true;}}
     void release(){for(auto&b:thumbs)if(b){b->Release();b=nullptr;}target=nullptr;}
@@ -28,7 +28,7 @@ public:
     LRESULT accessible(HWND h,WPARAM w){auto*provider=new AccessiblePage(h,controls,focus);LRESULT result=LresultFromObject(IID_IAccessible,w,provider);provider->Release();return result;}
     bool focusAction(int action){for(size_t i=0;i<focusable.size();i++)if(focusable[i]==action){focus=int(i);return true;}return false;}
     RECT focusRect()const{return focus>=0&&focus<int(controls.size())?controls[size_t(focus)].rect:RECT{};}
-    bool key(WPARAM key){if(focusable.empty())return false;if(key==VK_TAB){int step=GetKeyState(VK_SHIFT)<0?-1:1;focus=(focus+step+int(focusable.size()))%int(focusable.size());return true;}if((key==VK_SPACE||key==VK_RETURN)&&focus>=0){click(focusable[size_t(focus)]);return true;}return false;}
+    bool key(WPARAM key){if(focusable.empty())return false;if(key==VK_TAB){int step=GetKeyState(VK_SHIFT)<0?-1:1;focus=focus<0?(step<0?int(focusable.size())-1:0):(focus+step+int(focusable.size()))%int(focusable.size());return true;}if((key==VK_SPACE||key==VK_RETURN)&&focus>=0&&focus<int(focusable.size())){click(focusable[size_t(focus)]);return true;}return false;}
     bool click(int action){if(action<5000||!read||!changed)return false;Config c=read();
         if(action==5000)c.enabled=!c.enabled;else if(action==5001)c.paused=!c.paused;
         else if(action>=5010&&action<=5012)c.layout=Layout(action-5010);
@@ -51,7 +51,7 @@ public:
     void draw(vetro::Finestra&v,float left,float right,float&y,IDWriteTextFormat*font,IDWriteTextFormat*small,IDWriteTextFormat*center,D2D1_COLOR_F ink,D2D1_COLOR_F muted,D2D1_COLOR_F accent,float alpha,const std::function<void(D2D1_RECT_F,int)>&zone,int hovered){
         if(!read)return;Config c=read();monitors=topology();selectedMonitor=std::clamp(selectedMonitor,0,std::max(0,int(monitors.size())-1));const float d=v.dpi;loadGallery(v.fin);
         if(target!=v.rt){release();target=v.rt;}
-        if(gallery->ready){for(size_t i=0;i<thumbs.size();i++)if(!thumbs[i]&&!gallery->images[i].rgba.empty()){const auto&p=gallery->images[i];v.rt->CreateBitmap(D2D1::SizeU(p.width,p.height),p.rgba.data(),p.width*4,D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_IGNORE)),&thumbs[i]);}}
+        if(gallery->ready){for(size_t i=0;i<thumbs.size();i++)if(!thumbs[i]&&!gallery->images[i].rgba.empty()){const auto&p=gallery->images[i];v.rt->CreateBitmap(D2D1::SizeU(p.width,p.height),p.rgba.data(),p.width*4,D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE)),&thumbs[i]);}}
         focusable.clear();controls.clear();
         auto button=[&](D2D1_RECT_F r,int id,const std::wstring&label,bool selected=false,const std::wstring&spoken=L""){zone(r,id);focusable.push_back(id);controls.push_back({id,spoken.empty()?label:spoken,{LONG(r.left),LONG(r.top),LONG(r.right),LONG(r.bottom)},selected});bool focused=focus>=0&&focus<int(focusable.size())&&focusable[size_t(focus)]==id;
             v.pen->SetColor(selected?D2D1::ColorF(accent.r,accent.g,accent.b,.22f*alpha):D2D1::ColorF(v.scuro?1.f:0.f,v.scuro?1.f:0.f,v.scuro?1.f:0.f,(hovered==id?.12f:.06f)*alpha));v.rt->FillRoundedRectangle({r,7*d,7*d},v.pen);if(focused||selected){v.pen->SetColor(accent);v.rt->DrawRoundedRectangle({r,7*d,7*d},v.pen,1.3f*d);}v.testo(label,center,r,ink);};
