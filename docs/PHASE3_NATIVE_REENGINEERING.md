@@ -81,3 +81,6 @@ Live language changes now refresh DirectWrite locale for Settings, Dock/shared C
 
 
 Stage group-menu selection now updates the displayed/current member before using the shared activation route, and survives inventory refresh. Menu choices are copied and validated after the nested shared event loop; the rail is reacquired by HWND rather than dereferencing a potentially rebuilt rail. Hosted coverage right-clicks an actual two-window group, drives the real native menu, verifies selected HWND/activation/persistence and removal fallback. CI pending.
+
+
+CI 46059056737 passed Boxing renderer and native lifecycle contracts. The migrated runtime now finds the main window, but live log reading still timed out. Verified native evidence archive SHA256 8d888f52d6a081dadb2fc2a680d059ae4042b6e799bb1809cd71ee5c5412086a contains exactly the expected restored native/wallpaper values while main/Guardian were running. The fixture reader must share write/delete access with the active CRT log writer; use an explicitly shared FileStream and remove each previous runner log only between stopped sessions, preventing a stale-log false pass. Hosted verification pending.

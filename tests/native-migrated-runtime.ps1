@@ -22,7 +22,13 @@ function Wait-Migrated([scriptblock]$Condition,[string]$Label){
  throw "Migrated runtime timeout: $Label"
 }
 function Get-MigratedProcesses { @(Get-CimInstance Win32_Process -Filter "Name='TLauncher.exe'"|Where-Object ExecutablePath -IEQ $runtimeExe) }
-function Read-MigratedLog {try{[IO.File]::ReadAllText((Join-Path $env:TEMP 'tlauncher-native.log'))}catch [IO.IOException]{''}}
+function Read-MigratedLog {
+ $stream=$null;$reader=$null
+ try{
+  $stream=[IO.File]::Open((Join-Path $env:TEMP 'tlauncher-native.log'),[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+  $reader=[IO.StreamReader]::new($stream);return $reader.ReadToEnd()
+ }catch [IO.IOException]{return ''}finally{if($reader){$reader.Dispose()}elseif($stream){$stream.Dispose()}}
+}
 $manifest=Get-Content (Join-Path $Evidence 'profile-migration-runtime.json') -Raw|ConvertFrom-Json
 if($manifest.commit -cne $env:GITHUB_SHA -or !(Test-Path (Join-Path $manifest.profile '.tlauncher-native-trial'))){throw 'Migrated fixture identity mismatch.'}
 if([MigratedRuntime]::Window('TLauncher.Native.Messaggi') -ne [IntPtr]::Zero){throw 'Another native shell is active.'}
@@ -37,6 +43,7 @@ $env:TLAUNCHER_NATIVE_TRIAL_DIR=$manifest.profile;$env:GALLIUM_DRIVER='llvmpipe'
 $script:migratedCandidate=$null
 try{
  foreach($launch in 'migrated-first-start','migrated-restart'){
+  $logPath=Join-Path $env:TEMP 'tlauncher-native.log';if(Test-Path $logPath){Remove-Item -LiteralPath $logPath}
   $script:migratedCandidate=Start-Process -FilePath $runtimeExe -WorkingDirectory $runtime -ArgumentList @('--trial-dir',('"'+$manifest.profile+'"'),'--log') -WindowStyle Hidden -PassThru
   Wait-Migrated { [MigratedRuntime]::Window('TLauncher.Native.Messaggi') -ne [IntPtr]::Zero } 'normal entry point'
   Wait-Migrated { (Read-MigratedLog) -match 'PROFILE_RESTORED language=7 dock_visibility=2 notch=0 stage_enabled=1 stage_height=174 peek_delay=750 spotlight_mode=2 spotlight_mods=3 spotlight_key=133 stage_mods=5 stage_key=83 stage_shortcut=0' } 'actual restored native settings'
