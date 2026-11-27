@@ -32,7 +32,7 @@ class SceneRuntime {
     double lastTime=0;int lastCorgis=3;float goalSide=0,goalAge=100,userChase=0;
     static constexpr std::array<Vec4,4> corgiSlots{{{.415f,.508f,1,0},{.580f,.556f,1.06f,0},{.496f,.522f,.58f,1},{.462f,.592f,.88f,2}}};
     std::array<int,4> corgiPose{0,1,0,2},corgiNext{0,1,0,2};std::array<float,4> corgiHappy{},corgiRoll{-1,-1,-1,-1},corgiWait{18,26,22,30},corgiBreath{};Spring chime;
-    float birdHop=100,melonRefill=0,fanPhase=0;
+    float birdHop=0,melonRefill=0,fanPhase=0,fanOscillation=.4f;
     Body football;std::array<Body,22> players{};
     std::array<V2,22> formation{};int formationCount=0,ballOwner=-1,ballReceiver=-1,lastKicker=-1;
     std::array<int,2> footballScore{};float ballHold=.85f,ballPickup=0,ballDrag=2.05f,ballZ=0,ballVZ=0,footballTempo=1;
@@ -212,6 +212,8 @@ public:
 #ifdef WALLPAPER_HOSTED_PROBE
     // Synthetic initial conditions exist only in the hosted renderer executable.
     // Product builds have no runtime override or owner-facing probe controls.
+    struct PorchStatus {float fanYaw,fanBlade,chimeAngle,chimeVelocity,bird;int bites;std::array<int,4> poses;std::array<float,4> rolls,happy;};
+    PorchStatus probePorch()const{return {sin(fanOscillation)*.85f,fanPhase,chime.x,chime.v,birdHop,melonBites,corgiPose,corgiRoll,corgiHappy};}
     void probeCloud(V2 p,float radius){probeCloudCenter=p;probeCloudRadius=radius;}
     void probeActor(const char*name,size_t i,V2 p){auto&list=groups[name];if(i>=list.size())list.resize(i+1);auto&b=list[i];b.position=b.target=p;b.velocity={};b.heading=0;b.phase=0;b.initialized=true;}
     void probePalms(std::vector<Palm> trees){probePalmOverride=true;probePalmTrees=std::move(trees);}
@@ -270,7 +272,6 @@ public:
         if(!geometryExplicit&&(w!=previousW||h!=previousH)){geometry={w,h,{{0,0,w,h}}};placementDirty=true;}
         remainder+=std::clamp(double(dt),0.,.25);simulationSteps=int(floor((remainder+1e-7)/fixedStep));remainder-=simulationSteps*fixedStep;simulationTime+=simulationSteps*fixedStep;
         for(auto&e:effects)e.value[2]+=dt;
-        chime.step(dt,18,2.2f);
         const float sigma=p(c,"sigma",72),warp=p(c,"warp",34);
         bool iconsChanged=icons.size()!=previousIcons.size();if(!iconsChanged)for(size_t i=0;i<icons.size();i++)if(!EqualRect(&icons[i],&previousIcons[i])){iconsChanged=true;break;}
         if(w!=previousW||h!=previousH||sigma!=previousSigma||warp!=previousWarp||iconsChanged){
@@ -413,11 +414,11 @@ private:
         fx.value[3]=4;
         std::array<int,4> order{0,1,2,3};std::stable_sort(order.begin(),order.begin()+n,[](int a,int b){return corgiSlots[a][1]>corgiSlots[b][1];});
         for(int j=0;j<n;j++){int i=order[j];auto slot=corgiSlots[i];float sc=slot[2]*s*1.72f;
-            if(Box{w*slot[0]-50*sc,h*slot[1]-65*sc,100*sc,95*sc}.contains({x,y})){corgiNext[i]=(corgiPose[i]+1)%3;corgiRoll[i]=0;corgiHappy[i]=1;corgiWait[i]=22;fx.value[3]=0;return;}}
+            if(Box{w*slot[0]-50*sc,h*slot[1]-65*sc,100*sc,95*sc}.contains({x,y})){corgiNext[i]=(corgiPose[i]+1)%3;corgiRoll[i]=0;corgiHappy[i]=1;corgiWait[i]=18;fx.value[3]=0;return;}}
         if(hypot(x-w*.704f,y-(h*.518f-58*s))<68*s){fanMultiplier=fanMultiplier==1?1.8f:fanMultiplier>1.4f?.4f:fanMultiplier>.1f?0:1;fx.value[3]=1;return;}
-        if(hypot(x-w*.346f,y-(h*.095f+58*s))<52*s){chime.v=chime.x>=0?-4.2f:4.2f;birdHop=0;fx.value[3]=2;return;}
+        if(hypot(x-w*.346f,y-(h*.095f+58*s))<52*s){chime.v=chime.x>=0?-4.2f:4.2f;birdHop=.01f;fx.value[3]=2;return;}
         if(hypot(x-(w*.702f+32*s),y-(h*.592f-6*s))<52*s){melonBites=(melonBites+1)%4;melonRefill=6.5f;fx.value[3]=3;return;}
-        if(hypot(x-w*.848f,y-h*.676f)<36*s){birdHop=0;fx.value[3]=0;}
+        if(hypot(x-w*.848f,y-h*.676f)<36*s){birdHop=.01f;fx.value[3]=0;}
     }
     std::array<Vec4,8> effectsAsFx(){std::array<Vec4,8> values{};for(size_t i=0;i<values.size();i++){values[i]=effects[(effectNext+effects.size()-1-i)%effects.size()].value;if(values[i][2]>5)values[i]={0,0,-1,0};else if(std::string(catalog()[index].id)!="summer-porch")values[i][3]=fishing==4?1.f:0.f;}return values;}
     static void catPose(Cat&cat,int pose){if(cat.pose==pose)return;cat.previousPose=cat.pose;cat.pose=pose;cat.poseBlend=0;}
@@ -531,15 +532,23 @@ private:
         }else{program.f("uFishN",float(n));program.v4("uFish",fish.front().data(),4);}
     }
     void renderPorch(const Config&c,float w,float h,float t,float dt){
-        birdHop+=dt;melonRefill-=dt;if(melonRefill<=0)melonBites=0;fanPhase+=dt*p(c,"fanSpeed",1)*fanMultiplier*14;
+        const float fanSpeed=std::clamp(p(c,"fanSpeed",1)*fanMultiplier,0.f,2.4f);
         int n=std::clamp(int(p(c,"corgis",3)),1,4);std::array<Vec4,4> a{},b{};
-        for(int step=0;step<simulationSteps;step++)for(int i=0;i<n;i++){corgiHappy[i]=std::max(0.f,corgiHappy[i]-fixedStep*.75f);corgiBreath[i]+=fixedStep*1.85f;
+        // Audited fan yaw/blade phases stop together; the chime follows a
+        // wind target through its own damped spring, including click inertia.
+        for(int step=0;step<simulationSteps;step++){
+            if(fanSpeed>.02f){fanOscillation=wrap(fanOscillation+fixedStep*(.55f+.25f*fanSpeed),6.283185f);fanPhase=wrap(fanPhase+fixedStep*(12+16*fanSpeed),6.283185f);}
+            const float windTarget=sin(fanOscillation*.7f)*(.05f+.04f*fanSpeed);
+            chime.v+=((windTarget-chime.x)*14-chime.v*2.6f)*fixedStep;chime.x=std::clamp(chime.x+chime.v*fixedStep,-.65f,.65f);
+            if(birdHop>0){birdHop+=fixedStep*2.4f;if(birdHop>=1)birdHop=0;}
+            if(melonBites>0){melonRefill-=fixedStep;if(melonRefill<=0)melonBites=0;}
+            for(int i=0;i<n;i++){corgiHappy[i]=std::max(0.f,corgiHappy[i]-fixedStep*.75f);corgiBreath[i]+=fixedStep*1.85f;
             if(corgiRoll[i]>=0){float previous=corgiRoll[i];corgiRoll[i]+=fixedStep*1.85f;if(previous<.5f&&corgiRoll[i]>=.5f)corgiPose[i]=corgiNext[i];if(corgiRoll[i]>=1)corgiRoll[i]=-1;}
-            else {corgiWait[i]-=fixedStep;if(corgiWait[i]<=0){corgiNext[i]=(corgiPose[i]+1+int(random()>.55f))%3;corgiRoll[i]=0;corgiWait[i]=16+random()*18;}}}
+            else {corgiWait[i]-=fixedStep;if(corgiWait[i]<=0){corgiNext[i]=(corgiPose[i]+1+int(random()>.55f))%3;corgiRoll[i]=0;corgiWait[i]=16+random()*18;}}}}
         for(int i=0;i<n;i++){auto slot=corgiSlots[i];a[i]={w*slot[0],h*slot[1],float(corgiPose[i]),std::max(0.f,corgiRoll[i])};b[i]={slot[2],slot[3],corgiBreath[i]+i,corgiHappy[i]};}
         for(int i=0;i<n;i++)for(int j=i+1;j<n;j++)if(a[j][1]<a[i][1]){std::swap(a[i],a[j]);std::swap(b[i],b[j]);}program.f("uCorgiN",float(n));array("uCorgiA",a);array("uCorgiB",b);
         float day=p(c,"timeOfDay",0);if(day==3){SYSTEMTIME st{};GetLocalTime(&st);int minutes=st.wHour*60+st.wMinute;day=minutes>=360&&minutes<990?0:minutes>=990&&minutes<1140?1:2;}
-        program.f("uDayMode",day);program.f("uSunbeams",p(c,"sunbeams",1));program.f("uFanSpeed",p(c,"fanSpeed",1)*fanMultiplier);program.v4("uFanState",{w*.704f,h*.518f,sin(t*.6f)*.85f,fanPhase});program.v4("uProps",{chime.x,abs(chime.v)>.1f?wrap(age,1.f):-1.f,float(melonBites),birdHop<.7f?birdHop/.7f:0});flyers<10>("uBugs","uBugN",8,w,h,t,6);
+        program.f("uDayMode",day);program.f("uSunbeams",p(c,"sunbeams",1));program.f("uFanSpeed",fanSpeed);program.v4("uFanState",{w*.704f,h*.518f,sin(fanOscillation)*.85f,fanPhase});program.v4("uProps",{chime.x,-1.f,float(melonBites),birdHop});flyers<10>("uBugs","uBugN",8,w,h,t,6);
     }
     void renderCommute(const Config&c,float w,float h,float t,float hour,const std::array<Vec4,6>&fx){
         // Audited Drive -> braking -> Stop/doors -> depart -> Off lifecycle.

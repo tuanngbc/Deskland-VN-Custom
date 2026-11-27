@@ -228,6 +228,32 @@ int main(int argc,char**argv){try{
         }
     }
     {
+        Config cfg=config;cfg.sceneParams["summer-porch"]["fanSpeed"]=0;
+        SceneRuntime porch(gl,sceneIndex("summer-porch"));allocate(96,54);View v{0,0,1080,700,1080,700};double time=0;
+        auto draw=[&](float dt){time+=dt;noiseTexture.bind(gl,0);porch.render(cfg,v,{},weather,time,dt,stop,96.f/1080,54.f/700);};
+        draw(0);auto off=porch.probePorch();for(int i=0;i<25;++i)draw(.04f);auto rested=porch.probePorch();
+        check(off.fanYaw==rested.fanYaw&&off.fanBlade==rested.fanBlade,"Stopped fan still turns its head or blades");
+        check(abs(rested.chimeAngle)>.001f,"Wind-driven chime lost its spring target");
+        cfg.sceneParams["summer-porch"]["fanSpeed"]=1;for(int i=0;i<25;++i)draw(.04f);auto running=porch.probePorch();
+        check(abs(running.fanYaw-rested.fanYaw)>.02f&&abs(running.fanBlade-rested.fanBlade)>.1f,"Fan speed does not drive both phases");
+        cfg.sceneParams["summer-porch"]["fanSpeed"]=0;draw(0);auto frozen=porch.probePorch();for(int i=0;i<25;++i)draw(.04f);auto stopped=porch.probePorch();
+        check(frozen.fanYaw==stopped.fanYaw&&frozen.fanBlade==stopped.fanBlade,"Fan phase jumps or continues after switch off");
+        float scale=porch.spatial().porchScale();porch.click(1080*.346f,700*.095f+58*scale);auto tap=porch.probePorch();
+        check(abs(tap.chimeVelocity)>4&&tap.chimeAngle==stopped.chimeAngle&&tap.bird>0,"Chime tap lacks continuous impulse/bird reaction");
+        draw(.04f);check(abs(porch.probePorch().chimeAngle-tap.chimeAngle)>.01f,"Chime impulse never integrates");
+        for(int i=0;i<20;++i)draw(.04f);check(porch.probePorch().bird==0,"Bird hop failed to settle");
+        porch.click(1080*.702f+32*scale,700*.592f-6*scale);check(porch.probePorch().bites==1,"Melon bite missing");
+        for(int i=0;i<160;++i)draw(.04f);check(porch.probePorch().bites==1,"Melon refilled too early");
+        for(int i=0;i<5;++i)draw(.04f);check(porch.probePorch().bites==0,"Melon did not refill");
+        auto before=porch.probePorch();porch.click(1080*.415f,700*.508f);auto pet=porch.probePorch();
+        check(pet.poses[0]==before.poses[0]&&pet.rolls[0]==0&&pet.happy[0]==1,"Petting replaced Corgi pose immediately");
+        for(int i=0;i<5;++i)draw(.04f);check(porch.probePorch().poses[0]==before.poses[0],"Corgi pose changed before roll midpoint");
+        for(int i=0;i<4;++i)draw(.04f);check(porch.probePorch().poses[0]!=(before.poses[0]),"Corgi did not transition through roll midpoint");
+        for(int i=0;i<8;++i)draw(.04f);check(porch.probePorch().rolls[0]<0,"Corgi roll failed to settle");
+        png(evidence/"porch-native-interactions.png",96,54,capture(96,54));
+        report<<"PORCH_FAN_STOP_RESTART_AND_WIND_SPRING=PASS\nPORCH_CHIME_BIRD_MELON_CORGI_LIFECYCLE=PASS\n";
+    }
+    {
         Config cfg=config;cfg.sceneParams["boxing-ring"]["autoSpar"]=1;
         std::array<BoxingModel,4> zones;
         for(int zone=0;zone<4;++zone){auto& model=zones[zone];model.configure(cfg,1080,700,1);auto foot=model.foot(1);

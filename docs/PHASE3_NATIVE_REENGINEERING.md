@@ -72,3 +72,6 @@ Boxing parity correction replaces immediate generic head impulses with an audite
 
 
 CI 46058544456 found four Boxing uniform uploads passing std::array to the existing float-pointer API; use data() at those four integration sites. The migrated-runtime timeout in 46057151911 occurred while actual restored settings and rendering were logged normally: keep the Win32 null window-title filter inside C# instead of PowerShell string marshalling. These are source/fixture corrections awaiting hosted verification, not owner acceptance.
+
+
+Summer Porch audit restores the original independently accumulated fan yaw/blade phases (both freeze when switched off), bounded effective speed, wind-target chime spring and click inertia, original bird hop timing and fixed-step melon refill. Petting retains the rolling pose midpoint and original rest delay. Hosted renderer lifecycle assertions cover fan stop/restart, chime/bird settling, refill timing and Corgi roll transitions. CI pending; complete artwork/bug behavior and owner quality acceptance remain open.
