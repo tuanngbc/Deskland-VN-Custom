@@ -4128,6 +4128,7 @@ static bool gRtlAvvio = false;   // lingua da destra a sinistra all'avvio (vedi 
 static void applicaImpostazioni() {
     const impostazioni::Valori& v = impostazioni::valori();
     gStage.configure(v.stage);
+    if(!v.spotlightEnabled||v.spotlightMode==0||v.spotlightMode==3)gRicerca.ferma();
     if(gMessaggi){
         if(gSpotlightHotkey){UnregisterHotKey(gMessaggi,TASTO_SPOTLIGHT);gSpotlightHotkey=false;}
         if(v.spotlightEnabled&&v.spotlightAltSpace){gSpotlightHotkey=RegisterHotKey(gMessaggi,TASTO_SPOTLIGHT,MOD_ALT|MOD_NOREPEAT,VK_SPACE)!=FALSE;if(!gSpotlightHotkey)logf("Alt+Space unavailable; native system menu preserved");}
@@ -4332,7 +4333,7 @@ static LRESULT CALLBACK procMessaggi(HWND h, UINT m, WPARAM w, LPARAM l) {
             logf("panoramica");
             gPanoramica.apri(w == 1);   // ha un suo ciclo dei messaggi finche' resta aperta (w = 1: da Alt+Tab)
             return 0;
-        case WM_RICERCA: logf("ricerca"); gRicerca.apri(); return 0;
+        case WM_RICERCA: logf("ricerca"); apriSpotlight(); return 0;
         case WM_IMPOSTAZIONI: apriImpostazioni(w == 1); return 0;   // (w = 1: come da un menu, dal punto del mouse)
         case WM_PANNELLO: if (gDockOk) gDock.apriPannelloIsola((int)w); return 0;
         case WM_CHIUDI_FG:   // Alt+F4: foto, poi la chiusura normale (quella che farebbe Windows)
@@ -4939,7 +4940,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     impostaPausa(true);
     condividi::ferma();   // annulla la preparazione dei file senza aspettare prima di ripristinare Windows
     cursori::togli();   // di nuovo i cursori di Windows
-    gStage.stop();
+    gStage.stop();gRicerca.ferma();
     if (gDockOk) gDock.chiudi();
     gBanner.chiudiLettore();
     togliPrimoPiano();

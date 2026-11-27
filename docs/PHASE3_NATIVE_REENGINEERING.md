@@ -41,3 +41,14 @@ Source remains on `codex/native-stage-spotlight-reengineering-v1.0.3` in `E:\TLa
 Remaining work includes full original cat/character/game fidelity (including Stadium ownership/keepers/scoring), synchronized multi-monitor shared simulation, measured performance optimization, Stage group picker and all interaction/topology regressions, full Vietnamese coverage/layout evidence and live font refresh, four-edge collapsed Dock regression, and complete Spotlight disabled-worker cleanup/shortcut controls. Continue auditing actual legacy algorithms without restoring the legacy runtime. All delivery checklist items above remain open until their full scope and combined verification are satisfied.
 
 Production, baseline UAT packages/profiles/shortcuts and running owner sessions have not been changed. No local compilation, tests, candidate execution, benchmark, shortcut handoff or public release was performed.
+
+
+## Continued implementation checkpoint 2026-11-28
+
+- `148f0a0` / Actions `46052044116`: all required jobs PASS (cat state restoration).
+- `81e6852` / Actions `46052706134`: all required jobs PASS (physical Stadium ball, possession, keepers and goal-line scoring).
+- `6358db0` / Actions `46053165398`: localization audit reports two escaped Unicode keys. Both already exist in the translation table; normalize C++ Unicode escapes in the hosted audit instead of adding duplicate translations or suppressing the audit.
+- Current batch replaces Spotlight's permanent waiting thread and raw UI pointer with a bounded shared job state on the existing Windows worker pool. Query generations cancel stale results; disabling destroys the native window, timers, fonts and bitmaps. A provider still inside Shell retains only its job state and discards cancelled output. Hosted disable/reopen/drain assertions are added; pending CI.
+- Canonical metadata binds discovery aliases before deduplication, persists last-edit revision/identity, and shares names/icons/favorites/folders/visibility across equivalent commands. Existing command records remain readable; latest explicit customization wins. Shortcut arguments remain distinct. Dock/Stage consume the same metadata; custom artwork uses a new source path so old render-target bitmaps cannot mask an updated icon. Hosted actual LNK/EXE and persistence assertions are added; pending CI.
+
+This batch does not close the full Phase 3 checklist. Shared Synchronized simulation, complete game/character parity, mixed-DPI/four-edge interaction evidence, shortcut controls and full dynamic/localization layout coverage still require work. No owner UAT shortcut/profile/production changes or local app execution.

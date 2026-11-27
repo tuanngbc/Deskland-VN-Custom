@@ -78,6 +78,7 @@ inline auto Motore::fermaIcone() -> void {
 
 inline auto Motore::sorgenteIcona(const Voce& v) -> std::wstring {
     if (v.avvio == AVVIO_PILA) return cartellaDownload();   // l'icona della cartella Download
+    for(const auto& command:{v.avvio,v.exe,v.pacchetto})if(!command.empty()){auto custom=appcatalog::get(command).icon;if(!custom.empty())return custom;}
     if (!v.pacchetto.empty()) return v.pacchetto;             // app di pacchetto fissata (vedi Voce::pacchetto)
     if (!v.ripiego.empty()) return v.ripiego;                 // Squirrel, versione cancellata (vedi Voce::ripiego)
     if (v.iconaRotta && !v.exe.empty() && GetFileAttributesW(v.exe.c_str()) != INVALID_FILE_ATTRIBUTES) return v.exe;   // (vedi Voce::iconaRotta)
@@ -94,7 +95,7 @@ inline auto Motore::raccogliIcone() -> bool {
         ID2D1Bitmap1* b = ip.ok ? bitmapDaPixel(ip.w, ip.h, ip.px) : nullptr;
         bool presa = false;
         if (ip.lato == 256) {          // dock
-            for (auto& v : voci) if (!v.icona && v.avvio != AVVIO_LAUNCHER && v.avvio != AVVIO_CONTROLLO && sorgenteIcona(v) == ip.percorso) { v.icona = b; presa = true; dirty = true; break; }
+            for (auto& v : voci) if (!v.icona && v.avvio != AVVIO_LAUNCHER && v.avvio != AVVIO_CONTROLLO && sorgenteIcona(v) == ip.percorso) { v.icona = b;v.iconSource=ip.percorso; presa = true; dirty = true; break; }
             // (si potra' richiedere: l'app puo' chiudersi e riaprirsi; se e' fallita si riprova al prossimo aggiornamento)
             iconeChieste.erase(chiaveIcona(ip.percorso, ip.lato));
         } else if (ip.lato == 128) {   // app in background (se non c'e', la piccola foto salvata da Windows)
@@ -103,7 +104,7 @@ inline auto Motore::raccogliIcone() -> bool {
             for (auto& a : appSfondo) if (a.exe == ip.percorso) a.icona = b;
             pDirty = true; altra.pDirty = true;
         } else if (ip.lato == 96) {    // launcher
-            for (auto& a : tutteApp) if (appcatalog::iconSource(a.avvio) == ip.percorso && !a.icona) { a.icona = b; presa = true; lDirty = true; break; }
+            for (auto& a : tutteApp) if (appcatalog::iconSource(a.avvio) == ip.percorso && !a.icona) { a.icona = b;a.iconSource=ip.percorso; presa = true; lDirty = true; break; }
             iconeChieste.erase(chiaveIcona(ip.percorso,ip.lato));
         } else if (ip.lato == 48) {    // file e cartelle del launcher (anche "nessuna": non si richiede a ogni ricerca)
             auto& v = iconeFile[ip.percorso];
@@ -184,12 +185,16 @@ inline auto Motore::leggiTutteApp(bool subito) -> void {
 
 inline auto Motore::applicaTutteApp(std::vector<AppL> nuove) -> void {
     appcatalog::load();
+    for(const auto& a:nuove)appcatalog::bind(a.avvio,a.canonical);
     std::unordered_set<std::wstring> identities;
-    nuove.erase(std::remove_if(nuove.begin(),nuove.end(),[&](const AppL& a){return !identities.insert(a.canonical.empty()?appcatalog::fold(a.avvio):a.canonical).second;}),nuove.end());
+    nuove.erase(std::remove_if(nuove.begin(),nuove.end(),[&](const AppL& a){return !identities.insert(a.canonical.empty()?appcatalog::normalize(a.avvio):a.canonical).second;}),nuove.end());
     for(auto& a:nuove){auto m=appcatalog::get(a.avvio);if(!m.name.empty())a.nome=m.name;a.minuscolo=appcatalog::fold(a.nome);}
     std::stable_sort(nuove.begin(),nuove.end(),[](const AppL& a,const AppL& b){auto x=appcatalog::get(a.avvio),y=appcatalog::get(b.avvio);if(x.favorite!=y.favorite)return x.favorite;if(x.order!=y.order)return x.order<y.order;return a.minuscolo<b.minuscolo;});
+    // Metadata is shared with Dock/Stage. Refresh existing native presentation
+    // objects only when the actual source changes; no extra app enumeration.
+    appDaAggiornare=true;dirty=true;
     // le icone gia' caricate si conservano
-    for (auto& a : nuove) for (auto& v : tutteApp) if (v.avvio == a.avvio) { a.icona = v.icona; a.provata = v.provata; v.icona = nullptr; break; }
+    for (auto& a : nuove) for (auto& v : tutteApp) if (v.avvio == a.avvio&&v.iconSource==appcatalog::iconSource(a.avvio)) { a.icona = v.icona; a.provata = v.provata;a.iconSource=v.iconSource; v.icona = nullptr; break; }
     for (auto& v : tutteApp) if (v.icona) v.icona->Release();
     tutteApp = std::move(nuove);
     // launcher aperto (l'elenco nuovo arriva mentre si guarda): la scelta e lo scorrimento restano dove sono
@@ -644,7 +649,7 @@ inline auto Motore::menuApp(int i, POINT pt, HWND owner) -> void {
             if(cmd==0x7F04){auto name=a.nome;if(appcatalog::prompt(ui,testi::t(L"Rinomina",L"Rename"),name)&&!name.empty())m.name=name;}
             if(cmd==0x7F05){auto file=appcatalog::choose(ui,true);if(!file.empty()){
                 std::error_code ec;auto dest=std::filesystem::path(tlauncher::profile())/L"assets"/L"app-icons";std::filesystem::create_directories(dest,ec);
-                dest/=std::filesystem::path(appcatalog::key(a.avvio)).filename().wstring()+std::filesystem::path(file).extension().wstring();
+                dest/=std::filesystem::path(appcatalog::key(a.avvio)).filename().wstring()+L"-"+std::to_wstring(GetTickCount64())+std::filesystem::path(file).extension().wstring();
                 std::filesystem::copy_file(file,dest,std::filesystem::copy_options::overwrite_existing,ec);if(!ec)m.icon=dest.wstring();
             }}
             if(cmd==0x7F06)m.icon.clear();

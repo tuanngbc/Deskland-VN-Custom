@@ -2,12 +2,19 @@
 $ErrorActionPreference='Stop'
 if($env:GITHUB_ACTIONS -ne 'true'){throw 'Hosted verification only.'}
 $literal='L"((?:\\.|[^"\\])*)"'
+# C++ Unicode escapes and literal Unicode denote the same translation key.
+function Get-NativeLiteralKey([string]$value){
+    [regex]::Replace($value,'\\(?:u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8}))',{param($m)
+        $hex=if($m.Groups[1].Success){$m.Groups[1].Value}else{$m.Groups[2].Value}
+        [char]::ConvertFromUtf32([Convert]::ToInt32($hex,16))
+    })
+}
 $table=[IO.File]::ReadAllText((Join-Path $PSScriptRoot '../native/fluidwin/traduzioni.h'))
 $translated=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 foreach($row in [regex]::Matches($table,'(?m)^\s*\{(.+)\},?\s*$')){
     $values=[regex]::Matches($row.Groups[1].Value,$literal)
     if($values.Count -ne 7 -or !$values[6].Groups[1].Value){throw 'Vietnamese translation row must preserve six upstream columns and a nonempty Vietnamese column.'}
-    [void]$translated.Add($values[0].Groups[1].Value)
+    [void]$translated.Add((Get-NativeLiteralKey $values[0].Groups[1].Value))
 }
 if($translated.Count -lt 300){throw 'Translation-table parser did not cover the native UI table.'}
 $matchedCalls=0
@@ -18,7 +25,7 @@ foreach($file in $files){
     $source=[IO.File]::ReadAllText($file.FullName)
     foreach($call in [regex]::Matches($source,'testi::t\(\s*'+$literal+'\s*,\s*'+$literal+'\s*\)')){
         $matchedCalls++
-        $it=$call.Groups[1].Value;$en=$call.Groups[2].Value
+        $it=Get-NativeLiteralKey $call.Groups[1].Value;$en=Get-NativeLiteralKey $call.Groups[2].Value
         if(!$en -or $en -notmatch '[A-Za-z]' -or $en -in $brands -or $translated.Contains($en) -or $translated.Contains($it)){continue}
         [void]$missing.Add($en)
     }

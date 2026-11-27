@@ -138,6 +138,7 @@ struct Voce {
     bool iconaRotta = false;
     bool fissata = false;      // aggiunta alla barra
     ID2D1Bitmap1* icona = nullptr;
+    std::wstring iconSource;
     std::vector<HWND> finestre;
     double rimbalzoT0 = -1;    // istante di inizio del rimbalzo (avvio), -1 = fermo
     double sobbalzoT0 = -1;    // piccolo sobbalzo (una finestra caduta nel dock la' sopra, 1.3.0), -1 = fermo
@@ -1604,12 +1605,17 @@ private:
         const bool primaVolta = voci.empty();
         std::vector<bool> ritrovata(voci.size(), false);
         for (auto& v : nuove) {
+            if(!v.exe.empty())appcatalog::bind(v.avvio,L"exe:"+appcatalog::normalize(v.exe)+(v.argomenti.empty()?L"":L"|args:"+v.argomenti));
+            else if(!v.aumid.empty())appcatalog::bind(v.avvio,L"aumid:"+appcatalog::normalize(v.aumid));
+            v.nome=appcatalog::displayName(v.avvio,appcatalog::displayName(v.exe,v.nome));
+            const auto iconSource=sorgenteIcona(v);
             bool vecchiaTrovata = false;
             for (size_t j = 0; j < voci.size(); j++) {
                 Voce& vecchia = voci[j];
                 if (ritrovata[j]) continue;   // anche una voce che si stava restringendo: se l'app si riapre torna a crescere
                 if (vecchia.avvio == v.avvio || (!v.exe.empty() && vecchia.exe == v.exe)) {
-                    v.icona = vecchia.icona; vecchia.icona = nullptr;
+                    if(vecchia.iconSource.empty()||vecchia.iconSource==iconSource){v.icona = vecchia.icona;vecchia.icona = nullptr;}
+                    v.iconSource=iconSource;
                     v.rimbalzoT0 = v.finestre.empty() ? vecchia.rimbalzoT0 : -1;   // l'app si e' aperta: fine del rimbalzo
                     v.sobbalzoT0 = vecchia.sobbalzoT0; v.sobbalzoDopo = vecchia.sobbalzoDopo; v.sobbalzoAmp = vecchia.sobbalzoAmp;
                     v.scala = vecchia.scala; v.dx = vecchia.dx;
@@ -1619,7 +1625,7 @@ private:
             }
             if (!v.icona && v.avvio != AVVIO_LAUNCHER && v.avvio != AVVIO_CONTROLLO && v.avvio != AVVIO_CESTINO) {
                 // all'avvio subito (non c'e' ancora niente da animare); poi dal thread delle icone, senza fermare il dock
-                if (primaVolta) v.icona = caricaIcona(sorgenteIcona(v));
+                if (primaVolta) {v.icona = caricaIcona(iconSource);v.iconSource=iconSource;}
                 else chiediIcona(sorgenteIcona(v), 256);
                 if (!vecchiaTrovata && !primaVolta) v.scala = 0;   // voce nuova: cresce da zero
             }
@@ -3431,7 +3437,7 @@ private:
     }
 
     // ---- launcher: tutte le app, con la ricerca (tasto Win o icona "App" del dock) ----
-    struct AppL { std::wstring nome, avvio, minuscolo, canonical; ID2D1Bitmap1* icona = nullptr; bool provata = false; };
+    struct AppL { std::wstring nome, avvio, minuscolo, canonical, iconSource; ID2D1Bitmap1* icona = nullptr; bool provata = false; };
     HWND launcher = nullptr, vetroLauncher = nullptr;
     IDXGISwapChain1* scL = nullptr; IDCompositionTarget* targetL = nullptr; IDCompositionVisual* visualL = nullptr;
     IDCompositionEffectGroup* effettoL = nullptr; ID2D1Bitmap1* bersaglioL = nullptr;

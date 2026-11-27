@@ -24,6 +24,29 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     auto restored=appcatalog::get(L"C:\\fixture\\tool.exe");if(restored.name!=meta.name||!restored.favorite||restored.folder!=meta.folder||!restored.manual||restored.icon!=meta.icon)return 62;
     appcatalog::folder(meta.folder,L"Đã đổi tên");if(appcatalog::get(L"C:\\fixture\\tool.exe").folder!=L"Đã đổi tên")return 63;
     appcatalog::folder(L"Đã đổi tên",L"");if(appcatalog::get(L"C:\\fixture\\tool.exe").manual!=true||!appcatalog::get(L"C:\\fixture\\tool.exe").folder.empty())return 64;
+    const std::wstring alias=L"C:\\fixture\\tool-alias.lnk",canonical=L"exe:c:\\fixture\\tool.exe";
+    appcatalog::bind(L"C:\\fixture\\tool.exe",canonical);appcatalog::bind(alias,canonical);
+    auto shared=appcatalog::get(alias);if(shared.name!=meta.name||shared.icon!=meta.icon||!shared.favorite)return 98;
+    shared.name=L"Tên mới dùng chung";shared.folder=L"Dự án";shared.icon=L"new-custom.png";shared.hidden=true;appcatalog::save(alias,shared);
+    auto original=appcatalog::get(L"C:\\fixture\\tool.exe");
+    if(original.name!=shared.name||original.icon!=shared.icon||!original.hidden||!original.manual)return 99;
+    appcatalog::folder(L"Dự án",L"Đã gộp");if(appcatalog::get(alias).folder!=L"Đã gộp"||appcatalog::get(alias).name!=shared.name)return 100;
+    appcatalog::loaded=false;appcatalog::metadata.clear();appcatalog::aliases.clear();appcatalog::owners.clear();appcatalog::load();
+    appcatalog::bind(L"C:\\fixture\\tool.exe",canonical);appcatalog::bind(alias,canonical);
+    if(appcatalog::get(L"C:\\fixture\\tool.exe").name!=shared.name||appcatalog::iconSource(alias)!=shared.icon)return 101;
+    auto shown=appcatalog::get(alias);shown.hidden=false;appcatalog::save(alias,shown);
+    wchar_t actualExe[32768]{};GetModuleFileNameW(nullptr,actualExe,32768);
+    IShellLinkW* link=nullptr;IPersistFile* persist=nullptr;
+    if(FAILED(CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&link))))return 102;
+    const auto shortcut=evidence/L"canonical-fixture.lnk";link->SetPath(actualExe);
+    if(FAILED(link->QueryInterface(IID_PPV_ARGS(&persist)))||FAILED(persist->Save(shortcut.c_str(),TRUE)))return 103;
+    const auto exeIdentity=appcatalog::identity(actualExe),linkIdentity=appcatalog::identity(shortcut.wstring());
+    if(exeIdentity!=linkIdentity)return 104;
+    link->SetArguments(L"--separate-fixture");if(FAILED(persist->Save(shortcut.c_str(),TRUE)))return 105;
+    persist->Release();link->Release();
+    if(appcatalog::identity(shortcut.wstring())==exeIdentity)return 106;
+    report<<"ACTUAL_EXE_LNK_IDENTITY_AND_ARGUMENT_DISTINCTION=PASS\n";
+    report<<"CANONICAL_METADATA_ALIAS_PROPAGATION=PASS\nCANONICAL_METADATA_RELOAD_AND_FOLDER_MIGRATION=PASS\n";
     report<<"PHASE3_CUSTOM_SETTINGS_PERSIST=PASS\nVIETNAMESE_ACCENT_SEARCH=PASS\nCATALOG_FOLDER_RENAME_DELETE_PRESERVE_APPS=PASS\n";
     HWND source=CreateWindowW(L"STATIC",L"Stage actual source window",WS_OVERLAPPEDWINDOW|WS_VISIBLE,280,160,640,420,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
     if(!source)return 65;ciPump(100);DWORD pid=0;DWORD tid=GetWindowThreadProcessId(source,&pid);
@@ -76,6 +99,18 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     SendMessageW(search,WM_DROPFILES,reinterpret_cast<WPARAM>(drop),0);if(!appcatalog::get(dropPath).manual)return 91;
     SendMessageW(search,WM_KEYDOWN,VK_ESCAPE,0);ciPump(220);if(gRicerca.aperta())return 92;
     report<<"SPOTLIGHT_F6_LOGICAL_SELECTION_PRESERVED=PASS\nSPOTLIGHT_NATIVE_EXE_DROP_METADATA=PASS\nSPOTLIGHT_ESCAPE_DISMISS=PASS\n";
+    // Closing invalidates outstanding file/icon work. A fresh opening starts
+    // with no stale query; disabling releases HWND, timers, fonts and bitmaps.
+    gRicerca.ferma();
+    if(FindWindowW(L"TLauncher.Native.Ricerca",nullptr)||gRicerca.ciBitmapCount()||gRicerca.ciPendingWork())return 94;
+    gRicerca.fullscreen=false;gRicerca.apri();ciPump(80);search=FindWindowW(L"TLauncher.Native.Ricerca",nullptr);
+    if(!search||!gRicerca.ciQuery().empty())return 95;
+    SendMessageW(search,WM_CHAR,'t',0);SendMessageW(search,WM_CHAR,'o',0);ciPump(190);gRicerca.ferma();
+    for(int i=0;i<400&&!gRicerca.ciWorkerIdle();++i)ciPump(10);
+    if(!gRicerca.ciWorkerIdle()||gRicerca.ciPendingWork()||gRicerca.ciBitmapCount()||FindWindowW(L"TLauncher.Native.Ricerca",nullptr))return 96;
+    for(int i=0;i<3;++i){gRicerca.apri();ciPump(40);gRicerca.ferma();}
+    if(FindWindowW(L"TLauncher.Native.Ricerca",nullptr)||gRicerca.ciPendingWork())return 97;
+    report<<"SPOTLIGHT_DISABLE_NATIVE_RESOURCES_RELEASED=PASS\nSPOTLIGHT_WORKER_DRAINS_AND_EXITS=PASS\nSPOTLIGHT_REOPEN_AFTER_CANCELLATION=PASS\n";
     report<<"SPOTLIGHT_NATIVE_COMPACT_FULLSCREEN=PASS\nF6_QUERY_PRESERVED=PASS\nOWNER_VISUAL_ACCEPTANCE=PENDING\n";
     return 0;
 }

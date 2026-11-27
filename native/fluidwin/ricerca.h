@@ -8,6 +8,9 @@
 #include "indice.h"
 #include "app_icons.h"
 #include "app_organization.h"
+#include "pool.h"
+#include <memory>
+#include <mutex>
 #include "menu.h"
 #include <windowsx.h>
 #include <shlobj.h>
@@ -110,21 +113,35 @@ public:
     void (*registro)(const char*) = nullptr;
 
     bool aperta() const { return apertaOra; }
+    // Providers own only Work, never Ricerca or its HWND/D2D objects. Cancelling
+    // is immediate even if a Shell provider takes time to return.
+    void ferma() {
+        apertaOra=chiudendo=false;annullaLavoro();onda.chiudi();
+        if(v.fin){for(UINT id=1;id<=5;++id)KillTimer(v.fin,id);vetro::fermaBattito(v.fin,1);if(GetCapture()==v.fin)ReleaseCapture();}
+        for(auto& e:icone)if(e.second)e.second->Release();icone.clear();
+        for(auto f:{fTesto,fTitolo,fSotto,fSezione})if(f)f->Release();
+        fTesto=fTitolo=fSotto=fSezione=nullptr;fontDpi=0;fontLanguage=-1;
+        v.chiudi();testo.clear();app.clear();risultati.clear();file.clear();folder.clear();
+    }
+    ~Ricerca(){ferma();}
+
 #ifdef TLAUNCHER_NATIVE_CI
     std::wstring ciQuery() const {return testo;}
     size_t ciResults() const {return risultati.size();}
     std::wstring ciSelection()const{return sel>=0&&sel<int(risultati.size())?risultati[sel].azione:L"";}
     size_t ciBitmapCount()const{return icone.size();}
+    bool ciWorkerIdle()const{std::lock_guard<std::mutex> lock(work->mutex);return !work->running;}
+    size_t ciPendingWork()const{std::lock_guard<std::mutex> lock(work->mutex);return work->icons.size()+work->ready.size()+(work->queryGeneration>=0?1:0);}
+
 #endif
 
     void apri() {
         if (apertaOra) { chiudi(); return; }
+        catalogGeneration=appcatalog::generation;
         if (!v.fin) {
             if (!v.crea(L"TLauncher.Native.Ricerca", vetro::procedura<Ricerca>, this, true)) return;
             DragAcceptFiles(v.fin,TRUE);
-            InitializeCriticalSection(&cs);
-            evento = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-            CloseHandle(CreateThread(nullptr, 0, lavoratore, this, 0, nullptr));
+
         }
         v.aggiornaTema();
         const RECT a = vetro::areaPrincipale();
@@ -144,12 +161,8 @@ public:
         { POINT pm{}; GetCursorPos(&pm); ultimoMouse = (DWORD)MAKELONG((short)pm.x, (short)pm.y); }
         // una ricerca della sessione di prima ancora in corso non vale piu' (prima i suoi file arrivavano nella sessione
         // nuova vuota, R20261121-002818-S15)
-        InterlockedIncrement(&generazione); KillTimer(v.fin, 3);   // (3: la ricerca in attesa dopo l'ultimo tasto)
-        // icone dei file: oltre 300 si ricomincia (prima la cache cresceva per tutta la sessione, S17). Sotto cs: il
-        // thread delle icone la legge; quelle ancora in lavorazione restano segnate (nullptr) e si rifanno
-        EnterCriticalSection(&cs);
-        if (icone.size() > 300 && iconeDaFare.empty() && !iconeInCorso) { for (auto& [k, b] : icone) if (b) b->Release(); icone.clear(); }
-        LeaveCriticalSection(&cs);
+        annullaLavoro();KillTimer(v.fin,3);
+        for(auto& e:icone)if(e.second)e.second->Release();icone.clear();
         larg = (int)std::lround(680 * d);
         x = (a.left + a.right - larg) / 2; y = a.top + (int)std::lround((a.bottom - a.top) * 0.22);
         primaDi = GetForegroundWindow();
@@ -176,7 +189,8 @@ public:
 
     void chiudi(bool restituisciFuoco = true) {
         if (!apertaOra) return;
-        apertaOra = false; chiudendo = true; tAnim = adesso();
+        apertaOra = false; chiudendo = true; tAnim = adesso();annullaLavoro();
+        if(GetCapture()==v.fin)ReleaseCapture();dragFrom=-1;dragMoved=false;
         KillTimer(v.fin, 2);
         KillTimer(v.fin,3);KillTimer(v.fin,4);KillTimer(v.fin,5);
         onda.chiudi();
@@ -200,7 +214,7 @@ public:
                 if (w == 2) cursore = !cursore;
                 if (w == 3) { KillTimer(v.fin, 3); chiediFile(); }
                 if (w == 4) { raccogliIcone(); }
-                if(w==5&&apertaOra&&elencoApp){auto next=elencoApp();if(next!=app){app=std::move(next);componi();}return true;}
+                if(w==5&&apertaOra&&elencoApp){auto next=elencoApp();if(next!=app||catalogGeneration!=appcatalog::generation){catalogGeneration=appcatalog::generation;app=std::move(next);componi();}return true;}
                 disegna();
                 return true;
             case WM_PAINT: disegna(); return true;
@@ -300,7 +314,7 @@ private:
     std::wstring folder;
     int page=0,dragFrom=-1;POINT dragPoint{};bool dragMoved=false;
     float fontDpi=0;int fontLanguage=-1;
-    bool editing=false;
+    bool editing=false;uint64_t catalogGeneration=0;
     std::vector<std::pair<std::wstring, std::wstring>> app;
     std::vector<Risultato> risultati, file;
     int sel = 0, sopra = -1, larg = 0, x = 0, y = 0;
@@ -351,14 +365,23 @@ private:
         if (chiudendo) { chiudendo = false; ShowWindow(v.fin, SW_HIDE); scalaW = 1; spostaY = 0; }
     }
     volatile LONG generazione = 0;
-    // thread per i file e le icone
-    CRITICAL_SECTION cs{};
-    HANDLE evento = nullptr;
-    std::wstring richiesta; LONG genRichiesta = -1;
-    std::deque<std::wstring> iconeDaFare;
-    int iconeInCorso = 0;   // icone gia' prese dal thread e non ancora consegnate (sotto cs, FW-AUDIT-018)
-    struct Pixel { std::wstring chiave; int w = 0, h = 0; std::vector<UINT> px; };
-    std::vector<Pixel> iconePronte;
+    struct Pixel { std::wstring chiave; int w=0,h=0;std::vector<UINT> px; };
+    struct Work {
+        std::mutex mutex;bool running=false;LONG generation=0,queryGeneration=-1,fileGeneration=-1;
+        std::wstring query;std::deque<std::wstring> icons;std::vector<Pixel> ready;std::vector<Risultato> files;
+    };
+    std::shared_ptr<Work> work=std::make_shared<Work>();
+    void annullaLavoro(){
+        InterlockedIncrement(&generazione);std::lock_guard<std::mutex> lock(work->mutex);
+        work->generation=generazione;work->queryGeneration=work->fileGeneration=-1;
+        work->query.clear();work->icons.clear();work->ready.clear();work->files.clear();
+    }
+    void avviaLavoro(){
+        std::lock_guard<std::mutex> lock(work->mutex);
+        if(work->running||(work->queryGeneration<0&&work->icons.empty()))return;
+        work->running=true;auto job=new std::shared_ptr<Work>(work);
+        if(!pool::lancia(lavoratore,job,THREAD_PRIORITY_BELOW_NORMAL,true)){work->running=false;delete job;}
+    }
     std::unordered_map<std::wstring, ID2D1Bitmap*> icone;   // nullptr = in arrivo o non disponibile
 
     static constexpr float ALTO_BARRA = 64, ALTO_RIGA = 48;
@@ -426,7 +449,8 @@ private:
     void cambiato() {
         cursore = true; SetTimer(v.fin, 2, 530, nullptr);
         selUtente = false; sel = 0;   // testo nuovo: torna la prima riga (la scelta di prima era per l'altro testo)
-        InterlockedIncrement(&generazione);
+        annullaLavoro();
+        for(auto i=icone.begin();i!=icone.end();)if(!i->second)i=icone.erase(i);else ++i;
         file.clear();
         componi();
         // i file si cercano quando si smette di scrivere per un attimo
@@ -511,17 +535,17 @@ private:
     // icone che mancano: al thread
     void chiediIcone() {
         bool nuove = false;
-        EnterCriticalSection(&cs);
+        {std::lock_guard<std::mutex> lock(work->mutex);
         std::unordered_set<std::wstring> visible;
         for(size_t i=0;i<risultati.size();i++)if(!fullscreen||(int(i)>=page*pageSize()&&int(i)<(page+1)*pageSize()))if(!risultati[i].icona.empty())visible.insert(risultati[i].icona);
         if(icone.size()>256){for(auto i=icone.begin();i!=icone.end()&&icone.size()>192;)if(!visible.count(i->first)){if(i->second)i->second->Release();i=icone.erase(i);}else ++i;}
-        iconeDaFare.erase(std::remove_if(iconeDaFare.begin(),iconeDaFare.end(),[&](const auto& k){return !icone.count(k);}),iconeDaFare.end());
+        work->icons.erase(std::remove_if(work->icons.begin(),work->icons.end(),[&](const auto& k){return !icone.count(k);}),work->icons.end());
         for (size_t i=0;i<risultati.size();++i) {
             if(fullscreen&&(int(i)<page*pageSize()||int(i)>=(page+1)*pageSize()))continue;
-            const auto& r=risultati[i];if(!r.icona.empty()&&!icone.count(r.icona)){icone[r.icona]=nullptr;iconeDaFare.push_back(r.icona);nuove=true;}
+            const auto& r=risultati[i];if(!r.icona.empty()&&!icone.count(r.icona)){icone[r.icona]=nullptr;work->icons.push_back(r.icona);nuove=true;}
         }
-        LeaveCriticalSection(&cs);
-        if (nuove) { SetEvent(evento); SetTimer(v.fin, 4, 50, nullptr); }
+        }
+        if (nuove) { avviaLavoro();SetTimer(v.fin, 4, 50, nullptr); }
     }
 
     // render target ricreato (vetro::Finestra::giroRt): le icone del vecchio non valgono, si rifanno (FW-AUDIT-012)
@@ -536,13 +560,18 @@ private:
 
     void chiediFile() {
         if (!apertaOra || testo.size() < 2) return;
-        EnterCriticalSection(&cs); richiesta = testo; genRichiesta = generazione; LeaveCriticalSection(&cs);
-        SetEvent(evento);
+        {std::lock_guard<std::mutex> lock(work->mutex);work->query=testo;work->queryGeneration=generazione;}
+        avviaLavoro();SetTimer(v.fin,4,50,nullptr);
     }
 
     void raccogliIcone() {
         std::vector<Pixel> arrivate;
-        EnterCriticalSection(&cs); arrivate.swap(iconePronte); const bool finite = iconeDaFare.empty() && !iconeInCorso; LeaveCriticalSection(&cs);
+        std::vector<Risultato> found;LONG foundGeneration=-1;bool finite=false;
+        {std::lock_guard<std::mutex> lock(work->mutex);arrivate.swap(work->ready);found.swap(work->files);
+            foundGeneration=work->fileGeneration;work->fileGeneration=-1;
+            finite=!work->running&&work->icons.empty()&&work->queryGeneration<0;}
+        if(foundGeneration==generazione&&apertaOra){file=std::move(found);componi();finite=false;}
+        avviaLavoro();
         for (auto& p : arrivate) {
             if (p.px.empty() || !v.rt || !icone.count(p.chiave)) continue;
             ID2D1Bitmap* b = nullptr;
@@ -779,27 +808,27 @@ private:
 
     // ---- thread: file dall'indice di ricerca di Windows e icone ----
     static DWORD WINAPI lavoratore(LPVOID p) {
-        Ricerca* r = (Ricerca*)p;
-        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-        for (;;) {
-            WaitForSingleObject(r->evento, INFINITE);
-            for (;;) {
-                std::wstring q, ic; LONG g = -1;
-                EnterCriticalSection(&r->cs);
-                if (r->genRichiesta >= 0) { q = r->richiesta; g = r->genRichiesta; r->genRichiesta = -1; }
-                else if (!r->iconeDaFare.empty()) { ic = r->iconeDaFare.front(); r->iconeDaFare.pop_front(); r->iconeInCorso++; }
-                LeaveCriticalSection(&r->cs);
-                if (g >= 0) {
-                    // al massimo 8 (prima 5), dopo aver saltato quelli di sistema; quanti se ne vedono lo decide componi
-                    auto* lista = new std::vector<Risultato>(cercaFile(q, 8));
-                    if (g != r->generazione || !consegna::posta(r->v.fin, WM_APP + 1, (WPARAM)g, lista)) delete lista;
-                } else if (!ic.empty()) {
-                    Pixel px; px.chiave = ic;
-                    appicons::load(ic,64,px.w,px.h,px.px,[](const std::wstring& path,int size,int& w,int& h,std::vector<UINT>& pixels){return pixelIcona(path,size,w,h,pixels);});
-                    EnterCriticalSection(&r->cs); r->iconePronte.push_back(std::move(px)); r->iconeInCorso--; LeaveCriticalSection(&r->cs);
-                } else break;
+        std::unique_ptr<std::shared_ptr<Work>> job(static_cast<std::shared_ptr<Work>*>(p));auto state=*job;
+        const HRESULT com=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
+        for(;;){
+            std::wstring q,ic;LONG queryGeneration=-1,generation=0;
+            {std::lock_guard<std::mutex> lock(state->mutex);generation=state->generation;
+                if(state->queryGeneration>=0){q=std::move(state->query);queryGeneration=state->queryGeneration;state->queryGeneration=-1;}
+                else if(!state->icons.empty()){ic=std::move(state->icons.front());state->icons.pop_front();}
+                else break;
             }
+            try{
+                if(queryGeneration>=0){auto result=cercaFile(q,8);std::lock_guard<std::mutex> lock(state->mutex);
+                    if(queryGeneration==state->generation){state->files=std::move(result);state->fileGeneration=queryGeneration;}}
+                else {Pixel px;px.chiave=ic;
+                    appicons::load(ic,64,px.w,px.h,px.px,[](const std::wstring& path,int size,int& w,int& h,std::vector<UINT>& pixels){return pixelIcona(path,size,w,h,pixels);});
+                    std::lock_guard<std::mutex> lock(state->mutex);if(generation==state->generation)state->ready.push_back(std::move(px));}
+            }catch(...){/* A failing Shell provider cannot retain or touch UI state. */}
         }
+        if(SUCCEEDED(com))CoUninitialize();
+        // Mark idle only after COM teardown; UI can then enqueue exactly one new
+        // worker. Pending jobs that arrived during teardown are started by timer 4.
+        {std::lock_guard<std::mutex> lock(state->mutex);state->running=false;}
         return 0;
     }
 
