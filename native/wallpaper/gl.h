@@ -54,7 +54,7 @@ inline std::string assetText(const std::filesystem::path&p){
 inline std::string desktopShader(std::string text,bool world=true){
     auto line=text.find('\n');if(line==std::string::npos)throw std::runtime_error("Missing GLSL version");
     text.replace(0,line,"#version 330 core");line=text.find('\n');
-    if(world)text.insert(line+1,"uniform vec2 wpOrigin;\nvec4 wpFrag(){return vec4(gl_FragCoord.xy+wpOrigin,gl_FragCoord.zw);}\n#define gl_FragCoord wpFrag()\n");
+    if(world)text.insert(line+1,"uniform vec2 wpOrigin,wpPixelScale;\nvec4 wpFrag(){return vec4(gl_FragCoord.xy/wpPixelScale+wpOrigin,gl_FragCoord.zw);}\n#define gl_FragCoord wpFrag()\n");
     for(const auto& token:std::vector<std::string>{"precision highp float;","precision mediump float;","precision lowp float;"}){size_t at;while((at=text.find(token))!=std::string::npos)text.erase(at,token.size());}
     size_t at;while((at=text.find("uniform highp "))!=std::string::npos)text.replace(at,14,"uniform ");return text;
 }
@@ -101,6 +101,7 @@ public:
         }catch(...){if(rc){wglMakeCurrent(nullptr,nullptr);wglDeleteContext(rc);rc=nullptr;}if(dc){ReleaseDC(window,dc);dc=nullptr;}throw;}
     }
     ~Context(){if(rc){wglMakeCurrent(nullptr,nullptr);wglDeleteContext(rc);}if(dc)ReleaseDC(window,dc);}Context(const Context&)=delete;
-    bool current(){return wglMakeCurrent(dc,rc)!=FALSE;}bool present(){return SwapBuffers(dc)!=FALSE;}
+    bool current(){return wglMakeCurrent(dc,rc)!=FALSE;}bool current(HDC target){return wglMakeCurrent(target,rc)!=FALSE;}
+    bool present(){return SwapBuffers(dc)!=FALSE;}
 };
 }

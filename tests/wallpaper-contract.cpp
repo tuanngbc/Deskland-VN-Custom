@@ -2,6 +2,7 @@
 #include "../native/wallpaper/store.h"
 #include "../native/wallpaper/field.h"
 #include "../native/wallpaper/scene.h"
+#include "../native/wallpaper/session.h"
 #include <iostream>
 #include <limits>
 #include <set>

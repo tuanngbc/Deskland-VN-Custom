@@ -50,7 +50,7 @@ public:
         if(id=="stadium"&&previousW>0&&previousH>0){targetX=std::clamp(x/previousW,.12f,.88f);targetY=std::clamp(y/previousH,.2f,.85f);passAge=0;passes++;}
         if(id=="summer-porch"){if(previousW>0&&x>previousW*.6f&&y<previousH*.7f)fanMultiplier=fanMultiplier==0?1:0;else melonBites=(melonBites+1)%4;}
     }
-    void render(const Config&c,const View&view,const std::vector<RECT>&icons,const Weather&weather,double time,float dt,const std::atomic<bool>&stop){
+    void render(const Config&c,const View&view,const std::vector<RECT>&icons,const Weather&weather,double time,float dt,const std::atomic<bool>&stop,float scaleX=1,float scaleY=1){
         const float w=view.worldW,h=view.worldH,t=float(time);age+=dt;hitAge+=dt;toy[2]+=dt;toy[3]=std::max(0.f,toy[3]-dt);
         for(auto&e:effects)e.value[2]+=dt;
         for(auto&s:head)s.step(dt);for(auto&s:torso)s.step(dt);ring.step(dt);bag.step(dt);
@@ -61,7 +61,7 @@ public:
             if(previousW==0||previousH==0){for(size_t i=0;i<cats.size();i++){auto&cat=cats[i];cat.x=w*(.12f+random()*.76f);cat.y=h*(.38f+random()*.5f);cat.tx=cat.x;cat.ty=cat.y;cat.coat=int(i%8);cat.wait=random()*8;}}
             previousW=w;previousH=h;previousSigma=sigma;previousWarp=warp;previousIcons=icons;
         }
-        program.use();program.v2("uRes",w,h);program.v2("wpOrigin",view.x,view.worldH-view.y-view.h);
+        program.use();program.v2("uRes",w,h);program.v2("wpOrigin",view.x,view.worldH-view.y-view.h);program.v2("wpPixelScale",scaleX,scaleY);
         program.f("uScale",1);program.f("uSeed",7341%997*.37f);program.f("uTime",t);program.f("uDebug",0);program.i("uNoise",0);field.bind(program,time);
         const std::string id=catalog()[index].id;
         if(id=="meadow"||id=="sky"||id=="ocean"||id=="lake"){clouds.update(w,h,p(c,"cover",.25f),p(c,"flow",1),time);clouds.bind(program);}
@@ -72,7 +72,7 @@ public:
         float shade=c.solar&&sun.up>0?std::clamp(sun.up/.15f,0.f,1.f)*.34f*(1-weather.cloud*.85f):0;
         program.v2("uShadowOffset",std::clamp(-sun.east/std::max(sun.up,.18f),-1.15f,1.15f)*18,std::clamp(sun.north/std::max(sun.up,.18f)*.45f,-.2f,.65f)*18);program.f("uShadowAlpha",shade);
         std::array<Vec4,6> fx{};for(size_t i=0;i<fx.size();i++)if(effects[i].value[2]<5)fx[i]=effects[i].value;
-        array("uRip",fx);array("uBurst",fx);array("uFx",effectsAsFx());program.f("uShake",fx[0][3]?exp(-fx[0][2]*3):0);program.f("uTreeShake",fx[0][3]?exp(-fx[0][2]*3):0);
+        array("uRip",fx);array("uBurst",fx);auto allFx=effectsAsFx();program.v4("uFx",allFx.front().data(),id=="aquarium"?8:6);program.f("uShake",fx[0][3]?exp(-fx[0][2]*3):0);program.f("uTreeShake",fx[0][3]?exp(-fx[0][2]*3):0);
         std::array<Vec4,4> sand{};for(size_t i=0;i<sand.size();i++)sand[i]=fx[i];array("uSand",sand);
         flyers<8>("uBird","uBirdN",int(p(c,"birds",3)),w,h,t,35);
         flyers<4>("uKay","uKayN",int(p(c,"kayaks",0)),w,h,t,13,.25f,.8f);
