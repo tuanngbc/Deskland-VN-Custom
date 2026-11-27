@@ -21,6 +21,8 @@ int main(){try{
     auto sun=solar(1794718800.,10.94469,106.82432);require(sun.up>.8f,"Solar noon direction");
     auto snow=fromWmo(73,20,10,106);require(snow.snow==1&&snow.rain==0,"WMO snow mapping");
     auto rain=fromWmo(63,20,10,106);require(rain.rain==1&&rain.snow==0,"WMO rain mapping");
+    c.weather=WeatherMode::Clear;require(resolvedWeather(c,rain,10).rain==0&&resolvedWeather(c,rain,10).cloud==0,"Manual clear must override shared rain");
+    c.weather=WeatherMode::Snow;require(resolvedWeather(c,rain,10).snow==1&&resolvedWeather(c,rain,10).rain==0,"Manual snow contract");
     require(desktopShader("#version 300 es\nprecision highp float;\nuniform highp sampler2D x;\nvoid main(){}").find("#define gl_FragCoord wpFrag()")!=std::string::npos,"Tiled shader origin");
     const auto profile=std::filesystem::temp_directory_path()/L"tlauncher-native-trial-wallpaper-contract";
     std::filesystem::create_directories(profile);std::ofstream(profile/L".tlauncher-native-trial",std::ios::binary)<<"tlauncher-native isolated profile v1\n";

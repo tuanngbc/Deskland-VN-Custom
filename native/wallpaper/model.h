@@ -72,6 +72,13 @@ inline void validate(Config& c) {
 }
 struct Weather { bool available=false; double latitude=0,longitude=0; float rain=0,snow=0,cloud=0,wind=0; uint64_t updated=0; };
 struct Sun {float east=0,north=0,up=0;};
+inline Weather resolvedWeather(const Config&c,Weather shared,double time){
+    if(c.weather==WeatherMode::Live){if(!shared.available){shared.rain=shared.snow=shared.cloud=0;shared.wind=c.wind;}return shared;}
+    shared.rain=shared.snow=shared.cloud=0;shared.wind=c.wind;
+    switch(c.weather){case WeatherMode::Rain:shared.rain=1;shared.cloud=.8f;break;case WeatherMode::Snow:shared.snow=1;shared.cloud=.7f;break;case WeatherMode::Cloudy:shared.cloud=1;break;
+        case WeatherMode::Offline:{float k=sin(float(time)*.0021f);shared.cloud=abs(k);shared.rain=std::max(0.f,k-.4f);break;}default:break;}
+    return shared;
+}
 // Audited solar mathematics from USNO and src/solar.rs; no runtime dependency.
 inline Sun solar(double unixSeconds,double latitude,double longitude) {
     constexpr double rad=3.14159265358979323846/180;

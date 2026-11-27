@@ -9,6 +9,7 @@
 #include <fstream>
 #include <sstream>
 #include <map>
+#include <cstring>
 
 namespace wallpaper {
 using GLsizeiptr=ptrdiff_t;
@@ -65,7 +66,12 @@ inline std::string desktopShader(std::string text,bool world=true){
     text.replace(0,line,"#version 330 core");line=text.find('\n');
     if(world)text.insert(line+1,"uniform vec2 wpOrigin,wpPixelScale;\nvec4 wpFrag(){return vec4(gl_FragCoord.xy/wpPixelScale+wpOrigin,gl_FragCoord.zw);}\n#define gl_FragCoord wpFrag()\n");
     for(const auto& token:std::vector<std::string>{"precision highp float;","precision mediump float;","precision lowp float;"}){size_t at;while((at=text.find(token))!=std::string::npos)text.erase(at,token.size());}
-    size_t at;while((at=text.find("uniform highp "))!=std::string::npos)text.replace(at,14,"uniform ");return text;
+    size_t at;while((at=text.find("uniform highp "))!=std::string::npos)text.replace(at,14,"uniform ");
+    const std::pair<const char*,const char*> solarBindings[]={
+        {"const vec2 LIGHT = vec2(-0.6, -0.8);","uniform vec2 LIGHT;"},
+        {"const vec2 SHADOW_OFF = vec2(115.0, 156.0);","uniform vec2 SHADOW_OFF;"}};
+    for(const auto&[oldValue,newValue]:solarBindings)if((at=text.find(oldValue))!=std::string::npos)text.replace(at,strlen(oldValue),newValue);
+    return text;
 }
 class Program {
     GL*gl=nullptr;GLuint id=0;std::map<std::string,GLint> locations;

@@ -79,15 +79,14 @@ public:
         // Existing assets expect physical pixels. Resolution scaling is explicit.
         Config effective=s.config;
         if(s.config.layout==Layout::Independent){auto assignment=s.config.displays.find(monitor);if(assignment!=s.config.displays.end())for(const auto&[scene,params]:assignment->second.sceneParams)for(const auto&[key,value]:params)effective.sceneParams[scene][key]=value;}
-        runtime.render(effective,view,icons,s.weather,time,dt,stop,float(bw)/w,float(bh)/h);
+        auto weather=resolvedWeather(effective,s.weather,time);runtime.render(effective,view,icons,weather,time,dt,stop,float(bw)/w,float(bh)/h);
         if(stop)return;
         if(!presentation){try{presentation=std::make_unique<Presentation>(g,bridge,window.h,bw,bh,w,h);}catch(const std::exception&){
                 if(!bridge)throw;bridge=nullptr;SetWindowLongPtrW(window.h,GWL_EXSTYLE,(GetWindowLongPtrW(window.h,GWL_EXSTYLE)&~WS_EX_NOREDIRECTIONBITMAP)|(host.anchor?WS_EX_LAYERED:0));if(host.anchor)SetLayeredWindowAttributes(window.h,0,255,LWA_ALPHA);for(int i=0;i<8&&glGetError()!=GL_NO_ERROR;i++){}presentation=std::make_unique<Presentation>(g,nullptr,window.h,bw,bh,w,h);
             }}
         g.BindFramebuffer(0x8D40,presentation->begin());glViewport(0,0,bw,bh);color.bind(g,4);post.use();post.i("scene",4);post.v2("size",float(bw),float(bh));post.v2("physicalSize",float(w),float(h));post.f("flip",presentation->gpu()?1.f:0.f);post.v2("origin",view.x,view.y);post.v2("world",view.worldW,view.worldH);post.f("time",float(time));
         SYSTEMTIME st{};GetLocalTime(&st);post.f("hour",s.config.clockLighting?st.wHour+st.wMinute/60.f:s.config.manualHour);post.f("lighting",s.config.solar?1.f:0.f);
-        float rain=0,snow=0,cloud=0,wind=s.config.wind;switch(s.config.weather){case WeatherMode::Rain:rain=1;cloud=.8f;break;case WeatherMode::Snow:snow=1;cloud=.7f;break;case WeatherMode::Cloudy:cloud=1;break;case WeatherMode::Live:if(s.weather.available){rain=s.weather.rain;snow=s.weather.snow;cloud=s.weather.cloud;wind=s.weather.wind;}break;case WeatherMode::Offline:{float k=sin(float(time)*.0021f);cloud=abs(k);rain=std::max(0.f,k-.4f);break;}default:break;}
-        post.f("rain",rain);post.f("snow",snow);post.f("cloud",cloud);post.f("wind",wind);glDrawArrays(GL_TRIANGLES,0,3);
+        post.f("rain",weather.rain);post.f("snow",weather.snow);post.f("cloud",weather.cloud);post.f("wind",weather.wind);glDrawArrays(GL_TRIANGLES,0,3);
         if(glGetError()!=GL_NO_ERROR)throw std::runtime_error("Wallpaper presentation failed; native core unaffected");if(presentation->present())show(true);
     }
 };
@@ -108,9 +107,13 @@ class Session {
                 MSG message;while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}
                 Snapshot s;{std::lock_guard<std::mutex> lock(state->mutex);s=state->latest;}
                 if(!s.config.enabled)break;s.icons=icons.poll(state->stop);
+                // Worst presentation path: scene + fallback + 3 PBOs + CPU readback,
+                // 24 bytes per rendered pixel. Respect explicit quality settings.
+                uint64_t surfaceBytes=0;for(const auto&m:s.monitors){auto a=s.config.displays.find(m.id);if(a!=s.config.displays.end()&&!a->second.enabled)continue;surfaceBytes+=uint64_t(std::max(1,int((m.rect.right-m.rect.left)*s.config.resolution)))*std::max(1,int((m.rect.bottom-m.rect.top)*s.config.resolution))*24;}
+                if(surfaceBytes>192ull*1024*1024)throw std::runtime_error("Wallpaper surfaces exceed 192 MiB budget; select lower resolution or fewer displays");
                 bool topologyChanged=s.monitors!=topologyBefore;bool hostLost=false;for(const auto&o:outputs)if(!o->intact())hostLost=true;
                 if(topologyChanged||hostLost){context.current();worlds.clear();outputs.clear();topologyBefore=s.monitors;ShellHost host=shellHost();
-                    uint64_t pixels=0;for(const auto&m:s.monitors){pixels+=uint64_t(m.rect.right-m.rect.left)*(m.rect.bottom-m.rect.top);if(pixels>32*1024*1024)throw std::runtime_error("Monitor surfaces exceed 128 MiB budget");outputs.push_back(std::make_unique<Output>(gl,context,bridge.get(),m,host));}
+                    for(const auto&m:s.monitors)outputs.push_back(std::make_unique<Output>(gl,context,bridge.get(),m,host));
                 }
                 auto now=std::chrono::steady_clock::now();float dt=std::clamp(std::chrono::duration<float>(now-last).count(),0.f,.1f);last=now;
                 bool paused=s.config.paused||s.locked||s.displayOff;

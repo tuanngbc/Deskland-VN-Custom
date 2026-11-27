@@ -84,7 +84,10 @@ public:
         program.f("uWind",p(c,"wind",c.wind));program.f("uRain",p(c,"rain",1));program.f("uMist",p(c,"mist",.4f));program.f("uBloom",p(c,"bloom",1));program.f("uPetals",p(c,"petals",1));
         SYSTEMTIME clock{};GetLocalTime(&clock);float hour=c.clockLighting?clock.wHour+clock.wMinute/60.f:c.manualHour;
         Sun sun;if(c.clockLighting&&weather.available){FILETIME ft;GetSystemTimeAsFileTime(&ft);ULARGE_INTEGER u;u.LowPart=ft.dwLowDateTime;u.HighPart=ft.dwHighDateTime;sun=solar(double(u.QuadPart)/1e7-11644473600.,weather.latitude,weather.longitude);}else{float a=(hour/24-.25f)*6.283185f;sun={cos(a),.35f,sin(a)};}
-        float shade=c.solar&&sun.up>0?std::clamp(sun.up/.15f,0.f,1.f)*.34f*(1-weather.cloud*.85f):0;
+        const auto localWeather=resolvedWeather(c,weather,time);
+        float shade=c.solar&&sun.up>0?std::clamp(sun.up/.15f,0.f,1.f)*.34f*(1-localWeather.cloud*.85f):0;
+        const float shear=std::clamp(-sun.east/std::max(sun.up,.18f),-1.15f,1.15f);
+        program.v2("LIGHT",c.solar?sun.east:-.6f,c.solar?-sun.north:-.8f);program.v2("SHADOW_OFF",c.solar?shear*150:115,c.solar?std::clamp(sun.north/std::max(sun.up,.18f),-.5f,1.5f)*100:156);
         program.v2("uShadowOffset",std::clamp(-sun.east/std::max(sun.up,.18f),-1.15f,1.15f)*18,std::clamp(sun.north/std::max(sun.up,.18f)*.45f,-.2f,.65f)*18);program.f("uShadowAlpha",shade);
         std::array<Vec4,6> fx{};for(size_t i=0;i<fx.size();i++){const auto&v=effects[(effectNext+effects.size()-1-i)%effects.size()].value;if(v[2]<5)fx[i]=v;}
         array("uRip",fx);array("uBurst",fx);auto allFx=effectsAsFx();program.v4("uFx",allFx.front().data(),id=="aquarium"?8:6);program.f("uShake",fx[0][3]?exp(-fx[0][2]*3):0);program.f("uTreeShake",fx[0][3]?exp(-fx[0][2]*3):0);
@@ -110,8 +113,8 @@ public:
             if(!sprites)sprites=std::make_unique<Sprites>(g);
             if(id=="meadow"){
                 float actor=std::min(w/1080.f,h/700.f),x=w*.70f+sin(t*.08f)*w*.10f,y=h*.58f;
-                if(p(c,"showBoy",1)>0){int frame=int(t*5)%4;float reaction=fx[0][3]>0&&hypot(fx[0][0]-x,fx[0][1]-y)<280?exp(-fx[0][2]*3):0;sprites->kite(view,x+actor*135,y+actor*70,x-actor*170,y-actor*220,actor,t,reaction,scaleX,scaleY);sprites->draw(L"wallpaper/assets/meadow-kite-boy-diagonal-run.png",view,x,y,actor*210,actor*240,t,scaleX,scaleY,false,true,shade,.3f,frame);sprites->draw(L"wallpaper/assets/meadow-kite-boy-diagonal-run.png",view,x,y,actor*210,actor*240,t,scaleX,scaleY,false,false,1,.3f,frame);}
-                if(p(c,"showCat",1)>0){float cx=w*.53f+sin(t*.11f)*w*.08f,cy=h*.72f; sprites->draw(L"wallpaper/assets/meadow-black-kitten.png",view,cx,cy,actor*155,actor*155,t,scaleX,scaleY,false,true,shade);sprites->draw(L"wallpaper/assets/meadow-black-kitten.png",view,cx,cy,actor*155,actor*155,t,scaleX,scaleY,cos(t*.11f)<0);}
+                if(p(c,"showBoy",1)>0){int frame=int(t*5)%4;float reaction=fx[0][3]>0&&hypot(fx[0][0]-x,fx[0][1]-y)<280?exp(-fx[0][2]*3):0;sprites->kite(view,x+actor*135,y+actor*70,x-actor*170,y-actor*220,actor,t,reaction,scaleX,scaleY);sprites->draw(L"wallpaper/assets/meadow-kite-boy-diagonal-run.png",view,x,y,actor*210,actor*240,t,scaleX,scaleY,false,true,shade,shear,frame);sprites->draw(L"wallpaper/assets/meadow-kite-boy-diagonal-run.png",view,x,y,actor*210,actor*240,t,scaleX,scaleY,false,false,1,.3f,frame);}
+                if(p(c,"showCat",1)>0){float cx=w*.53f+sin(t*.11f)*w*.08f,cy=h*.72f; sprites->draw(L"wallpaper/assets/meadow-black-kitten.png",view,cx,cy,actor*155,actor*155,t,scaleX,scaleY,false,true,shade,shear);sprites->draw(L"wallpaper/assets/meadow-black-kitten.png",view,cx,cy,actor*155,actor*155,t,scaleX,scaleY,cos(t*.11f)<0);}
             }else{
                 static const wchar_t*paths[]={L"wallpaper/assets/beach-coconut-palm-v2.png",L"wallpaper/assets/beach-coconut-palm-curved.png",L"wallpaper/assets/beach-coconut-palm-airy.png",L"wallpaper/assets/beach-coconut-palm-windswept.png",L"wallpaper/assets/beach-coconut-palm-arch.png"};
                 int n=std::clamp(int(p(c,"palms",4)),0,10);float size=std::clamp(std::min(w/1080,h/700),.65f,1.6f)*220;
