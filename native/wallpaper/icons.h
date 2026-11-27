@@ -26,7 +26,7 @@ class IconGeometry {
     struct State {
         std::mutex mutex;std::vector<RECT> snapshot;
         std::atomic<bool> stop{false};bool active=false;DWORD worker=0;
-        uint64_t started=0;bool cancelled=false;
+        uint64_t started=0;bool cancelled=false,ready=false;
     };
     std::shared_ptr<State> state=std::make_shared<State>();
     std::vector<RECT> snapshot;uint64_t next=0;
@@ -54,6 +54,7 @@ class IconGeometry {
         return !s->stop;
     }
 public:
+    bool ready()const{std::lock_guard<std::mutex> lock(state->mutex);return state->ready;}
     ~IconGeometry(){auto s=state;s->stop=true;std::lock_guard<std::mutex> lock(s->mutex);if(s->worker)CoCancelCall(s->worker,0);}
     const std::vector<RECT>&poll(const std::atomic<bool>&stop){
         auto s=state;std::lock_guard<std::mutex> lock(s->mutex);snapshot=s->snapshot;
@@ -71,7 +72,7 @@ public:
                 {std::lock_guard<std::mutex> lock(s->mutex);s->worker=GetCurrentThreadId();}
                 std::vector<RECT> fresh;bool ok=false;
                 try{ok=query(s,fresh);}catch(...){}
-                {std::lock_guard<std::mutex> lock(s->mutex);if(ok&&!s->cancelled&&!s->stop)s->snapshot=std::move(fresh);s->worker=0;}
+                {std::lock_guard<std::mutex> lock(s->mutex);if(ok&&!s->cancelled&&!s->stop){s->snapshot=std::move(fresh);s->ready=true;}s->worker=0;}
                 if(SUCCEEDED(cancellation))CoDisableCallCancellation(nullptr);
                 CoUninitialize();
             }

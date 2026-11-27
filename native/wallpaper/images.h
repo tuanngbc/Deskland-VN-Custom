@@ -27,7 +27,7 @@ class Sprites {
 public:
     void boy(const View&view,V2 position,float s,float phase,float gait,float time,float tug,float shade,float scaleX,float scaleY){
         if(!boyProgram)boyProgram=std::make_unique<Program>(g,desktopShader(assetText(assetsRoot()/L"wallpaper/shaders/meadow-boy-native.frag")));
-        auto&p=*boyProgram;p.use();image(L"wallpaper/assets/meadow-kite-boy-level-face.png").bind(g,5);image(L"wallpaper/assets/meadow-kite-boy-diagonal-run.png").bind(g,6);p.i("uCharacter",5);p.i("uRunSprite",6);
+        auto&p=*boyProgram;p.use();auto&front=image(L"wallpaper/assets/meadow-kite-boy-level-face.png");auto&run=image(L"wallpaper/assets/meadow-kite-boy-diagonal-run.png");front.bind(g,5);run.bind(g,6);p.i("uCharacter",5);p.i("uRunSprite",6);
         p.v2("uRes",view.worldW,view.worldH);p.v2("wpOrigin",view.x,view.worldH-view.y-view.h);p.v2("wpPixelScale",scaleX,scaleY);p.v2("uOffset",0,0);p.f("uScale",1);p.f("uTime",time);p.v4("uPlace",{position.x,position.y,s,0});
         float bob=-(1-cos(phase*2))*.65f*gait;bool running=gait>.05f;
         p.v4("uMotion",{3,running?1.f:0.f,1,bob});p.v4("uRig",{gait,-sin(phase)*.42f*gait,(sin(phase)*.26f+sin(phase*2)*.035f)*gait,0});

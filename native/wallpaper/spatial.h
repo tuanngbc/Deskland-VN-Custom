@@ -44,7 +44,7 @@ inline Geometry sceneGeometry(const std::vector<Monitor>&monitors,const Monitor&
     if(layout==Layout::Panorama)for(auto&m:monitors)if(m.primary){ref=&m;break;}
     g.referenceW=float(ref->rect.right-ref->rect.left);g.referenceH=float(ref->rect.bottom-ref->rect.top);
     RECT all=bounds(monitors);
-    if(layout==Layout::Panorama)for(auto&m:monitors)g.outputs.push_back({float(m.rect.left-all.left),float(m.rect.top-all.top),float(m.rect.right-m.rect.left),float(m.rect.bottom-m.rect.top)});
+    if(layout==Layout::Panorama){auto add=[&](const Monitor&m){g.outputs.push_back({float(m.rect.left-all.left),float(m.rect.top-all.top),float(m.rect.right-m.rect.left),float(m.rect.bottom-m.rect.top)});};add(*ref);for(auto&m:monitors)if(m.id!=ref->id)add(m);}
     else g.outputs.push_back({0,0,float(current.rect.right-current.rect.left),float(current.rect.bottom-current.rect.top)});
     return g;
 }

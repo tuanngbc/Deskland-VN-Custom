@@ -129,7 +129,7 @@ class Session {
                     bool first=std::find(advanced.begin(),advanced.end(),key)==advanced.end();
                     world->setGeometry(sceneGeometry(s.monitors,m,s.config.layout));
                     for(auto event:s.input)if(s.config.layout==Layout::Panorama?first:bool(PtInRect(&m.rect,event.point))){
-                        bool blocked=!event.desktop;for(auto r:s.icons)if(PtInRect(&r,event.point)){blocked=true;break;}
+                        bool blocked=!event.desktop||!icons.ready();for(auto r:s.icons)if(PtInRect(&r,event.point)){blocked=true;break;}
                         V2 point{float(event.point.x-(s.config.layout==Layout::Panorama?all.left:m.rect.left)),float(event.point.y-(s.config.layout==Layout::Panorama?all.top:m.rect.top))};
                         world->pointer(blocked?PointerAction::Cancel:event.action,point);
                     }

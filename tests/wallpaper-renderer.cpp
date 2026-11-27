@@ -1,4 +1,5 @@
 // Actual shader/scene execution on a hosted software GL device, never owner PC.
+#define WALLPAPER_HOSTED_PROBE
 #include "../native/wallpaper/session.h"
 #include <iostream>
 #include <set>
@@ -31,6 +32,7 @@ int main(int argc,char**argv){try{
     std::vector<unsigned char> sheet(size_t(2560)*1440*4,255);
     for(int i=0;i<int(catalog().size());i++){
         allocate(640,360);noiseTexture.bind(gl,0);SceneRuntime scene(gl,i);scene.render(config,view,icons,weather,2.,.04f,stop);auto before=capture(640,360);
+        noiseTexture.bind(gl,0);scene.render(config,view,icons,weather,2.,0,stop);check(capture(640,360)==before,"First texture load differs from same-time render");
         std::set<uint32_t> colors;for(size_t p=0;p<before.size();p+=16){uint32_t value;memcpy(&value,before.data()+p,4);colors.insert(value);}check(colors.size()>30,"Scene is blank/constant");
         png(evidence/(std::string(catalog()[i].id)+".png"),640,360,before);png(assetsRoot()/L"wallpaper/thumbs"/(std::string(catalog()[i].id)+".png"),640,360,before);
         // Unmodified renderer pixels, ordered row-major exactly as catalog.
@@ -47,6 +49,46 @@ int main(int argc,char**argv){try{
         report<<catalog()[i].id<<"=RENDER_ANIMATION_AND_ISOLATED_CLICK_PASS\n";std::cout<<catalog()[i].id<<" PASS\n";
     }
     png(evidence/"all-16-contact-sheet.png",2560,1440,sheet);report<<"CATALOG_ORDER=meadow,beach,beach-turquoise,lake,sky,ocean,rainforest,mocchau,tet-sakura,cat-hill,stadium,aquarium,commute,summer-porch,cats,boxing-ring\nINPUT_PRESERVES_ALL_PHYSICAL_STATE=PASS\n";
+    {
+        // Force an actual cloud over a ground actor, and compare the exact
+        // same renderer with the actor hidden. A random contact sheet missed
+        // the previous semantic inversion, so overlap is mandatory here.
+        SceneRuntime meadow(gl,sceneIndex("meadow"));View v{0,0,960,540,960,540};allocate(960,540);Config cfg=config;
+        cfg.sceneParams["meadow"]["cover"]=0;cfg.sceneParams["meadow"]["showCat"]=0;
+        auto draw=[&](){noiseTexture.bind(gl,0);meadow.render(cfg,v,{},weather,30,0,stop);return capture(960,540);};
+        auto visible=draw();auto b=meadow.boyBounds();check(meadow.meadowBoy().initialized,"Meadow fixture has no boy");
+        cfg.sceneParams["meadow"]["showBoy"]=0;auto grass=draw();int changed=0;
+        auto equalPixel=[](auto&a,auto&b,size_t at){return std::equal(a.begin()+at,a.begin()+at+3,b.begin()+at);};
+        for(int y=int(b.y);y<int(b.y+b.h);y++)for(int x=int(b.x);x<int(b.x+b.w);x++){size_t at=(size_t(539-y)*960+x)*4;if(!equalPixel(visible,grass,at))changed++;}
+        check(changed>8,"Ground actor absent from uncovered grass");
+        meadow.probeCloud(meadow.meadowBoy().position,120);auto cloudOnly=draw();cfg.sceneParams["meadow"]["showBoy"]=1;auto covered=draw();
+        for(int y=int(b.y);y<int(b.y+b.h);y++)for(int x=int(b.x);x<int(b.x+b.w);x++){size_t at=(size_t(539-y)*960+x)*4;check(equalPixel(covered,cloudOnly,at),"Ground boy painted on top of cloud");}
+        png(evidence/"meadow-ground-uncovered.png",960,540,visible);png(evidence/"meadow-cloud-occludes-boy.png",960,540,covered);
+        report<<"MEADOW_CONTROLLED_CLOUD_OVER_GROUND_ACTOR=PASS\n";
+    }
+    {
+        SceneRuntime beach(gl,sceneIndex("beach"));allocate(640,360);Config cfg=config;cfg.sceneParams["beach"]["birds"]=1;cfg.sceneParams["beach"]["palms"]=0;
+        std::vector<RECT> island{{260,280,340,330}};
+        auto draw=[&](){noiseTexture.bind(gl,0);beach.render(cfg,view,island,weather,30,0,stop);return capture(640,360);};
+        draw();beach.probeActor("uBird",0,{300,185});beach.probePalms({});auto bird=draw();
+        // Anchor on known icon-generated sand, with canopy directly under bird.
+        beach.probePalms({Palm{{300,235},0,0,.496f,false}});check(beach.shore({300,235})<-6,"Palm overlap fixture is not sand");auto overlap=draw();cfg.sceneParams["beach"]["birds"]=0;auto palmOnly=draw();int matched=0,canopy=0;
+        for(int y=180;y<=190;y++)for(int x=293;x<=307;x++){size_t at=(size_t(359-y)*640+x)*4;
+            if(bird[at]>240&&bird[at+1]>240&&bird[at+2]>240&&std::equal(bird.begin()+at,bird.begin()+at+3,overlap.begin()+at)){matched++;if(!std::equal(palmOnly.begin()+at,palmOnly.begin()+at+3,overlap.begin()+at))canopy++;}}
+        check(matched>=3&&canopy>=3,"Palm canopy covered opaque airborne gull");png(evidence/"beach-bird-over-palm.png",640,360,overlap);report<<"BEACH_CONTROLLED_BIRD_OVER_PALM=PASS\n";
+    }
+    {
+        SceneRuntime cats(gl,sceneIndex("cats"));allocate(640,360);Config cfg=config;cfg.sceneParams["cats"]["cats"]=1;cfg.sceneParams["cats"]["bushes"]=1;
+        float x=640*(.06f+hash(0,sceneIndex("cats"),308)*.88f),y=360*(.4f+hash(0,sceneIndex("cats"),310)*.47f);
+        auto draw=[&](){noiseTexture.bind(gl,0);cats.render(cfg,view,{},weather,30,0,stop);return capture(640,360);};
+        draw();cats.probeCat(0,{x,y-40});auto behind=draw();cfg.sceneParams["cats"]["cats"]=0;auto tree=draw();
+        cfg.sceneParams["cats"]["cats"]=1;cfg.sceneParams["cats"]["bushes"]=0;auto cat=draw();cfg.sceneParams["cats"]["cats"]=0;auto ground=draw();
+        int hidden=0;for(size_t at=0;at<ground.size();at+=4){auto eq=[&](auto&a,auto&b){return std::equal(a.begin()+at,a.begin()+at+3,b.begin()+at);};if(!eq(tree,ground)&&!eq(cat,ground)&&eq(behind,tree))hidden++;}
+        check(hidden>8,"Cat behind tree was painted in foreground");png(evidence/"cats-behind-tree.png",640,360,behind);
+        cfg.sceneParams["cats"]["cats"]=1;cfg.sceneParams["cats"]["bushes"]=1;cats.probeCat(0,{x,y+8});auto front=draw();cfg.sceneParams["cats"]["bushes"]=0;cat=draw();int visible=0;
+        for(size_t at=0;at<ground.size();at+=4){auto eq=[&](auto&a,auto&b){return std::equal(a.begin()+at,a.begin()+at+3,b.begin()+at);};if(!eq(tree,ground)&&!eq(cat,ground)&&eq(front,cat))visible++;}
+        check(visible>8,"Cat in front of tree was painted behind it");png(evidence/"cats-in-front-of-tree.png",640,360,front);report<<"CATS_CONTROLLED_BOTH_SIDES_OF_TREE_DEPTH=PASS\n";
+    }
     {
         // Owner geometry fixture, not an inferred arrangement of their screens.
         std::vector<Monitor> monitors{{L"portrait",{-1080,-500,0,1420},144,false},{L"wide",{0,0,2560,1080},96,true}};

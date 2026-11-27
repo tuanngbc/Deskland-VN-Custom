@@ -77,7 +77,7 @@ validated catalog parameter definitions. No legacy scene object is retained.
 
 | Reference | Preserved behavior in new scene owner |
 | --- | --- |
-| meadow.rs, meadow-boy.js, meadow-kitten.js | Icon cloud fields, moving clouds, click dandelions/puffs, boy atlas, native kite/ribbons/tether, kitten, show/hide controls. Atlas layout and kite fabric math are audited artwork reuse. |
+| meadow.rs, meadow-boy.js, meadow-cat.js | Icon cloud fields, moving clouds, click dandelions/puffs, boy atlas, native kite/ribbons/tether, kitten, show/hide controls. Atlas layout and kite fabric math are audited artwork reuse. |
 | beach.rs | Icon shoreline, shallow/shoal/warp, palms/sun shadows, kayak target and birds, water ripples and sand marks. |
 | maldives.rs | Turquoise shoreline, palms, fish schools/turtles/kayaks/birds and click response. |
 | lake.rs | Icon banks and cloud reflection, koi, cast/wait/bite/catch/empty reel states, click ripples. |
@@ -107,3 +107,8 @@ for every scene; owner comparison must still assess artwork, object hit regions,
 mini-game timing and multi-monitor experience. Fullscreen/occlusion retain assigned
 world state, while disabling/unassigning releases it. Topology reconstruction safely
 rebuilds current scene resources and may reset actor trajectories.
+
+Owner rejected Phase 2 candidate 027f437 despite technical CI success. The
+subsequent 4cdbe4a run also revealed real composition defects on image inspection.
+The correction and all-16 scene audit are recorded in `WALLPAPER_LAYER_AUDIT.md`.
+Hosted verification and owner acceptance of the corrected candidate remain gates.

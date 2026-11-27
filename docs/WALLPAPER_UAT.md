@@ -3,6 +3,10 @@
 Phase 1 đã được owner nghiệm thu 11/11 trên c011c2b11b3d. Đây là Phase 2,
 chờ owner nghiệm thu hình ảnh, tương tác và hiệu năng trên máy thật.
 
+Bản 027f437 đã bị owner đánh FAIL về gallery/tương tác. Bản sửa cần kiểm tra
+lại cả 16 cảnh; CI PASS không thay cho owner PASS. Xem `WALLPAPER_LAYER_AUDIT.md`
+để đối chiếu lỗi xếp lớp và đặt vật thể đã phát hiện.
+
 Thoát NATIVE BASE TEST đang mở bằng menu TLauncher và chờ cửa sổ khởi chạy
 khôi phục production. Sau đó tự mở **TLauncher 1.0.3 — WALLPAPER TEST** trên
 Desktop. Giữ cửa sổ khởi chạy mở. Không mở EXE trực tiếp hoặc hai bản TEST cùng

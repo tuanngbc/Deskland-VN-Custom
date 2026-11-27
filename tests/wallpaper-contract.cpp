@@ -31,6 +31,13 @@ int main(){try{
         require(travelled>150&&actor.speed()<=spec.speed+.01f,"Actor failed to travel");final.push_back(actor);
     }
     for(auto&actor:final)require((actor.position-final[0].position).length()<.1f&&(actor.velocity-final[0].velocity).length()<.1f,"15/25/30/60 FPS simulation differs");
+    {
+        auto valid=[](V2 p,float r){return p.x>=r&&p.y>=r&&p.x<=800-r&&p.y<=600-r&&!(p.x>310-r&&p.x<490+r&&p.y>140-r&&p.y<460+r);};
+        V2 start{120,300},goal{680,300};auto route=waterRoute(start,goal,800,600,18,valid);require(route.size()>1&&route.size()<=128,"Water route did not detour around land");
+        V2 from=start;for(auto target:route){int steps=int(ceil((target-from).length()/2));for(int i=0;i<=steps;i++)require(valid(from+(target-from)*(float(i)/steps),18),"Route crossed shore/corner");from=target;}
+        auto isolated=[](V2 p,float r){return p.x>r&&p.x<800-r&&p.y>r&&p.y<600-r&&!(p.x>310-r&&p.x<490+r);};
+        require(waterRoute(start,goal,800,600,18,isolated).empty(),"Disconnected water unexpectedly navigable");std::cout<<"WATER_ROUTE_DETOUR_AND_DISCONNECTED_ISLANDS=PASS\n";
+    }
     std::cout<<"PHYSICAL_UNION_SCALE_DPI_ANCHORS=PASS\nTEMPORAL_CONTINUITY_ACCELERATION_TURN_REPEATED_INPUT_FPS=PASS\n";
     require(covered({0,0,100,100},{{0,0,50,100},{50,0,100,100}}),"Multiwindow occlusion");
     require(!covered({0,0,100,100},{{0,0,49,100},{50,0,100,100}}),"Visible gap must render");

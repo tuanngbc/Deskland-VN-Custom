@@ -71,5 +71,12 @@ public:
         }texture.image(g,3,columns*36,rows,0x8814,GL_RGBA,GL_FLOAT,bins.data());
     }
     void bind(Program&p){texture.bind(g,3);p.i("uCirc",3);p.v2("uCGrid",float(columns),float(rows));p.f("uCellG",48);}
+#ifdef WALLPAPER_HOSTED_PROBE
+    void probeDisc(float w,float h,float centerX,float centerY,float radius){
+        columns=int(ceil(w/48))+8;rows=int(ceil(h/48))+8;bins.assign(size_t(columns)*rows*36*4,0);
+        for(int cell=0;cell<columns*rows;cell++){size_t at=size_t(cell)*36*4;bins[at]=centerX;bins[at+1]=centerY;bins[at+2]=radius;}
+        texture.image(g,3,columns*36,rows,0x8814,GL_RGBA,GL_FLOAT,bins.data());
+    }
+#endif
 };
 }
