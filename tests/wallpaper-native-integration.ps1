@@ -41,7 +41,7 @@ $results=[Collections.Generic.List[object]]::new()
 foreach($mode in 'accepted-baseline','wallpaper-disabled','wallpaper-enabled'){
  $runtime=Join-Path $env:RUNNER_TEMP ('wallpaper-integration-'+$mode);New-Item -ItemType Directory -Path $runtime|Out-Null
  if($mode -eq 'accepted-baseline'){Copy-Item (Join-Path $baseExe[0].DirectoryName '*') $runtime -Recurse}
- else {Copy-Item $Exe (Join-Path $runtime 'TLauncher.exe');Copy-Item (Join-Path (Split-Path $Exe) 'wallpaper') $runtime -Recurse;Copy-Item (Join-Path $Mesa 'x64/*.dll') $runtime}
+ else {Copy-Item $Exe (Join-Path $runtime 'TLauncher.exe');Copy-Item (Join-Path (Split-Path $Exe) 'wallpaper') $runtime -Recurse;if($mode -eq 'wallpaper-enabled'){Copy-Item (Join-Path $Mesa 'x64/*.dll') $runtime}}
  $runtimeExe=Join-Path $runtime 'TLauncher.exe'
  Copy-Item tools/native-resource-diagnostics.ps1 $runtime
  $(if($mode -eq 'accepted-baseline'){$baselineCommit}else{$env:GITHUB_SHA})|Set-Content (Join-Path $runtime 'BUILD-COMMIT.txt')
@@ -77,6 +77,9 @@ foreach($mode in 'accepted-baseline','wallpaper-disabled','wallpaper-enabled'){
    Wait-For {[WallpaperIntegration]::IsWindowVisible($settings)} 'native Settings'
    Start-Sleep -Milliseconds 700
    1..6|ForEach-Object {[void][WallpaperIntegration]::PostMessage($settings,0x100,[IntPtr]0x28,[IntPtr]::Zero);Start-Sleep -Milliseconds 100}
+   Start-Sleep -Milliseconds 500
+   & (Join-Path (Split-Path $Exe) 'wallpaper-accessibility.exe') 2>&1|Tee-Object (Join-Path $Evidence 'wallpaper-accessibility.txt')
+   if($LASTEXITCODE -ne 0){throw 'Native wallpaper accessibility contract failed'}
    Send-Action $settings 5103
    Wait-For {(Get-Content (Join-Path $profile 'wallpaper-v1.ini') -Raw) -match '(?m)^scene=lake\r?$'} 'real Settings scene selection'
    Send-Action $settings 5000

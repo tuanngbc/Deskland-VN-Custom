@@ -81,7 +81,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: native-build
-          key: native-base-ucrt64-unicode-v2-${{ hashFiles('native/fluidwin/*.h','native/fluidwin/fluidwin.cpp','native/fluidwin/icona.rc','native/fluidwin/icona.ico','native/fluidwin/sfondi/*.jpg','native/wallpaper/**','tests/native-base-contract.cpp') }}
+          key: native-base-ucrt64-unicode-v2-${{ hashFiles('native/fluidwin/*.h','native/fluidwin/fluidwin.cpp','native/fluidwin/icona.rc','native/fluidwin/icona.ico','native/fluidwin/sfondi/*.jpg','native/wallpaper/**','tests/native-base-contract.cpp','tests/wallpaper-accessibility.cpp') }}
       - uses: msys2/setup-msys2@v2
         if: steps.native-cache.outputs.cache-hit != 'true'
         with:
@@ -102,6 +102,7 @@ jobs:
           (cd native/fluidwin && windres icona.rc -O coff -o ../../native-build/icon.o)
           g++ -O2 -std=gnu++20 -Wall -municode -mwindows native/fluidwin/fluidwin.cpp native-build/icon.o -o native-build/TLauncher.exe $libs -static
           g++ -O2 -std=gnu++20 -Wall -DUNICODE -D_UNICODE tests/native-base-contract.cpp native-build/icon.o -o native-build/native-contract.exe $libs -static
+          g++ -O2 -std=gnu++20 -Wall tests/wallpaper-accessibility.cpp -o native-build/wallpaper-accessibility.exe -loleacc -loleaut32 -lole32 -luuid -luser32 -static
           mkdir -p native-build/runtime-licenses
           for license_dir in /ucrt64/share/licenses/gcc* /ucrt64/share/licenses/libgcc* /ucrt64/share/licenses/libstdc++* /ucrt64/share/licenses/cc-libs* /ucrt64/share/licenses/libwinpthread* /ucrt64/share/licenses/mingw-w64*; do
             if [ -d "$license_dir" ]; then cp -r "$license_dir" native-build/runtime-licenses/; fi
@@ -112,7 +113,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: native-build
-          key: native-base-ucrt64-unicode-v2-${{ hashFiles('native/fluidwin/*.h','native/fluidwin/fluidwin.cpp','native/fluidwin/icona.rc','native/fluidwin/icona.ico','native/fluidwin/sfondi/*.jpg','native/wallpaper/**','tests/native-base-contract.cpp') }}
+          key: native-base-ucrt64-unicode-v2-${{ hashFiles('native/fluidwin/*.h','native/fluidwin/fluidwin.cpp','native/fluidwin/icona.rc','native/fluidwin/icona.ico','native/fluidwin/sfondi/*.jpg','native/wallpaper/**','tests/native-base-contract.cpp','tests/wallpaper-accessibility.cpp') }}
       - name: Verify real profile, Notch resources, native startup and Guardian recovery
         shell: pwsh
         run: |
