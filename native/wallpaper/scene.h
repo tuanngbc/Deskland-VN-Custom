@@ -8,6 +8,7 @@
 #include "motion.h"
 #include "navigation.h"
 #include "layers.h"
+#include "boxing.h"
 #include <memory>
 #include <chrono>
 #include <cstring>
@@ -26,18 +27,17 @@ class SceneRuntime {
     std::array<Cat,15> cats{};std::array<ClickFx,8> effects{};size_t effectNext=0;float age=0;
     Vec4 toy{0,0,0,0};float fishing=0,fishingAge=0;POINT fishingPoint{};
     std::array<NativeFish,8> fishActors{};int hookedFish=-1;float castY=0;V2 rodAnchor{},lineHook{};int caughtFish=0;
-    std::array<Spring,2> head{},torso{};Spring ring,bag;
-    std::array<float,2> hp{1,1},hpLag{1,1};int hitActor=-1;float hitAge=100,hitX=0,hitY=0,autoPunch=0;int melonBites=0;float fanMultiplier=1;
+    int melonBites=0;float fanMultiplier=1;
     float ballX=.5f,ballY=.5f,targetX=.5f,targetY=.5f;int passes=0;float passAge=0;
-    double lastTime=0;float lastHud=0,lastPower=1;int lastCorgis=3;float goalSide=0,goalAge=100,userChase=0;
+    double lastTime=0;int lastCorgis=3;float goalSide=0,goalAge=100,userChase=0;
     static constexpr std::array<Vec4,4> corgiSlots{{{.415f,.508f,1,0},{.580f,.556f,1.06f,0},{.496f,.522f,.58f,1},{.462f,.592f,.88f,2}}};
     std::array<int,4> corgiPose{0,1,0,2},corgiNext{0,1,0,2};std::array<float,4> corgiHappy{},corgiRoll{-1,-1,-1,-1},corgiWait{18,26,22,30},corgiBreath{};Spring chime;
-    float birdHop=100,melonRefill=0,fanPhase=0,tireAge=100;int roundNumber=1,bagIndex=0,hitZone=0;
-    float roundAge=0,roundBell=0;std::array<Spring,3> bags{};
+    float birdHop=100,melonRefill=0,fanPhase=0;
     Body football;std::array<Body,22> players{};
     std::array<V2,22> formation{};int formationCount=0,ballOwner=-1,ballReceiver=-1,lastKicker=-1;
     std::array<int,2> footballScore{};float ballHold=.85f,ballPickup=0,ballDrag=2.05f,ballZ=0,ballVZ=0,footballTempo=1;
     float busX=-170,busVelocity=0,busDoors=0,busWheel=0,busWait=0,busHonk=-1;int busState=0;bool busStop=true;
+    std::unique_ptr<BoxingModel> boxing;
     uint32_t rng=0x731f91u;
     Geometry geometry;bool geometryExplicit=false,placementDirty=true;int lastPalmCount=-1;
     PalmLayout palmLayout;Body boyBody;V2 meadowCat{};bool catPlaced=false;float boyGait=0,boyTug=0,boyNext=7;
@@ -205,6 +205,7 @@ public:
     const std::array<NativeFish,8>& fish()const{return fishActors;}
     struct FishingStatus {int phase,actor,caught;V2 hook;};
     FishingStatus fishingStatus()const{return {int(fishing),hookedFish,caughtFish,lineHook};}
+    const BoxingModel* boxingState()const{return boxing.get();}
     const Body& stadiumBall()const{return football;}
     const std::array<Body,22>& stadiumPlayers()const{return players;}
     const std::array<int,2>& stadiumScore()const{return footballScore;}
@@ -265,11 +266,11 @@ public:
         if(id=="commute"){float road=(previousH-48)*.79f;if(abs(x-previousW*.53f)<24&&y>road-80&&y<road+12){busStop=true;if(busState==0)busWait=0;}else if(busState&&abs(x-busX)<126&&y>road-70&&y<road+20)busHonk=0;}
     }
     void render(const Config&c,const View&view,const std::vector<RECT>&icons,const Weather&weather,double time,float dt,const std::atomic<bool>&stop,float scaleX=1,float scaleY=1){
-        const float w=view.worldW,h=view.worldH,t=float(time);lastHud=p(c,"hudMode",0);lastPower=p(c,"punchPower",1);lastCorgis=int(p(c,"corgis",3));lastTime=time;age+=dt;feedAge+=dt;hitAge+=dt;toy[2]+=dt;toy[3]=std::max(0.f,toy[3]-dt);
+        const float w=view.worldW,h=view.worldH,t=float(time);lastCorgis=int(p(c,"corgis",3));lastTime=time;age+=dt;feedAge+=dt;toy[2]+=dt;toy[3]=std::max(0.f,toy[3]-dt);
         if(!geometryExplicit&&(w!=previousW||h!=previousH)){geometry={w,h,{{0,0,w,h}}};placementDirty=true;}
         remainder+=std::clamp(double(dt),0.,.25);simulationSteps=int(floor((remainder+1e-7)/fixedStep));remainder-=simulationSteps*fixedStep;simulationTime+=simulationSteps*fixedStep;
         for(auto&e:effects)e.value[2]+=dt;
-        for(auto&s:torso)s.step(dt);ring.step(dt);bag.step(dt);chime.step(dt,18,2.2f);for(auto&s:bags)s.step(dt,15,1.6f);
+        chime.step(dt,18,2.2f);
         const float sigma=p(c,"sigma",72),warp=p(c,"warp",34);
         bool iconsChanged=icons.size()!=previousIcons.size();if(!iconsChanged)for(size_t i=0;i<icons.size();i++)if(!EqualRect(&icons[i],&previousIcons[i])){iconsChanged=true;break;}
         if(w!=previousW||h!=previousH||sigma!=previousSigma||warp!=previousWarp||iconsChanged){
@@ -406,20 +407,7 @@ private:
         }
         fx.value[3]=0;
     }
-    float sceneScale()const{return geometry.boxingScale();}
-    void clickBoxing(float x,float y){
-        const float s=sceneScale(),cx=previousW*.5f,h=previousH-48;
-        if(lastHud<2&&abs(x-cx)<54*s&&abs(y-44*s)<36*s){roundNumber++;roundAge=0;roundBell=1;hp={1,1};hpLag=hp;return;}
-        if(abs(x-(cx-420*s))<78*s&&abs(y-h*.845f)<54*s){tireAge=0;ring.v+=25;return;}
-        std::array<Vec4,3> targets{{{cx-388*s,h*.18f+82*s,0,0},{cx-448*s,h*.29f+86*s,0,0},{cx+425*s,h*.24f+88*s,0,0}}};
-        for(int i=0;i<3;i++)if(abs(x-targets[i][0])<40*s&&abs(y-targets[i][1])<78*s){bags[i].v+=3;bagIndex=i;hitActor=-1;hitAge=0;hitX=targets[i][0];hitY=targets[i][1];return;}
-        hitActor=x<cx?0:1;hitAge=0;hitX=x;hitY=y;autoPunch=2.2f;
-        const float foot=h*(hitActor?.766f:.758f),rel=(y-(foot-115*s))/std::max(s,.01f);
-        hitZone=rel<-14?0:rel<26?(abs(x-(cx+(hitActor?68:-68)*s))>14*s?1:2):3;
-        const float power=lastPower,side=hitActor?1.f:-1.f;
-        if(hitZone==3)torso[hitActor].v+=32*power;else head[hitActor].v+=side*(hitZone==0?70:55)*power;
-        ring.v+=5*power;hp[hitActor]=std::max(0.f,hp[hitActor]-(hitZone==3?.035f:.05f)*power);
-    }
+    void clickBoxing(float x,float y){if(boxing)boxing->click({x,y});}
     void clickPorch(float x,float y,ClickFx&fx){
         float w=previousW,h=previousH,s=geometry.porchScale();int n=lastCorgis;
         fx.value[3]=4;
@@ -650,18 +638,11 @@ private:
         program.v4("uBall",{football.position.x,football.position.y,ballZ,football.phase});program.v4("uBallTrail",{football.position.x-football.velocity.x*.06f,football.position.y-football.velocity.y*.06f,std::clamp(football.speed()/220,0.f,1.f),passAge});
         program.v4("uTarget",{targetX*w,targetY*h,passAge,userChase>0?1.f:0.f});program.v4("uGoalFx",{goalSide<0?x0:x1,cy,goalAge,goalSide});
     }
-    void renderBoxing(const Config&c,float w,float h,float t,float dt){
-        roundAge+=dt;roundBell=std::max(0.f,roundBell-dt);tireAge+=dt;if(roundAge>=60){roundAge=0;roundNumber++;roundBell=1;hp={1,1};}
-        for(auto&s:head)s.step(dt,180/std::max(.4f,p(c,"bounciness",1.25f)),8/std::max(.4f,p(c,"bounciness",1.25f)));
-        float spar=p(c,"autoSpar",0);autoPunch-=dt;
-        if(spar!=1&&autoPunch<=0){hitActor=int(random()*2);hitAge=0;float side=hitActor?1.f:-1.f;head[hitActor].v=side*55*p(c,"punchPower",1);torso[hitActor].v=14;ring.v=4;hp[hitActor]=std::max(0.f,hp[hitActor]-.025f);autoPunch=spar==2?.6f:1.6f+random()*2;}
-        if(hp[0]<=0||hp[1]<=0){roundNumber++;roundAge=0;roundBell=1;hp={1,1};}for(int i=0;i<2;i++)hpLag[i]+=(hp[i]-hpLag[i])*std::min(1.f,dt*2);
-        float s=geometry.boxingScale();std::array<Vec4,2> pos{},heads{},torsos{},expr{},faces{};
-        for(int i=0;i<2;i++){float facing=i?-1.f:1.f;pos[i]={w*.5f-facing*68*s,(h-48)*(i?.766f:.758f),abs(sin(t*1.7f+i))*4.2f-2,sin(t*.85f+i)*7.5f};heads[i]={head[i].x,0,head[i].x*.006f,std::clamp(head[i].x*.025f,-.58f,.58f)};torsos[i]={std::clamp(torso[i].x*.08f,-.85f,.85f),0,std::clamp(torso[i].x*.04f,0.f,1.25f),hitAge<.25f&&i!=hitActor?sin(hitAge/.25f*3.14159f):0};expr[i]={wrap(t+i,4)>.0f&&wrap(t+i,4)<.12f?1.f:0.f,hitAge<.4f&&i==hitActor?1.f:0.f,hp[i]<.25f?1.f:0.f,hitAge<.1f&&i==hitActor?1.f:0.f};}
-        std::array<Vec4,4> gloves{},gloveMeta{};std::array<Vec4,6> puffs{};
-        if(hitActor>=0&&hitAge<.68f){int j=hitActor;float facing=j?1.f:-1.f,tx=pos[j][0]+(hitZone==1?facing*14*s:0),ty=pos[j][1]-(hitZone==3?65:hitZone==0?135:115)*s,k=std::clamp(hitAge/.09f,0.f,1.f),tail=std::clamp((hitAge-.21f)/.47f,0.f,1.f);gloves[0]={tx-facing*(1-k)*100*s,ty-(hitZone==0?(1-k)*70*s:0), j?0.f:3.14159f,(1-tail)*p(c,"punchPower",1)};gloveMeta[0]={tx-facing*100*s,ty,k,hitZone==0?1.f:hitZone==2?2.f:0.f};puffs[0]={tx,ty,hitAge,.6f};}
-        if(hitActor<0&&hitAge<.68f){float k=std::min(1.f,hitAge/.09f);gloves[0]={hitX-(1-k)*80*s,hitY,0,1-std::clamp((hitAge-.21f)/.47f,0.f,1.f)};gloveMeta[0]={hitX-80*s,hitY,k,0};puffs[0]={hitX,hitY,hitAge,.6f};}
-        program.v4("uScene",{p(c,"gloveStyle",0),p(c,"hudMode",0),ring.x,ring.x*.2f});program.v4("uHud",{hp[0],hpLag[0],hp[1],hpLag[1]});program.v4("uRound",{float(roundNumber),60-roundAge,roundBell,0});program.v4("uGymProps",{bags[0].x,bags[1].x,bags[2].x,tireAge<.8f?sin(tireAge/.8f*3.14159f):0});array("uFPos",pos);array("uFHead",heads);array("uFFace",faces);array("uFTorso",torsos);array("uFExpr",expr);array("uGloves",gloves);array("uGloveMeta",gloveMeta);array("uPuffs",puffs);
+    void renderBoxing(const Config&c,float w,float h,float t,float){
+        if(!boxing)boxing=std::make_unique<BoxingModel>();boxing->configure(c,w,h,geometry.boxingScale());
+        {CpuMeasure measure{graphicsStats.simulationMs};for(int i=0;i<simulationSteps;++i)boxing->step(fixedStep);}
+        const auto u=boxing->uniforms(t);program.v4("uScene",u.scene);program.v4("uHud",u.hud);program.v4("uRound",u.round);program.v4("uGymProps",u.props);
+        array("uFPos",u.pos);array("uFHead",u.head);array("uFFace",u.face);array("uFTorso",u.torso);array("uFExpr",u.expression);array("uGloves",u.gloves);array("uGloveMeta",u.gloveMeta);array("uPuffs",u.puffs);
     }
 };
 }

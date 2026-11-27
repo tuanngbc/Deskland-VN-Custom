@@ -227,6 +227,35 @@ int main(int argc,char**argv){try{
             report<<id<<"_CAST_WAIT_APPROACH_NIBBLE_BITE_PHYSICAL_REEL_CATCH_RETURN=PASS\n";
         }
     }
+    {
+        Config cfg=config;cfg.sceneParams["boxing-ring"]["autoSpar"]=1;
+        std::array<BoxingModel,4> zones;
+        for(int zone=0;zone<4;++zone){auto& model=zones[zone];model.configure(cfg,1080,700,1);auto foot=model.foot(1);
+            V2 point{foot.x+(zone==1?20.f:0.f),foot.y-115+(zone==0?-22.f:zone==3?48.f:0.f)};
+            model.click(point);check(model.impacts==0&&model.fighters[1].hp==1,"Boxing damage occurred before glove impact");
+            for(int step=0;step<8;++step)model.step(1.f/120);check(model.impacts==0,"Boxing wind-up was skipped");
+            for(int step=0;step<10;++step)model.step(1.f/120);
+            check(model.impacts==1&&model.fighters[1].hp<1&&model.fighters[1].hpLag>model.fighters[1].hp,"Boxing impact/lagged health absent");
+        }
+        check(zones[0].fighters[1].headY.x>0&&zones[0].fighters[1].squash.x<0,"Head-top impact lacks vertical compression");
+        check(zones[1].fighters[1].headX.x>0&&zones[1].fighters[1].faceX.x>0,"Cheek impact lacks asymmetric face response");
+        check(zones[2].fighters[1].headY.x<0&&zones[2].fighters[1].squash.x>0,"Chin impact lacks upward stretch");
+        check(zones[3].fighters[1].dent.x>0,"Body shot lacks torso dent");
+        BoxingModel combo;combo.configure(cfg,1080,700,1);auto foot=combo.foot(1);for(int i=0;i<4;++i)combo.click({foot.x,foot.y-115});
+        for(int i=0;i<15;++i)combo.step(1.f/120);
+        check(combo.impacts==4&&combo.fighters[1].combo==4&&combo.fighters[1].dizzy>0,"Four-glove combo/dizzy state missing");
+        BoxingModel props;props.configure(cfg,1080,700,1);props.click({152,652*.18f+82});check(props.bags[0].x==0&&props.bags[0].v==0,"Bag reacted before impact");
+        for(int i=0;i<20;++i)props.step(1.f/120);check(abs(props.bags[0].x)>.01f,"Bag pendulum did not respond to glove");
+        props.click({120,652*.845f});check(props.tire>0&&props.ring.v!=0,"Tire smash lacks ring response");
+        auto round=props.roundNumber;props.click({540,44});check(props.roundNumber!=round&&props.roundSeconds==60,"HUD did not start next round");
+        for(int i=0;i<11200;++i)props.step(1.f/120);check(props.roundNumber>=3,"Round clock did not advance naturally");
+        Config autoConfig=cfg;autoConfig.sceneParams["boxing-ring"]["autoSpar"]=2;BoxingModel ai;ai.configure(autoConfig,1080,700,1);for(int i=0;i<160;++i)ai.step(1.f/120);check(ai.impacts>=2,"Fast auto-spar did not launch and land punches");
+        SceneRuntime ringScene(gl,sceneIndex("boxing-ring"));allocate(384,216);View v{0,0,1080,700,1080,700};noiseTexture.bind(gl,0);ringScene.render(cfg,v,{},weather,1,0,stop,384.f/1080,216.f/700);
+        auto target=ringScene.boxingState()->foot(1);ringScene.click(target.x+20,target.y-115);
+        for(int i=0;i<5;++i){noiseTexture.bind(gl,0);ringScene.render(cfg,v,{},weather,1+(i+1)*.04f,.04f,stop,384.f/1080,216.f/700);}
+        check(ringScene.boxingState()->impacts==1,"Native scene did not consume Boxing model");png(evidence/"boxing-native-cheek-impact.png",384,216,capture(384,216));
+        report<<"BOXING_DELAYED_FOUR_ZONE_SPRING_FACE_TORSO_IMPACTS=PASS\nBOXING_FOUR_GLOVE_COMBO_AND_DIZZY=PASS\nBOXING_BAG_TIRE_ROUND_AND_AUTOSPARRING=PASS\nBOXING_ACTUAL_RENDERER_INTEGRATION=PASS\n";
+    }
     for(auto shape:std::array<std::pair<int,int>,2>{{{2560,1080},{1080,1920}}}){
         int w=shape.first,h=shape.second;allocate(w,h);int id=sceneIndex(w>h?"beach":"cat-hill");SceneRuntime scene(gl,id);noiseTexture.bind(gl,0);scene.render(config,{0,0,float(w),float(h),float(w),float(h)},icons,weather,6.,.04f,stop);png(evidence/(w>h?"ultrawide-2560x1080.png":"portrait-1080x1920.png"),w,h,capture(w,h));
     }report<<"ULTRAWIDE_PORTRAIT_RENDER=PASS\n";
