@@ -11,9 +11,9 @@ template<class Valid>std::vector<V2> waterRoute(V2 start,V2 target,float w,float
     float step=std::max(32.f,std::max(w,h)/128.f);int nx=int(ceil(w/step)),ny=int(ceil(h/step)),count=nx*ny;if(count>32768)return {};
     auto point=[&](int n){return V2{(n%nx+.5f)*step,(n/nx+.5f)*step};};
     std::vector<signed char> pass(count,-1);auto cellValid=[&](int n){if(pass[n]<0)pass[n]=valid(point(n),radius)?1:0;return pass[n]==1;};
-    auto near=[&](V2 q){int best=-1;float distance=1e9;int cx=int(q.x/step),cy=int(q.y/step);
+    auto nearestCell=[&](V2 q){int best=-1;float distance=1e9;int cx=int(q.x/step),cy=int(q.y/step);
         for(int y=std::max(0,cy-3);y<std::min(ny,cy+4);y++)for(int x=std::max(0,cx-3);x<std::min(nx,cx+4);x++){int n=y*nx+x;float d=(point(n)-q).length();if(d<distance&&cellValid(n)&&line(q,point(n))){best=n;distance=d;}}return best;};
-    int source=near(start),goal=near(target);if(source<0||goal<0)return {};
+    int source=nearestCell(start),goal=nearestCell(target);if(source<0||goal<0)return {};
     struct Node{float cost;int cell;bool operator<(const Node&b)const{return cost>b.cost;}};
     std::priority_queue<Node> open;std::vector<float> cost(count,std::numeric_limits<float>::infinity());std::vector<int> parent(count,-1);cost[source]=0;open.push({0,source});
     int visits=0;while(!open.empty()&&visits++<count*4){int n=open.top().cell;open.pop();if(n==goal)break;
