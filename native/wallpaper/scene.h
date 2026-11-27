@@ -25,7 +25,7 @@ class SceneRuntime {
     std::vector<RECT> previousIcons;float previousW=0,previousH=0,previousSigma=-1,previousWarp=-1;
     std::array<Cat,15> cats{};std::array<ClickFx,8> effects{};size_t effectNext=0;float age=0;
     Vec4 toy{0,0,0,0};float fishing=0,fishingAge=0;POINT fishingPoint{};
-    std::array<NativeFish,8> fishActors{};int hookedFish=-1;float castY=0;
+    std::array<NativeFish,8> fishActors{};int hookedFish=-1;float castY=0;V2 rodAnchor{},lineHook{};int caughtFish=0;
     std::array<Spring,2> head{},torso{};Spring ring,bag;
     std::array<float,2> hp{1,1},hpLag{1,1};int hitActor=-1;float hitAge=100,hitX=0,hitY=0,autoPunch=0;int melonBites=0;float fanMultiplier=1;
     float ballX=.5f,ballY=.5f,targetX=.5f,targetY=.5f;int passes=0;float passAge=0;
@@ -203,6 +203,8 @@ public:
     const Body& meadowBoy()const{return boyBody;}
     const std::array<Cat,15>& catActors()const{return cats;}
     const std::array<NativeFish,8>& fish()const{return fishActors;}
+    struct FishingStatus {int phase,actor,caught;V2 hook;};
+    FishingStatus fishingStatus()const{return {int(fishing),hookedFish,caughtFish,lineHook};}
     const Body& stadiumBall()const{return football;}
     const std::array<Body,22>& stadiumPlayers()const{return players;}
     const std::array<int,2>& stadiumScore()const{return footballScore;}
@@ -385,15 +387,24 @@ private:
     void clickFishing(float x,float y,ClickFx&fx){
         const bool aquarium=std::string(catalog()[index].id)=="aquarium";
         if(fishing==4||(fishing==1&&fishingAge<.22f))return;
-        if(!aquarium&&!navigable({x,y},8,true))return;
         if(fishing==3){fishing=4;fishingAge=0;if(hookedFish>=0)fishActors[hookedFish].mode=FishMode::Hooked;fx.value[3]=1;return;}
+        if(!aquarium&&!navigable({x,y},8,true))return;
         if(hookedFish>=0){fleeFish(fishActors[hookedFish],{float(fishingPoint.x),float(fishingPoint.y)},aquarium);hookedFish=-1;}
         if(aquarium&&(!fishWater({x,y},44,true)||obstacle(x,y,previousIcons))){
             fishing=fishing?5:0;fishingAge=0;fx.value[3]=2;
             for(auto&fish:fishActors)if(hypot(fish.x-x,fish.y-y)<160)fleeFish(fish,{x,y},true);return;
         }
         if(fishing==2&&hypot(x-fishingPoint.x,y-fishingPoint.y)<42){fishing=5;fishingAge=0;return;}
-        fishing=1;fishingAge=0;fishingPoint={LONG(x),LONG(y)};castY=aquarium?previousH*.12f:previousH;fx.value[3]=0;
+        fishing=1;fishingAge=0;fishingPoint={LONG(x),LONG(y)};castY=aquarium?previousH*.12f:previousH;rodAnchor={x,castY};
+        if(!aquarium){float nearest=1e9f;
+            // Audited original shore-anchor search; use a physical in-bounds
+            // edge fallback so a lifted actor never targets outside its world.
+            for(int j=0;j<24;j++){float a=j*6.283185f/24;
+                for(float distance=24;distance<=460;distance+=16){V2 q{x+cos(a)*distance,y+sin(a)*distance};
+                    if(geometry.contains(q,18)&&iconClear({q.x-10,q.y-10,20,20},previousIcons)&&field.sample(q.x,q.y,lastTime)<=-3){if(distance<nearest){nearest=distance;rodAnchor=q;}break;}}}
+            if(nearest==1e9f)for(auto o:geometry.outputs)if(o.contains({x,y})){rodAnchor={std::clamp(x+38,o.x+20,o.x+o.w-20),o.y+o.h-20};break;}
+        }
+        fx.value[3]=0;
     }
     float sceneScale()const{return geometry.boxingScale();}
     void clickBoxing(float x,float y){
@@ -469,10 +480,15 @@ private:
                 float nearest=1e9;for(int i=0;i<n;i++){float d=hypot(fishActors[i].x-fishingPoint.x,fishActors[i].y-fishingPoint.y);if(d<nearest&&fishActors[i].mode==FishMode::Swim){nearest=d;hookedFish=i;}}
                 if(hookedFish>=0){auto&fish=fishActors[hookedFish];auto path=waterRoute(fish.body.position,{float(fishingPoint.x)+12,float(fishingPoint.y)},w,h,aquarium?44.f:12.f,[&](V2 q,float r){return fishWater(q,r,aquarium);});
                     if(path.empty()){hookedFish=-1;fishing=5;fishingAge=0;}else{fish.mode=FishMode::Approach;fish.timer=0;routes[{"bait",size_t(hookedFish)}]={std::move(path),0};}}}
-            else if(fishing==3&&fishingAge>2.2f){fishing=5;fishingAge=0;if(hookedFish>=0){fleeFish(fishActors[hookedFish],{float(fishingPoint.x),float(fishingPoint.y)},aquarium);hookedFish=-1;}}
-            else if(fishing>=4&&fishingAge>1.2f){if(fishing==4&&hookedFish>=0){auto&fish=fishActors[hookedFish];fish.mode=FishMode::Caught;fish.timer=0;}fishing=0;fishingAge=0;hookedFish=-1;}}
+            else if(fishing==3&&fishingAge>(aquarium?1.35f:3.2f)){fishing=5;fishingAge=0;if(hookedFish>=0){fleeFish(fishActors[hookedFish],{float(fishingPoint.x),float(fishingPoint.y)},aquarium);hookedFish=-1;}}
+            else if(fishing==4&&hookedFish>=0){auto& fish=fishActors[hookedFish];V2 landing=aquarium?V2{float(fishingPoint.x),h*.12f+18}:rodAnchor;
+                if((fish.body.position-landing).length()<22&&fish.body.speed()<42){fish.mode=FishMode::Caught;fish.timer=0;caughtFish++;fishing=0;fishingAge=0;hookedFish=-1;}
+                else if(fishingAge>18){fleeFish(fish,{float(fishingPoint.x),float(fishingPoint.y)},aquarium);fishing=5;fishingAge=0;hookedFish=-1;}}
+            else if(fishing==5&&fishingAge>1.2f){fishing=0;fishingAge=0;hookedFish=-1;}}
         float fx=float(fishingPoint.x),fy=float(fishingPoint.y);float k=std::clamp(fishingAge/.6f,0.f,1.f);
-        std::array<Vec4,2> rod{{{fx,h,fx,fy},{fishing,k,fx,fy}}};if(fishing==1)rod[0]={fx,h,fx,h+(fy-h)*k-sin(k*3.14159f)*42};if(fishing>=4){k=std::clamp(fishingAge/1.2f,0.f,1.f);rod[0][3]=fy+(h-fy)*k-sin(k*3.14159f)*54;rod[1][1]=k;}array("uRod",rod);
+        std::array<Vec4,2> rod{{{rodAnchor.x,rodAnchor.y,fx,fy},{fishing,k,fx,fy}}};
+        if(fishing==1){float ease=1-(1-k)*(1-k);rod[0]={rodAnchor.x,rodAnchor.y,rodAnchor.x+(fx-rodAnchor.x)*ease,rodAnchor.y+(fy-rodAnchor.y)*ease-sin(k*3.14159f)*42};}
+        if(fishing>=4){k=std::clamp(fishingAge/1.2f,0.f,1.f);rod[0][2]=fx+(rodAnchor.x-fx)*k;rod[0][3]=fy+(rodAnchor.y-fy)*k-sin(k*3.14159f)*18;rod[1][1]=k;}array("uRod",rod);
         std::array<Vec4,8> fish{},body{};
         for(int i=0;i<n;i++){auto&b=fishActors[i].body;
             auto valid=[&](V2 q,float radius){return fishWater(q,radius,aquarium);};
@@ -489,7 +505,7 @@ private:
                 if(a.mode==FishMode::Approach&&a.timer>18){fleeFish(a,{fx,fy},aquarium);hookedFish=-1;fishing=5;fishingAge=0;target=b.target;}
                 else if(a.mode==FishMode::Approach&&(b.position-target).length()<20){a.mode=FishMode::Nibble;a.timer=0;}
                 if(a.mode==FishMode::Nibble&&a.timer>.8f){a.mode=FishMode::Bite;a.timer=0;fishing=3;fishingAge=0;}}
-            else if(a.mode==FishMode::Hooked){target={fx,fy+(h*.12f-fy)*std::clamp(fishingAge/1.2f,0.f,1.f)};speed=220;b.command=true;}
+            else if(a.mode==FishMode::Hooked){target=aquarium?V2{fx,h*.12f+18}:rodAnchor;speed=220;b.command=true;}
             else if(a.mode==FishMode::Caught){a.timer+=fixedStep;target={fx,std::max(16.f,h*.12f-80)};speed=180;b.command=true;if(a.timer>2.4f){a.mode=FishMode::Returning;target={fx,fy};b.aim(target);}}
             else if(a.mode==FishMode::Returning){target={fx,fy};speed=100;b.command=true;if(valid(b.position,aquarium?44.f:12.f)){fleeFish(a,{fx,fy},aquarium);target=b.target;}}
             else if(a.mode==FishMode::Flee){speed=130;a.timer-=fixedStep;target=b.target;if(a.timer<=0){a.mode=FishMode::Swim;b.command=false;b.idle=10;}}
@@ -500,7 +516,7 @@ private:
                 if(path.next<path.points.size()){target=path.points[path.next];if(path.next+1<path.points.size())b.command=false;}}}
             V2 separation{};for(int j=0;j<n;j++)if(j!=i&&fishActors[j].body.initialized){V2 d=b.position-fishActors[j].body.position;float distance=d.length();if(distance<48&&distance>.01f)separation=separation+unit(d)*((48-distance)/24);}
             bool lifted=a.mode==FishMode::Hooked||a.mode==FishMode::Caught||a.mode==FishMode::Returning;
-            steer(b,{speed,90,100,2.3f,5,aquarium?44.f:12.f,false},target,fixedStep,[&](V2 q,float r){return lifted?geometry.contains(q,r):valid(q,r);},lifted?V2{}:separation);
+            steer(b,{speed,a.mode==FishMode::Hooked?200.f:90.f,a.mode==FishMode::Hooked?200.f:100.f,2.3f,5,aquarium?44.f:12.f,false},target,fixedStep,[&](V2 q,float r){return lifted?geometry.contains(q,r):valid(q,r);},lifted?V2{}:separation);
             b.target=finalTarget;if(a.mode==FishMode::Approach)b.command=true;
             a.phase+=fixedStep*(2.1f+b.speed()*.08f);
             a.x=b.position.x;a.y=b.position.y;a.heading=b.heading;
@@ -510,6 +526,7 @@ private:
         // One lifted fish, attached to the physical fish body; no duplicate
         // underwater body and no second shader-generated flight trajectory.
         if(!aquarium&&fishing==4&&hookedFish>=0){rod[0][2]=fishActors[hookedFish].x;rod[0][3]=fishActors[hookedFish].y;array("uRod",rod);}
+        lineHook={rod[0][2],rod[0][3]};
         if(aquarium){
             program.f("uFishN",float(n));array("uFish",fish);array("uFishB",body);
             int want=std::clamp(int(p(c,"plants",.6f)*32),0,32),np=0;std::array<Vec4,32> plants{};
@@ -520,7 +537,9 @@ private:
                 plants[np++]={x,bed+3,height,hash(i,2,30)*100};}
             program.f("uPlantN",float(np));array("uPlant",plants);program.f("uLight",p(c,"light",1));program.f("uBubbles",p(c,"bubbles",1));program.f("uSurf",h*.12f);
             float hookY=fishing==1?castY+(fy-castY)*k:fishing>=4?fy+(h*.12f-fy)*std::clamp(fishingAge/1.2f,0.f,1.f):fy;
-            program.v4("uLine",{fx,fx,hookY,fishing?1.f:0.f});program.v4("uLineB",{fishing==3?11.f:hookedFish>=0&&fishActors[hookedFish].mode==FishMode::Nibble?2+abs(sin(t*7))*2:0.f,fishing==2||fishing==3?1.f:0.f,fishing==3?1.f:0.f,fishing==4?1.f:0.f});
+            lineHook={fx,hookY};
+            if(fishing==4&&hookedFish>=0){const auto& a=fishActors[hookedFish];float size=.65f+hash(hookedFish,2,80)*.6f;lineHook=a.body.position+V2{cos(a.heading),sin(a.heading)}*(14*size);}
+            program.v4("uLine",{fx,lineHook.x,lineHook.y,fishing?1.f:0.f});program.v4("uLineB",{fishing==3?11.f:hookedFish>=0&&fishActors[hookedFish].mode==FishMode::Nibble?2+abs(sin(t*7))*2:0.f,fishing==2||fishing==3?1.f:0.f,fishing==3?1.f:0.f,fishing==4?1.f:0.f});
         }else{program.f("uFishN",float(n));program.v4("uFish",fish.front().data(),4);}
     }
     void renderPorch(const Config&c,float w,float h,float t,float dt){

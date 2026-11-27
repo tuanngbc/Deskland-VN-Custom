@@ -185,6 +185,48 @@ int main(int argc,char**argv){try{
         check(match.stadiumScore()[0]==score[0]+1,"Actual goal-line crossing did not score");png(evidence/"stadium-native-physical-goal.png",192,108,capture(192,108));
         report<<"STADIUM_PHYSICAL_KICK_KEEPER_FORMATION_GOAL_CROSSING=PASS\n";
     }
+    {
+        // Exercise actual fishing lifecycles using read-only runtime state;
+        // no probe forces a bite, hook, catch or timeout transition.
+        for(const char* id:{"lake","aquarium"})for(int outcome=0;outcome<3;++outcome){
+            SceneRuntime fishing(gl,sceneIndex(id));View v{0,0,960,540,960,540};Config cfg=config;
+            cfg.sceneParams["aquarium"]["fish"]=1;allocate(96,54);float elapsed=0;
+            auto draw=[&](float dt){elapsed+=dt;noiseTexture.bind(gl,0);fishing.render(cfg,v,{},weather,10+elapsed,dt,stop,.1f,.1f);};
+            draw(0);check(fishing.fish()[0].body.initialized,"Fishing fixture has no physical fish");
+            const V2 bait=fishing.fish()[0].body.position;fishing.click(bait.x,bait.y);check(fishing.fishingStatus().phase==1,"Cast did not start");
+            bool sawWait=false,sawNibble=false,sawBite=false;int selected=-1;
+            for(int frame=0;frame<850;++frame){draw(.04f);const auto state=fishing.fishingStatus();sawWait|=state.phase==2;
+                if(state.actor>=0){selected=state.actor;auto mode=fishing.fish()[selected].mode;sawNibble|=mode==FishMode::Nibble;}
+                if(outcome==1&&sawNibble)break;
+                if(state.phase==3){sawBite=true;break;}
+            }
+            check(sawWait&&sawNibble&&selected>=0,"Fishing never approached and nibbled actual bait");
+            if(outcome==1){
+                const auto before=fishing.fish()[selected].body.position;fishing.click(bait.x,bait.y);
+                check(fishing.fish()[selected].mode==FishMode::Flee&&(fishing.fish()[selected].body.position-before).length()==0&&fishing.fishingStatus().caught==0,"Early hook did not flee continuously");
+                report<<id<<"_EARLY_HOOK_FLEE_NO_CATCH=PASS\n";continue;
+            }
+            check(sawBite,"Fish did not enter bite window");
+            if(outcome==2){for(int frame=0;frame<100;++frame)draw(.04f);
+                check(fishing.fishingStatus().phase!=3&&fishing.fishingStatus().caught==0&&fishing.fish()[selected].mode!=FishMode::Bite,"Missed bite did not escape");
+                report<<id<<"_MISSED_BITE_ESCAPE=PASS\n";continue;
+            }
+            const auto before=fishing.fish()[selected].body.position;fishing.click(bait.x,bait.y);
+            check(fishing.fishingStatus().phase==4&&(fishing.fish()[selected].body.position-before).length()==0,"Hook click teleported fish");
+            bool reeled=false;for(int frame=0;frame<550&&fishing.fishingStatus().caught==0;++frame){auto previous=fishing.fish()[selected].body.position;draw(.04f);
+                check((fishing.fish()[selected].body.position-previous).length()<9.5f,"Reeling moved fish discontinuously");
+                if(fishing.fishingStatus().phase==4){reeled=true;auto hook=fishing.fishingStatus().hook;const auto& fish=fishing.fish()[selected];
+                    if(std::string(id)=="aquarium"){float size=.65f+hash(selected,2,80)*.6f;V2 mouth=fish.body.position+V2{cos(fish.heading),sin(fish.heading)}*(14*size);check((hook-mouth).length()<.01f,"Reeling hook detached from physical fish mouth");}
+                    else check((hook-fish.body.position).length()<.01f,"Lake flight duplicated shader fish trajectory");
+                }
+            }
+            check(reeled&&fishing.fishingStatus().caught==1,"Physical fish never reached landing to complete catch");
+            png(evidence/(std::string(id)+"-completed-physical-catch.png"),96,54,capture(96,54));
+            for(int frame=0;frame<750&&fishing.fish()[selected].mode!=FishMode::Swim;++frame)draw(.04f);
+            check(fishing.fish()[selected].mode==FishMode::Swim,"Caught actor did not return to normal swimming");
+            report<<id<<"_CAST_WAIT_APPROACH_NIBBLE_BITE_PHYSICAL_REEL_CATCH_RETURN=PASS\n";
+        }
+    }
     for(auto shape:std::array<std::pair<int,int>,2>{{{2560,1080},{1080,1920}}}){
         int w=shape.first,h=shape.second;allocate(w,h);int id=sceneIndex(w>h?"beach":"cat-hill");SceneRuntime scene(gl,id);noiseTexture.bind(gl,0);scene.render(config,{0,0,float(w),float(h),float(w),float(h)},icons,weather,6.,.04f,stop);png(evidence/(w>h?"ultrawide-2560x1080.png":"portrait-1080x1920.png"),w,h,capture(w,h));
     }report<<"ULTRAWIDE_PORTRAIT_RENDER=PASS\n";
