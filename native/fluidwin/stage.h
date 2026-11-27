@@ -57,7 +57,7 @@ class Manager {
         IDWriteTextFormat* text = nullptr;
         std::vector<Card> cards;
         int hover = -1, page = 0, capacity = 1;
-        bool hidden = false;
+        bool hidden = false,blocked=false,suppressed=false;RECT available{};
         ULONGLONG hoverAt = 0;
         explicit Rail(Manager* m): owner(m) {}
         ~Rail() { clear(); if (text) text->Release(); glass.chiudi(); }
@@ -177,8 +177,12 @@ public:
         windows=std::move(next);
         for(auto& r:rails) {
             const bool hide=fullscreen&&fullscreen(r->monitor);
-            if(hide) { closePeek(); ShowWindow(r->glass.fin,SW_HIDE); }
-            else { if(!same) rebuild(*r); else for(auto& c:r->cards) preview(*r,c); ShowWindow(r->glass.fin,SW_SHOWNOACTIVATE); draw(*r); }
+            const bool resumed=r->suppressed&&!hide;r->suppressed=hide;
+            const RECT area=work(*r);
+            if(hide) { closePeek();for(auto& c:r->cards)preview(*r,c);ShowWindow(r->glass.fin,SW_HIDE); }
+            else {if(!same||resumed||!EqualRect(&area,&r->available))rebuild(*r);else for(auto& c:r->cards)preview(*r,c);
+                if(!r->blocked){ShowWindow(r->glass.fin,SW_SHOWNOACTIVATE);draw(*r);}}
+
         }
         pollCapture();
     }
@@ -188,6 +192,10 @@ public:
     }
     size_t windowCount() const {return windows.size();}
     size_t railCount() const {return rails.size();}
+#ifdef TLAUNCHER_NATIVE_CI
+    size_t ciThumbnailCount()const{size_t n=0;for(const auto&r:rails)for(const auto&c:r->cards)if(c.thumbnail)n++;return n;}
+    HWND ciSelected()const{return rails.empty()||rails[0]->cards.empty()?nullptr:rails[0]->cards[0].source().hwnd;}
+#endif
     size_t cachedPreviewCount()const{size_t n=0;for(const auto&r:rails)for(const auto&c:r->cards)if(c.minimized&&c.bitmap)n++;return n;}
     size_t snapshotBytes() const {std::lock_guard<std::mutex> lock(stampa::savedMutex);size_t n=0;for(auto& s:stampa::saved)n+=s.second->pixels.size()*4;return n;}
     ~Manager() {stop();}
@@ -227,24 +235,33 @@ private:
         MONITORINFO mi{};mi.cbSize=sizeof(mi);GetMonitorInfoW(rail.monitor,&mi);
         RECT area=menu::areaLibera(rail.monitor,mi.rcWork);
         // Reserve the actual Notch/Dock footprint without altering Windows work areas.
-        if(reserved) {RECT r=reserved(rail.monitor),over{};if(IntersectRect(&over,&area,&r)) {
-            if(r.top<=area.top&&r.bottom<area.bottom) area.top=r.bottom;
-            else if(r.bottom>=area.bottom&&r.top>area.top)area.bottom=r.top;
+        if(reserved){RECT r=reserved(rail.monitor),over{};if(IntersectRect(&over,&area,&r)){
+            if(r.right-r.left>=r.bottom-r.top){if(r.bottom>=mi.rcMonitor.bottom-1)area.bottom=std::min(area.bottom,r.top);else if(r.top<=mi.rcMonitor.top+1)area.top=std::max(area.top,r.bottom);}
+            else{if(r.left<=mi.rcMonitor.left+1)area.left=std::max(area.left,r.right);else if(r.right>=mi.rcMonitor.right-1)area.right=std::min(area.right,r.left);}
         }}
         if(exclusions){
             const int width=int((settings.height*1.55+20)*rail.glass.dpi),gap=int(settings.edgeGap*rail.glass.dpi);
             RECT side{settings.right?area.right-width-gap:area.left+gap,area.top,settings.right?area.right-gap:area.left+width+gap,area.bottom};
+            // Subtract all intersecting intervals before choosing the largest
+            // free section. The result cannot depend on popup enumeration order.
+            std::vector<std::pair<LONG,LONG>> free{{area.top,area.bottom}};
             for(auto obstacle:exclusions(rail.monitor)){RECT overlap{};if(!IntersectRect(&overlap,&side,&obstacle))continue;
-                if(overlap.top-area.top>area.bottom-overlap.bottom)area.bottom=overlap.top-gap;else area.top=overlap.bottom+gap;
-                side.top=area.top;side.bottom=area.bottom;
+                std::vector<std::pair<LONG,LONG>> next;for(auto [top,bottom]:free){
+                    if(overlap.bottom+gap<=top||overlap.top-gap>=bottom)next.push_back({top,bottom});
+                    else{if(overlap.top-gap>top)next.push_back({top,std::min(bottom,overlap.top-gap)});if(overlap.bottom+gap<bottom)next.push_back({std::max(top,overlap.bottom+gap),bottom});}
+                }free=std::move(next);
             }
+            auto best=std::max_element(free.begin(),free.end(),[](auto a,auto b){return a.second-a.first<b.second-b.first;});
+            if(best==free.end())area.bottom=area.top;else{area.top=best->first;area.bottom=best->second;}
         }
         return area;
     }
     void layout(Rail& rail) {
         const RECT area=work(rail);const float d=rail.glass.dpi;
         const int pad=int(10*d),ch=int(settings.height*d),gap=int(settings.spacing*d),edge=int(settings.edgeGap*d);
-        const int width=int(settings.height*1.55*d)+2*pad;
+        const int width=int(settings.height*1.55*d)+2*pad;rail.available=area;
+        rail.blocked=area.right-area.left<width+2*edge||area.bottom-area.top<(rail.cards.empty()?2*pad:ch+2*pad)+2*edge;
+        if(rail.blocked){closePeek();for(auto& c:rail.cards)preview(rail,c);ShowWindow(rail.glass.fin,SW_HIDE);return;}
         const int h=std::max(1,std::min(int(area.bottom-area.top-2*edge),int(rail.cards.size())*(ch+gap)+2*pad));
         const int x=settings.right?area.right-width-edge:area.left+edge;
         rail.glass.posiziona(rail.hidden?(settings.right?area.right-int(5*d):area.left):x,area.top+std::max(edge,int((area.bottom-area.top-h)/2)),rail.hidden?int(5*d):width,std::max(1,h));
@@ -255,7 +272,7 @@ private:
             c.rect={pad+inset,top,width-pad-inset,top+ch};
             preview(rail,c);
         }
-        if(!(fullscreen&&fullscreen(rail.monitor)))ShowWindow(rail.glass.fin,SW_SHOWNOACTIVATE);
+        if(!rail.suppressed&&!(fullscreen&&fullscreen(rail.monitor)))ShowWindow(rail.glass.fin,SW_SHOWNOACTIVATE);
         draw(rail);
     }
     void groupMenu(Rail&rail,int index,POINT at){
@@ -306,14 +323,14 @@ private:
     }
     void preview(Rail& rail,Card& c) {
         const Window& w=c.source();auto cached=stampa::lastImage(w.hwnd);const ULONGLONG at=cached?cached->at:0;
-        if(c.registered==w.hwnd&&c.minimized==bool(IsIconic(w.hwnd))&&c.generation==rail.glass.giroRt&&c.snapshotAt==at&&!rail.hidden&&(c.thumbnail||c.bitmap)) {
+        if(c.registered==w.hwnd&&c.minimized==bool(IsIconic(w.hwnd))&&c.generation==rail.glass.giroRt&&c.snapshotAt==at&&!rail.hidden&&!rail.blocked&&!rail.suppressed&&(c.thumbnail||c.bitmap)) {
             if(c.thumbnail){SIZE sz{};DwmQueryThumbnailSourceSize(c.thumbnail,&sz);RECT r=c.rect;r.bottom-=int(25*rail.glass.dpi);r=aspectFit(sz.cx,sz.cy,r);DWM_THUMBNAIL_PROPERTIES p{};p.dwFlags=DWM_TNP_RECTDESTINATION;p.rcDestination=r;DwmUpdateThumbnailProperties(c.thumbnail,&p);}return;
         }
         if(c.generation!=rail.glass.giroRt&&c.icon){c.icon->Release();c.icon=nullptr;}
         if(c.thumbnail)DwmUnregisterThumbnail(c.thumbnail);c.thumbnail=nullptr;
         if(c.bitmap)c.bitmap->Release();c.bitmap=nullptr;
         c.registered=w.hwnd;c.minimized=IsIconic(w.hwnd);c.generation=rail.glass.giroRt;c.snapshotAt=at;
-        if(!w.valid()||rail.hidden)return;
+        if(!w.valid()||rail.hidden||rail.blocked||rail.suppressed)return;
         if(IsIconic(w.hwnd)||settings.perspective){c.bitmap=snapshot(w,rail.glass);if(!IsIconic(w.hwnd))requestCapture(w);}
         else if(SUCCEEDED(DwmRegisterThumbnail(rail.glass.fin,w.hwnd,&c.thumbnail))) {
             SIZE sz{};DwmQueryThumbnailSourceSize(c.thumbnail,&sz);RECT r=c.rect;r.bottom-=int(25*rail.glass.dpi);r=aspectFit(sz.cx,sz.cy,r);
@@ -353,7 +370,7 @@ private:
         v.finisci();
     }
     void openPeek(Rail& rail,const Window& w) {
-        closePeek();if(!settings.peek||!w.valid())return;
+        closePeek();if(!settings.peek||!w.valid()||rail.blocked||rail.suppressed)return;
         if(!peek.glass.crea(L"TLauncher.Native.StagePeek",vetro::procedura<Peek>,&peek,false))return;
         peek.source=w;const float d=rail.glass.dpi;RECT a=work(rail),rr{};GetWindowRect(rail.glass.fin,&rr);
         RECT wr{};GetWindowRect(w.hwnd,&wr);int sw=wr.right-wr.left,sh=wr.bottom-wr.top;

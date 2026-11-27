@@ -99,6 +99,25 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     st.perspective=true;manager.configure(st);ciPump(100);manager.changed();rail=FindWindowW(L"TLauncher.Native.Stage",nullptr);
     if(!rail||!IsIconic(source)||!manager.cachedPreviewCount()||!phase3Snapshot(rail,evidence/L"phase3-stage-perspective.bmp"))return 93;
     report<<"STAGE_NATIVE_PROJECTIVE_CARD_RENDER=PASS\n";
+    // Actual rail geometry follows each synthetic Dock edge footprint without
+    // changing the real Windows work area, even when inventory is unchanged.
+    MONITORINFO monitor{sizeof(monitor)};HMONITOR display=MonitorFromWindow(rail,MONITOR_DEFAULTTONEAREST);GetMonitorInfoW(display,&monitor);RECT reservation{};
+    manager.reserved=[&](HMONITOR){return reservation;};
+    for(int edge=0;edge<4;++edge){reservation=monitor.rcMonitor;
+        if(edge==0)reservation.top=reservation.bottom-100;else if(edge==1)reservation.bottom=reservation.top+100;
+        else if(edge==2)reservation.right=reservation.left+100;else reservation.left=reservation.right-100;
+        manager.changed();RECT actual{},overlap{};GetWindowRect(rail,&actual);
+        if(IsWindowVisible(rail)&&IntersectRect(&overlap,&actual,&reservation))return 121;
+    }
+    reservation={};RECT obstacle=monitor.rcWork;manager.exclusions=[&](HMONITOR){return std::vector<RECT>{obstacle};};manager.changed();
+    if(IsWindowVisible(rail))return 122;
+    obstacle={};manager.changed();if(!IsWindowVisible(rail))return 123;
+    MONITORINFO unchanged{sizeof(unchanged)};GetMonitorInfoW(display,&unchanged);if(!EqualRect(&monitor.rcWork,&unchanged.rcWork))return 124;
+    st.perspective=false;manager.configure(st);rail=FindWindowW(L"TLauncher.Native.Stage",nullptr);
+    bool fullscreen=false;manager.fullscreen=[&](HMONITOR){return fullscreen;};manager.changed();
+    fullscreen=true;manager.changed();if(IsWindowVisible(rail)||manager.ciThumbnailCount())return 125;
+    fullscreen=false;manager.changed();if(!IsWindowVisible(rail))return 126;
+    report<<"STAGE_FOUR_EDGE_RESERVED_GEOMETRY=PASS\nSTAGE_DYNAMIC_EXCLUSION_HIDE_RESUME=PASS\nSTAGE_FULLSCREEN_PREVIEW_RELEASE_RESUME=PASS\nWINDOWS_WORK_AREA_UNCHANGED=PASS\n";
     SetCursorPos(previousPointer.x,previousPointer.y);
     DestroyWindow(source);manager.changed();st.enabled=false;manager.configure(st);
     if(manager.railCount()||manager.snapshotBytes()||FindWindowW(L"TLauncher.Native.Stage",nullptr)||FindWindowW(L"TLauncher.Native.StagePeek",nullptr))return 72;
