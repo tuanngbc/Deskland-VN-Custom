@@ -3,8 +3,8 @@
 | Workload | CPU/RAM/GPU/startup/frame pacing |
 | --- | --- |
 | Untouched FluidWin 1.3.1 | Owner reports good experience; comparable instrumented values NOT_VERIFIED |
-| Branded native Phase 1 | Hosted functional smoke only; owner measurements PENDING |
-| Native + Wallpaper | WAITING_PHASE_2 |
+| Accepted native c011c2b11b3d | Owner functional acceptance 11/11; comparable owner measurements PENDING |
+| Native + Wallpaper | Hosted serial accepted-baseline/disabled/enabled integration and exact main+Guardian sampling; use final run's `accepted-baseline-comparison.json` and three resource JSONs. Physical GPU/owner measurements PENDING |
 | Native + Stage | WAITING_PHASE_3 |
 | Native + Spotlight | WAITING_PHASE_3 |
 | Full TLauncher | WAITING_PHASE_5 |
@@ -23,3 +23,10 @@ count. CPU is normalized across logical processors. GPU is summed across owned P
 per physical engine then busiest engine per adapter, not a sum of unrelated engines.
 Unavailable counters remain null. DWM and sampler overhead require separate Task
 Manager observation; do not attribute whole-machine GPU load solely to TLauncher.
+
+The hosted comparison downloads and verifies the exact c011c2b11b3d artifact,
+runs one shell at a time with fresh isolated profiles, records first-observed and
+warm message-window startup and bounded UI message round-trip latency. It does
+not purge OS caches, so first-observed is not proof of cold startup. Enabled
+wallpaper uses pinned hosted-only Mesa software GL: its CPU, RAM and frame pacing
+cannot establish GTX 1070 hardware performance. Software DLLs are never packaged.

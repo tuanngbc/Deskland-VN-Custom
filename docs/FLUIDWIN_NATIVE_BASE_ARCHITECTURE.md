@@ -36,3 +36,10 @@ Hosted UCRT64 GCC C++20/static runtime follows the upstream build recipe. Only
 `.github/workflows/build-rust-test.yml` builds/packages; no local build, install,
 runtime verification or benchmark is authorized. Phase 0 builds the exact untouched
 upstream checkout separately. CI success is not owner visual/performance acceptance.
+
+Owner accepted c011c2b11b3d (Actions 45870002906), 11/11 PASS. Phase 2 integration
+adds only controller/snapshot lifecycle, existing mouse-input forwarding, shared
+weather reads, and an additional native Settings page. See
+`WALLPAPER_REENGINEERING.md`; the accepted animation/capture/Dock implementations
+and their timing/easing remain unchanged. Old integration audit documents describe
+superseded architectures and remain preserved as historical evidence.

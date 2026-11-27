@@ -2,7 +2,8 @@
 
 Status vocabulary: NOT_STARTED, IMPLEMENTED, VERIFIED_CI, VERIFIED_OWNER,
 BLOCKED_WITH_EVIDENCE, EXCLUDED_BY_OWNER. A retained source implementation is not
-proof of successful hardware behavior. Owner gate is PENDING.
+proof of successful hardware behavior. Native Base c011c2b11b3d, Actions
+45870002906, is VERIFIED_OWNER 11/11 PASS. Phase 2 owner gate remains PENDING.
 
 | Upstream subsystem (source audit) | Current status |
 | --- | --- |
@@ -25,4 +26,6 @@ proof of successful hardware behavior. Owner gate is PENDING.
 Complete headers and three embedded upstream wallpaper assets are retained; no
 FluidWin logo/showcase media is presented as TLauncher. Asset provenance is in
 THIRD_PARTY_NOTICES. Actual visuals, physical multi-monitor and whole-process
-performance await owner acceptance; no VERIFIED_OWNER claims are made.
+performance for the newly extended Phase 2 candidate await owner acceptance.
+The accepted Native Base is retained separately for direct comparison; its
+acceptance does not automatically approve new wallpaper code.

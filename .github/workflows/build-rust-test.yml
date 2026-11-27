@@ -159,6 +159,10 @@ jobs:
           Copy-Item native/fluidwin/LICENSE (Join-Path $dir 'FLUIDWIN-LICENSE.txt')
           Copy-Item native/fluidwin/PROVENANCE.json $dir
           Copy-Item docs/NATIVE_BASE_UAT.md (Join-Path $dir 'NATIVE-BASE-UAT.md')
+          if (Test-Path native-build/wallpaper) {
+            Copy-Item docs/WALLPAPER_UAT.md (Join-Path $dir 'WALLPAPER-UAT.md')
+            Copy-Item docs/WALLPAPER_REENGINEERING.md (Join-Path $dir 'WALLPAPER-ARCHITECTURE.md')
+          }
           Copy-Item tools/native-owner-uat.ps1 $dir
           Copy-Item tools/legacy-uat-library.ps1 $dir
           Copy-Item tools/native-resource-diagnostics.ps1 $dir

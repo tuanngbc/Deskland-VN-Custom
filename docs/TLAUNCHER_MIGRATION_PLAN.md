@@ -16,8 +16,8 @@ New branch: `codex/fluidwin-native-base-v1.0.3`, based on preserved old HEAD.
 | Phase | Deliverable | Gate |
 | --- | --- | --- |
 | 0 | Untouched FluidWin reference build and technical evidence | Hosted CI |
-| 1 | Branded native foundation, true Notch switch, updater removed, isolated TEST | **Stop for direct owner acceptance** |
-| 2 | Wallpaper (16 themes), displays/panorama, weather/solar | Owner must first accept Phase 1 |
+| 1 | Branded native foundation, true Notch switch, updater removed, isolated TEST | **OWNER PASS 11/11, c011c2b11b3d** |
+| 2 | Re-engineered native wallpaper (16 themes), displays/panorama, weather/solar | Authorized; stop for Phase 2 owner acceptance |
 | 3 | Stage/Peek and Compact/Fullscreen Spotlight, shared services | Retain upstream Launcher |
 | 4 | Clocks, screenshot editor, recorder, resource indicators, migration/localization | Preserve all stable features |
 | 5 | Consolidation, full parity/recovery/performance/UAT | Owner acceptance before release |

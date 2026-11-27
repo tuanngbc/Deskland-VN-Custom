@@ -69,3 +69,41 @@ off/on against accepted baseline: startup, native Launcher/Settings/Notch, Guard
 scene images, resources, hotplug/topology, pause and recovery. CI counters do not
 establish GTX 1070 owner performance. No WALLPAPER TEST shortcut until the Phase 2
 package is complete and passing. No local candidate execution or benchmark.
+
+## Scene specifications and ownership
+
+All rows share the bounded field/noise/GL owners, native input snapshot and
+validated catalog parameter definitions. No legacy scene object is retained.
+
+| Reference | Preserved behavior in new scene owner |
+| --- | --- |
+| meadow.rs, meadow-boy.js, meadow-kitten.js | Icon cloud fields, moving clouds, click dandelions/puffs, boy atlas, native kite/ribbons/tether, kitten, show/hide controls. Atlas layout and kite fabric math are audited artwork reuse. |
+| beach.rs | Icon shoreline, shallow/shoal/warp, palms/sun shadows, kayak target and birds, water ripples and sand marks. |
+| maldives.rs | Turquoise shoreline, palms, fish schools/turtles/kayaks/birds and click response. |
+| lake.rs | Icon banks and cloud reflection, koi, cast/wait/bite/catch/empty reel states, click ripples. |
+| sky.rs | Day/dusk/night, clouds, birds/plane, moon/stars, daytime cloud puffs and nighttime click meteors. |
+| ocean.rs | Shared clouds, boats/yachts/birds, waypoint attraction and ripples. |
+| rainforest.rs | Rain/mist/wind, birds/fireflies, water ripple interaction. |
+| mocchau.rs | Blossom/petals/mist/wind, birds and click petal burst. |
+| tet_sakura.rs | Petals, lanterns, swallows and click burst. |
+| cat_hill.rs | Bounded cats/poses/coats, pet happiness, yarn, icon avoidance, butterflies/leaves/tree shake. |
+| stadium.rs | Two teams with per-team player count, passes and chasing, click target/shots/goals, field lighting/stripes. |
+| aquarium.rs | Eight bounded goldfish, plants/light/bubbles, cast/approach/nibble/bite/hook/caught/flee states. |
+| commute.rs | Time presets, moving/stopping bus/doors, horn/gust click feedback, wind/reeds/lights. |
+| summer_porch.rs | Corgi poses/petting, fan stages, chime/bird hop, melon bites/refill, time and sunbeam controls. |
+| cats.rs | Native GPU hill composition using audited cat artwork, moving/lazy cats/yarn/flowers/trees/sun controls. No old CPU vector renderer. |
+| boxing_ring.rs | Position-dependent impacts, bounded springs/gloves, bags/tire, HUD/rounds, auto-spar, power/bounciness/style controls. |
+
+Geometry uses read-only `IFolderView` queries on the existing Windows pool, one
+coalesced cancellable job. It does not allocate or write memory inside Explorer.
+The renderer receives the last complete geometry snapshot without waiting.
+See Microsoft's [IFolderView::GetItemPosition](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifolderview-getitemposition)
+and [GetSpacing](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifolderview-getspacing).
+
+The scene simulations are re-engineered interpretations of those functional
+contracts, not a claim of pixel-identical trajectories or certified owner parity.
+CI proves nonconstant images, animation and a click-only difference at equal time
+for every scene; owner comparison must still assess artwork, object hit regions,
+mini-game timing and multi-monitor experience. Fullscreen/occlusion retain assigned
+world state, while disabling/unassigning releases it. Topology reconstruction safely
+rebuilds current scene resources and may reset actor trajectories.
