@@ -641,7 +641,7 @@ private:
     void renderBoxing(const Config&c,float w,float h,float t,float){
         if(!boxing)boxing=std::make_unique<BoxingModel>();boxing->configure(c,w,h,geometry.boxingScale());
         {CpuMeasure measure{graphicsStats.simulationMs};for(int i=0;i<simulationSteps;++i)boxing->step(fixedStep);}
-        const auto u=boxing->uniforms(t);program.v4("uScene",u.scene);program.v4("uHud",u.hud);program.v4("uRound",u.round);program.v4("uGymProps",u.props);
+        const auto u=boxing->uniforms(t);program.v4("uScene",u.scene.data());program.v4("uHud",u.hud.data());program.v4("uRound",u.round.data());program.v4("uGymProps",u.props.data());
         array("uFPos",u.pos);array("uFHead",u.head);array("uFFace",u.face);array("uFTorso",u.torso);array("uFExpr",u.expression);array("uGloves",u.gloves);array("uGloveMeta",u.gloveMeta);array("uPuffs",u.puffs);
     }
 };

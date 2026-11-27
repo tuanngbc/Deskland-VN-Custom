@@ -69,3 +69,6 @@ Stage now re-evaluates its available region when Dock/Notch/Settings geometry ch
 
 
 Boxing parity correction replaces immediate generic head impulses with an audited native model: four independent glove slots, 90 ms wind-up before impact, 680 ms flight/return, separate top/cheek/chin/body springs and face deformation, attacker lunge, combo/dizzy/recovery, delayed health bars, bag pendulums, tire smash, round timer and original auto-spar cadence. The accepted shader and renderer remain unchanged; the model is lazily allocated only by the Boxing scene. Hosted checks cover timing and zone-specific physical state, four simultaneous punches, props/rounds/AI and an actual shader impact capture. CI pending; owner naturalness/visual acceptance remains required.
+
+
+CI 46058544456 found four Boxing uniform uploads passing std::array to the existing float-pointer API; use data() at those four integration sites. The migrated-runtime timeout in 46057151911 occurred while actual restored settings and rendering were logged normally: keep the Win32 null window-title filter inside C# instead of PowerShell string marshalling. These are source/fixture corrections awaiting hosted verification, not owner acceptance.
