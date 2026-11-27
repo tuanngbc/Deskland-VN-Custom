@@ -11,7 +11,9 @@ $candidate=Join-Path $root 'wallpaper-old'
 [IO.Directory]::CreateDirectory((Join-Path $source 'assets'))|Out-Null
 [IO.Directory]::CreateDirectory($candidate)|Out-Null
 [IO.File]::WriteAllText((Join-Path $source '.tlauncher-native-trial'),"tlauncher-native isolated profile v1`n")
-[IO.File]::WriteAllText((Join-Path $source 'wallpaper-v1.ini'),"schema=1`nenabled=1`nscene=lake`nfps=29`nlayout=2`nunknown.owner=keep-me`nmonitor.test=portrait-negative-1.5`n")
+Add-Type -AssemblyName System.Windows.Forms
+$monitorSettings=([Windows.Forms.Screen]::AllScreens|ForEach-Object {"monitor.$($_.DeviceName).enabled=1`nmonitor.$($_.DeviceName).scene=aquarium`nmonitor.$($_.DeviceName).param.aquarium.fish=6`n"}) -join ''
+[IO.File]::WriteAllText((Join-Path $source 'wallpaper-v1.ini'),"schema=1`nenabled=1`nscene=lake`nfps=29`nlayout=2`nresolution=0.75`npauseCovered=0`nweather=5`nclockLighting=0`nhour=17.25`nwind=1.4`nparam.lake.depth=321`nunknown.owner=keep-me`n$monitorSettings")
 [IO.File]::WriteAllText((Join-Path $source 'assets\custom.txt'),'Tài nguyên của chủ máy')
 [IO.File]::WriteAllText((Join-Path $source 'guardian.journal'),'must not migrate')
 @{profile=$source}|ConvertTo-Json|Set-Content (Join-Path $candidate 'verified-native-artifact.json') -Encoding UTF8
@@ -20,6 +22,7 @@ $snapshot=@(
  @{key='Impostazioni';name='Lingua';kind='DWord';value=7},
  @{key='Impostazioni';name='DockVisibility';kind='DWord';value=2},
  @{key='Impostazioni';name='NotchEnabled';kind='DWord';value=0},
+ @{key='Impostazioni';name='StageEnabled';kind='DWord';value=1},
  @{key='Impostazioni';name='StageHeight';kind='DWord';value=174},
  @{key='Impostazioni';name='StagePeekDelay';kind='DWord';value=750},
  @{key='Impostazioni';name='SpotlightMode';kind='DWord';value=2},
@@ -61,6 +64,8 @@ if($NativeContract){
         $env:TLAUNCHER_NATIVE_TRIAL_DIR=$destination
         & $NativeContract $Evidence '--verify-migrated'
         if($LASTEXITCODE -ne 0){throw "Migrated native profile verification failed: $LASTEXITCODE"}
+        Copy-Item (Join-Path $Evidence 'native-contract.txt') (Join-Path $Evidence 'native-migrated-contract.txt')
+        @{profile=$destination;registry=(Get-NativeRegistryPath $destination);commit=$env:GITHUB_SHA}|ConvertTo-Json|Set-Content (Join-Path $Evidence 'profile-migration-runtime.json') -Encoding UTF8
     }finally{$env:TLAUNCHER_NATIVE_TRIAL_DIR=$beforeProfile}
 }
 $rejected=$false

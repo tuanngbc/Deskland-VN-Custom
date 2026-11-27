@@ -22,6 +22,8 @@ int main(int argc,char** argv) {
         if(testi::attuale()!=testi::VIETNAMITA||s.notchEnabled||s.dockVisibility!=2||s.stage.height!=174||s.stage.peekDelay!=750||s.spotlightMode!=2)return 83;
         if(s.spotlightShortcut!=shortcuts::Key{MOD_CONTROL|MOD_ALT,VK_F22}||s.stageShortcut!=shortcuts::Key{MOD_ALT|MOD_SHIFT,'S'}||s.stageShortcutEnabled)return 117;
         if(!c.enabled||c.scene!=wallpaper::sceneIndex("lake")||c.fps!=29||c.layout!=wallpaper::Layout::Panorama)return 84;
+        if(!s.stage.enabled||c.resolution!=.75f||c.pauseCovered||c.weather!=wallpaper::WeatherMode::Offline||c.clockLighting||c.manualHour!=17.25f||std::abs(c.wind-1.4f)>.001f||wallpaper::parameter(c,c.scene,"depth")!=321)return 118;
+        if(c.displays.empty())return 119;for(const auto& entry:c.displays){const auto& a=entry.second;if(!a.enabled||a.scene!=wallpaper::sceneIndex("aquarium")||a.sceneParams.at("aquarium").at("fish")!=6)return 120;}
         gImpostazioni.apri();ciPump(350);if(!FindWindowW(L"TLauncher.Native.Impostazioni",nullptr))return 85;
         if(!phase3Snapshot(FindWindowW(L"TLauncher.Native.Impostazioni",nullptr),std::filesystem::path(argv[1])/L"phase3-migrated-vietnamese-settings.bmp"))return 86;
         report<<"MIGRATED_CUSTOM_NATIVE_SETTINGS_READ=PASS\nMIGRATED_WALLPAPER_READ=PASS\nVIETNAMESE_NATIVE_SETTINGS_RENDER=PASS\n";report.close();ExitProcess(0);

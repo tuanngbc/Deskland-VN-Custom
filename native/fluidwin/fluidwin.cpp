@@ -4875,6 +4875,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     affianca::registro() = [](const char* s) { logf("%s", s); };   // (prima di applicaImpostazioni, che spegne lo Snap)
     gAffRiquadro.scelto = [](HWND h, const RECT& z, HMONITOR) { logf("affianca %p: casella dal riquadro dei layout", h); affiancaInRett(h, false, z, "riquadro dei layout"); };
     applicaImpostazioni();
+    if(gLog){const auto& s=impostazioni::valori();const auto c=gWallpaper->settings();
+        logf("PROFILE_RESTORED language=%d dock_visibility=%d notch=%d stage_enabled=%d stage_height=%d peek_delay=%d spotlight_mode=%d spotlight_mods=%u spotlight_key=%u stage_mods=%u stage_key=%u stage_shortcut=%d",testi::attuale(),s.dockVisibility,int(s.notchEnabled),int(s.stage.enabled),s.stage.height,s.stage.peekDelay,s.spotlightMode,s.spotlightShortcut.mods,s.spotlightShortcut.key,s.stageShortcut.mods,s.stageShortcut.key,int(s.stageShortcutEnabled));
+        logf("WALLPAPER_RESTORED enabled=%d scene=%s fps=%d layout=%d resolution=%.2f pause_covered=%d weather=%d clock=%d hour=%.2f wind=%.2f assignments=%zu depth=%.2f",int(c.enabled),wallpaper::catalog()[c.scene].id,c.fps,int(c.layout),c.resolution,int(c.pauseCovered),int(c.weather),int(c.clockLighting),c.manualHour,c.wind,c.displays.size(),wallpaper::parameter(c,c.scene,"depth"));
+        fflush(gLog);
+    }
     // banner di FluidWin spenti: quelli di Windows tornano com'erano anche se l'ultima chiusura e' stata brusca
     // (FluidWin e guardiano chiusi insieme, per esempio togliendo la corrente)
     if (!impostazioni::valori().banner) if (const int restano = banner::ripristinaBannerWindows()) logf("banner di Windows: %s %d", restano < 0 ? "chiave delle copie non apribile, niente ripristinato" : "copie non ripristinate (restano):", restano);   // opzione spenta: banner di Windows come prima

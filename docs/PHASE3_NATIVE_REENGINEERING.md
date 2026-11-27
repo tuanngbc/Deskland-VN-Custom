@@ -55,3 +55,8 @@ This batch does not close the full Phase 3 checklist. Shared Synchronized simula
 
 
 Configurable Stage toggle and Spotlight hotkeys now use native profile fields and the existing Settings dialog. Key validation rejects modifier-only/plain keys and reserved F12, while the accepted Stage default stays Ctrl+Alt+Win+S. Registration reserves a replacement on an alternate owned ID before releasing the previous binding; conflicts preserve the old key. The native hosted contract exercises an actual competing Windows registration from another thread, replacement and release. Migration fixtures now include both customized combinations and Stage shortcut disabled. CI pending; dynamic localization/layout and owner hardware quality remain unaccepted.
+
+
+The full-product migration check now runs after hosted assets/software GL setup, using the real TLauncher entry point twice. The customized fixture includes actual runner monitor IDs/overrides, scene parameters, 29 FPS, 75% explicit resolution, weather/manual lighting, Stage enabled, Notch disabled, collapsed Dock and both custom shortcuts. Startup diagnostics report actual consumed settings; the hosted check requires visible wallpaper, native Stage/Spotlight windows, no Notch, and normal main/Guardian shutdown before restart. This remains a runner fixture, not proof that owner settings were migrated or owner hardware targets met. CI pending.
+
+CI `46054827907` compiled the worker/catalog batch, passed localization and migration, then stopped at fixture exit 103: IPersistFile::Save received a relative path. Use an absolute fixture LNK path; no change to product launch behavior is required.

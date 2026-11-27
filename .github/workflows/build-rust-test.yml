@@ -140,6 +140,10 @@ jobs:
           path: ${{ runner.temp }}/wallpaper-mesa
           key: hosted-mesa-26.3.1-64e84cf13d67dd35
           fail-on-cache-miss: true
+      - name: Verify customized migrated profile through normal product startup and restart
+        if: github.ref == 'refs/heads/codex/native-stage-spotlight-reengineering-v1.0.3'
+        shell: pwsh
+        run: ./tests/native-migrated-runtime.ps1 -Exe (Resolve-Path native-build/TLauncher.exe).Path -Evidence (Resolve-Path native-evidence).Path -Mesa (Join-Path $env:RUNNER_TEMP 'wallpaper-mesa')
       - name: Compare accepted baseline with native wallpaper disabled and enabled
         if: (github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3' || github.ref == 'refs/heads/codex/native-stage-spotlight-reengineering-v1.0.3')
         shell: pwsh

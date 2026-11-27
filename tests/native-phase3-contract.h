@@ -65,7 +65,7 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     wchar_t actualExe[32768]{};GetModuleFileNameW(nullptr,actualExe,32768);
     IShellLinkW* link=nullptr;IPersistFile* persist=nullptr;
     if(FAILED(CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&link))))return 102;
-    const auto shortcut=evidence/L"canonical-fixture.lnk";link->SetPath(actualExe);
+    const auto shortcut=std::filesystem::absolute(evidence/L"canonical-fixture.lnk");link->SetPath(actualExe);
     if(FAILED(link->QueryInterface(IID_PPV_ARGS(&persist)))||FAILED(persist->Save(shortcut.c_str(),TRUE)))return 103;
     const auto exeIdentity=appcatalog::identity(actualExe),linkIdentity=appcatalog::identity(shortcut.wstring());
     if(exeIdentity!=linkIdentity)return 104;
