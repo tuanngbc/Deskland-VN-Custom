@@ -114,6 +114,7 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     obstacle={};manager.changed();if(!IsWindowVisible(rail))return 123;
     MONITORINFO unchanged{sizeof(unchanged)};GetMonitorInfoW(display,&unchanged);if(!EqualRect(&monitor.rcWork,&unchanged.rcWork))return 124;
     st.perspective=false;manager.configure(st);rail=FindWindowW(L"TLauncher.Native.Stage",nullptr);
+    ShowWindow(source,SW_RESTORE);ciPump(80);manager.changed();if(!manager.ciThumbnailCount())return 127;
     bool fullscreen=false;manager.fullscreen=[&](HMONITOR){return fullscreen;};manager.changed();
     fullscreen=true;manager.changed();if(IsWindowVisible(rail)||manager.ciThumbnailCount())return 125;
     fullscreen=false;manager.changed();if(!IsWindowVisible(rail))return 126;
