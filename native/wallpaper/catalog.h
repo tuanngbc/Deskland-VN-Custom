@@ -2,14 +2,14 @@
 #pragma once
 #include "model.h"
 namespace wallpaper { inline const std::vector<Scene>& catalog() { static const std::vector<Scene> scenes = {
-{"meadow", L"Thảo nguyên", L"wallpaper/shaders/meadow.frag", L"wallpaper/thumbs/meadow.jpg", {
+{"meadow", L"Thảo nguyên", L"wallpaper/shaders/meadow.frag", L"wallpaper/thumbs/meadow.png", {
 {"sigma",L"Kích thước đám mây",40,200,1,72},
 {"cover",L"Mây trên thảo nguyên",0,1,0.01,0.3},
 {"flow",L"Tốc độ trôi",0,3,0.05,1},
 {"showBoy",L"Hiển thị cậu bé",0,1,1,1},
 {"showCat",L"Hiển thị mèo con",0,1,1,1},
 }},
-{"beach", L"Bãi biển", L"wallpaper/shaders/beach.frag", L"wallpaper/thumbs/beach.jpg", {
+{"beach", L"Bãi biển", L"wallpaper/shaders/beach.frag", L"wallpaper/thumbs/beach.png", {
 {"sigma",L"Khoảng cách bờ biển",40,200,1,85},
 {"warp",L"Độ uốn lượn",0,80,1,34},
 {"shoal",L"Bãi nước nông trong vắt",0,300,1,110},
@@ -18,7 +18,7 @@ namespace wallpaper { inline const std::vector<Scene>& catalog() { static const 
 {"kayaks",L"Thuyền kayak",0,4,1,2},
 {"birds",L"Chim biển",0,8,1,3},
 }},
-{"beach-turquoise", L"Đảo Maldives", L"wallpaper/shaders/maldives.frag", L"wallpaper/thumbs/beach-turquoise.jpg", {
+{"beach-turquoise", L"Đảo Maldives", L"wallpaper/shaders/maldives.frag", L"wallpaper/thumbs/beach-turquoise.png", {
 {"sigma",L"Bán kính bãi cát",40,200,1,85},
 {"warp",L"Độ uốn bờ cát",0,80,1,34},
 {"shoal",L"Độ rộng bãi cạn",0,300,1,120},
@@ -29,7 +29,7 @@ namespace wallpaper { inline const std::vector<Scene>& catalog() { static const 
 {"kayaks",L"Thuyền kayak",0,4,1,1},
 {"birds",L"Chim biển",0,8,1,3},
 }},
-{"lake", L"Hồ nước", L"wallpaper/shaders/lake.frag", L"wallpaper/thumbs/lake.jpg", {
+{"lake", L"Hồ nước", L"wallpaper/shaders/lake.frag", L"wallpaper/thumbs/lake.png", {
 {"sigma",L"Phạm vi bờ cỏ",40,200,1,82},
 {"warp",L"Độ uốn bờ hồ",0,80,1,32},
 {"shoal",L"Bãi sỏi nước nông",20,240,1,95},
@@ -37,7 +37,7 @@ namespace wallpaper { inline const std::vector<Scene>& catalog() { static const 
 {"flow",L"Gợn sóng mặt hồ",0,3,0.05,1},
 {"clouds",L"Mây phản chiếu",0,8,1,4},
 }},
-{"sky", L"Bầu trời", L"wallpaper/shaders/sky.frag", L"wallpaper/thumbs/sky.jpg", {
+{"sky", L"Bầu trời", L"wallpaper/shaders/sky.frag", L"wallpaper/thumbs/sky.png", {
 {"time",L"Thời điểm trong ngày",0,3,1,0},
 {"sigma",L"Kích thước đám mây",40,200,1,74},
 {"cover",L"Mây trôi tự do",0,1,0.01,0.35},
@@ -47,7 +47,7 @@ namespace wallpaper { inline const std::vector<Scene>& catalog() { static const 
 {"moon",L"Mặt trăng",0,1,1,1},
 {"stars",L"Mật độ sao đêm",0,1,0.05,0.6},
 }},
-{"ocean", L"Đại dương", L"wallpaper/shaders/ocean.frag", L"wallpaper/thumbs/ocean.jpg", {
+{"ocean", L"Đại dương", L"wallpaper/shaders/ocean.frag", L"wallpaper/thumbs/ocean.png", {
 {"sigma",L"Kích thước đám mây",40,200,1,72},
 {"cover",L"Mây trên biển",0,1,0.01,0.3},
 {"flow",L"Tốc độ gió biển",0,3,0.05,1},
@@ -55,7 +55,7 @@ namespace wallpaper { inline const std::vector<Scene>& catalog() { static const 
 {"yachts",L"Du thuyền",0,4,1,1},
 {"birds",L"Chim biển",0,8,1,3},
 }},
-{"rainforest", L"Rừng mưa nhiệt đới", L"wallpaper/shaders/rainforest.frag", L"wallpaper/thumbs/rainforest.jpg", {
+{"rainforest", L"Rừng mưa nhiệt đới", L"wallpaper/shaders/rainforest.frag", L"wallpaper/thumbs/rainforest.png", {
 {"sigma",L"Độ rộng trảng rêu",40,200,1,80},
 {"warp",L"Độ uốn bìa rừng",0,80,1,32},
 {"rain",L"Mưa & Gợn nước",0,1,0.05,0.65},
@@ -64,7 +64,7 @@ namespace wallpaper { inline const std::vector<Scene>& catalog() { static const 
 {"birds",L"Chim nhiệt đới",0,8,1,3},
 {"fireflies",L"Đom đóm rừng",0,15,1,6},
 }},
-{"mocchau", L"Hoa mận", L"wallpaper/shaders/mocchau.frag", L"wallpaper/thumbs/mocchau.jpg", {
+{"mocchau", L"Hoa mận", L"wallpaper/shaders/mocchau.frag", L"wallpaper/thumbs/mocchau.png", {
 {"sigma",L"Độ rộng đồi cỏ",40,200,1,80},
 {"warp",L"Độ uốn sườn đồi",0,80,1,30},
 {"bloom",L"Độ dày hoa mận",0.2,1,0.05,0.8},
@@ -73,7 +73,7 @@ namespace wallpaper { inline const std::vector<Scene>& catalog() { static const 
 {"mist",L"Sương sớm",0,1,0.05,0.35},
 {"birds",L"Chim rừng",0,8,1,3},
 }},
-{"tet-sakura", L"Hoa anh đào Tết", L"wallpaper/shaders/tet_sakura.frag", L"wallpaper/thumbs/tet-sakura.jpg", {
+{"tet-sakura", L"Hoa anh đào Tết", L"wallpaper/shaders/tet_sakura.frag", L"wallpaper/thumbs/tet-sakura.png", {
 {"sigma",L"Độ rộng sân xuân",40,200,1,80},
 {"warp",L"Độ uốn cành hoa",0,80,1,30},
 {"petals",L"Cánh đào bay",0,1,0.05,0.65},
@@ -81,20 +81,20 @@ namespace wallpaper { inline const std::vector<Scene>& catalog() { static const 
 {"lanterns",L"Đèn lồng & Lì xì",0,8,1,4},
 {"swallows",L"Chim én mùa xuân",0,8,1,3},
 }},
-{"cat-hill", L"Đồi mèo nắng ấm", L"wallpaper/shaders/cat_hill.frag", L"wallpaper/thumbs/cat-hill.jpg", {
+{"cat-hill", L"Đồi mèo nắng ấm", L"wallpaper/shaders/cat_hill.frag", L"wallpaper/thumbs/cat-hill.png", {
 {"cats",L"Số lượng mèo",3,15,1,8},
 {"butterflies",L"Bươm bướm vàng",0,6,1,2},
 {"leaves",L"Mật độ lá bay & lá rụng",0,1,0.05,0.65},
 {"wind",L"Sức gió trên đồi",0,3,0.05,1},
 }},
-{"stadium", L"Sân bóng sôi động", L"wallpaper/shaders/stadium.frag", L"wallpaper/thumbs/stadium.jpg", {
+{"stadium", L"Sân bóng sôi động", L"wallpaper/shaders/stadium.frag", L"wallpaper/thumbs/stadium.png", {
 {"players",L"Cầu thủ mỗi đội",3,11,1,6},
 {"speed",L"Nhịp độ trận đấu",0.4,2.5,0.05,1},
 {"passFreq",L"Tần suất chuyền bóng",0.4,2.5,0.05,1},
 {"lighting",L"Ánh sáng sân vận động",0,2,1,0},
 {"stripes",L"Độ đậm sọc cỏ",0,1,0.05,0.65},
 }},
-{"aquarium", L"Bể cá vàng", L"wallpaper/shaders/aquarium.frag", L"wallpaper/thumbs/aquarium.jpg", {
+{"aquarium", L"Bể cá vàng", L"wallpaper/shaders/aquarium.frag", L"wallpaper/thumbs/aquarium.png", {
 {"fish",L"Số cá vàng",1,8,1,4},
 {"eager",L"Cá háu ăn",0.4,2.5,0.05,1},
 {"plants",L"Rong rêu",0,1,0.05,0.6},
@@ -103,7 +103,7 @@ namespace wallpaper { inline const std::vector<Scene>& catalog() { static const 
 {"sigma",L"Độ rộng rạn cát",40,200,1,80},
 {"warp",L"Độ uốn rạn cát",0,80,1,30},
 }},
-{"commute", L"Chuyến xe chiều", L"wallpaper/shaders/commute.frag", L"wallpaper/thumbs/commute.jpg", {
+{"commute", L"Chuyến xe chiều", L"wallpaper/shaders/commute.frag", L"wallpaper/thumbs/commute.png", {
 {"time",L"Giờ trong ngày",0,3,1,0},
 {"busFreq",L"Xe buýt qua lại",0.2,2.5,0.05,1},
 {"wind",L"Gió",0,2,0.05,1},
@@ -112,7 +112,7 @@ namespace wallpaper { inline const std::vector<Scene>& catalog() { static const 
 {"sigma",L"Độ rộng đồi cỏ / mây",40,200,1,70},
 {"warp",L"Độ uốn mép",0,80,1,30},
 }},
-{"summer-porch", L"Hiên nhà ngày hạ", L"wallpaper/shaders/summer-porch.frag", L"wallpaper/thumbs/summer-porch.jpg", {
+{"summer-porch", L"Hiên nhà ngày hạ", L"wallpaper/shaders/summer-porch.frag", L"wallpaper/thumbs/summer-porch.png", {
 {"corgis",L"Số lượng Corgi",1,4,1,3},
 {"fanSpeed",L"Tốc độ quạt bàn",0,2,0.05,1},
 {"timeOfDay",L"Thời điểm trong ngày",0,3,1,0},
@@ -120,7 +120,7 @@ namespace wallpaper { inline const std::vector<Scene>& catalog() { static const 
 {"sigma",L"Độ rộng luống vườn",45,140,1,78},
 {"warp",L"Độ uốn bờ vườn",0,70,1,28},
 }},
-{"cats", L"Mèo con trên đồi", L"wallpaper/shaders/cats.frag", L"wallpaper/thumbs/cats.jpg", {
+{"cats", L"Mèo con trên đồi", L"wallpaper/shaders/cats.frag", L"wallpaper/thumbs/cats.png", {
 {"mound",L"Độ rộng gò cỏ",10,80,1,28},
 {"cats",L"Số chú mèo",1,14,1,8},
 {"speed",L"Tốc độ đi",0.3,2,0.05,1},
@@ -130,7 +130,7 @@ namespace wallpaper { inline const std::vector<Scene>& catalog() { static const 
 {"bushes",L"Cây & lùm cây",0,10,1,4},
 {"wind",L"Sức gió",0,2,0.05,1},
 }},
-{"boxing-ring", L"Võ đài quyền anh", L"wallpaper/shaders/boxing-ring.frag", L"wallpaper/thumbs/boxing-ring.jpg", {
+{"boxing-ring", L"Võ đài quyền anh", L"wallpaper/shaders/boxing-ring.frag", L"wallpaper/thumbs/boxing-ring.png", {
 {"bounciness",L"Độ nảy biến dạng",0.4,2.5,0.05,1.25},
 {"punchPower",L"Lực đấm & Rung đài",0.5,2.5,0.05,1},
 {"autoSpar",L"Chế độ giao đấu",0,2,1,0},

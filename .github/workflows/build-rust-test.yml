@@ -67,7 +67,8 @@ jobs:
           retention-days: 14
           if-no-files-found: error
   native-base:
-    if: github.ref == 'refs/heads/codex/fluidwin-native-base-v1.0.3' || github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3'
+    needs: wallpaper-contract
+    if: always() && (github.ref == 'refs/heads/codex/fluidwin-native-base-v1.0.3' || (github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3' && needs.wallpaper-contract.result == 'success'))
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -120,6 +121,11 @@ jobs:
           & ./native-build/native-contract.exe ./native-evidence
           if ($LASTEXITCODE -ne 0) {throw "Native lifecycle contract failed: $LASTEXITCODE"}
           ./tests/native-runtime-smoke.ps1 -Exe (Resolve-Path native-build/TLauncher.exe).Path -Evidence (Resolve-Path native-evidence).Path
+      - uses: actions/download-artifact@v4
+        if: github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3'
+        with:
+          name: native-wallpaper-assets
+          path: native-build/wallpaper
       - name: Package immutable Native Base TEST
         shell: pwsh
         run: |
@@ -129,6 +135,10 @@ jobs:
           New-Item -ItemType Directory -Path $dir -Force | Out-Null
           Copy-Item native-build/TLauncher.exe $dir
           Copy-Item native-build/runtime-licenses (Join-Path $dir 'runtime-licenses') -Recurse
+          if (Test-Path native-build/wallpaper) {
+            Copy-Item native-build/wallpaper (Join-Path $dir 'wallpaper') -Recurse
+            'PHASE_2_WALLPAPER' | Set-Content (Join-Path $dir 'PACKAGE-KIND.txt') -Encoding ascii
+          }
           foreach ($file in 'LICENSE','NOTICE','THIRD_PARTY_NOTICES.md','TRADEMARKS.md') {Copy-Item $file $dir}
           Copy-Item native/fluidwin/LICENSE (Join-Path $dir 'FLUIDWIN-LICENSE.txt')
           Copy-Item native/fluidwin/PROVENANCE.json $dir
@@ -162,7 +172,7 @@ jobs:
   wallpaper-contract:
     if: github.ref == 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3'
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: msys2/setup-msys2@v2
@@ -176,11 +186,45 @@ jobs:
           set -euo pipefail
           mkdir -p wallpaper-evidence
           g++ -O2 -std=gnu++20 -Wall -DUNICODE -D_UNICODE -DNOMINMAX tests/wallpaper-contract.cpp -o wallpaper-evidence/wallpaper-contract.exe -lopengl32 -lgdi32 -luser32 -static
+          g++ -O2 -std=gnu++20 -Wall -DUNICODE -D_UNICODE -DNOMINMAX tests/wallpaper-renderer.cpp -o wallpaper-evidence/wallpaper-renderer.exe -lopengl32 -lgdi32 -luser32 -lole32 -loleaut32 -luuid -lwindowscodecs -ldwmapi -static
       - name: Verify native configuration, physical topology and solar contracts
         shell: pwsh
         run: |
           & ./wallpaper-evidence/wallpaper-contract.exe 2>&1 | Tee-Object wallpaper-evidence/contracts.txt
           if ($LASTEXITCODE -ne 0) { throw 'Wallpaper contracts failed' }
+      - name: Stage only audited graphics assets for hosted visual verification
+        shell: pwsh
+        run: ./tools/stage-wallpaper-assets.ps1 -Destination wallpaper-evidence
+      - name: Cache pinned software GL solely for hosted verification
+        id: mesa-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/wallpaper-mesa
+          key: hosted-mesa-26.3.1-64e84cf13d67dd35
+      - name: Retrieve checksum-verified hosted software GL
+        if: steps.mesa-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $archive=Join-Path $env:RUNNER_TEMP 'mesa-hosted.7z'
+          Invoke-WebRequest 'https://github.com/pal1000/mesa-dist-win/releases/download/26.3.1/mesa3d-26.3.1-release-msvc.7z' -OutFile $archive
+          if ((Get-FileHash $archive).Hash.ToLowerInvariant() -cne '64e84cf13d67dd354640bf443ed0445e6a83afd06a5729f0750b3744d633b3f1') {throw 'Hosted Mesa checksum mismatch'}
+          & 7z x -y $archive ('-o'+(Join-Path $env:RUNNER_TEMP 'wallpaper-mesa'))
+          if ($LASTEXITCODE -ne 0) {throw 'Hosted Mesa extraction failed'}
+      - name: Render all native scenes and verify panorama pixels
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'wallpaper-mesa/x64/*.dll') wallpaper-evidence
+          $env:GALLIUM_DRIVER='llvmpipe'
+          $env:LIBGL_ALWAYS_SOFTWARE='true'
+          & ./wallpaper-evidence/wallpaper-renderer.exe wallpaper-evidence 2>&1 | Tee-Object wallpaper-evidence/renderer.log
+          if ($LASTEXITCODE -ne 0) {throw 'Native scene/panorama verification failed'}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-wallpaper-assets
+          path: wallpaper-evidence/wallpaper/
+          retention-days: 30
       - uses: actions/upload-artifact@v4
         if: always()
         with:
