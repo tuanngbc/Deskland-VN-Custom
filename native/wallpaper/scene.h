@@ -210,7 +210,7 @@ private:
     void renderStadium(const Config&c,float w,float h,float t,float dt){
         passAge+=dt;userChase=std::max(0.f,userChase-dt);float speed=dt*std::max(.2f,p(c,"speed",1))*(userChase>0?5.f:1.4f);ballX+=(targetX-ballX)*std::min(1.f,speed);ballY+=(targetY-ballY)*std::min(1.f,speed);
         if(goalSide!=0){if(goalAge<0&&hypot(ballX-targetX,ballY-targetY)<.015f)goalAge=0;else if(goalAge>=0)goalAge+=dt;if(goalAge>2.2f){goalSide=0;ballX=targetX=.5f;ballY=targetY=.54f;}}
-        if(passAge>std::max(.5f,4-p(c,"passFreq",1))){targetX=.16f+random()*.68f;targetY=.26f+random()*.52f;passAge=0;passes++;}
+        if(goalSide==0&&userChase==0&&passAge>std::max(.5f,4-p(c,"passFreq",1))){targetX=.16f+random()*.68f;targetY=.26f+random()*.52f;passAge=0;passes++;}
         std::array<Vec4,22> pos{},meta{};int n=std::clamp(int(p(c,"players",6))*2,6,22);
         for(int i=0;i<n;i++){float baseX=i<n/2?.2f+float(i%3)*.1f:.8f-float(i%3)*.1f,baseY=.3f+float(i%5)*.11f;float chase=userChase>0&&i%3==passes%3?.72f:.16f;float x=baseX+(ballX-baseX)*chase+sin(t*.6f+i)*.015f,y=baseY+(ballY-baseY)*chase;pos[i]={x*w,y*h,atan2(ballY-y,ballX-x),t*(chase>.5f?11:6)+i};meta[i]={float(i==0?2:i==n/2?3:i<n/2?0:1),.6f,i==passes%n?1.f:0.f,hash(i,1,101)};}
         program.v4("uPitch",{w*.1f,h*.2f,w*.9f,h*.88f});program.f("uStripes",p(c,"stripes",.4f));program.f("uLighting",p(c,"lighting",0));program.f("uPlayerN",float(n));array("uPlPos",pos);array("uPlMeta",meta);program.v4("uBall",{ballX*w,ballY*h,sin(std::min(passAge,1.f)*3.14159f)*16,t*5});program.v4("uBallTrail",{ballX*w-10,ballY*h-8,.4f,passAge});program.v4("uTarget",{targetX*w,targetY*h,passAge,userChase>0?1.f:0.f});program.v4("uGoalFx",{targetX*w,h*.54f,goalAge,goalAge>=0?goalSide:0});
