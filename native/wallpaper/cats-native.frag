@@ -7,7 +7,7 @@ void main() {
   vec3 col=mix(vec3(.70,.86,.98),vec3(.91,.97,1.),p.y/H);
   if(wpSun>.5)col=mix(col,vec3(1.,.94,.63),ss(31.*s,29.*s,length(p-vec2(W*.79,H*.13))));
   for(int i=0;i<4;i++)drawCloud(col,p,vec2(mod(float(i)*W*.31+uTime*4.,W+160.)-80.,H*(.10+float(i%2)*.08)),.7*s);
-  float hill=H*(.30-.025*sin(p.x/W*6.28)*wpMound);
+  float hill=H*(.30-.025*sin(p.x/W*6.28)*wpMound/28.);
   vec3 grass=mix(vec3(.72,.88,.49),vec3(.46,.72,.31),clamp((p.y-hill)/(H-hill),0.,1.));
   col=mix(col,grass,ss(1.,-1.,hill-p.y));
   for(int i=0;i<12;i++) {

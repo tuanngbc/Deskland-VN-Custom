@@ -30,7 +30,10 @@ public:
         else if(action>=5020&&action<5036){selectedMonitor=std::clamp(action-5020,0,std::max(0,int(monitors.size())-1));return true;}
         else if(action==5040&&!monitors.empty()){auto&a=c.displays[monitors[selectedMonitor].id];a.enabled=!a.enabled;}
         else if(action>=5100&&action<5116){if(c.layout==Layout::Independent&&!monitors.empty())c.displays[monitors[selectedMonitor].id].scene=action-5100;else c.scene=action-5100;}
-        else if(action>=5200&&action<5400){int n=(action-5200)/2;int id=scene(c);const auto&params=catalog()[id].params;if(n>=int(params.size()))return true;const auto&p=params[n];double value=parameter(c,id,p.key);value+=((action-5200)%2?1:-1)*p.step;c.sceneParams[catalog()[id].id][p.key]=std::clamp(value,p.min,p.max);}
+        else if(action>=5200&&action<5400){int n=(action-5200)/2;int id=scene(c);const auto&params=catalog()[id].params;if(n>=int(params.size()))return true;const auto&p=params[n];Config effective=c;
+            if(c.layout==Layout::Independent&&!monitors.empty()){auto&overrides=c.displays[monitors[selectedMonitor].id].sceneParams[catalog()[id].id];for(const auto&[k,v]:overrides)effective.sceneParams[catalog()[id].id][k]=v;}
+            double value=parameter(effective,id,p.key);value+=((action-5200)%2?1:-1)*p.step;
+            if(c.layout==Layout::Independent&&!monitors.empty())c.displays[monitors[selectedMonitor].id].sceneParams[catalog()[id].id][p.key]=std::clamp(value,p.min,p.max);else c.sceneParams[catalog()[id].id][p.key]=std::clamp(value,p.min,p.max);}
         else if(action>=5400&&action<=5405)c.weather=WeatherMode(action-5400);
         else if(action==5410)c.solar=!c.solar;else if(action==5411)c.clockLighting=!c.clockLighting;
         else if(action==5420)c.manualHour=std::max(0.f,c.manualHour-1);else if(action==5421)c.manualHour=std::min(24.f,c.manualHour+1);
@@ -59,7 +62,8 @@ public:
         title(L"Wallpaper gallery · select a scene to preview on Desktop");int selected=scene(c);float gap=8*d,cardW=(right-left-gap*2)/3,cardH=94*d;
         for(size_t i=0;i<catalog().size();i++){int col=int(i%3);float x=left+col*(cardW+gap);D2D1_RECT_F card{x,y,x+cardW,y+cardH};button(card,5100+int(i),L"",int(i)==selected);if(thumbs[i])v.rt->DrawBitmap(thumbs[i],{x+4*d,y+4*d,x+cardW-4*d,y+65*d},alpha,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);v.testo(catalog()[i].name,small,{x+5*d,y+66*d,x+cardW-5*d,y+cardH},ink);if(col==2||i+1==catalog().size())y+=cardH+gap;}
         if(!gallery->ready){v.testo(L"Loading scene thumbnails…",small,{left,y,right,y+26*d},muted);y+=30*d;}
-        title(L"Scene customization");const auto&s=catalog()[selected];for(size_t i=0;i<s.params.size();i++){const auto&p=s.params[i];wchar_t value[48];swprintf(value,48,L"%.2g",parameter(c,selected,p.key));adjust(p.name,value,5200+int(i)*2);}
+        title(L"Scene customization");const auto&s=catalog()[selected];Config effective=c;if(c.layout==Layout::Independent&&!monitors.empty()){auto a=c.displays.find(monitors[selectedMonitor].id);if(a!=c.displays.end()){auto values=a->second.sceneParams.find(s.id);if(values!=a->second.sceneParams.end())for(const auto&[key,value]:values->second)effective.sceneParams[s.id][key]=value;}}
+        for(size_t i=0;i<s.params.size();i++){const auto&p=s.params[i];wchar_t value[48];swprintf(value,48,L"%.2g",parameter(effective,selected,p.key));adjust(p.name,value,5200+int(i)*2);}
         title(L"Weather");choices({L"Clear",L"Rain",L"Snow"},5400,int(c.weather));choices({L"Clouds",L"Live",L"Offline"},5403,int(c.weather)-3);
         v.testo(L"Live uses the city selected in Control Center → Weather",small,{left,y,right,y+28*d},muted);y+=32*d;
         adjust(L"Wind",std::to_wstring(int(c.wind*100))+L"%",5450);

@@ -31,6 +31,12 @@ public:
     WP_GL(void,GenFramebuffers,(GLsizei,GLuint*)) WP_GL(void,BindFramebuffer,(GLenum,GLuint))
     WP_GL(void,FramebufferTexture2D,(GLenum,GLenum,GLenum,GLuint,GLint)) WP_GL(GLenum,CheckFramebufferStatus,(GLenum))
     WP_GL(void,DeleteFramebuffers,(GLsizei,const GLuint*))
+    WP_GL(void,GenRenderbuffers,(GLsizei,GLuint*)) WP_GL(void,DeleteRenderbuffers,(GLsizei,const GLuint*))
+    WP_GL(void,FramebufferRenderbuffer,(GLenum,GLenum,GLenum,GLuint))
+    WP_GL(void,GenBuffers,(GLsizei,GLuint*)) WP_GL(void,DeleteBuffers,(GLsizei,const GLuint*))
+    WP_GL(void,BindBuffer,(GLenum,GLuint)) WP_GL(void,BufferData,(GLenum,GLsizeiptr,const void*,GLenum))
+    WP_GL(void,GetBufferSubData,(GLenum,ptrdiff_t,GLsizeiptr,void*))
+    WP_GL(void*,FenceSync,(GLenum,GLbitfield)) WP_GL(GLenum,ClientWaitSync,(void*,GLbitfield,uint64_t)) WP_GL(void,DeleteSync,(void*))
 #undef WP_GL
     GL(){library=LoadLibraryExW(L"opengl32.dll",nullptr,LOAD_LIBRARY_SEARCH_APPLICATION_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);if(!library)throw std::runtime_error("OpenGL loader unavailable");
         try {
@@ -40,6 +46,9 @@ public:
         WP_LOAD(UseProgram) WP_LOAD(GetUniformLocation) WP_LOAD(Uniform1i) WP_LOAD(Uniform1f) WP_LOAD(Uniform2f) WP_LOAD(Uniform4fv) WP_LOAD(ActiveTexture)
         WP_LOAD(GenVertexArrays) WP_LOAD(BindVertexArray) WP_LOAD(DeleteVertexArrays) WP_LOAD(GenFramebuffers) WP_LOAD(BindFramebuffer)
         WP_LOAD(FramebufferTexture2D) WP_LOAD(CheckFramebufferStatus) WP_LOAD(DeleteFramebuffers)
+        WP_LOAD(GenRenderbuffers) WP_LOAD(DeleteRenderbuffers) WP_LOAD(FramebufferRenderbuffer)
+        WP_LOAD(GenBuffers) WP_LOAD(DeleteBuffers) WP_LOAD(BindBuffer) WP_LOAD(BufferData) WP_LOAD(GetBufferSubData)
+        WP_LOAD(FenceSync) WP_LOAD(ClientWaitSync) WP_LOAD(DeleteSync)
 #undef WP_LOAD
         }catch(...){FreeLibrary(library);library=nullptr;throw;}
     }

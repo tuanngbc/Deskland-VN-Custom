@@ -41,9 +41,24 @@ int main(int argc,char**argv){try{
     {
         SceneRuntime scene(gl,sceneIndex("beach"));allocate(320,180);noiseTexture.bind(gl,0);scene.render(config,view,icons,weather,4.,0,stop,.5f,.5f);capture(320,180);report<<"SCALED_SURFACE_COORDINATES=PASS\n";
     }
+    for(auto shape:std::array<std::pair<int,int>,2>{{{2560,1080},{1080,1920}}}){
+        int w=shape.first,h=shape.second;allocate(w,h);int id=sceneIndex(w>h?"beach":"cat-hill");SceneRuntime scene(gl,id);noiseTexture.bind(gl,0);scene.render(config,{0,0,float(w),float(h),float(w),float(h)},icons,weather,6.,.04f,stop);png(evidence/(w>h?"ultrawide-2560x1080.png":"portrait-1080x1920.png"),w,h,capture(w,h));
+    }report<<"ULTRAWIDE_PORTRAIT_RENDER=PASS\n";
     // Context and scene resources are destroyed on their owner thread even after
     // a shader failure; verify a following scene still compiles and renders.
     try{Program broken(gl,"#version 330 core\nthis is intentionally invalid");throw std::runtime_error("Bad shader accepted");}catch(const std::exception&){}
     allocate(640,360);{SceneRuntime recovery(gl,sceneIndex("sky"));noiseTexture.bind(gl,0);recovery.render(config,view,icons,weather,8.,.04f,stop);capture(640,360);}report<<"SHADER_FAILURE_RECOVERY=PASS\n";
-    gl.BindFramebuffer(0x8D40,0);gl.DeleteFramebuffers(1,&fbo);gl.DeleteVertexArrays(1,&vao);report<<"OWNER_PERFORMANCE=NOT_MEASURED\nOWNER_VISUAL_UAT=PENDING\n";return 0;
+    gl.BindFramebuffer(0x8D40,0);gl.DeleteFramebuffers(1,&fbo);gl.DeleteVertexArrays(1,&vao);
+    auto await=[&](auto condition,const char*label){uint64_t end=GetTickCount64()+30000;while(!condition()){check(GetTickCount64()<end,label);Sleep(20);}};
+    {
+        Snapshot s;s.config.enabled=true;s.config.scene=sceneIndex("beach");s.config.fps=15;s.monitors={{L"CI-hosted",{0,0,640,360},96,true}};Session session(s);
+        await([&]{auto m=session.metrics();if(!m.error.empty())throw std::runtime_error(m.error);return m.frames>=4;},"Wallpaper session never presented");
+        s.locked=true;session.publish(s);await([&]{return session.metrics().paused;},"Lock did not suspend");auto frames=session.metrics().frames;Sleep(150);check(session.metrics().frames==frames,"Rendering continued during lock");
+        s.locked=false;s.displayOff=true;session.publish(s);Sleep(150);check(session.metrics().frames==frames,"Rendering continued with display off");
+        s.displayOff=false;s.config.scene=sceneIndex("lake");session.publish(s);await([&]{return session.metrics().frames>frames+2;},"Resume/scene swap failed");
+        s.monitors[0].rect={-320,-100,320,260};session.publish(s);frames=session.metrics().frames;await([&]{return session.metrics().frames>frames+2;},"Hotplug/reposition failed");
+        session.stop();await([&]{return session.finished();},"Wallpaper shutdown failed");auto m=session.metrics();check(m.surfaces==0&&m.scenes==0&&!m.running,"Disabled wallpaper resources remain");
+        report<<"SESSION_NATIVE_PRESENT="<<m.presentation<<"\nSESSION_LOCK_DISPLAY_OFF_RESUME=PASS\nSESSION_SCENE_SWAP_TOPOLOGY=PASS\nSESSION_STOP_RESOURCE_RELEASE=PASS\n";
+    }
+    context.current();report<<"OWNER_PERFORMANCE=NOT_MEASURED\nOWNER_VISUAL_UAT=PENDING\n";return 0;
 }catch(const std::exception&e){std::cerr<<"WALLPAPER_RENDERER_FAILURE="<<e.what()<<'\n';return 1;}}

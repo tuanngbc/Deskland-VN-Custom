@@ -1,12 +1,13 @@
 #version 330 core
 uniform sampler2D scene;
-uniform vec2 size,origin,world;
-uniform float time,hour,rain,snow,cloud,wind,lighting;
+uniform vec2 size,physicalSize,origin,world;
+uniform float time,hour,rain,snow,cloud,wind,lighting,flip;
 out vec4 o;
 float hash(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
 float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1)),f.x),f.y);}
 void main(){
-  vec2 uv=gl_FragCoord.xy/size,p=vec2(uv.x*size.x,(1.-uv.y)*size.y)+origin;
+  vec2 uv=gl_FragCoord.xy/size;if(flip>.5)uv.y=1.-uv.y;
+  vec2 p=vec2(uv.x*physicalSize.x,(1.-uv.y)*physicalSize.y)+origin;
   vec3 color=texture(scene,uv).rgb;
   if(lighting>.5){float daylight=smoothstep(5.,8.,hour)*(1.-smoothstep(17.,21.,hour));color*=mix(vec3(.83,.88,1.),vec3(1.),daylight);}
   if(cloud>0.){float c=noise(p/450.+vec2(time*.008*wind,0));color*=1.-c*cloud*.16;}

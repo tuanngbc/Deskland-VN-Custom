@@ -44,7 +44,7 @@ inline RECT bounds(const std::vector<Monitor>& monitors) {
     if(monitors.empty())return {};
     RECT r=monitors.front().rect;for(const auto&m:monitors){r.left=std::min(r.left,m.rect.left);r.top=std::min(r.top,m.rect.top);r.right=std::max(r.right,m.rect.right);r.bottom=std::max(r.bottom,m.rect.bottom);}return r;
 }
-struct Assignment { bool enabled=true; int scene=0; std::map<std::string,double> params; };
+struct Assignment { bool enabled=true; int scene=0; std::map<std::string,std::map<std::string,double>> sceneParams; };
 struct Config {
     bool enabled=false, paused=false, pauseCovered=true, solar=true;
     Layout layout=Layout::Synchronized; WeatherMode weather=WeatherMode::Clear;

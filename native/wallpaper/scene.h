@@ -65,7 +65,7 @@ public:
         program.use();program.v2("uRes",w,h);program.v2("wpOrigin",view.x,view.worldH-view.y-view.h);program.v2("wpPixelScale",scaleX,scaleY);
         program.f("uScale",1);program.f("uSeed",7341%997*.37f);program.f("uTime",t);program.f("uDebug",0);program.i("uNoise",0);field.bind(program,time);
         const std::string id=catalog()[index].id;
-        if(id=="meadow"||id=="sky"||id=="ocean"||id=="lake"){clouds.update(w,h,p(c,"cover",.25f),p(c,"flow",1),time);clouds.bind(program);}
+        if(id=="meadow"||id=="sky"||id=="ocean"||id=="lake"){clouds.update(w,h,id=="lake"?p(c,"clouds",.25f):p(c,"cover",.25f),p(c,"flow",1),time);clouds.bind(program);}
         program.f("uEdge",10);program.f("uSpeed",id=="beach-turquoise"?21:22);program.f("uRunup",120);program.f("uShallow",p(c,"shallow",260));program.f("uShoal",p(c,"shoal",110));program.f("uGrain",1);program.f("uWave",1.6f);program.f("uSigma",sigma);program.f("uSpacing",70);program.f("uWaves",1);program.f("uDepth",p(c,"depth",1));program.f("uFlow",p(c,"flow",1));
         program.f("uWind",p(c,"wind",c.wind));program.f("uRain",p(c,"rain",1));program.f("uMist",p(c,"mist",.4f));program.f("uBloom",p(c,"bloom",1));program.f("uPetals",p(c,"petals",1));
         SYSTEMTIME clock{};GetLocalTime(&clock);float hour=c.clockLighting?clock.wHour+clock.wMinute/60.f:c.manualHour;
@@ -128,7 +128,7 @@ private:
         std::array<Vec4,2> rod{{{fx,h,fx,fy},{fishing,k,fx,fy}}};if(fishing==1)rod[0]={fx,h,fx,h+(fy-h)*k-sin(k*3.14159f)*42};if(fishing>=4){k=std::clamp(fishingAge/1.2f,0.f,1.f);rod[0][3]=fy+(h-fy)*k-sin(k*3.14159f)*54;rod[1][1]=k;}array("uRod",rod);
         if(id=="aquarium"){
             int n=std::clamp(int(p(c,"fish",4)),0,8);std::array<Vec4,8> fish{},body{};
-            for(int i=0;i<n;i++){float phase=t*(.5f+hash(i,1,90)*.2f)+i;float x=w*(.5f+.32f*sin(phase*.22f)),y=h*(.5f+.2f*cos(phase*.18f));if(fishing){x+=(fx-x)*.25f;y+=(fy-y)*.25f;}fish[i]={x,y,cos(phase*.22f)>0?0.f:3.14159f,phase*3};body[i]={.65f+hash(i,2,80)*.6f,hash(i,3,70),.4f,1};}
+            for(int i=0;i<n;i++){float phase=t*(.5f+hash(i,1,90)*.2f)+i;float x=w*(.5f+.32f*sin(phase*.22f)),y=h*(.5f+.2f*cos(phase*.18f));if(fishing){float attract=std::clamp(p(c,"eager",1)*.25f,0.f,.9f);x+=(fx-x)*attract;y+=(fy-y)*attract;}fish[i]={x,y,cos(phase*.22f)>0?0.f:3.14159f,phase*3};body[i]={.65f+hash(i,2,80)*.6f,hash(i,3,70),.4f,1};}
             program.f("uFishN",float(n));array("uFish",fish);array("uFishB",body);
             int np=std::clamp(int(p(c,"plants",12)),0,32);std::array<Vec4,32> plants{};for(int i=0;i<np;i++)plants[i]={w*(i+.5f)/std::max(np,1),h-30,70+hash(i,1,20)*120,hash(i,2,30)*100};program.f("uPlantN",float(np));array("uPlant",plants);program.f("uLight",p(c,"light",1));program.f("uBubbles",p(c,"bubbles",1));program.f("uSurf",h*.12f);
             program.v4("uLine",{fx,fx,fy,fishing?1.f:0.f});program.v4("uLineB",{fishing==3?6.f:0.f,fishing==2||fishing==3?1.f:0.f,fishing==3?1.f:0.f,fishing==4?1.f:0.f});
@@ -146,6 +146,7 @@ private:
         program.v4("uPitch",{w*.1f,h*.2f,w*.9f,h*.88f});program.f("uStripes",p(c,"stripes",.4f));program.f("uLighting",p(c,"lighting",0));program.f("uPlayerN",float(n));array("uPlPos",pos);array("uPlMeta",meta);program.v4("uBall",{ballX*w,ballY*h,sin(std::min(passAge,1.f)*3.14159f)*16,t*5});program.v4("uBallTrail",{ballX*w-10,ballY*h-8,.4f,passAge});program.v4("uTarget",{targetX*w,targetY*h,passAge,1});program.v4("uGoalFx",{0,0,100,0});
     }
     void renderBoxing(const Config&c,float w,float h,float t,float dt){
+        for(auto&s:head)s.step(dt,180/std::max(.4f,p(c,"bounciness",1.25f)),8/std::max(.4f,p(c,"bounciness",1.25f)));
         float spar=p(c,"autoSpar",0);autoPunch-=dt;
         if(spar!=1&&autoPunch<=0){hitActor=int(random()*2);hitAge=0;float side=hitActor?1.f:-1.f;head[hitActor].v=side*55*p(c,"punchPower",1);torso[hitActor].v=14;ring.v=4;hp[hitActor]=std::max(0.f,hp[hitActor]-.025f);autoPunch=spar==2?.6f:1.6f+random()*2;}
         if(hp[0]<=0||hp[1]<=0)hp={1,1};for(int i=0;i<2;i++)hpLag[i]+=(hp[i]-hpLag[i])*std::min(1.f,dt*2);

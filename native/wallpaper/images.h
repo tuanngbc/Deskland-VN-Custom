@@ -8,6 +8,7 @@ template<class T>class Com {
     T*p=nullptr;
 public:
     ~Com(){if(p)p->Release();}Com()=default;Com(const Com&)=delete;
+    Com(Com&&other)noexcept:p(other.p){other.p=nullptr;}Com&operator=(Com&&other)noexcept{if(this!=&other){if(p)p->Release();p=other.p;other.p=nullptr;}return *this;}
     T**put(){if(p){p->Release();p=nullptr;}return &p;}T*get()const{return p;}T*operator->()const{return p;}
 };
 struct Pixels {UINT width=0,height=0;std::vector<unsigned char> rgba;};

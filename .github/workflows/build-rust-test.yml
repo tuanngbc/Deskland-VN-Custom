@@ -186,7 +186,7 @@ jobs:
           set -euo pipefail
           mkdir -p wallpaper-evidence
           g++ -O2 -std=gnu++20 -Wall -DUNICODE -D_UNICODE -DNOMINMAX tests/wallpaper-contract.cpp -o wallpaper-evidence/wallpaper-contract.exe -lopengl32 -lgdi32 -luser32 -static
-          g++ -O2 -std=gnu++20 -Wall -DUNICODE -D_UNICODE -DNOMINMAX tests/wallpaper-renderer.cpp -o wallpaper-evidence/wallpaper-renderer.exe -lopengl32 -lgdi32 -luser32 -lole32 -loleaut32 -luuid -lwindowscodecs -ldwmapi -static
+          g++ -O2 -std=gnu++20 -Wall -DUNICODE -D_UNICODE -DNOMINMAX tests/wallpaper-renderer.cpp -o wallpaper-evidence/wallpaper-renderer.exe -lopengl32 -lgdi32 -luser32 -lole32 -loleaut32 -luuid -lwindowscodecs -ldwmapi -ld3d11 -ldxgi -ldcomp -static
       - name: Verify native configuration, physical topology and solar contracts
         shell: pwsh
         run: |
@@ -229,7 +229,10 @@ jobs:
         if: always()
         with:
           name: wallpaper-reengineering-evidence
-          path: wallpaper-evidence/
+          path: |
+            wallpaper-evidence/*.txt
+            wallpaper-evidence/*.log
+            wallpaper-evidence/*.png
           retention-days: 30
   build-rust:
     if: github.ref != 'refs/heads/codex/fluidwin-native-base-v1.0.3' && github.ref != 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3'
