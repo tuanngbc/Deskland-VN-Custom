@@ -18,7 +18,7 @@ new C++ owners and audited artwork/math; no legacy runtime or module is linked.
 | MP4 H.264 recorder/region/30–60 FPS/system audio/pause/output/shortcuts | IMPLEMENTED through the on-demand capture helper; owner UAT pending | 4 |
 | CPU/GPU/RAM/network indicators and native controls | IMPLEMENTED: Control Center readout and on-demand package diagnostics; owner hardware UAT pending | 4 |
 | Backup/schema/validation/idempotent migration/rollback/unknown fields/assets | Wallpaper schema/atomic backup/unknown fields implemented; whole-app migration/import/export/rollback remains NOT_STARTED, production untouched | 4 |
-| Full Vietnamese/English/Simplified Chinese Settings parity | PARTIAL: Vietnamese and English available; native Simplified Chinese pending | 4–5 |
+| Full Vietnamese/English/Simplified Chinese Settings parity | PARTIAL: Vietnamese, English and Simplified Chinese selectable; some native surfaces still fall back to English in Chinese | 4–5 |
 
 Phase 3 waits for Phase 2 owner acceptance; Phase 4 waits for Phase 3 acceptance.
 Only Auto Update is excluded; Dynamic Notch is now included.

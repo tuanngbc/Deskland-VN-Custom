@@ -129,7 +129,7 @@ inline void saveClock(size_t index,const desktopclock::Settings& c) {
     scriviTesto(clockKey(index,L"Display").c_str(),c.display);
 }
 inline const wchar_t* clockText(const wchar_t* vi,const wchar_t* en) {
-    return testi::attuale()==testi::VIETNAMITA?vi:en;
+    return testi::attuale()==testi::VIETNAMITA?vi:testi::attuale()==testi::CINESE?testi::t(en,en):en;
 }
 
 // Avvio con Windows: il valore "FluidWin" nella chiave Run dell'utente (come le altre app che si aprono all'accesso;

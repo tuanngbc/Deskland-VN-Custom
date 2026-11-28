@@ -134,6 +134,16 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
         clock.stop();testi::lingua()=locale;
         report<<"CLOCK_CLASSIC_EN_AND_VI_SCREENSHOTS=EXPORTED\n";
     }
+    {
+        const int language=testi::lingua().exchange(testi::CINESE);
+        const bool valid=!wcscmp(testi::nome(testi::CINESE),L"简体中文")&&!wcscmp(testi::locale(),L"zh-CN")&&
+            !wcscmp(testi::t(L"Lingua",L"Language"),L"语言")&&
+            !wcscmp(testi::t(L"Dock",L"Dock"),L"程序坞")&&
+            !wcscmp(testi::t(nullptr,L"unmapped synthetic fixture"),L"unmapped synthetic fixture");
+        testi::lingua()=language;
+        if(!valid)return 194;
+        report<<"NATIVE_SIMPLIFIED_CHINESE_SETTINGS_LOOKUP_AND_FALLBACK=PASS\n";
+    }
     if(appcatalog::fold(L"Tiếng Việt Đặng")!=L"tieng viet dang")return 60;
     std::filesystem::create_directories(tlauncher::dockPins());
     auto pin=tlauncher::dockPins()/L"fixture.lnk";

@@ -23,7 +23,7 @@
 
 namespace testi {
 
-enum Lingua { ITALIANO = 0, INGLESE = 1, SPAGNOLO = 2, FRANCESE = 3, TEDESCO = 4, PORTOGHESE = 5, ARABO = 6, VIETNAMITA = 7, N_LINGUE = 8 };
+enum Lingua { ITALIANO = 0, INGLESE = 1, SPAGNOLO = 2, FRANCESE = 3, TEDESCO = 4, PORTOGHESE = 5, ARABO = 6, VIETNAMITA = 7, CINESE = 8, N_LINGUE = 9 };
 
 // atomica: la leggono anche i thread di lavoro (aggiornamenti, widget) mentre l'interfaccia la cambia (S12)
 inline std::atomic<int>& lingua() { static std::atomic<int> l{ITALIANO}; return l; }
@@ -34,7 +34,7 @@ inline bool rtl() { return attuale() == ARABO; }
 
 // nome di ogni lingua nella lingua stessa (scelta nelle impostazioni)
 inline const wchar_t* nome(int l) {
-    static const wchar_t* n[N_LINGUE] = {L"Italiano", L"English", L"Español", L"Français", L"Deutsch", L"Português", L"العربية", L"Tiếng Việt"};
+    static const wchar_t* n[N_LINGUE] = {L"Italiano", L"English", L"Español", L"Français", L"Deutsch", L"Português", L"العربية", L"Tiếng Việt", L"简体中文"};
     return l >= 0 && l < N_LINGUE ? n[l] : n[INGLESE];
 }
 
@@ -44,6 +44,7 @@ inline std::function<void(const wchar_t*)>& registro() { static std::function<vo
 }  // namespace testi
 
 #include "traduzioni.h"
+#include "chinese.h"
 
 namespace testi {
 
@@ -75,6 +76,7 @@ inline const wchar_t* t(const wchar_t* it, const wchar_t* en) {
     const int l = attuale();
     if (l == ITALIANO) return it;
     if (l == INGLESE || !en || !*en) return en;
+    if (l == CINESE) { const auto* translated = chinese(en); if(translated==en) dettagli::mancante(en); return translated; }
     if (it) for (const auto& r : traduzioni::PER_ITALIANO) if (!wcscmp(r[0], it)) return r[l - 1];
     const auto& m = dettagli::indice();
     const auto k = m.find(std::wstring_view(en));
@@ -86,7 +88,7 @@ inline const wchar_t* t(const wchar_t* it, const wchar_t* en) {
 // nome della lingua per date e orari (GetDateFormatEx). Arabo d'Egitto: calendario gregoriano (quello saudita e'
 // l'egiriano, e le date non corrisponderebbero al resto di Windows)
 inline const wchar_t* locale() {
-    static const wchar_t* n[N_LINGUE] = {L"it-IT", L"en-US", L"es-ES", L"fr-FR", L"de-DE", L"pt-BR", L"ar-EG",L"vi-VN"};
+    static const wchar_t* n[N_LINGUE] = {L"it-IT", L"en-US", L"es-ES", L"fr-FR", L"de-DE", L"pt-BR", L"ar-EG",L"vi-VN",L"zh-CN"};
     return n[attuale()];
 }
 // Recreate only the text format on a language change; retain the owner's
@@ -111,11 +113,11 @@ inline bool aggiornaFormato(IDWriteFactory* factory, IDWriteTextFormat*& format)
 }
 // codice di due lettere (ricerca delle citta' del meteo)
 inline const wchar_t* codice() {
-    static const wchar_t* n[N_LINGUE] = {L"it", L"en", L"es", L"fr", L"de", L"pt", L"ar",L"vi"};
+    static const wchar_t* n[N_LINGUE] = {L"it", L"en", L"es", L"fr", L"de", L"pt", L"ar",L"vi",L"zh"};
     return n[attuale()];
 }
 // separatore dei decimali nei risultati dei calcoli
-inline wchar_t virgola() { const int l = attuale(); return l == INGLESE || l == ARABO ? L'.' : L','; }
+inline wchar_t virgola() { const int l = attuale(); return l == INGLESE || l == ARABO || l == CINESE ? L'.' : L','; }
 
 // lingua al primo avvio: quella di Windows se FluidWin la conosce, altrimenti inglese
 inline int predefinita() {
