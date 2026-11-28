@@ -26,6 +26,7 @@
 #include <dwmapi.h>
 #include "raggio.h"
 #include "sistema.h"
+#include "resource_readout.h"
 #include "vetro.h"
 #include "gpu.h"
 #include "pool.h"
@@ -547,6 +548,7 @@ public:
     void chiudi() {
         fermaIcone();
         fermaNotifiche();
+        resourceReadout.stop();
         if (!attivo) return;
         attivo = false;
         extraDocks.clear();
@@ -697,6 +699,10 @@ public:
             }
             if (adesso() - wlCercataT > 10) { wlCercataT = adesso(); wlan.cerca(); }
         }
+        const bool resourcesVisible=attivo&&pannelloTipo==P_CONTROLLO&&!pChiusura&&
+            !nascostoSchermoIntero&&altezzaMassimaP()>=std::round((468+48*righeControllo())*dpi);
+        if(resourcesVisible){if(resourceReadout.update())pDirty=true;}
+        else resourceReadout.stop();
         // centro di controllo aperto: il tempo del timer e lo stato del microfono si aggiornano
         if (pannelloTipo == P_CONTROLLO && (comodita::timerAttivo() || comodita::timerSuona() || sensori::Sensori::io().versione != versioneSensoriCentro
                                             || sensori::Sensori::io().versioneTempo != versioneTempoCentro)) {
@@ -3288,6 +3294,7 @@ private:
     IDXGISwapChain1* scP = nullptr; IDCompositionTarget* targetP = nullptr; IDCompositionVisual* visualP = nullptr;
     IDCompositionEffectGroup* effettoP = nullptr; ID2D1Bitmap1* bersaglioP = nullptr;
     IDWriteTextFormat *fmtTitolo = nullptr, *fmtVoce = nullptr, *fmtSotto = nullptr, *fmtNome = nullptr;
+    resource_readout::Readout resourceReadout;
     int pannelloTipo = P_NESSUNO, pannelloChiuso = P_NESSUNO;
     bool pDirty = false, pAnimazione = false, pChiusura = false, pMouseDentro = false, trascinaVolume = false;
     double pT0 = 0, pChiusoT = -10, pK = -1;

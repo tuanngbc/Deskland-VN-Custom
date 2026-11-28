@@ -96,6 +96,20 @@ static int phase3DockContracts(std::ostream& report,const std::filesystem::path&
 static int phase3Contracts(std::ostream& report,const std::filesystem::path& evidence) {
     if(int result=phase3ShortcutContracts(report))return result;
     {
+        resource_readout::Readout readout;
+        const auto deadline=GetTickCount64()+8000;
+        do {
+            readout.update();
+            if(readout.values().cpu>=0&&readout.values().ram>=0)break;
+            ciPump(20);
+        } while(GetTickCount64()<deadline);
+        if(readout.values().cpu<0||readout.values().cpu>100||
+            readout.values().ram<0||readout.values().ram>100)return 192;
+        readout.stop();
+        if(readout.values().cpu!=-1||readout.values().ram!=-1)return 193;
+        report<<"CONTROL_CENTER_RESOURCE_SAMPLES_AND_RESET=PASS\n";
+    }
+    {
         appicons::Pixels fixture{48,48,std::vector<UINT>(48*48)};
         for(int y=18;y<30;++y)for(int x=12;x<36;++x)fixture.bgra[y*48+x]=0xff3695e4;
         appicons::normalize(fixture,48);

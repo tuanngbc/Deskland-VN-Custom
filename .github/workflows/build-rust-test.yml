@@ -101,7 +101,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p native-build native-evidence
-          libs='-ld3d11 -ldxgi -ldcomp -ld3dcompiler -ld2d1 -ldwrite -ldwmapi -luser32 -lgdi32 -lshell32 -lole32 -loleaut32 -lversion -lpropsys -luuid -liphlpapi -lwindowscodecs -lruntimeobject -lpowrprof -lshlwapi -lshcore -lsetupapi -lwinmm -ldxva2 -lwinhttp -lcomdlg32 -lbcrypt -lopengl32 -lwtsapi32 -loleacc -lnormaliz'
+          libs='-ld3d11 -ldxgi -ldcomp -ld3dcompiler -ld2d1 -ldwrite -ldwmapi -luser32 -lgdi32 -lshell32 -lole32 -loleaut32 -lversion -lpropsys -luuid -liphlpapi -lwindowscodecs -lruntimeobject -lpowrprof -lshlwapi -lshcore -lsetupapi -lwinmm -ldxva2 -lwinhttp -lcomdlg32 -lbcrypt -lopengl32 -lwtsapi32 -loleacc -lnormaliz -lpdh'
           (cd native/fluidwin && windres icona.rc -O coff -o ../../native-build/icon.o)
           g++ -O2 -std=gnu++20 -Wall -municode -mwindows native/fluidwin/fluidwin.cpp native-build/icon.o -o native-build/TLauncher.exe $libs -static
           g++ -O2 -std=gnu++20 -Wall -DUNICODE -D_UNICODE tests/native-base-contract.cpp native-build/icon.o -o native-build/native-contract.exe $libs -static

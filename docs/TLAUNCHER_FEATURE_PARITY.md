@@ -16,7 +16,7 @@ new C++ owners and audited artwork/math; no legacy runtime or module is linked.
 | Two desktop clocks/format/monitor/opacity/click-through/lock | IMPLEMENTED; Classic uses packaged 1.0.2 typography; visual parity UAT pending | 4 |
 | Screenshot editor/crop/arrows/text/numbers/pixelation/redaction/copy/PNG/JPG | IMPLEMENTED through the on-demand capture helper; owner UAT pending | 4 |
 | MP4 H.264 recorder/region/30–60 FPS/system audio/pause/output/shortcuts | IMPLEMENTED through the on-demand capture helper; owner UAT pending | 4 |
-| CPU/GPU/RAM/network indicators and native controls | PARTIAL: on-demand RAM/CPU/GPU diagnostics packaged; live Control Center indicators pending | 4 |
+| CPU/GPU/RAM/network indicators and native controls | IMPLEMENTED: Control Center readout and on-demand package diagnostics; owner hardware UAT pending | 4 |
 | Backup/schema/validation/idempotent migration/rollback/unknown fields/assets | Wallpaper schema/atomic backup/unknown fields implemented; whole-app migration/import/export/rollback remains NOT_STARTED, production untouched | 4 |
 | Full Vietnamese/English/Simplified Chinese Settings parity | PARTIAL: Vietnamese and English available; native Simplified Chinese pending | 4–5 |
 

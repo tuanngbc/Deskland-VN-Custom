@@ -1,7 +1,7 @@
 # Download/verify/stage only. Never executes an EXE or alters a live candidate.
 [CmdletBinding()]
 param([Parameter(Mandatory)][long]$RunId,[Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{40}$')][string]$Commit,
- [string]$UatRoot='E:\TLauncher-UAT',[string]$ProductionExe='E:\TLauncher\TLauncher.exe',[switch]$Wallpaper,[switch]$StageSpotlight)
+ [string]$UatRoot='E:\TLauncher-UAT',[string]$ProductionExe='E:\TLauncher\TLauncher.exe',[switch]$Wallpaper,[switch]$StageSpotlight,[switch]$FullFeature,[switch]$StageOnly)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 $requestedProduction=$ProductionExe
@@ -12,19 +12,36 @@ if([IO.Path]::GetFileName($root)  -ine  'TLauncher-UAT'  -or  !(Test-Path $Produ
  (Get-Item $ProductionExe).VersionInfo.ProductVersion  -cne  '1.0.2'){throw 'Invalid UAT root or production'}
 Assert-NoReparse $root
 if($Wallpaper -and $StageSpotlight){throw 'Choose one package kind.'}
+if($FullFeature -and !$StageSpotlight){throw 'FULL FEATURE TEST requires the persistent Stage and Spotlight profile.'}
+if($StageOnly -and !$FullFeature){throw 'Stage-only is supported for FULL FEATURE TEST.'}
+function Assert-FullFeatureVacant {
+ if(!$FullFeature){return}
+ $processes=Get-CimInstance Win32_Process -Filter "Name='TLauncher.exe' OR Name='TLauncherCapture.exe'"
+ foreach($p in $processes){
+  if(!$p.ExecutablePath -or $p.ExecutablePath -ine $ProductionExe){
+   throw 'A TEST process is still running or cannot be identified. Exit TEST normally before updating the shortcut.'
+  }
+ }
+}
 $kind=if($StageSpotlight){'stage-spotlight'}elseif($Wallpaper){'wallpaper'}else{'native-base'}
 $candidate=Join-Path $root ($kind+'-1.0.3-'+$Commit.Substring(0,12))
 $profile=Join-Path $root ('profiles\tlauncher-native-trial-'+$(if($Wallpaper){'wallpaper-'}else{''})+$Commit.Substring(0,12))
 if($StageSpotlight){$profile=Join-Path $root 'profiles\tlauncher-native-trial-owner-1-0-3'}
 $download=Join-Path $root ($kind+'-downloads-'+$Commit.Substring(0,12))
 foreach($path in @($candidate,$profile,$download,$ProductionExe)){Assert-NoReparse $path}
-if(Test-Path -LiteralPath $candidate){throw 'Candidate exists; never change an existing or running session.'}
+$reuse=Test-Path -LiteralPath $candidate
+if($reuse -and !$FullFeature){throw 'Candidate exists; never change an existing or running session.'}
+if($reuse -and !(Test-Path -LiteralPath (Join-Path $candidate 'verified-native-artifact.json') -PathType Leaf)){throw 'Incomplete candidate directory; existing files left intact.'}
 $stableHash=(Get-FileHash -LiteralPath $ProductionExe).Hash
-$credentials=("protocol=https`nhost=github.com`n`n"|git credential fill)
-$secret=$credentials|Where-Object {$_.StartsWith('password=')}|Select-Object -First 1
-if(!$secret){throw 'GitHub repository credential unavailable'}
-$headers=@{Authorization=('Bearer '+$secret.Substring(9));Accept='application/vnd.github+json';'X-GitHub-Api-Version'='2022-11-28'}
-Remove-Variable credentials,secret
+$token=if($env:GH_TOKEN){$env:GH_TOKEN}elseif($env:GITHUB_TOKEN){$env:GITHUB_TOKEN}else{
+ $env:GIT_TERMINAL_PROMPT='0';$env:GCM_INTERACTIVE='Never'
+ $line=("protocol=https`nhost=github.com`npath=tuanngbc/TLauncher.git`n`n"|git credential fill 2>$null)|Where-Object {$_.StartsWith('password=')}|Select-Object -First 1
+ if($line){$line.Substring(9)}
+}
+if(!$token){throw 'GitHub repository credential unavailable'}
+$headers=@{Authorization=('Bearer '+$token);Accept='application/vnd.github+json';'X-GitHub-Api-Version'='2022-11-28';'User-Agent'='TLauncher-UAT'}
+Remove-Variable token -ErrorAction SilentlyContinue
+if(Test-Path Variable:line){Remove-Variable line}
 $api='https://api.github.com/repos/tuanngbc/TLauncher'
 $run=Invoke-RestMethod "$api/actions/runs/$RunId" -Headers $headers
 $expectedBranch=if($StageSpotlight){'codex/native-stage-spotlight-reengineering-v1.0.3'}elseif($Wallpaper){'codex/native-wallpaper-reengineering-v1.0.3'}else{'codex/fluidwin-native-base-v1.0.3'}
@@ -72,9 +89,18 @@ try{
   [pscustomobject]@{entry=$entry;to=$to;relative=$relative}
  })
  foreach($member in $members){
-  [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($member.to))|Out-Null
-  [IO.Compression.ZipFileExtensions]::ExtractToFile($member.entry,$member.to,$false)
-  $fileManifest += [pscustomobject]@{path=$member.relative;sha256=(Get-FileHash -LiteralPath $member.to).Hash.ToLowerInvariant()}
+  if(!$reuse){
+   [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($member.to))|Out-Null
+   [IO.Compression.ZipFileExtensions]::ExtractToFile($member.entry,$member.to,$false)
+  }
+  $fileHash=(Get-FileHash -LiteralPath $member.to).Hash.ToLowerInvariant()
+  if($reuse){
+   $stream=$member.entry.Open();$hash=[Security.Cryptography.SHA256]::Create()
+   try{$sourceHash=[BitConverter]::ToString($hash.ComputeHash($stream)).Replace('-','').ToLowerInvariant()}
+   finally{$hash.Dispose();$stream.Dispose()}
+   if($sourceHash -cne $fileHash){throw "Existing candidate differs from artifact: $($member.relative)"}
+  }
+  $fileManifest += [pscustomobject]@{path=$member.relative;sha256=$fileHash}
  }
 }finally{$package.Dispose()}
 $exe=Join-Path $candidate 'TLauncher.exe'
@@ -82,6 +108,12 @@ if((Get-Content (Join-Path $candidate 'BUILD-COMMIT.txt') -Raw).Trim() -cne  $Co
  (Get-Content (Join-Path $candidate 'VERSION.txt') -Raw).Trim() -cne  '1.0.3' -or 
  (Get-Content (Join-Path $candidate 'UPSTREAM-COMMIT.txt') -Raw).Trim() -cne  '2f773a8733b84c7dbee88fff6628d14e9ac802b9' -or 
  (Get-Item $exe).VersionInfo.ProductVersion -cne  '1.0.3'){throw 'Candidate metadata mismatch'}
+if($FullFeature){
+ foreach($file in 'TLauncherCapture.exe','native-owner-uat.ps1','native-profile-library.ps1','NATIVE-RESOURCE.cmd','STAGE-SPOTLIGHT-UAT.md'){
+  if(!(Test-Path -LiteralPath (Join-Path $candidate $file) -PathType Leaf)){throw "Missing FULL FEATURE package member: $file"}
+ }
+ if(!(Test-Path -LiteralPath $profile -PathType Container)){throw 'Saved owner TEST profile is missing'}
+}
 if($Wallpaper -or $StageSpotlight){
  $expectedKind=if($StageSpotlight){'PHASE_3_STAGE_SPOTLIGHT'}else{'PHASE_2_WALLPAPER'}
  if((Get-Content (Join-Path $candidate 'PACKAGE-KIND.txt') -Raw).Trim() -cne $expectedKind){throw 'Wrong candidate package kind'}
@@ -104,7 +136,25 @@ if(!$StageSpotlight){
 }
 $verified=[ordered]@{sourceCommit=$Commit;runId=$RunId;workflow=$run.html_url;artifactId=$art[0].id;artifactSha256=$art[0].digest.Substring(7);archiveSha256=$wanted;version='1.0.3';profile=$profile;productionExe=$ProductionExe;files=$fileManifest;executed=$false;ownerAcceptance='PENDING';publicRelease='NOT_PUBLISHED'}
 if($StageSpotlight){$verified['profilePolicy']='persistent-native-1.0.3';$verified['migration']='DEFERRED_UNTIL_OWNER_LAUNCH_AFTER_VACANCY'}
-$verified|ConvertTo-Json -Depth 6|Set-Content (Join-Path $candidate 'verified-native-artifact.json') -Encoding UTF8
+$manifestPath=Join-Path $candidate 'verified-native-artifact.json'
+Assert-NoReparse $manifestPath
+if($reuse){
+ $cached=Get-Content -LiteralPath $manifestPath -Raw|ConvertFrom-Json
+ foreach($key in 'sourceCommit','runId','artifactId','artifactSha256','archiveSha256','version','profile','productionExe','profilePolicy','migration'){
+  if($cached.$key -cne $verified[$key]){throw "Existing candidate manifest mismatch: $key"}
+ }
+ if(@($cached.files).Count -ne $fileManifest.Count){throw 'Existing candidate manifest has a different file list.'}
+ $cachedHashes=@{}
+ foreach($file in $cached.files){$cachedHashes[$file.path]=$file.sha256}
+ foreach($file in $fileManifest){if($cachedHashes[$file.path] -cne $file.sha256){throw "Existing manifest file differs: $($file.path)"}}
+}else{
+ $verified|ConvertTo-Json -Depth 6|Set-Content -LiteralPath $manifestPath -Encoding UTF8
+}
+if($StageOnly){
+ [pscustomobject]@{candidate=$candidate;profile=$profile;commit=$Commit;packageSha256=$wanted;shortcutUpdated=$false;executed=$false}
+ return
+}
+Assert-FullFeatureVacant
 $entryPoint=Join-Path $root ('START-'+$(if($StageSpotlight){'STAGE-SPOTLIGHT'}elseif($Wallpaper){'WALLPAPER'}else{'NATIVE'})+'-TEST-'+$Commit.Substring(0,12)+'.cmd')
 $text=@'
 @echo off
@@ -115,14 +165,19 @@ echo Leave this window open. Exit TEST normally to restore production.
 if errorlevel 1 pause
 '@
 if($Wallpaper){$text=$text.Replace('NATIVE BASE TEST','WALLPAPER TEST')}
-if($StageSpotlight){$text=$text.Replace('NATIVE BASE TEST','STAGE AND SPOTLIGHT TEST')}
-[IO.File]::WriteAllText($entryPoint,($text.Replace('__CANDIDATE__',[IO.Path]::GetFileName($candidate))-replace '\r?\n',"`r`n"),[Text.Encoding]::ASCII)
-$linkPath=Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) ('TLauncher 1.0.3 '+[char]0x2014+$(if($StageSpotlight){' STAGE & SPOTLIGHT TEST.lnk'}elseif($Wallpaper){' WALLPAPER TEST.lnk'}else{' NATIVE BASE TEST.lnk'}))
+if($StageSpotlight){$text=$text.Replace('NATIVE BASE TEST',$(if($FullFeature){'FULL FEATURE TEST'}else{'STAGE AND SPOTLIGHT TEST'}))}
+Assert-NoReparse $entryPoint
+$launcherText=$text.Replace('__CANDIDATE__',[IO.Path]::GetFileName($candidate))-replace '\r?\n',"`r`n"
+if(Test-Path -LiteralPath $entryPoint){
+ if([IO.File]::ReadAllText($entryPoint) -cne $launcherText){throw 'Existing candidate launcher differs; left unchanged.'}
+}else{[IO.File]::WriteAllText($entryPoint,$launcherText,[Text.Encoding]::ASCII)}
+$linkPath=Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) ('TLauncher 1.0.3 '+[char]0x2014+$(if($FullFeature){' FULL FEATURE TEST.lnk'}elseif($StageSpotlight){' STAGE & SPOTLIGHT TEST.lnk'}elseif($Wallpaper){' WALLPAPER TEST.lnk'}else{' NATIVE BASE TEST.lnk'}))
 Assert-NoReparse $linkPath
 $wsh=New-Object -ComObject WScript.Shell;$link=$wsh.CreateShortcut($linkPath)
 $link.TargetPath=Join-Path $env:SystemRoot 'System32\cmd.exe';$link.Arguments='/d /c .\'+[IO.Path]::GetFileName($entryPoint)
 $link.WorkingDirectory=$root;$link.IconLocation=$exe+',0';$link.WindowStyle=1
-$link.Description=if($Wallpaper){'TLauncher Phase 2 WALLPAPER owner TEST. Exit normally to restore stable 1.0.2.'}else{'TLauncher native Phase 1 owner TEST. Exit normally to restore stable 1.0.2.'};$link.Save()
+Assert-FullFeatureVacant
+$link.Description=if($FullFeature){'TLauncher 1.0.3 FULL FEATURE TEST. Exit normally to restore stable 1.0.2.'}elseif($Wallpaper){'TLauncher Phase 2 WALLPAPER owner TEST. Exit normally to restore stable 1.0.2.'}else{'TLauncher native Phase 1 owner TEST. Exit normally to restore stable 1.0.2.'};$link.Save()
 $readback=$wsh.CreateShortcut($linkPath)
 if($readback.TargetPath -ine  $link.TargetPath -or  $readback.Arguments -cne  $link.Arguments -or  $readback.WorkingDirectory -ine  $root){throw 'Shortcut readback mismatch'}
 if((Get-FileHash -LiteralPath $ProductionExe).Hash -cne  $stableHash){throw 'Production file changed'}

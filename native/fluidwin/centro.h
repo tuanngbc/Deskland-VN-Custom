@@ -290,7 +290,7 @@ inline auto Motore::controlloCompatto() const -> bool {
 #ifdef PROVA_COMPATTO
     return true;
 #endif
-    return std::round((518 + 52 * righeControllo()) * dpi) > altezzaMassimaP(); }
+    return std::round((556 + 52 * righeControllo()) * dpi) > altezzaMassimaP(); }
 // luminosita' e batteria: una riga in piu' solo se il monitor si regola e se c'e' una batteria. Le conta anche
 // controlloCompatto. Su uno schermo cosi' basso che nemmeno la versione compatta ci sta con tutte e due (720p al
 // 125%) la luminosita' lascia il posto alla batteria: sul portatile la si regola anche coi tasti
@@ -302,8 +302,9 @@ inline auto Motore::rigaLuminosita() const -> bool {
 inline auto Motore::righeControllo() const -> int { return (rigaLuminosita() ? 1 : 0) + (rigaBatteria() ? 1 : 0); }
 inline auto Motore::altezzaControllo() const -> float {
     const int righe = righeControllo();
-    if (!controlloCompatto()) return std::round((518 + 52 * righe) * dpi);
-    return std::round((430 + 48 * righe) * dpi);
+    if (!controlloCompatto()) return std::round((556 + 52 * righe) * dpi);
+    const float withMetrics = std::round((468 + 48 * righe) * dpi);
+    return withMetrics <= altezzaMassimaP() ? withMetrics : std::round((430 + 48 * righe) * dpi);
 }
 
 inline auto Motore::nascondiPannello() -> void {
@@ -1375,6 +1376,25 @@ inline auto Motore::disegnaControllo(bool scuro, D2D1_COLOR_F ink) -> void {
         pennello->SetColor({ink.r, ink.g, ink.b, ink.a * 0.75f});
         scrivi(nomi[i], fmtNome, {cx - 40 * dpi, cy + rc + 4 * dpi, cx + 40 * dpi, cy + rc + 22 * dpi});
     }
+    if(altezzaMassimaP()>=std::round((468+48*righeControllo())*dpi)){
+        const auto& metrics=resourceReadout.values();
+        const auto pct=[](int v){return v<0?std::wstring(L"—"):std::to_wstring(v)+L"%";};
+        const auto rate=[](double v){
+            if(v<0)return std::wstring(L"—");
+            wchar_t text[30]{};
+            if(v>=1000000)swprintf(text,30,L"%.1f MB/s",v/1000000);
+            else if(v>=1000)swprintf(text,30,L"%.1f KB/s",v/1000);
+            else swprintf(text,30,L"%.0f B/s",v);
+            return std::wstring(text);
+        };
+        const auto load=L"CPU "+pct(metrics.cpu)+L"   RAM "+pct(metrics.ram)+L"   GPU "+pct(metrics.gpu);
+        const auto network=L"↓ "+rate(metrics.down)+L"     ↑ "+rate(metrics.up);
+        const float top=y+(cp?70:78)*dpi;
+        pennello->SetColor(ink);
+        scrivi(load,fmtSotto,{16*dpi,top,PW-16*dpi,top+16*dpi});
+        scrivi(network,fmtSotto,{16*dpi,top+16*dpi,PW-16*dpi,top+32*dpi});
+    }
+
 }
 
 // simboli del meteo (scala 1 = circa 24 px)

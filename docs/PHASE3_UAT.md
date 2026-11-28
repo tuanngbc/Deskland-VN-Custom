@@ -1,8 +1,8 @@
-# TLauncher 1.0.3 — STAGE & SPOTLIGHT TEST
+# TLauncher 1.0.3 — FULL FEATURE TEST
 
 Tài liệu cho bản TEST Phase 3 tổng hợp khi được bàn giao. CI PASS chưa phải owner nghiệm thu; các giới hạn thực tế phải đi kèm báo cáo của đúng candidate.
 
-Mở lối tắt **TLauncher 1.0.3 — STAGE & SPOTLIGHT TEST** trên Desktop. Giữ cửa sổ khởi chạy mở. Launcher yêu cầu production thoát bình thường, chờ singleton/Guardian, rồi mở TEST với profile riêng. Khi TEST thoát, launcher khôi phục production nếu trước đó đang chạy. Không chạy trực tiếp EXE hoặc mở đồng thời hai desktop shell.
+Mở lối tắt **TLauncher 1.0.3 — FULL FEATURE TEST** trên Desktop. Giữ cửa sổ khởi chạy mở. Launcher yêu cầu production thoát bình thường, chờ singleton/Guardian, rồi mở TEST với profile riêng. Khi TEST thoát, launcher khôi phục production nếu trước đó đang chạy. Không chạy trực tiếp EXE hoặc mở đồng thời hai desktop shell.
 
 | Tính năng | Vị trí và cách dùng |
 | --- | --- |
@@ -46,4 +46,4 @@ Báo cáo gồm RAM/private working set/private bytes, CPU, GPU theo adapter, de
 - **Đồng hồ**: Settings → Desktop clocks để cài đặt hai đồng hồ độc lập, dùng Classic để đối chiếu với 1.0.2.
 - **Chụp/quay**: Ctrl+Shift+S mở chọn ảnh; Ctrl+Shift+R bắt đầu chọn vùng quay hoặc dừng và lưu. Space chọn cả màn hình dưới con trỏ; Esc hủy chọn; Ctrl+Shift+P tạm dừng/tiếp tục. Settings → Keyboard có 30/60 FPS, âm thanh và thư mục lưu.
 - **Wallpaper**: thử thêm một shortcut cạnh mép nước; cây hợp lệ nên giữ vị trí và thuyền mắc bờ tìm lại nước.
-- **Tài nguyên**: dùng NATIVE-RESOURCE.cmd trong gói TEST khi cần đo; công cụ không tự chạy.
+- **Tài nguyên**: Control Center hiển thị tải CPU, RAM, GPU và tốc độ mạng nếu có đủ chỗ. Dùng NATIVE-RESOURCE.cmd trong gói TEST để đo riêng các tiến trình TLauncher; công cụ không tự chạy.
