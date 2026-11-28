@@ -113,3 +113,6 @@ Compatible-world keys use stable monitor representatives, so dragging icons does
 
 
 CI 46090624758 / 08d9f85 passed all required jobs with actual DirectWrite locale assertions restored. CI 46091127471 / a2c9259 passed Porch insects/renderer, and the real Dock regression reached exit 164 after passing hover, retraction, stable anchors, zero idle redraw and fullscreen checks on all four edges. Its work-area assertion incorrectly compared pre-shell state to the active accepted Dock startup, which enables Windows taskbar auto-hide. Compare collapsed transitions against the settled active-shell baseline, then separately require the original work area after normal Dock exit. CI pending.
+
+
+Wallpaper immutable sprite textures now share one upload across scene/output instances in the existing session GL context. Cache entries are weak, so disabling the last scene owner releases its GPU texture immediately rather than retaining a permanent asset cache. Hosted pixel/allocation assertions check no second upload/allocation, survival after the first owner exits and return to the exact previous allocation count after the final owner exits. CI pending; this is measured ownership/upload elimination, not a claim of owner RAM/CPU/GPU targets.

@@ -147,6 +147,7 @@ class Session {
             Program post(gl,assetText(assetsRoot()/L"wallpaper/shaders/post.frag"));
             std::unique_ptr<Bridge> bridge;try{bridge=std::make_unique<Bridge>();}catch(const std::exception&){}
             {std::lock_guard<std::mutex> lock(state->mutex);state->metrics.presentation=bridge?"GPU DirectComposition":"Asynchronous bounded DIB fallback";}
+            auto imageCache=std::make_shared<ImageCache>(gl);
             std::vector<std::unique_ptr<Output>> outputs;std::vector<Monitor> topologyBefore;std::map<std::wstring,std::unique_ptr<SceneRuntime>> worlds;IconGeometry icons;
             std::vector<std::wstring> worldKeys,previousWorldKeys;std::vector<RECT> priorIcons;Layout priorLayout=Layout::Independent;
             auto deadline=std::chrono::steady_clock::now(),last=deadline;double elapsed=0;
@@ -182,7 +183,7 @@ class Session {
                     int scene=s.config.layout==Layout::Independent&&assignment!=s.config.displays.end()?assignment->second.scene:s.config.scene;
                     auto view=viewport(m,all,s.config.layout);const std::wstring& key=worldKeys[i];used.push_back(key);
                     if(paused||(s.config.pauseCovered&&covered(m.rect,s.opaqueWindows)))continue;
-                    bool inheritedAdvanced=false;auto&world=worlds[key];if(!world||world->scene()!=scene){context.current();world.reset();world=std::make_unique<SceneRuntime>(gl,scene);
+                    bool inheritedAdvanced=false;auto&world=worlds[key];if(!world||world->scene()!=scene){context.current();world.reset();world=std::make_unique<SceneRuntime>(gl,scene,imageCache);
                         if(s.config.layout==Layout::Synchronized&&i<previousWorldKeys.size())if(auto old=worlds.find(previousWorldKeys[i]);old!=worlds.end()&&old->second&&old->second.get()!=world.get()){
                             if(world->inheritSimulation(*old->second,view,sceneGeometry(s.monitors,m,s.config.layout)))inheritedAdvanced=std::find(advanced.begin(),advanced.end(),previousWorldKeys[i])!=advanced.end();
                         }

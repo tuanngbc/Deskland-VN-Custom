@@ -22,7 +22,7 @@ struct ClickFx {Vec4 value{0,0,100,0};};
 enum class FishMode {Swim,Approach,Nibble,Bite,Hooked,Caught,Returning,Flee};
 struct NativeFish {float x=0,y=0,heading=0,phase=0,timer=0;FishMode mode=FishMode::Swim;Body body;};
 class SceneRuntime {
-    GL&g;int index;Program program;Field field;Clouds clouds;std::unique_ptr<Sprites> sprites;
+    GL&g;int index;Program program;Field field;Clouds clouds;std::shared_ptr<ImageCache> imageCache;std::unique_ptr<Sprites> sprites;
     std::vector<RECT> previousIcons;float previousW=0,previousH=0,previousSigma=-1,previousWarp=-1;
     std::array<Cat,15> cats{};std::array<ClickFx,8> effects{};size_t effectNext=0;float age=0;
     Vec4 toy{0,0,0,0};float fishing=0,fishingAge=0;POINT fishingPoint{};
@@ -196,7 +196,7 @@ class SceneRuntime {
         if(water){if((valid-b.target).length()<24&&b.command)return;auto path=waterRoute(b.position,valid,previousW,previousH,radius,[&](V2 q,float r){return navigable(q,r,true);});if(path.empty())return;routes[{name,i}]={std::move(path),0};}b.aim(valid);
     }
 public:
-    SceneRuntime(GL&gl,int id):g(gl),index(id),program(gl,source(id)),field(gl),clouds(gl){rng^=uint32_t(id*19001);}
+    SceneRuntime(GL&gl,int id,std::shared_ptr<ImageCache> cache={}):g(gl),index(id),program(gl,source(id)),field(gl),clouds(gl),imageCache(cache?std::move(cache):std::make_shared<ImageCache>(gl)){rng^=uint32_t(id*19001);}
     int scene()const{return index;}
     // Fork CPU state only when a previously compatible synchronized group splits.
     // Graphics resources stay uniquely owned on the render thread; physical
@@ -367,7 +367,7 @@ public:
         if(id=="boxing-ring")renderBoxing(c,w,h,t,dt);
         glDrawArrays(GL_TRIANGLES,0,3);
         if(id=="beach"||id=="beach-turquoise"||id=="meadow"){
-            if(!sprites)sprites=std::make_unique<Sprites>(g);
+            if(!sprites)sprites=std::make_unique<Sprites>(g,imageCache);
             if(id=="meadow"){
                 renderMeadow(c,view,t,dt,shade,shear,scaleX,scaleY);
             }else{

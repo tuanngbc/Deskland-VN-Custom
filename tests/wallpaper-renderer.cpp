@@ -81,6 +81,14 @@ int main(int argc,char**argv){try{
             bool differs=!std::equal(resting.begin()+pixel,resting.begin()+pixel+4,flick.begin()+pixel);if(differs){changed++;check(x>180&&y>220,"Tail deformation moves kitten face or body");}}
         check(changed>8,"Kitten tail deformation absent");check(meadowKittenTailAngle(0)==0&&meadowKittenTailAngle(8)==0,"Kitten long resting interval absent");
         bool moved=false;for(int i=0;i<160;++i)moved=moved||abs(meadowKittenTailAngle(2.16f+i*.01f))>.05f;check(moved,"Kitten periodic tail flick absent");
+        auto cache=std::make_shared<ImageCache>(gl);const auto baselineBytes=graphicsStats.textureBytes,baselineCount=graphicsStats.textures;
+        auto first=std::make_unique<Sprites>(gl,cache),second=std::make_unique<Sprites>(gl,cache);
+        auto sharedDraw=[&](Sprites& renderer){glClearColor(1,1,1,1);glClear(GL_COLOR_BUFFER_BIT);renderer.anchored(L"wallpaper/assets/meadow-black-kitten.png",v,cat,0,1,1);return capture(384,384);};
+        const auto firstPixels=sharedDraw(*first);const auto firstBytes=graphicsStats.textureBytes,firstCount=graphicsStats.textures,firstUpload=graphicsStats.uploadBytes;
+        check(sharedDraw(*second)==firstPixels&&graphicsStats.textureBytes==firstBytes&&graphicsStats.textures==firstCount&&graphicsStats.uploadBytes==firstUpload,"Second output duplicated immutable texture upload");
+        first.reset();check(sharedDraw(*second)==firstPixels,"Shared texture died with first output");second.reset();
+        check(graphicsStats.textureBytes==baselineBytes&&graphicsStats.textures==baselineCount,"Image cache retains unused scene textures");
+        report<<"SHARED_IMMUTABLE_IMAGE_UPLOAD_AND_LAST_OWNER_RELEASE=PASS\n";
         png(evidence/"meadow-kitten-tail-flick.png",384,384,flick);
         SceneRuntime meadow(gl,sceneIndex("meadow"));allocate(96,54);View sceneView{0,0,960,540,960,540};noiseTexture.bind(gl,0);meadow.render(config,sceneView,{},weather,8,0,stop,.1f,.1f);
         auto position=meadow.probeMeadowKitten();meadow.click(position.x,position.y);check(meadow.probeMeadowTail()==0,"Petting teleported the tail");

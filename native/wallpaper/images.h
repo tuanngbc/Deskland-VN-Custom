@@ -22,6 +22,18 @@ inline Pixels decode(const std::filesystem::path&path,UINT maxWidth=2048,UINT ma
     if(FAILED(factory->CreateBitmapScaler(scaler.put()))||FAILED(scaler->Initialize(frame.get(),pixels.width,pixels.height,WICBitmapInterpolationModeFant))||FAILED(factory->CreateFormatConverter(converter.put()))||FAILED(converter->Initialize(scaler.get(),GUID_WICPixelFormat32bppRGBA,WICBitmapDitherTypeNone,nullptr,0,WICBitmapPaletteTypeCustom)))throw std::runtime_error("Wallpaper image conversion failed");
     pixels.rgba.resize(size_t(pixels.width)*pixels.height*4);if(FAILED(converter->CopyPixels(nullptr,pixels.width*4,UINT(pixels.rgba.size()),pixels.rgba.data())))throw std::runtime_error("Wallpaper image pixels unavailable");return pixels;
 }
+// Immutable package images share one GPU upload within the session/context.
+// Weak entries never retain a scene's last texture after its owners release it.
+class ImageCache {
+    GL& g;std::map<std::wstring,std::weak_ptr<Texture>> images;
+public:
+    explicit ImageCache(GL& gl):g(gl){}
+    std::shared_ptr<Texture> image(const wchar_t* path){
+        auto& entry=images[path];if(auto current=entry.lock())return current;
+        auto pixels=decode(assetsRoot()/path);auto texture=std::make_shared<Texture>();
+        texture->image(g,5,pixels.width,pixels.height,0x8058,GL_RGBA,GL_UNSIGNED_BYTE,pixels.rgba.data());entry=texture;return texture;
+    }
+};
 // Audited from prototype/meadow-cat.js: long rests, then a short tail flick.
 inline float meadowKittenTailAngle(float time,int seed=7341){
     const float period=10+abs(seed%4),age=float(fmod(std::max(0.f,time)+abs(seed%1300)/1000.f,period))-3;
@@ -30,8 +42,8 @@ inline float meadowKittenTailAngle(float time,int seed=7341){
     return sin(phase*12.5663706f)*envelope*envelope*.34f;
 }
 class Sprites {
-    GL&g;Program program;std::unique_ptr<Program> kiteProgram,boyProgram;std::map<std::wstring,std::unique_ptr<Texture>> textures;
-    Texture&image(const wchar_t*path){auto i=textures.find(path);if(i!=textures.end())return *i->second;auto pixels=decode(assetsRoot()/path);auto texture=std::make_unique<Texture>();texture->image(g,5,pixels.width,pixels.height,0x8058,GL_RGBA,GL_UNSIGNED_BYTE,pixels.rgba.data());auto&ref=*texture;textures.emplace(path,std::move(texture));return ref;}
+    GL&g;Program program;std::unique_ptr<Program> kiteProgram,boyProgram;std::shared_ptr<ImageCache> imageCache;std::map<std::wstring,std::shared_ptr<Texture>> textures;
+    Texture&image(const wchar_t*path){auto& texture=textures[path];if(!texture)texture=imageCache->image(path);return *texture;}
 public:
     void boy(const View&view,V2 position,float s,float phase,float gait,float time,float tug,float shade,float scaleX,float scaleY){
         if(!boyProgram)boyProgram=std::make_unique<Program>(g,desktopShader(assetText(assetsRoot()/L"wallpaper/shaders/meadow-boy-native.frag")));
@@ -69,12 +81,12 @@ public:
         auto&p=*kiteProgram;p.use();p.v2("world",view.worldW,view.worldH);p.v2("origin",view.x,-(view.worldH-view.y-view.h));p.v2("pixelScale",scaleX,scaleY);p.v2("hand",handX,handY);p.v2("kite",x,y);p.f("scale",scale);p.f("time",time);p.f("reaction",reaction);
         glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);glDrawArrays(GL_TRIANGLES,0,3);glDisable(GL_BLEND);
     }
-    explicit Sprites(GL&gl):g(gl),program(gl,R"(#version 330 core
+    explicit Sprites(GL&gl,std::shared_ptr<ImageCache> cache={}):g(gl),program(gl,R"(#version 330 core
 uniform sampler2D sprite;uniform vec2 origin,world,pixelScale;uniform vec4 rect,uvRect;uniform float time,mirror,shadow,alpha,shear,anchorY,kitten,tailAngle;
 out vec4 o;
 float tailMask(vec2 uv){return smoothstep(.635,.665,uv.x)*smoothstep(.715,.75,uv.y);}
 vec4 kittenColor(vec2 uv){vec2 pivot=vec2(.68,.73),delta=uv-pivot;float a=-tailAngle*smoothstep(.025,.16,length(delta));float c=cos(a),s=sin(a);vec2 source=pivot+vec2(c*delta.x-s*delta.y,s*delta.x+c*delta.y);vec4 body=texture(sprite,uv),tail=texture(sprite,source);body.a*=1.-tailMask(uv);tail.a*=tailMask(source);float opacity=body.a+tail.a;return vec4((body.rgb*body.a+tail.rgb*tail.a)/max(opacity,.001),min(opacity,1.));}
-void main(){vec2 p=vec2(gl_FragCoord.x/pixelScale.x,world.y-gl_FragCoord.y/pixelScale.y)+origin;vec2 uv=(p-rect.xy)/rect.zw;if(shadow>.5){float height=(uv.y-anchorY)*2.8;uv.x-=shear*height*rect.w/rect.z;uv.y=anchorY-height;}else if(kitten<.5)uv.x+=sin(time*1.4+uv.y*2.)*.006*pow(1.-uv.y,2.);if(mirror>.5)uv.x=1.-uv.x;if(any(lessThan(uv,vec2(0)))||any(greaterThan(uv,vec2(1))))discard;vec4 c=kitten>.5?kittenColor(clamp(uv,.001,.999)):texture(sprite,uvRect.xy+clamp(uv,.001,.999)*uvRect.zw);o=vec4(shadow>.5?vec3(.12,.20,.18):c.rgb,c.a*alpha);})"){}
+void main(){vec2 p=vec2(gl_FragCoord.x/pixelScale.x,world.y-gl_FragCoord.y/pixelScale.y)+origin;vec2 uv=(p-rect.xy)/rect.zw;if(shadow>.5){float height=(uv.y-anchorY)*2.8;uv.x-=shear*height*rect.w/rect.z;uv.y=anchorY-height;}else if(kitten<.5)uv.x+=sin(time*1.4+uv.y*2.)*.006*pow(1.-uv.y,2.);if(mirror>.5)uv.x=1.-uv.x;if(any(lessThan(uv,vec2(0)))||any(greaterThan(uv,vec2(1))))discard;vec4 c=kitten>.5?kittenColor(clamp(uv,.001,.999)):texture(sprite,uvRect.xy+clamp(uv,.001,.999)*uvRect.zw);o=vec4(shadow>.5?vec3(.12,.20,.18):c.rgb,c.a*alpha);})"),imageCache(cache?std::move(cache):std::make_shared<ImageCache>(gl)){}
     void draw(const wchar_t*path,const View&view,float x,float y,float w,float h,float time,float scaleX,float scaleY,bool mirror=false,bool shadow=false,float alpha=1,float shear=.3f,int atlasFrame=-1,float anchorY=1,float tailAngle=0){
         auto&texture=image(path);texture.bind(g,5);program.use();program.i("sprite",5);program.v2("world",view.worldW,view.worldH);program.v2("origin",view.x,-(view.worldH-view.y-view.h));program.v2("pixelScale",scaleX,scaleY);program.v4("rect",{x,y,w,h});program.f("time",time);program.f("mirror",mirror?1.f:0.f);program.f("shadow",shadow?1.f:0.f);program.f("alpha",alpha);program.f("shear",shear);
         program.f("kitten",std::wstring_view(path)==L"wallpaper/assets/meadow-black-kitten.png"?1.f:0.f);program.f("tailAngle",tailAngle);
