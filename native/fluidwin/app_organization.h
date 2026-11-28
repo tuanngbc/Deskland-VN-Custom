@@ -15,7 +15,15 @@ inline std::wstring normalize(std::wstring value) {
 }
 inline std::wstring fold(const std::wstring& value) {
     int n=NormalizeString(NormalizationD,value.c_str(),int(value.size()),nullptr,0);
-    std::wstring decomposed(n>0?n:0,L'\0');if(n>0)n=NormalizeString(NormalizationD,value.c_str(),int(value.size()),decomposed.data(),n);
+    std::wstring decomposed(n>0?n:0,L'\0');
+    if(n>0) {
+        n=NormalizeString(NormalizationD,value.c_str(),int(value.size()),decomposed.data(),int(decomposed.size()));
+        // The size probe is an estimate; long Vietnamese aliases can need more.
+        if(n<0&&GetLastError()==ERROR_INSUFFICIENT_BUFFER) {
+            decomposed.resize(size_t(-n));
+            n=NormalizeString(NormalizationD,value.c_str(),int(value.size()),decomposed.data(),int(decomposed.size()));
+        }
+    }
     if(n<=0)return normalize(value);decomposed.resize(n);
     std::wstring result;for(wchar_t c:decomposed){if(c>=0x300&&c<=0x36f)continue;if(c==L'đ'||c==L'Đ')c=L'd';result+=(wchar_t)towlower(c);}return result;
 }
