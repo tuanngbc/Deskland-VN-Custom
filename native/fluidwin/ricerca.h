@@ -128,6 +128,9 @@ public:
 #ifdef TLAUNCHER_NATIVE_CI
     std::wstring ciQuery() const {return testo;}
     size_t ciResults() const {return risultati.size();}
+    bool ciSetting(const std::wstring& action,const std::wstring& title)const{
+        for(const auto& r:risultati)if(r.tipo==T_IMPOSTAZIONE&&r.azione==action&&r.titolo==title)return true;return false;
+    }
     std::wstring ciSelection()const{return sel>=0&&sel<int(risultati.size())?risultati[sel].azione:L"";}
     size_t ciBitmapCount()const{return icone.size();}
     bool ciWorkerIdle()const{std::lock_guard<std::mutex> lock(work->mutex);return !work->running;}
@@ -767,42 +770,43 @@ private:
         }
     }
 
-    // pagine delle impostazioni: nome in italiano e in inglese, parole chiave nelle due lingue (si trova in tutte e due)
+    // Settings titles use the shared translation table; search aliases also cover
+    // Vietnamese concepts, folded through the same accent-insensitive matcher.
     static const std::vector<Risultato>& pagine() {
-        static const wchar_t* t[][4] = {
-                {L"Schermo", L"Display", L"display risoluzione monitor scala resolution scale", L"ms-settings:display"},
-                {L"Audio", L"Sound", L"suono volume microfono altoparlanti audio microphone speakers", L"ms-settings:sound"},
-                {L"Notifiche", L"Notifications", L"avvisi non disturbare alerts do not disturb", L"ms-settings:notifications"},
-                {L"Bluetooth e dispositivi", L"Bluetooth & devices", L"cuffie mouse tastiera headphones keyboard", L"ms-settings:bluetooth"},
-                {L"Wi-Fi", L"Wi-Fi", L"wireless rete internet network", L"ms-settings:network-wifi"},
-                {L"Rete e Internet", L"Network & internet", L"ethernet connessione proxy vpn connection", L"ms-settings:network-status"},
-                {L"Personalizzazione", L"Personalization", L"aspetto appearance", L"ms-settings:personalization"},
-                {L"Sfondo", L"Background", L"wallpaper desktop sfondo", L"ms-settings:personalization-background"},
-                {L"Colori e tema scuro", L"Colors and dark mode", L"modalità scura chiara colore dark light theme", L"ms-settings:colors"},
-                {L"App installate", L"Installed apps", L"disinstalla programmi uninstall programs", L"ms-settings:appsfeatures"},
-                {L"App predefinite", L"Default apps", L"browser apri con open with", L"ms-settings:defaultapps"},
-                {L"App all'avvio", L"Startup apps", L"esecuzione automatica autostart", L"ms-settings:startupapps"},
-                {L"Account", L"Accounts", L"utente profilo user profile", L"ms-settings:yourinfo"},
-                {L"Data e ora", L"Date & time", L"orologio fuso orario clock time zone", L"ms-settings:dateandtime"},
-                {L"Lingua e area geografica", L"Language & region", L"italiano inglese formato english format", L"ms-settings:regionlanguage"},
-                {L"Tastiera e digitazione", L"Keyboard & typing", L"layout tastiera keyboard", L"ms-settings:typing"},
-                {L"Mouse", L"Mouse", L"puntatore velocità touchpad pointer speed", L"ms-settings:mousetouchpad"},
-                {L"Energia", L"Power", L"batteria sospensione spegnimento battery sleep", L"ms-settings:powersleep"},
-                {L"Archiviazione", L"Storage", L"spazio disco pulizia disk space cleanup", L"ms-settings:storagesense"},
-                {L"Windows Update", L"Windows Update", L"aggiornamenti updates", L"ms-settings:windowsupdate"},
-                {L"Sicurezza di Windows", L"Windows Security", L"antivirus defender firewall", L"windowsdefender:"},
-                {L"Privacy e sicurezza", L"Privacy & security", L"autorizzazioni fotocamera posizione permissions camera location", L"ms-settings:privacy"},
-                {L"Stampanti e scanner", L"Printers & scanners", L"stampa print", L"ms-settings:printers"},
-                {L"Informazioni sul sistema", L"About", L"pc specifiche nome versione specs name version", L"ms-settings:about"},
-                {L"Gioco", L"Gaming", L"game bar modalità gioco game mode", L"ms-settings:gaming-gamebar"},
-                {L"Accessibilità", L"Accessibility", L"testo grande contrasto narratore large text contrast narrator", L"ms-settings:easeofaccess"},
-                {L"Pannello di controllo", L"Control Panel", L"classico classic", L"control"},
-                {L"Gestione attività", L"Task Manager", L"processi task manager processes", L"taskmgr"},
-                {L"Impostazioni di TLauncher", L"TLauncher settings", L"dock gelatina genio panoramica jelly genie overview", L"*tlauncher-native"},
+        static const wchar_t* t[][5] = {
+                {L"Schermo", L"Display", L"display risoluzione monitor scala resolution scale", L"ms-settings:display", L"màn hình độ phân giải tỷ lệ hiển thị màn dọc"},
+                {L"Audio", L"Sound", L"suono volume microfono altoparlanti audio microphone speakers", L"ms-settings:sound", L"âm thanh âm lượng loa micro thiết bị phát ghi âm"},
+                {L"Notifiche", L"Notifications", L"avvisi non disturbare alerts do not disturb", L"ms-settings:notifications", L"thông báo không làm phiền cảnh báo"},
+                {L"Bluetooth e dispositivi", L"Bluetooth & devices", L"cuffie mouse tastiera headphones keyboard", L"ms-settings:bluetooth", L"bluetooth thiết bị tai nghe kết nối không dây"},
+                {L"Wi-Fi", L"Wi-Fi", L"wireless rete internet network", L"ms-settings:network-wifi", L"wifi wi-fi mạng không dây internet"},
+                {L"Rete e Internet", L"Network & internet", L"ethernet connessione proxy vpn connection", L"ms-settings:network-status", L"mạng internet kết nối ethernet bộ điều hợp proxy vpn"},
+                {L"Personalizzazione", L"Personalization", L"aspetto appearance", L"ms-settings:personalization", L"cá nhân hóa giao diện diện mạo"},
+                {L"Sfondo", L"Background", L"wallpaper desktop sfondo", L"ms-settings:personalization-background", L"hình nền nền màn hình ảnh nền"},
+                {L"Colori e tema scuro", L"Colors and dark mode", L"modalità scura chiara colore dark light theme", L"ms-settings:colors", L"màu sắc chế độ tối sáng chủ đề"},
+                {L"App installate", L"Installed apps", L"disinstalla programmi uninstall programs", L"ms-settings:appsfeatures", L"ứng dụng đã cài gỡ cài đặt chương trình"},
+                {L"App predefinite", L"Default apps", L"browser apri con open with", L"ms-settings:defaultapps", L"ứng dụng mặc định trình duyệt mở bằng"},
+                {L"App all'avvio", L"Startup apps", L"esecuzione automatica autostart", L"ms-settings:startupapps", L"ứng dụng khởi động cùng windows tự khởi động"},
+                {L"Account", L"Accounts", L"utente profilo user profile", L"ms-settings:yourinfo", L"tài khoản người dùng hồ sơ thông tin cá nhân"},
+                {L"Data e ora", L"Date & time", L"orologio fuso orario clock time zone", L"ms-settings:dateandtime", L"ngày giờ thời gian múi giờ đồng hồ"},
+                {L"Lingua e area geografica", L"Language & region", L"italiano inglese formato english format", L"ms-settings:regionlanguage", L"ngôn ngữ khu vực tiếng việt định dạng vùng"},
+                {L"Tastiera e digitazione", L"Keyboard & typing", L"layout tastiera keyboard", L"ms-settings:typing", L"bàn phím gõ nhập liệu bố cục"},
+                {L"Mouse", L"Mouse", L"puntatore velocità touchpad pointer speed", L"ms-settings:mousetouchpad", L"chuột con trỏ tốc độ bàn di chuột"},
+                {L"Energia", L"Power", L"batteria sospensione spegnimento battery sleep", L"ms-settings:powersleep", L"nguồn điện pin ngủ tắt màn hình tiết kiệm năng lượng"},
+                {L"Archiviazione", L"Storage", L"spazio disco pulizia disk space cleanup", L"ms-settings:storagesense", L"lưu trữ dung lượng ổ đĩa dọn dẹp"},
+                {L"Windows Update", L"Windows Update", L"aggiornamenti updates", L"ms-settings:windowsupdate", L"cập nhật windows bản vá"},
+                {L"Sicurezza di Windows", L"Windows Security", L"antivirus defender firewall", L"windowsdefender:", L"bảo mật windows chống vi-rút tường lửa"},
+                {L"Privacy e sicurezza", L"Privacy & security", L"autorizzazioni fotocamera posizione permissions camera location", L"ms-settings:privacy", L"quyền riêng tư bảo mật quyền truy cập camera vị trí"},
+                {L"Stampanti e scanner", L"Printers & scanners", L"stampa print", L"ms-settings:printers", L"máy in máy quét in ấn"},
+                {L"Informazioni sul sistema", L"About", L"pc specifiche nome versione specs name version", L"ms-settings:about", L"giới thiệu hệ thống thông số tên máy phiên bản"},
+                {L"Gioco", L"Gaming", L"game bar modalità gioco game mode", L"ms-settings:gaming-gamebar", L"trò chơi chế độ chơi game"},
+                {L"Accessibilità", L"Accessibility", L"testo grande contrasto narratore large text contrast narrator", L"ms-settings:easeofaccess", L"trợ năng cỡ chữ tương phản trình tường thuật"},
+                {L"Pannello di controllo", L"Control Panel", L"classico classic", L"control", L"bảng điều khiển cổ điển"},
+                {L"Gestione attività", L"Task Manager", L"processi task manager processes", L"taskmgr", L"trình quản lý tác vụ tiến trình hiệu suất bộ nhớ"},
+                {L"Impostazioni di TLauncher", L"TLauncher settings", L"dock gelatina genio panoramica jelly genie overview", L"*tlauncher-native", L"cài đặt tlauncher thanh dock hình nền stage spotlight hiệu ứng phím tắt"},
         };
         static std::vector<Risultato> p[testi::N_LINGUE];
         std::vector<Risultato>& v = p[testi::attuale()];
-        if (v.empty()) for (auto& x : t) v.push_back({T_IMPOSTAZIONE, testi::t(x[0], x[1]), x[2], x[3], L""});
+        if (v.empty()) for (auto& x : t) v.push_back({T_IMPOSTAZIONE, testi::t(x[0], x[1]), std::wstring(x[2])+L" "+x[4], x[3], L""});
         return v;
     }
 

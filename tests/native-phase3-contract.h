@@ -215,6 +215,22 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     RECT full{};GetWindowRect(search,&full);RECT screen=vetro::areaPrincipale();if(!EqualRect(&full,&screen))return 76;
     if(!phase3Snapshot(search,evidence/L"phase3-fullscreen.bmp"))return 77;
     SendMessageW(search,WM_KEYDOWN,VK_F6,0);if(gRicerca.fullscreen||gRicerca.ciQuery()!=query)return 78;
+    struct VietnameseSettingQuery{const wchar_t* query;const wchar_t* action;const wchar_t* title;};
+    for(const auto& test:std::vector<VietnameseSettingQuery>{
+        {L"độ phân giải",L"ms-settings:display",L"Màn hình"},
+        {L"do phan giai",L"ms-settings:display",L"Màn hình"},
+        {L"âm lượng",L"ms-settings:sound",L"Âm thanh"},
+        {L"khong lam phien",L"ms-settings:notifications",L"Thông báo"},
+        {L"trình duyệt",L"ms-settings:defaultapps",L"Ứng dụng mặc định"},
+        {L"mui gio",L"ms-settings:dateandtime",L"Ngày và giờ"},
+        {L"bàn phím",L"ms-settings:typing",L"Bàn phím và nhập liệu"},
+        {L"cài đặt tlauncher",L"*tlauncher-native",L"Cài đặt TLauncher"}}){
+        while(!gRicerca.ciQuery().empty())SendMessageW(search,WM_CHAR,VK_BACK,0);
+        for(const wchar_t ch:std::wstring(test.query))SendMessageW(search,WM_CHAR,ch,0);
+        if(!gRicerca.ciSetting(test.action,test.title))return 177;
+    }
+    if(!phase3Snapshot(search,evidence/L"phase3-spotlight-vietnamese-settings.bmp"))return 178;
+    report<<"SPOTLIGHT_ACTUAL_VIETNAMESE_SETTINGS_SYNONYMS_AND_ACCENT_FOLDING=PASS\n";
     gRicerca.chiudi();ciPump(250);
     gRicerca.elencoApp=[]{std::vector<std::pair<std::wstring,std::wstring>> result;for(int i=0;i<20;i++)result.push_back({L"Tool "+std::to_wstring(i),L"C:\\fixture\\tool"+std::to_wstring(i)+L".exe"});return result;};
     gRicerca.fullscreen=true;gRicerca.apri();ciPump(450);search=FindWindowW(L"TLauncher.Native.Ricerca",nullptr);

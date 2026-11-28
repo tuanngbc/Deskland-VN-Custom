@@ -23,6 +23,18 @@ $missing=[Collections.Generic.SortedSet[string]]::new([StringComparer]::Ordinal)
 $files=@(Get-ChildItem (Join-Path $PSScriptRoot '../native/fluidwin'),(Join-Path $PSScriptRoot '../native/wallpaper') -File | Where-Object {$_.Extension -in '.h','.cpp' -and $_.Name -ne 'aggiorna.h'})
 foreach($file in $files){
     $source=[IO.File]::ReadAllText($file.FullName)
+    if($file.Name -eq 'ricerca.h'){
+        $pages=[regex]::Match($source,'static const wchar_t\* t\[\]\[5\] = \{([\s\S]*?)\n\s*\};')
+        $pageCount=0
+        foreach($row in [regex]::Matches($pages.Groups[1].Value,'(?m)^\s*\{(.+)\},?\s*$')){
+            $values=[regex]::Matches($row.Groups[1].Value,$literal)
+            if($values.Count -ne 5 -or !$values[4].Groups[1].Value){throw 'Settings page must retain its command and Vietnamese aliases.'}
+            $en=Get-NativeLiteralKey $values[1].Groups[1].Value
+            if($en -notin $brands -and !$translated.Contains($en)){[void]$missing.Add($en)}
+            $pageCount++
+        }
+        if($pageCount -lt 29){throw 'Dynamic Settings-page localization audit missed records.'}
+    }
     foreach($call in [regex]::Matches($source,'testi::t\(\s*'+$literal+'\s*,\s*'+$literal+'\s*\)')){
         $matchedCalls++
         $it=Get-NativeLiteralKey $call.Groups[1].Value;$en=Get-NativeLiteralKey $call.Groups[2].Value
