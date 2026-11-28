@@ -349,7 +349,7 @@ public:
         daCentro = da != nullptr; daPunto = !daCentro; morph = 0; mx = 1; rientra = false; fuori = false; fuoriDopo = false;
         const int x = (a.left + a.right - w) / 2, y = (a.top + a.bottom - h) / 2;   // al centro, come sempre
         rA = {x, y, x + w, y + h};
-        if(!dalMouse&&!da&&leggiDword(L"SettingsPlacement",0)){
+        if(leggiDword(L"SettingsPlacement",0)){
             const LONG px=LONG(leggiDword(L"SettingsX",DWORD(x))),py=LONG(leggiDword(L"SettingsY",DWORD(y)));
             RECT desired{px,py,px+w,py+h};
             RECT overlap{};
@@ -488,6 +488,18 @@ public:
                     InvalidateRect(hw,nullptr,FALSE);
                 }
                 return false;
+            case WM_DPICHANGED:{
+                if(!aperta||morph)return false;
+                const float next=HIWORD(w)/96.f;
+                if(next>0){
+                    const float ratio=next/v.dpi;scorriSez*=ratio;sidebarScroll*=ratio;
+                    v.dpi=next;fLanguage=-1;
+                    const RECT& r=*reinterpret_cast<const RECT*>(l);
+                    SetWindowPos(hw,nullptr,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOZORDER|SWP_NOACTIVATE);
+                    InvalidateRect(hw,nullptr,FALSE);
+                }
+                return true;
+            }
             case WM_EXITSIZEMOVE:savePlacement();return false;
             case WM_NCLBUTTONDBLCLK:
                 if(w==HTCAPTION&&!morph){ShowWindow(hw,IsZoomed(hw)?SW_RESTORE:SW_MAXIMIZE);return true;}
@@ -953,6 +965,9 @@ private:
         if (s != S_WALLPAPER) wallpaperPage.close();
         if (s == sezione) return;
         sezione = s; kSez = 0; tSez = vetro::ms(); scorriSez = 0; massimoSez = 0;
+        const float top=(84+s*44)*v.dpi,bottom=top+38*v.dpi;
+        if(top-sidebarScroll<78*v.dpi)sidebarScroll=std::max(0.f,top-78*v.dpi);
+        if(bottom-sidebarScroll>v.H)sidebarScroll=std::min(sidebarMax,bottom-v.H);
         vetro::battito(v.fin, 1);
         disegna();
     }

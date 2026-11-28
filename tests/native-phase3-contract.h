@@ -95,6 +95,31 @@ static int phase3DockContracts(std::ostream& report,const std::filesystem::path&
 }
 static int phase3Contracts(std::ostream& report,const std::filesystem::path& evidence) {
     if(int result=phase3ShortcutContracts(report))return result;
+    {
+        appicons::Pixels fixture{48,48,std::vector<UINT>(48*48)};
+        for(int y=18;y<30;++y)for(int x=12;x<36;++x)fixture.bgra[y*48+x]=0xff3695e4;
+        appicons::normalize(fixture,48);
+        if(fixture.w!=48||fixture.h!=48||fixture.bgra[24*48+5]||
+            fixture.bgra[24*48+6]!=0xff3695e4||fixture.bgra[15*48+24]!=0xff3695e4||
+            fixture.bgra[14*48+24]||fixture.bgra[24*48+42])return 189;
+        report<<"ICON_TRANSPARENT_PADDING_ASPECT_AND_UPSCALE_CAP=PASS\n";
+    }
+    {
+        desktopclock::Clock clock;desktopclock::Settings appearance;appearance.enabled=true;
+        const auto locale=testi::lingua();
+        for(const auto lang:{testi::INGLESE,testi::VIETNAMITA}){
+            testi::lingua()=lang;clock.configure(appearance,false,true);
+            const auto window=clock.ciHandle();
+            if(!window){testi::lingua()=locale;return 190;}
+            SetWindowPos(window,HWND_TOPMOST,0,0,0,0,SWP_NOACTIVATE|SWP_NOMOVE|SWP_NOSIZE);
+            ciPump(120);
+            if(!phase3Snapshot(window,evidence/(lang==testi::INGLESE?L"phase3-clock-classic-en.bmp":L"phase3-clock-classic-vi.bmp"))){
+                testi::lingua()=locale;return 191;
+            }
+        }
+        clock.stop();testi::lingua()=locale;
+        report<<"CLOCK_CLASSIC_EN_AND_VI_SCREENSHOTS=EXPORTED\n";
+    }
     if(appcatalog::fold(L"Tiếng Việt Đặng")!=L"tieng viet dang")return 60;
     std::filesystem::create_directories(tlauncher::dockPins());
     auto pin=tlauncher::dockPins()/L"fixture.lnk";

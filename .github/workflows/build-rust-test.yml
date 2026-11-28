@@ -126,6 +126,8 @@ jobs:
           New-Item -ItemType Directory -Path $profile -Force | Out-Null
           [IO.File]::WriteAllText((Join-Path $profile '.tlauncher-native-trial'),"tlauncher-native isolated profile v1`n")
           $env:TLAUNCHER_NATIVE_TRIAL_DIR=$profile
+          New-Item -ItemType Directory -Force native-build/assets | Out-Null
+          Copy-Item assets/widget native-build/assets -Recurse -Force
           & ./native-build/native-contract.exe ./native-evidence
           if ($LASTEXITCODE -ne 0) {throw "Native lifecycle contract failed: $LASTEXITCODE"}
           ./tests/native-runtime-smoke.ps1 -Exe (Resolve-Path native-build/TLauncher.exe).Path -Evidence (Resolve-Path native-evidence).Path
@@ -168,7 +170,9 @@ jobs:
           $dir=Join-Path 'dist' $name
           New-Item -ItemType Directory -Path $dir -Force | Out-Null
           Copy-Item native-build/TLauncher.exe $dir
-          if (Test-Path native-build/TLauncherCapture.exe) { Copy-Item native-build/TLauncherCapture.exe $dir }
+          if ('${{ github.ref }}' -eq 'refs/heads/codex/native-stage-spotlight-reengineering-v1.0.3') {
+            Copy-Item native-build/TLauncherCapture.exe $dir
+          }
           New-Item -ItemType Directory -Path (Join-Path $dir assets) -Force | Out-Null
           Copy-Item assets/widget (Join-Path $dir assets) -Recurse
           Copy-Item native-build/runtime-licenses (Join-Path $dir 'runtime-licenses') -Recurse

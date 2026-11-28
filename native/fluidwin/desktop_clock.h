@@ -96,6 +96,9 @@ public:
         order();
     }
 
+#ifdef TLAUNCHER_NATIVE_CI
+    HWND ciHandle()const{return hwnd;}
+#endif
     void stop() {
         if(!hwnd)return;
         KillTimer(hwnd,1);
@@ -171,25 +174,10 @@ private:
         UINT dpi=96,yDpi=96;
         if(FAILED(GetDpiForMonitor(screen.handle,MDT_EFFECTIVE_DPI,&dpi,&yDpi)))dpi=96;
         const float scale=config.scale*dpi/9600.f;
-        const int width=std::max(1,std::min(int(screen.area.right-screen.area.left),int(std::ceil((config.style==0?500:320)*scale))));
-        const int height=std::max(1,std::min(int(screen.area.bottom-screen.area.top),int(std::ceil((config.date?(config.style==0?230:135):105)*scale))));
         HDC screenDC=GetDC(nullptr);
         if(!screenDC)return;
         HDC dc=CreateCompatibleDC(screenDC);
-        BITMAPINFO info{};
-        info.bmiHeader={sizeof(BITMAPINFOHEADER),width,-height,1,32,BI_RGB,0,0,0,0};
-        void* data=nullptr;
-        HBITMAP bitmap=dc?CreateDIBSection(screenDC,&info,DIB_RGB_COLORS,&data,nullptr,0):nullptr;
-        if(!bitmap||!data){
-            if(bitmap)DeleteObject(bitmap);
-            if(dc)DeleteDC(dc);
-            ReleaseDC(nullptr,screenDC);
-            return;
-        }
-        auto old=SelectObject(dc,bitmap);
-        auto* pixels=static_cast<unsigned*>(data);
-        std::fill_n(pixels,size_t(width)*height,0u);
-        SetBkMode(dc,TRANSPARENT);SetTextColor(dc,RGB(255,255,255));
+        if(!dc){ReleaseDC(nullptr,screenDC);return;}
         wchar_t hour[40]{},weekday[128]{},date[128]{};
         GetTimeFormatEx(testi::locale(),0,&time,config.seconds?L"HH:mm:ss":L"HH:mm",hour,40);
         GetDateFormatEx(testi::locale(),0,&time,L"dddd",weekday,128,nullptr);
@@ -200,26 +188,58 @@ private:
             swprintf(date,128,L"%u%ls %ls %u",unsigned(day),suffix,month,unsigned(time.wYear));
         }else GetDateFormatEx(testi::locale(),0,&time,L"d MMMM yyyy",date,128,nullptr);
         if(config.style==0)CharUpperBuffW(date,DWORD(wcslen(date)));
-        const wchar_t* straight=config.font.empty()?(config.style==0?L"Steelfish Rg":L"Segoe UI Variable Text"):config.font.c_str();
-        const wchar_t* script=config.font.empty()&&config.style==0?L"la Compagnie des Ombres":straight;
-        const auto draw=[&](const wchar_t* value,const wchar_t* face,int size,int top,int bottom){
-            RECT rect{0,LONG(top*scale),LONG(width),std::min(LONG(height),LONG(bottom*scale))};
-            HFONT font=CreateFontW((config.style==0?1:-1)*std::max(1,int(size*scale)),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,
+        const bool classic=config.style==0;
+        const wchar_t* straight=config.font.empty()?(classic?L"Steelfish Rg":L"Gravity Light"):config.font.c_str();
+        const wchar_t* script=config.font.empty()&&classic?L"la Compagnie des Ombres":straight;
+        struct Run {const wchar_t* text;HFONT font;COLORREF color;RECT rect;};
+        std::vector<Run> runs;
+        RECT canvas{0,0,LONG(320*scale),LONG((config.date?(classic?230:135):105)*scale)};
+        const auto layout=[&](const wchar_t* value,const wchar_t* face,int size,int base,COLORREF color){
+            const int px=std::max(1,int(size*scale));
+            HFONT font=CreateFontW(classic?px:-px,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,
                 OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,ANTIALIASED_QUALITY,DEFAULT_PITCH,face);
-            auto previous=font?SelectObject(dc,font):nullptr;
-            DrawTextW(dc,value,-1,&rect,DT_CENTER|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_NOCLIP);
-            if(font){SelectObject(dc,previous);DeleteObject(font);}
+            if(!font)return;
+            const auto previous=SelectObject(dc,font);SIZE extent{};
+            GetTextExtentPoint32W(dc,value,int(wcslen(value)),&extent);SelectObject(dc,previous);
+            const LONG halfWidth=(std::max(1L,extent.cx)+1)/2;
+            const LONG center=classic?120:canvas.right/2,top=LONG(base*scale);
+            RECT rect{center-halfWidth,top,center+halfWidth,top+px+8};
+            const LONG padding=classic?std::max(8,px):8;
+            canvas.left=std::min(canvas.left,rect.left-padding);canvas.top=std::min(canvas.top,rect.top-padding);
+            canvas.right=std::max(canvas.right,rect.right+padding);canvas.bottom=std::max(canvas.bottom,rect.bottom+padding);
+            runs.push_back({value,font,color,rect});
         };
-        draw(hour,straight,config.style==0?100:70,0,config.style==0?108:100);
+        layout(hour,straight,classic?100:70,0,config.color);
         if(config.date){
-            if(config.style==0){draw(date,straight,35,150,193);draw(weekday,script,85,70,163);}
-            else draw(date,straight,27,86,128);
+            layout(date,straight,classic?35:27,classic?150:86,config.color);
+            if(classic)layout(weekday,script,85,70,config.color==RGB(185,231,245)?RGB(220,247,255):config.color);
+        }
+        const int width=std::max(1,std::min(int(screen.area.right-screen.area.left),int(canvas.right-canvas.left)));
+        const int height=std::max(1,std::min(int(screen.area.bottom-screen.area.top),int(canvas.bottom-canvas.top)));
+        BITMAPINFO info{};info.bmiHeader={sizeof(BITMAPINFOHEADER),width,-height,1,32,BI_RGB,0,0,0,0};
+        void* data=nullptr;
+        HBITMAP bitmap=CreateDIBSection(screenDC,&info,DIB_RGB_COLORS,&data,nullptr,0);
+        if(!bitmap||!data){
+            if(bitmap)DeleteObject(bitmap);
+            for(const auto& run:runs)DeleteObject(run.font);
+            DeleteDC(dc);ReleaseDC(nullptr,screenDC);
+            return;
+        }
+        auto old=SelectObject(dc,bitmap);
+        auto* pixels=static_cast<unsigned*>(data);
+        std::fill_n(pixels,size_t(width)*height,0u);
+        SetBkMode(dc,TRANSPARENT);
+        for(auto& run:runs){
+            RECT rect=run.rect;OffsetRect(&rect,-canvas.left,-canvas.top);
+            const auto previous=SelectObject(dc,run.font);SetTextColor(dc,run.color);
+            DrawTextW(dc,run.text,-1,&rect,DT_CENTER|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_NOCLIP);
+            SelectObject(dc,previous);DeleteObject(run.font);
         }
         GdiFlush();
         for(size_t i=0;i<size_t(width)*height;++i){
-            const unsigned alpha=pixels[i]&255;
-            const unsigned r=GetRValue(config.color)*alpha/255,g=GetGValue(config.color)*alpha/255,b=GetBValue(config.color)*alpha/255;
-            pixels[i]=(alpha<<24)|(r<<16)|(g<<8)|b;
+            const unsigned rgb=pixels[i]&0xffffff;
+            const unsigned alpha=std::max({rgb&255,(rgb>>8)&255,rgb>>16});
+            pixels[i]=rgb|(alpha<<24);
         }
         const auto& area=screen.area;
         POINT pos{area.left+(config.x==-1?(area.right-area.left-width)/2:config.x),

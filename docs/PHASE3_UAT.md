@@ -38,3 +38,12 @@ So sánh từng tình huống với cùng workload, màn hình, theme, FPS và r
 Báo cáo gồm RAM/private working set/private bytes, CPU, GPU theo adapter, dedicated/shared GPU memory, thread và handle của main, Guardian và helper được nhận diện. Bộ lấy mẫu không tính vào tổng app. Working set và GPU shared memory có thể đếm trùng phần dùng chung giữa tiến trình; counter không có dữ liệu giữ unavailable. Số đo software GL trên CI không chứng minh mục tiêu GTX 1070/RAM 100–150 MiB/GPU 3%/CPU 1% trên máy owner.
 
 Để đối chiếu lỗi, ghi commit và ứng dụng/màn hình/thao tác gây lỗi. Giữ animation speed 0.70x theo thiết lập owner; không tự reset profile để làm phép đo đẹp hơn. Thử Genie/Drop/Jelly, menu Desktop/Explorer, Control Center, Notch, Snap, fullscreen, đổi màn hình và thu nhỏ/phục hồi cửa sổ. Chỉ owner quyết định PASS/FAIL và nghiệm thu Phase 3.
+
+### FULL FEATURE TEST
+
+- **Dock**: vào Settings → Dock để chọn màn hình, thanh thu nhỏ và ảnh nút Start. Trong Start, dùng menu chuột phải để ghim, kéo các mục ghim để đổi thứ tự.
+- **Stage**: Settings → Stage Manager có nền rail/thẻ riêng và chế độ luôn hiện dành vùng cho Stage. Kiểm tra maximize, Snap và chuyển màn hình.
+- **Đồng hồ**: Settings → Desktop clocks để cài đặt hai đồng hồ độc lập, dùng Classic để đối chiếu với 1.0.2.
+- **Chụp/quay**: Ctrl+Shift+S mở chọn ảnh; Ctrl+Shift+R bắt đầu chọn vùng quay hoặc dừng và lưu. Space chọn cả màn hình dưới con trỏ; Esc hủy chọn; Ctrl+Shift+P tạm dừng/tiếp tục. Settings → Keyboard có 30/60 FPS, âm thanh và thư mục lưu.
+- **Wallpaper**: thử thêm một shortcut cạnh mép nước; cây hợp lệ nên giữ vị trí và thuyền mắc bờ tìm lại nước.
+- **Tài nguyên**: dùng NATIVE-RESOURCE.cmd trong gói TEST khi cần đo; công cụ không tự chạy.

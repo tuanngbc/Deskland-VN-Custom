@@ -269,8 +269,14 @@ inline auto Motore::filtra() -> void {
     for (auto& l : livelli) filtrate.insert(filtrate.end(), l.begin(), l.end());
     lPinned=0;
     if(q.empty()){
-        const auto boundary=std::stable_partition(filtrate.begin(),filtrate.end(),[&](int i){return appcatalog::get(tutteApp[i].avvio).favorite;});
-        lPinned=int(boundary-filtrate.begin());
+        std::vector<int> pinned;
+        for(int i:filtrate)if(appcatalog::get(tutteApp[i].avvio).favorite)pinned.push_back(i);
+        std::stable_sort(pinned.begin(),pinned.end(),[&](int a,int b){
+            return appcatalog::get(tutteApp[a].avvio).order<appcatalog::get(tutteApp[b].avvio).order;
+        });
+        std::stable_sort(filtrate.begin(),filtrate.end(),[&](int a,int b){return tutteApp[a].minuscolo<tutteApp[b].minuscolo;});
+        lPinned=int(pinned.size());
+        filtrate.insert(filtrate.begin(),pinned.begin(),pinned.end());
     }
     lSel = 0; lScrollObj = 0; lDirty = true; lSelTastiera = false;
     // file e cartelle: testo nuovo -> ricerca 0,2 s dopo l'ultimo tasto (una per parola, non per lettera); testo vuoto
@@ -971,7 +977,8 @@ inline LRESULT CALLBACK Motore::procLauncher(HWND h, UINT m, WPARAM w, LPARAM l)
                         int moved=order[from];order.erase(order.begin()+from);order.insert(order.begin()+to,moved);
                         for(size_t i=0;i<order.size();++i){const auto& item=d->tutteApp[order[i]];
                             auto meta=appcatalog::get(item.avvio);meta.order=int(i)+1;appcatalog::save(item.avvio,meta);}
-                        d->catalogChanged();
+                        std::copy(order.begin(),order.end(),d->filtrate.begin());
+                        d->lSel=to;d->lDirty=true;
                     }
                     return 0;
                 }

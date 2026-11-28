@@ -118,6 +118,7 @@ class SceneRuntime {
                 body.retryAt=0;body.initialized=true;return true;
             }
         }
+        if(body.retryAt>0)body.retryAt=lastTime+.65; // throttle full search when no water is currently usable
         return true; // let the existing scene-wide spawn search try next
     }
     void stepCraft(const std::string& group,size_t index,Body& craft,const std::vector<Body>& previous,
@@ -148,6 +149,13 @@ class SceneRuntime {
             avoidance=avoidance+(unit(delta)*-2+V2{-forward.y,forward.x}*1.6f)*risk;
             if(closing<0&&delta.x*forward.x+delta.y*forward.y>0)
                 spec.speed*=std::clamp(.25f+.75f*(distance-clearance)/50,.25f,1.f);
+        }
+        if(craft.command){
+            auto path=routes.find(key);
+            if(!valid(craft.target,spec.radius)||(path!=routes.end()&&path->second.next<path->second.points.size()&&
+                !valid(path->second.points[path->second.next],spec.radius))){
+                routes.erase(key);craft.command=false;craft.target=craft.position;craft.idle=0;
+            }
         }
         if(craft.command) {
             desired=craft.target;
@@ -289,6 +297,10 @@ class SceneRuntime {
                     if(neighbors){social=social+unit(center*(1.f/neighbors)-b.position)*.12f+unit(velocity)*.22f;}
                 }
                 V2 waypoint=b.target;auto route=routes.find({uniform,size_t(i)});const bool commanded=b.command;
+                if(route!=routes.end()&&(!navigable(b.target,radius,true)||(route->second.next<route->second.points.size()&&
+                    !navigable(route->second.points[route->second.next],radius,true)))){
+                    routes.erase(route);route=routes.end();b.command=false;b.target=waypoint=b.position;state.wander=0;
+                }
                 if(route!=routes.end()){auto& path=route->second;if(path.next<path.points.size()&&(path.points[path.next]-b.position).length()<radius)path.next++;
                     if(path.next<path.points.size()){waypoint=path.points[path.next];if(path.next+1<path.points.size())b.command=false;}}
                 steer(b,spec,waypoint,fixedStep,[&](V2 q,float r){return navigable(q,r,true);},social);

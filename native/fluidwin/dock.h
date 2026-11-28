@@ -98,7 +98,6 @@ static void togliAppbarRimasta() {
 static const UINT_PTR TIMER_INVIO = 7;   // "icone nascoste": Invio poco dopo Win+B
 static const UINT_PTR TIMER_BORDO = 8;   // dock nascosto: controlla se il mouse arriva sul bordo in basso
 static const UINT_PTR TIMER_DOPO = 9;    // launcher o centro di controllo da aprire quando l'altro ha finito di chiudersi
-static const UINT_PTR TIMER_CITTA = 10;  // (finestra del pannello) ricerca della citta' del meteo: attesa dopo l'ultimo tasto e risultati
 static const UINT_PTR TIMER_FILE_L = 11; // (finestra del launcher) file e cartelle: la ricerca parte 0,2 s dopo l'ultimo tasto
 static const UINT_PTR TIMER_DESKTOP = 12; // "Mostra il desktop" / "Ripristina le finestre": una finestra ogni 45 ms
 static const UINT_PTR TIMER_ANTEPRIME = 13; // anteprime delle finestre: quando aprirle e chiuderle (ogni 80 ms, solo col mouse sul dock o aperte)
@@ -563,7 +562,7 @@ public:
 
     // Lingua dell'interfaccia cambiata: date, nomi delle voci fisse e pannelli si rifanno nella lingua nuova
     void linguaCambiata() {
-        for(auto** f:{&testo,&fmtOra,&fmtData,&fmtTitolo,&fmtGrande,&fmtVoce,&fmtSotto,&fmtNotizia,&fmtNome})testi::aggiornaFormato(fdw,*f);
+        for(auto** f:{&testo,&fmtOra,&fmtData,&fmtTitolo,&fmtGrande,&fmtVoce,&fmtSotto,&fmtNome})testi::aggiornaFormato(fdw,*f);
         testoOra.clear();   // le date si ricalcolano anche se l'ora non e' cambiata
         aggiornaStato(true);
         appDaAggiornare = true; dirty = true; pDirty = true; lDirty = true;
@@ -1188,7 +1187,11 @@ private:
                 if(i>=owner->voci.size()||opacity<=0)continue;
                 const auto& v=owner->voci[i];
                 const auto key=v.avvio==AVVIO_LAUNCHER?owner->startSource:owner->sorgenteIcona(v);
-                const D2D1_RECT_F local{float(r.left-screenRect.left),float(r.top-screenRect.top),float(r.right-screenRect.left),float(r.bottom-screenRect.top)};
+                D2D1_RECT_F local{float(r.left-screenRect.left),float(r.top-screenRect.top),float(r.right-screenRect.left),float(r.bottom-screenRect.top)};
+                if(v.avvio==AVVIO_LAUNCHER){
+                    const float padding=(local.right-local.left)*(1-owner->startScale/100.f)*.5f;
+                    local.left+=padding;local.top+=padding;local.right-=padding;local.bottom-=padding;
+                }
                 const float cx=(local.left+local.right)/2,cy=(local.top+local.bottom)/2;
                 if(int(i)==hovered){brush->SetColor(surface.inchiostro(.18f*opacity));rt->FillRoundedRectangle({local,5,5},brush);}
                 if(const auto f=bitmaps.find(key);f!=bitmaps.end())rt->DrawBitmap(f->second,local,opacity);
@@ -1537,13 +1540,10 @@ private:
         sinistra(fTitoli, DWRITE_FONT_WEIGHT_SEMI_BOLD, 34.0f, &fmtGrande);
         sinistra(fTesto, DWRITE_FONT_WEIGHT_SEMI_BOLD, 13.0f, &fmtVoce);
         sinistra(fTesto, DWRITE_FONT_WEIGHT_NORMAL, 11.5f, &fmtSotto);
-        sinistra(fTesto, DWRITE_FONT_WEIGHT_MEDIUM, 13.0f, &fmtNotizia);   // titoli delle notizie: a capo, al massimo due righe
         formato(fTesto, DWRITE_FONT_WEIGHT_NORMAL, 11.0f, &fmtNome);
         if (!fontOk) return false;
-        fmtNotizia->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP); fmtNotizia->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
-        fmtNotizia->SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, 17.0f * dpi, 13.5f * dpi);   // righe fisse: ne entrano esattamente due
         const DWRITE_TRIMMING tr{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
-        for (IDWriteTextFormat* f : {fmtNome, fmtSotto, fmtVoce, fmtNotizia}) {
+        for (IDWriteTextFormat* f : {fmtNome, fmtSotto, fmtVoce}) {
             IDWriteInlineObject* punti = nullptr;
             if (SUCCEEDED(fdw->CreateEllipsisTrimmingSign(f, &punti))) { f->SetTrimming(&tr, punti); punti->Release(); }
         }
@@ -3087,14 +3087,6 @@ private:
         g->Release();
     }
 
-    void simboloWidget(float cx, float cy) {
-        const float l = 6.5f * dpi, g = 2.5f * dpi, r = 2.0f * dpi;
-        for (int i = 0; i < 4; i++) {
-            const float x = cx - l - g / 2 + (i % 2) * (l + g), y = cy - l - g / 2 + (i / 2) * (l + g);
-            dc->FillRoundedRectangle({{x, y, x + l, y + l}, r, r}, pennello);
-        }
-    }
-
     // centro di controllo: due interruttori uno sopra l'altro (pallino a destra e a sinistra), come su macOS
     void simboloControllo(float cx, float cy) {
         const float w = 7.5f * dpi, h = 3.2f * dpi;
@@ -3179,7 +3171,6 @@ private:
         if (pannelloTipo == P_CONTROLLO && !pChiusura) {   // l'uscita audio puo' cambiare (cuffie collegate)
             const std::wstring u0 = nomeUscita; leggiUscita(); if (u0 != nomeUscita) pDirty = true;
         }
-        if (widD.pronto.exchange(false) && pannelloTipo == P_WIDGET) { wid = widD.copia(); pDirty = true; }
         // radio e luminosita' lette dal thread: il pannello si ridisegna (e si allunga se la luminosita' e' regolabile)
         if (sis.pronto.exchange(false) && pannelloTipo == P_CONTROLLO && !pChiusura) { riadattaControllo(); pDirty = true; }
     }
@@ -3241,7 +3232,7 @@ private:
     }
 
     // ---- pannelli in stile iOS (al posto di quelli di Windows, che si agganciano alla barra e la fanno risalire) ----
-    enum { P_NESSUNO, P_SFONDO, P_CONTROLLO, P_NOTIFICHE, P_WIDGET, P_MIXER, P_APPUNTI, P_WIFI };
+    enum { P_NESSUNO, P_SFONDO, P_CONTROLLO, P_NOTIFICHE, P_MIXER, P_APPUNTI, P_WIFI };
     // reti Wi-Fi (vista P_WIFI, wifi.h): ultima copia del thread, per il disegno
     wifi::Wifi wlan;
     std::vector<wifi::Rete> wlReti;
@@ -3256,34 +3247,14 @@ private:
     void disegnaWifi(bool scuro, D2D1_COLOR_F ink);
     void simboloSegnale(float cx, float cy, int livello, D2D1_COLOR_F c);
     void simboloLucchetto(float cx, float cy);
-    widget::Dati widD;                   // meteo e notizie (scaricati in un thread a parte)
-    widget::Istantanea wid;              // l'ultima copia, per il disegno
+    widget::Dati widD;                   // shared weather provider
     jumplist::Indice jumpList;           // comandi delle app (tasto destro sulle icone), letti dai file di Windows
-    IDWriteTextFormat* fmtNotizia = nullptr;
     enum Azione { A_APP, A_TUTTE, A_RETE, A_BLUETOOTH, A_VOLUME, A_MUTO, A_AUDIO, A_SCHERMO, A_ENERGIA, A_IMPOSTAZIONI,
                   A_NOTIFICA, A_RIMUOVI, A_CANCELLA, A_IMPOST_NOTIFICHE, A_TEMA, A_FLUIDWIN, A_LUMINOSITA,
-                  A_SFONDO, A_NOTIZIA, A_NOTIFICHE, A_INDIETRO, A_SVEGLIO, A_SILENZIO, A_TIMER, A_MICROFONO,
+                  A_SFONDO, A_NOTIFICHE, A_INDIETRO, A_SVEGLIO, A_SILENZIO, A_TIMER, A_MICROFONO,
                   A_MIXER_VOL, A_MIXER_MUTO, A_MIXER_PRED, A_ALTRE_USCITE,
                   A_APPUNTI, A_APPUNTI_VOCE, A_APPUNTI_TOGLI, A_APPUNTI_SVUOTA,
-                  A_W_CITTA, A_W_LUOGO, A_W_UNITA, A_W_ANNULLA, A_W_FONTE,
                   A_WIFI_RETI, A_WIFI_RETE, A_WIFI_RADIO, A_WIFI_SCOLLEGA, A_WIFI_IMPOSTAZIONI, A_WIFI_PRIVACY };
-    // Ricerca della citta' nella scheda del meteo (widget): aperta o no, avanzamento dell'animazione 0..1 (la scheda si
-    // allunga e il contenuto cambia), testo scritto, testo gia' chiesto, istante dell'ultimo tasto (si cerca 0,3 s
-    // dopo, non a ogni lettera), luoghi trovati con lo stato della ricerca, riga scelta con le frecce. Stanno fuori
-    // dalle schede (scambiaScheda): il widget vive solo nella scheda 0
-    bool wCitta = false;
-    double wK = 0, wCambiato = 0, wUnitaPos = -1;
-    std::wstring wTesto, wCercato;
-    std::vector<widget::Luogo> wLuoghi;
-    int wStato = widget::R_VUOTA, wSel = 0;
-    int wRighe = 6;   // risultati che entrano nel pannello (schermi bassi: meno di 6; vedi disegnaWidget)
-    void apriRicercaCitta();
-    void chiudiRicercaCitta();
-    void passoCitta();
-    void cercaCitta();
-    void carattereCitta(wchar_t c);
-    void scegliLuogo(int i);
-    void menuFonte(const D2D1_RECT_F& r);
     sistema::Sistema sis;                // Wi-Fi, Bluetooth e luminosita' (letti e cambiati in un thread a parte)
     double temaK = -1;                   // simbolo del tema: 0 sole (chiaro) .. 1 luna (scuro), animato
     bool trascinaLum = false;
@@ -3485,7 +3456,6 @@ private:
     void disegnaControllo(bool scuro, D2D1_COLOR_F ink);
 
     // ---- widget: meteo e notizie ----
-    void disegnaWidget(bool scuro, D2D1_COLOR_F ink);
 
     void simboloMeteo(int c, float cx, float cy, float s);
 
