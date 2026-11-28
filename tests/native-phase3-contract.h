@@ -51,7 +51,17 @@ static int phase3DockContracts(std::ostream& report,const std::filesystem::path&
     auto pump=[&](int milliseconds){ULONGLONG until=GetTickCount64()+milliseconds;do{ciPump(8);gDock.ciBorder();if(gDock.serveFotogramma())gDock.disegna(vetro::secondi(),false);}while(GetTickCount64()<until);};
     auto await=[&](auto condition){const ULONGLONG until=GetTickCount64()+6000;do{pump(20);if(condition())return true;}while(GetTickCount64()<until);return false;};
     for(int edge=0;edge<4;++edge){
-        gDock.impostaLato(edge);gDock.impostaVisibility(2,104,16,80,120,180,false);gDock.controllaFinestre(true);
+        ShowWindow(source, SW_RESTORE);
+        SetWindowPos(source,nullptr,monitor.rcMonitor.left+140,monitor.rcMonitor.top+140,200,130,SWP_NOZORDER);
+        SetForegroundWindow(source);
+        gDock.impostaLato(edge);
+        gDock.impostaVisibility(2,64,4,80,120,180,false,8,3,35,2,12);
+        gDock.impostaSpazio(true);
+        gDock.controllaFinestre(true);
+        if(!await([&]{return gDock.ciCollapse()<.001&&!gDock.serveFotogramma();}))return 181;
+        ShowWindow(source, SW_MAXIMIZE);
+        SetForegroundWindow(source);
+        gDock.controllaFinestre(true);
         if(!await([&]{return gDock.ciCollapse()>.999&&!gDock.serveFotogramma();}))return 152;
         RECT bar=gDock.ciCollapsedBounds(),overlap{};if(!IntersectRect(&overlap,&bar,&monitor.rcMonitor)||!EqualRect(&bar,&overlap))return 153;
         if(edge<2?bar.right-bar.left<=bar.bottom-bar.top:bar.bottom-bar.top<=bar.right-bar.left)return 154;
@@ -64,6 +74,12 @@ static int phase3DockContracts(std::ostream& report,const std::filesystem::path&
         if(!await([&]{return gDock.ciCollapse()>.999&&!gDock.serveFotogramma();}))return 159;
         const long frames=gDock.diagFotogrammi;pump(400);if(gDock.diagFotogrammi!=frames)return 160;
         if(!phase3Snapshot(gDock.icone,evidence/(L"phase3-dock-collapsed-edge-"+std::to_wstring(edge)+L".bmp")))return 161;
+        MONITORINFO hoverWork{sizeof(hoverWork)};
+        GetMonitorInfoW(MonitorFromWindow(source,MONITOR_DEFAULTTONEAREST),&hoverWork);
+        if(!EqualRect(&monitor.rcWork,&hoverWork.rcWork))return 182;
+        ShowWindow(source, SW_RESTORE);
+        gDock.controllaFinestre(true);
+        if(!await([&]{return gDock.ciCollapse()<.001&&!gDock.serveFotogramma();}))return 183;
         report<<"DOCK_NATIVE_EDGE="<<edge<<" HOVER_RETRACT_ANCHOR_AND_IDLE=PASS\n";report.flush();
     }
     gDock.schermoIntero(2);if(IsWindowVisible(gDock.icone)||gDock.serveFotogramma())return 162;
@@ -270,6 +286,31 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     SendMessageW(search,WM_DROPFILES,reinterpret_cast<WPARAM>(drop),0);if(!appcatalog::get(dropPath).manual)return 91;
     SendMessageW(search,WM_KEYDOWN,VK_ESCAPE,0);ciPump(220);if(gRicerca.aperta())return 92;
     report<<"SPOTLIGHT_F6_LOGICAL_SELECTION_PRESERVED=PASS\nSPOTLIGHT_NATIVE_EXE_DROP_METADATA=PASS\nSPOTLIGHT_ESCAPE_DISMISS=PASS\n";
+    const auto iconPath=evidence/L"phase3-custom-icon.bmp";
+    gRicerca.fullscreen=true;
+    gRicerca.apri();ciPump(300);
+    search=FindWindowW(L"TLauncher.Native.Ricerca",nullptr);
+    if(!search||!phase3Snapshot(search,iconPath))return 184;
+    gRicerca.chiudi();ciPump(260);
+    auto iconMeta=appcatalog::get(dropPath);
+    iconMeta.icon=iconPath.wstring();appcatalog::save(dropPath,iconMeta);
+    gRicerca.elencoApp=[dropPath]{return std::vector<std::pair<std::wstring,std::wstring>>{{L"Fixture icon",dropPath}};};
+    gRicerca.ferma();gRicerca.prefetch();
+    for(int i=0;i<300&&!gRicerca.ciWorkerIdle();++i)ciPump(10);
+    gRicerca.apri();
+    search=FindWindowW(L"TLauncher.Native.Ricerca",nullptr);
+    const auto firstBitmap=gRicerca.ciBitmap(iconPath.wstring());
+    if(!search||!firstBitmap)return 185;
+    ciPump(480);
+    if(!phase3Snapshot(search,evidence/L"phase3-spotlight-cached-icon.bmp"))return 186;
+    gRicerca.chiudi();ciPump(260);
+    gRicerca.apri();
+    if(gRicerca.ciBitmap(iconPath.wstring())!=firstBitmap)return 187;
+    SendMessageW(search,WM_CHAR,'f',0);
+    SendMessageW(search,WM_KEYDOWN,VK_F6,0);
+    if(gRicerca.ciBitmap(iconPath.wstring())!=firstBitmap)return 188;
+    gRicerca.chiudi();ciPump(260);
+    report<<"SPOTLIGHT_PREFETCH_FIRST_FRAME_AND_REOPEN_BITMAP_REUSE=PASS\n";
     // Closing invalidates outstanding file/icon work. A fresh opening starts
     // with no stale query; disabling releases HWND, timers, fonts and bitmaps.
     gRicerca.ferma();

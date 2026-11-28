@@ -367,7 +367,7 @@ public:
     double diagLente() const { return lente; }
 #ifdef TLAUNCHER_NATIVE_CI
     double ciCollapse()const{return yNascosto/(altezzaDock+MARGINE+6*dpi);}
-    RECT ciCollapsedBounds()const{return aSchermo({zonaDockL,float(H)-3*dpi-barThickness*dpi,zonaDockR,float(H)-3*dpi});}
+    RECT ciCollapsedBounds()const{return aSchermo(collapsedBar());}
     bool ciAnchor(RECT& r){return rettIcona(0,r);}
     void ciBorder(){controllaBordo();}
 #endif
@@ -759,12 +759,12 @@ public:
                          (int)IsZoomed(r), w.left, w.top, w.right, w.bottom, schermo.left, schermo.top, schermo.right, schermo.bottom);
                 // alcune app ingrandite lasciano 1-2 px liberi sul bordo della barra di Windows a scomparsa
                 // (con lo spazio riservato le finestre ingrandite si fermano sopra il dock: non lo coprono)
-                n = (IsZoomed(r) && !spazioRiservato) || (w.left <= schermo.left + 2 && w.top <= schermo.top + 2 && w.right >= schermo.right - 2 && w.bottom >= schermo.bottom - 2);
+                n = (IsZoomed(r) && (visibilityMode==2 || !spazioRiservato)) || (w.left <= schermo.left + 2 && w.top <= schermo.top + 2 && w.right >= schermo.right - 2 && w.bottom >= schermo.bottom - 2);
                 // come i dock "intelligenti": si nasconde anche quando la finestra in primo piano gli finisce sopra
                 if (!n) {
                     RECT vis{}; if (FAILED(DwmGetWindowAttribute(r, DWMWA_EXTENDED_FRAME_BOUNDS, &vis, sizeof(vis)))) vis = w;
                     const float topDock = yBaseRiposo() - S - PAD;
-                    const RECT dockR = aSchermo({zonaDockL, topDock, zonaDockR, (float)H});
+                    const RECT dockR = visibilityMode==2 ? expandedDockBounds() : aSchermo({zonaDockL, topDock, zonaDockR, (float)H});
                     const RECT isolaR = isola.right > isola.left ? aSchermo({isola.left, topDock, isola.right, (float)H}) : RECT{};
                     RECT x;
                     n = IntersectRect(&x, &vis, &dockR) || IntersectRect(&x, &vis, &isolaR);
@@ -774,7 +774,6 @@ public:
         // a scomparsa spento: il dock resta su sopra qualsiasi finestra (le app a schermo intero lo tolgono a parte,
         // vedi schermoIntero)
         if (!autoNascondi) n = false;
-        if(visibilityMode==2)n=true;
         // app a schermo intero (vedi schermoIntero): giu' anche col dock fisso, che altrimenti coprirebbe il video
         if (appSchermoIntero) { n = true; if (!*perche) snprintf(perche, sizeof(perche), "app a schermo intero"); }
         // orario e centro di controllo restano sempre giu' e risalgono solo col mouse sul bordo in basso
@@ -868,10 +867,13 @@ public:
         autoNascondi = si;
         controllaFinestre(true);
     }
-    void impostaVisibility(int mode,int length,int thickness,int alpha,int openDelay,int closeDelay,bool onFullscreen) {
+    void impostaVisibility(int mode,int length,int thickness,int alpha,int openDelay,int closeDelay,bool onFullscreen,int inset=3,int align=1,int offset=50,int radius=4,int dockCorner=-1) {
         mode=std::clamp(mode,0,2);
-        if(visibilityMode==mode&&barLength==length&&barThickness==thickness&&barOpacity==alpha&&barOpenDelay==openDelay&&barCloseDelay==closeDelay&&barFullscreen==onFullscreen)return;
+        if(visibilityMode==mode&&barLength==length&&barThickness==thickness&&barOpacity==alpha&&barOpenDelay==openDelay&&barCloseDelay==closeDelay&&barFullscreen==onFullscreen&&barInset==inset&&barAlignment==align&&barOffset==offset&&barRadius==radius&&dockRadius==dockCorner)return;
+        const bool reservationChanged=(visibilityMode==2)!=(mode==2);
         visibilityMode=mode;barLength=length;barThickness=thickness;barOpacity=alpha;barOpenDelay=openDelay;barCloseDelay=closeDelay;barFullscreen=onFullscreen;
+        barInset=inset;barAlignment=align;barOffset=offset;barRadius=radius;dockRadius=dockCorner;
+        if(reservationChanged)aggiornaAppbar();
         rivelato=false;barEntered=-1;dirty=true;controllaFinestre(true);
     }
     // impostazione: le finestre ingrandite si fermano sopra il dock (spazio riservato, appbar) o vanno fino in fondo
@@ -1082,7 +1084,10 @@ private:
     double ultimaMusica = -100;       // quando suonava l'ultima volta (in pausa resta qualche secondo)
     int periodoTesta = 0;             // TIMER_TESTA (ms, 0 spento): 60 con le barrette che ballano, 250 per i secondi del timer
     bool autoNascondi = true;         // impostazione: il dock scende sotto le finestre ingrandite o che lo coprono
-    int visibilityMode=1,barLength=104,barThickness=16,barOpacity=80,barOpenDelay=120,barCloseDelay=650;
+    int visibilityMode=1,barLength=64,barThickness=4,barOpacity=80,barOpenDelay=120,barCloseDelay=650;
+    int barInset=3,barAlignment=1,barOffset=50,barRadius=4,dockRadius=-1;
+    int dockGlassRadius=-1,dockHitRadius=0;
+    float expandedLeft=0,expandedRight=0;
     bool barFullscreen=false;
     double barEntered=-1;
     float opacita = 1;                // impostazione: opacita' del fondo del dock (vetro e velo), 0.2..1
@@ -1112,7 +1117,7 @@ public:
 private:
     void aggiornaAppbar() {
         APPBARDATA ab{}; ab.cbSize = sizeof(ab); ab.hWnd = icone;
-        if (!spazioRiservato || !attivo || !icone) {
+        if (!spazioRiservato || visibilityMode==2 || !attivo || !icone) {
             if (appbarOk) {
                 SHAppBarMessage(ABM_REMOVE, &ab); appbarOk = false;
                 RegDeleteKeyValueW(HKEY_CURRENT_USER, CHIAVE_APPBAR, L"Appbar");
@@ -1909,15 +1914,17 @@ private:
         // (isola tolta: mai. L'ora nel dock fa da isola per il mouse ma sta nel dock: la fa risalire la zona del dock)
         const bool zonaIsola = !oraNelDock && isola.right > isola.left && x >= isola.left - 10 * dpi;
         const bool zonaDock = x >= zonaDockL - 10 * dpi && x <= zonaDockR + 10 * dpi;
-        const bool onBar=visibilityMode==2&&WindowFromPoint(pt)==icone&&x>=zonaDockL&&x<=zonaDockR;
-        const bool reveal=(sulBordo(pt,schermo)||onBar)&&PtInRect(&schermo,pt)&&(zonaIsola||zonaDock);
+        const RECT bar=aSchermo(collapsedBar());
+        const bool onBar=visibilityMode==2&&vuoleNascondersi&&PtInRect(&bar,pt)&&WindowFromPoint(pt)==icone;
+        const bool reveal=(sulBordo(pt,schermo)||onBar)&&PtInRect(&schermo,pt)&&(onBar||zonaIsola||zonaDock);
         if(reveal&&barEntered<0)barEntered=adesso();
         if(!reveal)barEntered=-1;
         if (reveal&&(visibilityMode!=2||adesso()-barEntered>=barOpenDelay/1000.)) {
-            bool &r = zonaIsola ? rivelatoI : rivelato;
+            const bool revealIsland=zonaIsola&&!onBar;
+            bool &r = revealIsland ? rivelatoI : rivelato;
             // risalendo torna sopra a tutto (anche alle finestre "sempre in primo piano" ingrandite dopo di lui)
             if (!r) {
-                r = true; (zonaIsola ? fuoriDalI : fuoriDal) = -1; dirty = true; posizionaVetri();
+                r = true; (revealIsland ? fuoriDalI : fuoriDal) = -1; dirty = true; posizionaVetri();
                 if (registro) { char b[120]; snprintf(b, 120, "bordo: risale %s (mouse %ld,%ld, nascosto per schermo intero %d)", zonaIsola ? "l'isola" : "il dock", pt.x, pt.y, (int)nascostoSchermoIntero); scrivi(b); }
             }
         }
@@ -2108,12 +2115,17 @@ private:
         float fondoR = std::round(sinistra + tot + PAD + (float)std::max(0.0, tiroX));
         float fondoT = std::round(baseT - (float)tiroY);
         const float collapsed=visibilityMode==2&&!spostamento&&(!appSchermoIntero||barFullscreen)?float(std::clamp(yNascosto/fuori,0.,1.)):0.f;
-        const float barW=std::min(float(W-24*dpi),barLength*dpi),barB=H-3*dpi,barT=barB-barThickness*dpi;
+        const bool firstBounds=expandedRight<=expandedLeft;
+        expandedLeft=std::round(sinistra-PAD);
+        expandedRight=std::round(sinistra+tot+PAD);
+        if(firstBounds&&visibilityMode==2)controllaFinestre();
+        const auto bar=collapsedBar();
         auto blend=[&](float a,float b){return a+(b-a)*collapsed;};
-        fondoL=blend(fondoL,(W-barW)/2);fondoR=blend(fondoR,(W+barW)/2);
-        fondoT=blend(fondoT,barT);fondoB=blend(fondoB,barB);
-        disegnaFondo({fondoL, fondoT, fondoR, fondoB}, scuro, blend(opacita,barOpacity/100.f), coloreAuto ? nullptr : &coloreFondo);
-        aggiornaVetro(vetro, rettVetro, fondoL, fondoT, fondoR, fondoB);
+        fondoL=blend(fondoL,bar.left);fondoR=blend(fondoR,bar.right);
+        fondoT=blend(fondoT,bar.top);fondoB=blend(fondoB,bar.bottom);
+        const float radius=std::clamp(blend(dockRadius<0?RAGGIO:dockRadius*dpi,barRadius*dpi),0.f,std::max(0.f,std::min(fondoB-fondoT,fondoR-fondoL)/2));
+        disegnaFondo({fondoL, fondoT, fondoR, fondoB}, scuro, blend(opacita,barOpacity/100.f), coloreAuto ? nullptr : &coloreFondo, radius);
+        aggiornaVetro(vetro, rettVetro, fondoL, fondoT, fondoR, fondoB, dockRadius>=0||collapsed>0?int(std::lround(radius)):-1);
         zonaDockL = fondoL; zonaDockR = fondoR;
 
         // icone (la trascinata per ultima, sopra le altre)
@@ -2288,13 +2300,17 @@ private:
             const D2D1_RECT_F f = fis(D2D1_RECT_F{l, t, r, b});
             return {(int)std::floor(f.left), (int)std::floor(f.top), (int)std::ceil(f.right), (int)std::ceil(f.bottom)};
         };
-        const RECT rd = rettFin(fondoL - 2, std::min(regTop - 2, (float)H), fondoR + 2, (float)H);
+        const bool onlyBar=collapsed>=.999f;
+        const RECT rd = onlyBar ? rettFin(fondoL,fondoT,fondoR,fondoB) : rettFin(fondoL - 2, std::min(regTop - 2, (float)H), fondoR + 2, (float)H);
+        const int hitRadius=onlyBar?int(std::lround(radius)):0;
         const RECT rs = collapsed<.999f&&isola.right > isola.left ? rettFin(isola.left - 2, std::min(isola.top - 2, (float)H), isola.right + 2, (float)H) : RECT{};
         RECT re{};
         if (etichettaAlfa > 0.01) re = {(int)rettEtichetta.left - 2, (int)rettEtichetta.top - 2, (int)rettEtichetta.right + 2, (int)rettEtichetta.bottom + 2};
-        if (!EqualRect(&rd, &regioneDock) || !EqualRect(&rs, &regioneIsola) || !EqualRect(&re, &regioneEtichetta)) {
+        if (dockHitRadius!=hitRadius || !EqualRect(&rd, &regioneDock) || !EqualRect(&rs, &regioneIsola) || !EqualRect(&re, &regioneEtichetta)) {
+            dockHitRadius=hitRadius;
             regioneDock = rd; regioneIsola = rs; regioneEtichetta = re;
-            HRGN rg = CreateRectRgnIndirect(&rd), ri = CreateRectRgnIndirect(&rs);
+            HRGN rg = hitRadius ? CreateRoundRectRgn(rd.left,rd.top,rd.right,rd.bottom,2*hitRadius,2*hitRadius) : CreateRectRgnIndirect(&rd);
+            HRGN ri = CreateRectRgnIndirect(&rs);
             CombineRgn(rg, rg, ri, RGN_OR); DeleteObject(ri);
             if (!IsRectEmpty(&re)) { HRGN rt = CreateRectRgnIndirect(&re); CombineRgn(rg, rg, rt, RGN_OR); DeleteObject(rt); }
             SetWindowRgn(icone, rg, FALSE);
@@ -2671,14 +2687,15 @@ private:
     // velo chiaro, bordo luminoso e sottile contorno scuro: stessa forma del vetro sotto
     // fondo di vetro (velo e bordi sopra il vetro acrilico); a: opacita' (quella del dock, impostazione; 1 i pannelli)
     // tinta: colore scelto per il dock (nullptr: chiaro o scuro col tema), piu' coprente perche' si veda
-    void disegnaFondo(const D2D1_RECT_F& f, bool scuro, float a = 1, const D2D1_COLOR_F* tinta = nullptr) {
+    void disegnaFondo(const D2D1_RECT_F& f, bool scuro, float a = 1, const D2D1_COLOR_F* tinta = nullptr, float radius = -1) {
+        if(radius<0)radius=RAGGIO;
         pennello->SetColor(tinta ? D2D1::ColorF(tinta->r, tinta->g, tinta->b, 0.62f * a)
                                  : scuro ? D2D1::ColorF(0.12f, 0.12f, 0.14f, 0.35f * a) : D2D1::ColorF(1, 1, 1, 0.38f * a));
-        dc->FillRoundedRectangle({f, RAGGIO, RAGGIO}, pennello);
+        dc->FillRoundedRectangle({f, radius, radius}, pennello);
         pennello->SetColor(scuro ? D2D1::ColorF(1, 1, 1, 0.14f * a) : D2D1::ColorF(1, 1, 1, 0.75f * a));
-        dc->DrawRoundedRectangle({{f.left + 0.5f, f.top + 0.5f, f.right - 0.5f, f.bottom - 0.5f}, std::max(0.0f, RAGGIO - 0.5f), std::max(0.0f, RAGGIO - 0.5f)}, pennello, 1.0f);
+        dc->DrawRoundedRectangle({{f.left + 0.5f, f.top + 0.5f, f.right - 0.5f, f.bottom - 0.5f}, std::max(0.0f, radius - 0.5f), std::max(0.0f, radius - 0.5f)}, pennello, 1.0f);
         pennello->SetColor(D2D1::ColorF(0, 0, 0, (scuro ? 0.45f : 0.10f) * a));
-        dc->DrawRoundedRectangle({{f.left - 0.5f, f.top - 0.5f, f.right + 0.5f, f.bottom + 0.5f}, RAGGIO + 0.5f, RAGGIO + 0.5f}, pennello, 1.0f);
+        dc->DrawRoundedRectangle({{f.left - 0.5f, f.top - 0.5f, f.right + 0.5f, f.bottom + 0.5f}, radius + 0.5f, radius + 0.5f}, pennello, 1.0f);
     }
 
     void disegnaEtichetta(bool scuro) {
@@ -3415,7 +3432,22 @@ private:
     // VETRO_FUORI, e rimesso quando rientra (con WS_THICKFRAME Windows non lo farebbe piu' piccolo della misura minima
     // di una finestra). Solo quelli nascosti cosi' si rimostrano: vetroStato e vetroOra non sono mai visibili
     static constexpr const wchar_t* VETRO_FUORI = L"TLauncher.Native.VetroFuori";
-    void aggiornaVetro(HWND h, RECT& ultimo, float l, float t, float r, float b) {
+    D2D1_RECT_F collapsedBar() const {
+        const float length=std::min(float(W),barLength*dpi);
+        const float room=std::max(0.f,W-length);
+        const float margin=std::min(12*dpi,room/2);
+        const float offset=barAlignment==0?margin:barAlignment==2?room-margin:barAlignment==3?room*barOffset/100.f:room/2;
+        const float bottom=H-std::min(barInset*dpi,std::max(0.f,H-barThickness*dpi));
+        return {offset,bottom-barThickness*dpi,offset+length,bottom};
+    }
+
+    RECT expandedDockBounds() const {
+        if(expandedRight<=expandedLeft)return {};
+        const float bottom=yBaseRiposo()+PAD;
+        return aSchermo({expandedLeft,bottom-S-2*PAD,expandedRight,bottom});
+    }
+
+    void aggiornaVetro(HWND h, RECT& ultimo, float l, float t, float r, float b,int radius=-1) {
         const RECT pieno = aSchermo({l, t, r, b});   // (sul lato del dock)
         RECT nuovo{};
         // (sotto i 16 px Windows lo allarga alla sua misura minima, 14 px misurati, verso l'altro schermo: nascosto)
@@ -3428,7 +3460,15 @@ private:
             return;
         }
         const bool rimetti = GetPropW(h, VETRO_FUORI) && attivo && !nascostoSchermoIntero;
-        if (!EqualRect(&nuovo, &ultimo) || rimetti) {
+        const bool moved=!EqualRect(&nuovo,&ultimo);
+        if(h==vetro&&(moved||dockGlassRadius!=radius)&&(radius>=0||dockGlassRadius>=0)) {
+            dockGlassRadius=radius;
+            const int w=nuovo.right-nuovo.left,ht=nuovo.bottom-nuovo.top;
+            const int diameter=std::min(2*radius,std::min(w,ht));
+            HRGN shape=diameter>0?CreateRoundRectRgn(0,0,w,ht,diameter,diameter):radius==0?CreateRectRgn(0,0,w,ht):nullptr;
+            if(!SetWindowRgn(h,shape,FALSE)&&shape)DeleteObject(shape);
+        }
+        if (moved || rimetti) {
             ultimo = nuovo;
             SetWindowPos(h, icone, nuovo.left, nuovo.top, nuovo.right - nuovo.left, nuovo.bottom - nuovo.top,
                          SWP_NOACTIVATE | SWP_NOREDRAW | (rimetti ? SWP_SHOWWINDOW : 0));

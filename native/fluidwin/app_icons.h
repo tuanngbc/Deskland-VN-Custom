@@ -75,10 +75,10 @@ inline bool decodeImage(const std::wstring& source,int size,int& w,int& h,std::v
     if(converter)converter->Release();if(scaler)scaler->Release();if(frame)frame->Release();if(decoder)decoder->Release();if(factory)factory->Release();return SUCCEEDED(hr);
 }
 struct Header {uint32_t magic=0x31494354,w=0,h=0,reserved=0;uint64_t checksum=0;};
-template<class Extract> bool load(const std::wstring& source,int size,int& w,int& h,std::vector<UINT>& pixels,Extract extract) {
+template<class Extract> bool load(const std::wstring& source,int size,int& w,int& h,std::vector<UINT>& pixels,Extract extract,std::shared_ptr<const Pixels>* shared=nullptr) {
     if(size<16||size>512||!canRequest(source,size))return false;
     const auto k=key(source,size);
-    {std::lock_guard<std::mutex> lock(mutex);auto i=memory.find(k);if(i!=memory.end()){w=i->second.pixels->w;h=i->second.pixels->h;pixels=i->second.pixels->bgra;aliases[requestKey(source,size)]=k;return true;}}
+    {std::lock_guard<std::mutex> lock(mutex);auto i=memory.find(k);if(i!=memory.end()){w=i->second.pixels->w;h=i->second.pixels->h;if(shared)*shared=i->second.pixels;else pixels=i->second.pixels->bgra;i->second.used=GetTickCount64();aliases[requestKey(source,size)]=k;return true;}}
     auto p=std::make_shared<Pixels>();
     Header head;bool valid=false;
     {std::ifstream in(path(k),std::ios::binary);if(in.read((char*)&head,sizeof(head))&&head.magic==0x31494354&&head.w>0&&head.h>0&&head.w<=512&&head.h<=512){p->w=head.w;p->h=head.h;p->bgra.resize(size_t(head.w)*head.h);valid=bool(in.read((char*)p->bgra.data(),p->bgra.size()*4))&&hash(p->bgra.data(),p->bgra.size()*4)==head.checksum;}}
@@ -94,6 +94,6 @@ template<class Extract> bool load(const std::wstring& source,int size,int& w,int
         {std::ofstream out(temp,std::ios::binary);out.write((char*)&head,sizeof(head));out.write((char*)p->bgra.data(),p->bgra.size()*4);out.flush();if(!out){out.close();std::filesystem::remove(temp,ec);}}
         MoveFileExW(temp.c_str(),dest.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);
     }
-    w=p->w;h=p->h;pixels=p->bgra;remember(requestKey(source,size),k,p);return true;
+    w=p->w;h=p->h;if(shared)*shared=p;else pixels=p->bgra;remember(requestKey(source,size),k,p);return true;
 }
 } // namespace appicons

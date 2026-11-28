@@ -3966,6 +3966,7 @@ static void altTabVeloce() {
 static ricerca::Ricerca gRicerca;
 static stage::Manager gStage;
 static constexpr UINT_PTR TIMER_STAGE_CHANGE=0x5354;
+static constexpr UINT_PTR TIMER_SPOTLIGHT_PREFETCH=0x5310;
 static void stageEvent(DWORD ev,HWND h){
     if(!gStage.settings.enabled)return;DWORD pid=0;GetWindowThreadProcessId(h,&pid);if(pid==GetCurrentProcessId())return;
     switch(ev){case EVENT_SYSTEM_FOREGROUND:case EVENT_SYSTEM_MINIMIZESTART:case EVENT_SYSTEM_MINIMIZEEND:case EVENT_OBJECT_SHOW:case EVENT_OBJECT_HIDE:case EVENT_OBJECT_DESTROY:case EVENT_OBJECT_NAMECHANGE:
@@ -4147,7 +4148,7 @@ static void applicaImpostazioni() {
         if (gDockOk) gDock.impostaAngoli();
         logf("angoli: %s", v.angoli == 0 ? "arrotondati" : v.angoli == 1 ? "poco arrotondati" : "squadrati");
     }
-    if (gDockOk) { gDock.impostaVisibility(v.dockVisibility,v.dockBarLength,v.dockBarThickness,v.dockBarOpacity,v.dockBarOpenDelay,v.dockBarCloseDelay,v.dockBarFullscreen);gDock.impostaAutoNascondi(v.dockVisibility!=0); gDock.impostaOpacita(v.dockOpacita / 100.0f); gDock.impostaSpazio(v.dockSpazio); gDock.impostaAltriSchermi(v.dockSchermi); gDock.impostaAnteprime(v.dockAnteprime);
+    if (gDockOk) { gDock.impostaVisibility(v.dockVisibility,v.dockBarLength,v.dockBarThickness,v.dockBarOpacity,v.dockBarOpenDelay,v.dockBarCloseDelay,v.dockBarFullscreen,v.dockBarInset,v.dockBarAlignment,v.dockBarOffset,v.dockBarRadius,v.dockCornerRadius);gDock.impostaAutoNascondi(v.dockVisibility!=0); gDock.impostaOpacita(v.dockOpacita / 100.0f); gDock.impostaSpazio(v.dockSpazio); gDock.impostaAltriSchermi(v.dockSchermi); gDock.impostaAnteprime(v.dockAnteprime);
                    gDock.impostaLatoIcone(v.dockIcone); gDock.impostaDistanzaIcone(v.dockDistanza); gDock.impostaColore(v.dockColore); }
     // Arabo acceso o spento: i formati di testo prendono la direzione (da destra a sinistra) quando nascono, e molti
     // vivono quanto FluidWin. Riavviare e' il modo sicuro di rifarli tutti
@@ -4340,6 +4341,12 @@ static LRESULT CALLBACK procMessaggi(HWND h, UINT m, WPARAM w, LPARAM l) {
             if (IsWindow((HWND)w)) { preparaChiusura((HWND)w); PostMessageW((HWND)w, WM_SYSCOMMAND, SC_CLOSE, 0); }
             return 0;
         case WM_TIMER:
+            if(w==TIMER_SPOTLIGHT_PREFETCH){
+                static int attempts=0;
+                const auto& config=impostazioni::valori();
+                if(!config.spotlightEnabled||(config.spotlightMode!=1&&config.spotlightMode!=2)||gRicerca.prefetch()||++attempts>=4)KillTimer(h,w);
+                return 0;
+            }
             if(w==TIMER_STAGE_CHANGE){KillTimer(h,TIMER_STAGE_CHANGE);if(gStage.settings.enabled){if(gDockOk)gDock.timer();gStage.changed();}return 0;}
             if (w == 1) { wallpaperTick(); gStage.changed(); }
             if (w == 13) { gBattito = GetTickCount64(); return 0; }   // battito per l'hook della tastiera (uiViva)
@@ -4918,6 +4925,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     menu::fasciaDock = [](HMONITOR m) { return gDockOk ? gDock.fasciaSu(m) : RECT{}; };   // (i menu lunghi restano fuori dal dock, su ogni lato)
 
     // ciclo principale: messaggi quando non c'e' niente da animare, un passo per fotogramma del compositore quando si anima
+    SetTimer(gMessaggi,TIMER_SPOTLIGHT_PREFETCH,1500,nullptr);
     MSG msg;
     bool attivo = true;
     while (attivo) {

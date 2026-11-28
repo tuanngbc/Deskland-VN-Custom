@@ -118,7 +118,7 @@ public:
     void ferma() {
         apertaOra=chiudendo=false;annullaLavoro();onda.chiudi();
         if(v.fin){for(UINT id=1;id<=5;++id)KillTimer(v.fin,id);vetro::fermaBattito(v.fin,1);if(GetCapture()==v.fin)ReleaseCapture();}
-        for(auto& e:icone)if(e.second)e.second->Release();icone.clear();
+        clearBitmaps();verifiedIcons.clear();
         for(auto f:{fTesto,fTitolo,fSotto,fSezione})if(f)f->Release();
         fTesto=fTitolo=fSotto=fSezione=nullptr;fontDpi=0;fontLanguage=-1;
         v.chiudi();testo.clear();app.clear();risultati.clear();file.clear();folder.clear();
@@ -134,10 +134,28 @@ public:
     }
     std::wstring ciSelection()const{return sel>=0&&sel<int(risultati.size())?risultati[sel].azione:L"";}
     size_t ciBitmapCount()const{return icone.size();}
+    const void* ciBitmap(const std::wstring& source){return bitmapFor(source);}
     bool ciWorkerIdle()const{std::lock_guard<std::mutex> lock(work->mutex);return !work->running;}
     size_t ciPendingWork()const{std::lock_guard<std::mutex> lock(work->mutex);return work->icons.size()+work->ready.size()+(work->queryGeneration>=0?1:0);}
 
 #endif
+
+    bool prefetch() {
+        if(apertaOra||!elencoApp)return true;
+        const RECT area=vetro::areaPrincipale();
+        const float dpi=vetro::dpiMonitor(MonitorFromPoint({area.left,area.top},MONITOR_DEFAULTTOPRIMARY));
+        const int count=gridColumns(area.right-area.left,dpi)*gridRows(area.bottom-area.top,dpi);
+        auto catalog=elencoApp();
+        std::vector<std::wstring> sources;
+        for(const auto& item:catalog) {
+            if(!appcatalog::get(item.second).folder.empty())continue;
+            auto source=appcatalog::iconSource(item.second);
+            if(!source.empty())sources.push_back(std::move(source));
+            if(int(sources.size())==count)break;
+        }
+        queueIcons(sources,iconSize(dpi));
+        return !sources.empty();
+    }
 
     void apri() {
         if (apertaOra) { chiudi(); return; }
@@ -166,7 +184,7 @@ public:
         // una ricerca della sessione di prima ancora in corso non vale piu' (prima i suoi file arrivavano nella sessione
         // nuova vuota, R20261121-002818-S15)
         annullaLavoro();KillTimer(v.fin,3);
-        for(auto& e:icone)if(e.second)e.second->Release();icone.clear();
+        verifiedIcons.clear();
         larg = (int)std::lround(680 * d);
         x = (a.left + a.right - larg) / 2; y = a.top + (int)std::lround((a.bottom - a.top) * 0.22);
         primaDi = GetForegroundWindow();
@@ -182,12 +200,12 @@ public:
             onda.apri(vetro::areaPrincipale(), {x + larg / 2, y + (int)std::lround(ALTO_BARRA * d / 2)}, d, v.fin);
             if (registro && adesso() - t1 > 0.008) { char b[80]; snprintf(b, sizeof(b), "ricerca: foto per l'onda %.1f ms", (adesso() - t1) * 1000); registro(b); }
         }
+        componi(); // Prepare cached icons before the first visible frame.
         ShowWindow(v.fin, SW_SHOW);
         prendiFuoco();
         vetro::battito(v.fin, 1);    // animazione del riquadro (se l'onda non c'e', o tra un battito e l'altro)
         SetTimer(v.fin, 2, 530, nullptr);   // cursore lampeggiante
         passoRiquadro();
-        componi();
         SetTimer(v.fin,5,300,nullptr); // bounded catalog readiness notification; no new discovery
     }
 
@@ -218,7 +236,7 @@ public:
                 if (w == 2) cursore = !cursore;
                 if (w == 3) { KillTimer(v.fin, 3); chiediFile(); }
                 if (w == 4) { raccogliIcone(); }
-                if(w==5&&apertaOra&&elencoApp){auto next=elencoApp();if(next!=app||catalogGeneration!=appcatalog::generation){catalogGeneration=appcatalog::generation;app=std::move(next);componi();}return true;}
+                if(w==5&&apertaOra&&elencoApp){auto next=elencoApp();if(next!=app||catalogGeneration!=appcatalog::generation){catalogGeneration=appcatalog::generation;verifiedIcons.clear();app=std::move(next);componi();}return true;}
                 disegna();
                 return true;
             case WM_PAINT: disegna(); return true;
@@ -369,16 +387,23 @@ private:
         if (chiudendo) { chiudendo = false; ShowWindow(v.fin, SW_HIDE); scalaW = 1; spostaY = 0; }
     }
     volatile LONG generazione = 0;
-    struct Pixel { std::wstring chiave; int w=0,h=0;std::vector<UINT> px; };
+    struct IconJob { std::wstring source; int size; ULONGLONG generation; };
+    struct Pixel { IconJob job; std::shared_ptr<const appicons::Pixels> pixels; };
+    struct Bitmap {
+        ID2D1Bitmap* image=nullptr;
+        std::weak_ptr<const appicons::Pixels> pixels;
+        ULONGLONG used=0;
+    };
     struct Work {
         std::mutex mutex;bool running=false;LONG generation=0,queryGeneration=-1,fileGeneration=-1;
-        std::wstring query;std::deque<std::wstring> icons;std::vector<Pixel> ready;std::vector<Risultato> files;
+        std::wstring query;std::deque<IconJob> icons;std::vector<Pixel> ready;std::vector<Risultato> files;
     };
     std::shared_ptr<Work> work=std::make_shared<Work>();
     void annullaLavoro(){
         InterlockedIncrement(&generazione);std::lock_guard<std::mutex> lock(work->mutex);
         work->generation=generazione;work->queryGeneration=work->fileGeneration=-1;
         work->query.clear();work->icons.clear();work->ready.clear();work->files.clear();
+        pendingIcons.clear();
     }
     void avviaLavoro(){
         std::lock_guard<std::mutex> lock(work->mutex);
@@ -386,7 +411,43 @@ private:
         work->running=true;auto job=new std::shared_ptr<Work>(work);
         if(!pool::lancia(lavoratore,job,THREAD_PRIORITY_BELOW_NORMAL,true)){work->running=false;delete job;}
     }
-    std::unordered_map<std::wstring, ID2D1Bitmap*> icone;   // nullptr = in arrivo o non disponibile
+    std::unordered_map<std::wstring,Bitmap> icone;
+    std::unordered_set<std::wstring> pendingIcons;
+    std::unordered_map<std::wstring,ULONGLONG> verifiedIcons;
+    unsigned giroIcone=0;
+    int bitmapSize=0;
+
+    static int iconSize(float dpi){return std::clamp(int(std::ceil(58*dpi/32))*32,64,256);}
+
+    void clearBitmaps() {
+        for(auto& [key,bitmap]:icone)if(bitmap.image)bitmap.image->Release();
+        icone.clear();
+    }
+
+    ID2D1Bitmap* bitmapFor(const std::wstring& source) {
+        auto found=icone.find(source);
+        if(found==icone.end())return nullptr;
+        found->second.used=GetTickCount64();
+        return found->second.image;
+    }
+
+    void putBitmap(const std::wstring& source,const std::shared_ptr<const appicons::Pixels>& pixels) {
+        if(!pixels||!v.rt)return;
+        auto found=icone.find(source);
+        if(found!=icone.end()&&found->second.pixels.lock()==pixels)return;
+        ID2D1Bitmap* image=nullptr;
+        if(FAILED(v.rt->CreateBitmap(D2D1::SizeU(pixels->w,pixels->h),pixels->bgra.data(),pixels->w*4,
+                D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED),96,96),&image)))return;
+        const size_t limit=std::min<size_t>(256,16*1024*1024/(4*bitmapSize*bitmapSize));
+        if(found==icone.end()&&icone.size()>=limit) {
+            auto oldest=std::min_element(icone.begin(),icone.end(),[](const auto& a,const auto& b){return a.second.used<b.second.used;});
+            oldest->second.image->Release();
+            icone.erase(oldest);
+        }
+        auto& slot=icone[source];
+        if(slot.image)slot.image->Release();
+        slot={image,pixels,GetTickCount64()};
+    }
 
     static constexpr float ALTO_BARRA = 64, ALTO_RIGA = 48;
 
@@ -454,7 +515,6 @@ private:
         cursore = true; SetTimer(v.fin, 2, 530, nullptr);
         selUtente = false; sel = 0;   // testo nuovo: torna la prima riga (la scelta di prima era per l'altro testo)
         annullaLavoro();
-        for(auto i=icone.begin();i!=icone.end();)if(!i->second)i=icone.erase(i);else ++i;
         file.clear();
         componi();
         // i file si cercano quando si smette di scrivere per un attimo
@@ -536,30 +596,46 @@ private:
         disegna();
     }
 
-    // icone che mancano: al thread
-    void chiediIcone() {
-        bool nuove = false;
-        {std::lock_guard<std::mutex> lock(work->mutex);
-        std::unordered_set<std::wstring> visible;
-        for(size_t i=0;i<risultati.size();i++)if(!fullscreen||(int(i)>=page*pageSize()&&int(i)<(page+1)*pageSize()))if(!risultati[i].icona.empty())visible.insert(risultati[i].icona);
-        if(icone.size()>256){for(auto i=icone.begin();i!=icone.end()&&icone.size()>192;)if(!visible.count(i->first)){if(i->second)i->second->Release();i=icone.erase(i);}else ++i;}
-        work->icons.erase(std::remove_if(work->icons.begin(),work->icons.end(),[&](const auto& k){return !icone.count(k);}),work->icons.end());
-        for (size_t i=0;i<risultati.size();++i) {
-            if(fullscreen&&(int(i)<page*pageSize()||int(i)>=(page+1)*pageSize()))continue;
-            const auto& r=risultati[i];if(!r.icona.empty()&&!icone.count(r.icona)){icone[r.icona]=nullptr;work->icons.push_back(r.icona);nuove=true;}
+    void queueIcons(const std::vector<std::wstring>& sources,int size) {
+        bool queued=false;
+        {
+            std::lock_guard<std::mutex> lock(work->mutex);
+            const auto now=GetTickCount64();
+            if(verifiedIcons.size()>1024)verifiedIcons.clear();
+            for(const auto& source:sources) {
+                if(source.empty()||work->icons.size()>=256)continue;
+                const auto key=appicons::requestKey(source,size);
+                const auto verified=verifiedIcons.find(key);
+                if(verified!=verifiedIcons.end()&&now-verified->second<5000)continue;
+                if(!pendingIcons.insert(key).second)continue;
+                work->icons.push_back({source,size,ULONGLONG(generazione)});
+                queued=true;
+            }
         }
+        if(queued) {
+            avviaLavoro();
+            if(v.fin)SetTimer(v.fin,4,50,nullptr);
         }
-        if (nuove) { avviaLavoro();SetTimer(v.fin, 4, 50, nullptr); }
     }
 
-    // render target ricreato (vetro::Finestra::giroRt): le icone del vecchio non valgono, si rifanno (FW-AUDIT-012)
-    unsigned giroIcone = 0;
-    void controllaTarget() {
-        if (giroIcone == v.giroRt) return;
-        giroIcone = v.giroRt;
-        for (auto& [k, b] : icone) if (b) b->Release();
-        icone.clear();
-        chiediIcone();
+    void chiediIcone() {
+        const int size=iconSize(v.dpi);
+        if(giroIcone!=v.giroRt||bitmapSize!=size) {
+            giroIcone=v.giroRt;
+            bitmapSize=size;
+            clearBitmaps();
+            verifiedIcons.clear();
+        }
+        std::vector<std::wstring> sources;
+        const int begin=fullscreen?page*pageSize():0;
+        const int end=fullscreen?std::min(int(risultati.size()),begin+pageSize()):int(risultati.size());
+        for(int i=begin;i<end;++i) {
+            const auto& source=risultati[i].icona;
+            if(source.empty())continue;
+            if(!icone.count(source))putBitmap(source,appicons::peek(source,size));
+            sources.push_back(source);
+        }
+        queueIcons(sources,size);
     }
 
     void chiediFile() {
@@ -576,16 +652,19 @@ private:
             finite=!work->running&&work->icons.empty()&&work->queryGeneration<0;}
         if(foundGeneration==generazione&&apertaOra){file=std::move(found);componi();finite=false;}
         avviaLavoro();
-        for (auto& p : arrivate) {
-            if (p.px.empty() || !v.rt || !icone.count(p.chiave)) continue;
-            ID2D1Bitmap* b = nullptr;
-            v.rt->CreateBitmap(D2D1::SizeU(p.w, p.h), p.px.data(), p.w * 4,
-                               D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)), &b);
-            // la stessa icona puo' arrivare due volte (chiesta di nuovo dopo la ricreazione del target mentre la prima
-            // era in lavorazione): quella vecchia si rilascia, prima si perdeva (R20261113-010114-S4)
-            ID2D1Bitmap*& posto = icone[p.chiave];
-            if (posto) posto->Release();
-            posto = b;
+        for(auto& item:arrivate) {
+            const auto& job=item.job;
+            if(job.generation!=ULONGLONG(generazione))continue;
+            const auto key=appicons::requestKey(job.source,job.size);
+            pendingIcons.erase(key);
+            verifiedIcons[key]=GetTickCount64();
+            if(job.size==bitmapSize&&apertaOra) {
+                if(item.pixels)putBitmap(job.source,item.pixels);
+                else if(auto found=icone.find(job.source);found!=icone.end()) {
+                    found->second.image->Release();
+                    icone.erase(found);
+                }
+            }
         }
         if (finite && arrivate.empty()) KillTimer(v.fin, 4);
     }
@@ -634,8 +713,10 @@ private:
         return i < (int)risultati.size() ? i : -1;
     }
 
-    int columns() const {return std::clamp(int(v.W/(136*v.dpi)),3,12);}
-    int rows() const {return std::max(1,int((v.H-160*v.dpi)/(124*v.dpi)));}
+    static int gridColumns(int width,float dpi){return std::clamp(int(width/(136*dpi)),3,12);}
+    static int gridRows(int height,float dpi){return std::clamp(int((height-160*dpi)/(124*dpi)),1,16);}
+    int columns() const {return gridColumns(v.W,v.dpi);}
+    int rows() const {return gridRows(v.H,v.dpi);}
     int pageSize() const {return columns()*rows();}
     D2D1_RECT_F cell(int index) const {
         const int col=columns(),i=index%pageSize();const float d=v.dpi,cw=std::min(148*d,(v.W-48*d)/col);
@@ -653,8 +734,8 @@ private:
             const auto& result=risultati[i];auto r=cell(i);
             if(i==sel||i==sopra){v.pen->SetColor(v.inchiostro(i==sopra?.13f:.07f));v.rt->FillRoundedRectangle({r,16*d,16*d},v.pen);}
             const float cx=(r.left+r.right)/2,iy=r.top+10*d,size=58*d;
-            auto image=icone.find(result.icona);
-            if(image!=icone.end()&&image->second)v.rt->DrawBitmap(image->second,{cx-size/2,iy,cx+size/2,iy+size});
+            auto image=bitmapFor(result.icona);
+            if(image)v.rt->DrawBitmap(image,{cx-size/2,iy,cx+size/2,iy+size});
             else if(result.tipo==T_FOLDER){v.pen->SetColor(D2D1::ColorF(.95f,.72f,.25f,.95f));v.rt->FillRoundedRectangle({{cx-28*d,iy+8*d,cx+28*d,iy+52*d},7*d,7*d},v.pen);}
             else simbolo(result.tipo,cx,iy+size/2,v.inchiostro(.6f));
             v.testo(result.titolo,fTitolo,{r.left+4*d,iy+size+8*d,r.right-4*d,r.bottom-3*d},v.inchiostro());
@@ -695,12 +776,12 @@ private:
             if(command>=100&&command-100<hidden.size()){auto m=appcatalog::get(hidden[command-100]);m.hidden=false;appcatalog::save(hidden[command-100],m);}
             if(command&&catalogChanged)catalogChanged();
         }
-        editing=false;app=elencoApp?elencoApp():app;componi();
+        editing=false;verifiedIcons.clear();app=elencoApp?elencoApp():app;componi();
     }
 
     void disegna() {
         if (!apertaOra && !chiudendo) return;
-        controllaTarget();
+        if(giroIcone!=v.giroRt||bitmapSize!=iconSize(v.dpi))chiediIcone();
         if (!v.inizia()) return;
         if(fullscreen){drawFullscreen();v.finisci();return;}
         const float d = v.dpi, W = (float)v.W;
@@ -735,8 +816,8 @@ private:
             const D2D1_COLOR_F c = s ? D2D1::ColorF(1, 1, 1, 1) : ink, c2 = s ? D2D1::ColorF(1, 1, 1, 0.75f) : tenue;
             // icona
             const float ix = riga.left + 12 * d, iy = y0 + (ALTO_RIGA - 30) * d / 2, il = 30 * d;
-            auto it = icone.find(r.icona);
-            if (!r.icona.empty() && it != icone.end() && it->second) v.rt->DrawBitmap(it->second, {ix, iy, ix + il, iy + il});
+            auto image=bitmapFor(r.icona);
+            if(image) v.rt->DrawBitmap(image, {ix, iy, ix + il, iy + il});
             else simbolo(r.tipo, ix + il / 2, iy + il / 2, c);
             const float tx = ix + il + 12 * d;
             v.testo(r.titolo, fTitolo, {tx, y0 + 5 * d, riga.right - 12 * d, y0 + 26 * d}, c);
@@ -816,18 +897,24 @@ private:
         std::unique_ptr<std::shared_ptr<Work>> job(static_cast<std::shared_ptr<Work>*>(p));auto state=*job;
         const HRESULT com=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
         for(;;){
-            std::wstring q,ic;LONG queryGeneration=-1,generation=0;
-            {std::lock_guard<std::mutex> lock(state->mutex);generation=state->generation;
+            std::wstring q;IconJob icon{};LONG queryGeneration=-1;
+            {std::lock_guard<std::mutex> lock(state->mutex);
                 if(state->queryGeneration>=0){q=std::move(state->query);queryGeneration=state->queryGeneration;state->queryGeneration=-1;}
-                else if(!state->icons.empty()){ic=std::move(state->icons.front());state->icons.pop_front();}
+                else if(!state->icons.empty()){icon=std::move(state->icons.front());state->icons.pop_front();}
                 else break;
             }
             try{
                 if(queryGeneration>=0){auto result=cercaFile(q,8);std::lock_guard<std::mutex> lock(state->mutex);
                     if(queryGeneration==state->generation){state->files=std::move(result);state->fileGeneration=queryGeneration;}}
-                else {Pixel px;px.chiave=ic;
-                    appicons::load(ic,64,px.w,px.h,px.px,[](const std::wstring& path,int size,int& w,int& h,std::vector<UINT>& pixels){return pixelIcona(path,size,w,h,pixels);});
-                    std::lock_guard<std::mutex> lock(state->mutex);if(generation==state->generation)state->ready.push_back(std::move(px));}
+                else {
+                    std::shared_ptr<const appicons::Pixels> pixels;
+                    int width=0,height=0;
+                    std::vector<UINT> unused;
+                    appicons::load(icon.source,icon.size,width,height,unused,pixelIcona,&pixels);
+                    std::lock_guard<std::mutex> lock(state->mutex);
+                    if(icon.generation==ULONGLONG(state->generation)&&state->ready.size()<256)
+                        state->ready.push_back({std::move(icon),std::move(pixels)});
+                }
             }catch(...){/* A failing Shell provider cannot retain or touch UI state. */}
         }
         if(SUCCEEDED(com))CoUninitialize();

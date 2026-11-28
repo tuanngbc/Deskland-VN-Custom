@@ -24,7 +24,8 @@ namespace impostazioni {
 
 struct Valori {
     stage::Settings stage;
-    int dockVisibility=1,dockBarLength=104,dockBarThickness=16,dockBarOpacity=80,dockBarOpenDelay=120,dockBarCloseDelay=650;
+    int dockVisibility=1,dockBarLength=64,dockBarThickness=4,dockBarOpacity=80,dockBarOpenDelay=120,dockBarCloseDelay=650;
+    int dockBarInset=3,dockBarAlignment=1,dockBarOffset=50,dockBarRadius=4,dockCornerRadius=-1;
     bool dockBarFullscreen=false;
     bool spotlightEnabled=true,spotlightAltSpace=true;
     int spotlightMode=1;
@@ -142,11 +143,16 @@ inline void carica() {
     v.notch = leggiDword(L"Notch", 1); v.oraDock = leggiDword(L"OraDock", 0);
     v.dockAuto = leggiDword(L"DockAutoNascosto", 1);
     v.dockVisibility=std::clamp(int(leggiDword(L"DockVisibility",v.dockAuto?1:0)),0,2);
-    v.dockBarLength=std::clamp(int(leggiDword(L"DockBarLength",104)),48,320);
-    v.dockBarThickness=std::clamp(int(leggiDword(L"DockBarThickness",16)),16,32);
+    v.dockBarLength=std::clamp(int(leggiDword(L"DockBarLength",64)),32,320);
+    v.dockBarThickness=std::clamp(int(leggiDword(L"DockBarThickness",4)),2,32);
     v.dockBarOpacity=std::clamp(int(leggiDword(L"DockBarOpacity",80)),20,100);
     v.dockBarOpenDelay=std::clamp(int(leggiDword(L"DockBarOpenDelay",120)),0,1500);
     v.dockBarCloseDelay=std::clamp(int(leggiDword(L"DockBarCloseDelay",650)),100,3000);
+    v.dockBarInset=std::clamp(int(leggiDword(L"DockBarInset",3)),0,48);
+    v.dockBarAlignment=std::clamp(int(leggiDword(L"DockBarAlignment",1)),0,3);
+    v.dockBarOffset=std::clamp(int(leggiDword(L"DockBarOffset",50)),0,100);
+    v.dockBarRadius=std::clamp(int(leggiDword(L"DockBarRadius",4)),0,16);
+    v.dockCornerRadius=std::clamp(int(leggiDword(L"DockCornerRadius",DWORD(-1))),-1,48);
     v.dockBarFullscreen=leggiDword(L"DockBarFullscreen",0);
     v.spotlightEnabled=leggiDword(L"SpotlightEnabled",1);v.spotlightAltSpace=leggiDword(L"SpotlightAltSpace",1);
     v.spotlightShortcut={leggiDword(L"SpotlightHotkeyMods",MOD_ALT),leggiDword(L"SpotlightHotkeyKey",VK_SPACE)};
@@ -192,6 +198,8 @@ inline void carica() {
 inline void salva() {
     const Valori& v = valori();
     scriviDword(L"DockVisibility",v.dockVisibility);scriviDword(L"DockBarLength",v.dockBarLength);scriviDword(L"DockBarThickness",v.dockBarThickness);
+    scriviDword(L"DockBarInset",v.dockBarInset);scriviDword(L"DockBarAlignment",v.dockBarAlignment);scriviDword(L"DockBarOffset",v.dockBarOffset);
+    scriviDword(L"DockBarRadius",v.dockBarRadius);scriviDword(L"DockCornerRadius",DWORD(v.dockCornerRadius));
     scriviDword(L"DockBarOpacity",v.dockBarOpacity);scriviDword(L"DockBarOpenDelay",v.dockBarOpenDelay);scriviDword(L"DockBarCloseDelay",v.dockBarCloseDelay);scriviDword(L"DockBarFullscreen",v.dockBarFullscreen);
     scriviDword(L"SpotlightHotkeyMods",v.spotlightShortcut.mods);scriviDword(L"SpotlightHotkeyKey",v.spotlightShortcut.key);
     scriviDword(L"StageHotkeyMods",v.stageShortcut.mods);scriviDword(L"StageHotkeyKey",v.stageShortcut.key);scriviDword(L"StageHotkeyEnabled",v.stageShortcutEnabled);
@@ -570,9 +578,14 @@ private:
     // cursori (valori con un minimo e un massimo): 500+i. Il dock cambia mentre si trascina; si salva quando si lascia
     struct Cursore { const wchar_t *nome, *name, *spiega, *explain, *unita; int Valori::*campo; int min, max, passo; int sezione; };
     const std::vector<Cursore> cursori = {
-        {L"Lunghezza barra",L"Collapsed bar length",L"",L"",L" px",&Valori::dockBarLength,48,320,8,S_DOCK},
-        {L"Spessore barra",L"Collapsed bar thickness",L"",L"",L" px",&Valori::dockBarThickness,16,32,2,S_DOCK},
+        {L"Lunghezza barra",L"Collapsed bar length",L"",L"",L" px",&Valori::dockBarLength,32,320,4,S_DOCK},
+        {L"Spessore barra",L"Collapsed bar thickness",L"",L"",L" px",&Valori::dockBarThickness,2,32,1,S_DOCK},
         {L"Opacità barra",L"Collapsed bar opacity",L"",L"",L"%",&Valori::dockBarOpacity,20,100,5,S_DOCK},
+        {L"Distanza barra dal bordo",L"Bar edge inset",L"",L"",L" DIP",&Valori::dockBarInset,0,48,1,S_DOCK},
+        {L"Posizione barra",L"Bar alignment (0 start, 1 center, 2 end, 3 custom)",L"",L"",L"",&Valori::dockBarAlignment,0,3,1,S_DOCK},
+        {L"Offset barra",L"Custom bar offset",L"",L"",L"%",&Valori::dockBarOffset,0,100,1,S_DOCK},
+        {L"Raggio barra",L"Bar corner radius",L"",L"",L" DIP",&Valori::dockBarRadius,0,16,1,S_DOCK},
+        {L"Raggio Dock",L"Dock corner radius (-1 system, 0 square)",L"",L"",L" DIP",&Valori::dockCornerRadius,-1,48,1,S_DOCK},
         {L"Attesa apertura",L"Expand delay",L"",L"",L" ms",&Valori::dockBarOpenDelay,0,1500,50,S_DOCK},
         {L"Attesa chiusura",L"Collapse delay",L"",L"",L" ms",&Valori::dockBarCloseDelay,100,3000,100,S_DOCK},
         {L"Dimensione delle icone", L"Icon size", L"Anche l'altezza del dock segue", L"The dock's height follows",
