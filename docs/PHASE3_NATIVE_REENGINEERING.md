@@ -110,3 +110,6 @@ Synchronized optimization now shares a SceneRuntime only across outputs with ide
 
 
 Compatible-world keys use stable monitor representatives, so dragging icons does not reset actors. If a compatible group splits, CPU state (including games, routes, reactions and cloud puffs) forks only after exact dimensions and Geometry equality checks; graphics remain separately owned. A world already advanced this frame is not stepped twice after a fork. Hosted shader assertions compare inherited game state and same-time pixels, and reject unequal dimensions. Full shared simulation for unequal outputs remains open.
+
+
+CI 46090624758 / 08d9f85 passed all required jobs with actual DirectWrite locale assertions restored. CI 46091127471 / a2c9259 passed Porch insects/renderer, and the real Dock regression reached exit 164 after passing hover, retraction, stable anchors, zero idle redraw and fullscreen checks on all four edges. Its work-area assertion incorrectly compared pre-shell state to the active accepted Dock startup, which enables Windows taskbar auto-hide. Compare collapsed transitions against the settled active-shell baseline, then separately require the original work area after normal Dock exit. CI pending.

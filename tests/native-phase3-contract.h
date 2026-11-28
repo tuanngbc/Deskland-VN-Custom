@@ -42,7 +42,11 @@ static int phase3DockContracts(std::ostream& report,const std::filesystem::path&
     POINT original{};GetCursorPos(&original);MONITORINFO monitor{sizeof(monitor)};GetMonitorInfoW(MonitorFromWindow(source,MONITOR_DEFAULTTONEAREST),&monitor);
     struct Cleanup{HWND source;POINT cursor;~Cleanup(){gDock.chiudi();gDock.fermaWidget(3000);SetCursorPos(cursor.x,cursor.y);DestroyWindow(source);}}cleanup{source,original};
     gDock.impostaSpazio(false);gDock.impostaNotchEnabled(false);gDock.altriSchermi=false;
+    const RECT originalWork=monitor.rcWork;
     if(!gDock.inizializza(GetModuleHandleW(nullptr)))return 151;
+    // Accepted Dock startup enables Windows taskbar auto-hide. Compare collapse
+    // transitions against that active-shell baseline, then verify full recovery.
+    ciPump(350);GetMonitorInfoW(MonitorFromWindow(source,MONITOR_DEFAULTTONEAREST),&monitor);
     SetForegroundWindow(source);const POINT away{(monitor.rcMonitor.left+monitor.rcMonitor.right)/2,(monitor.rcMonitor.top+monitor.rcMonitor.bottom)/2};SetCursorPos(away.x,away.y);
     auto pump=[&](int milliseconds){ULONGLONG until=GetTickCount64()+milliseconds;do{ciPump(8);gDock.ciBorder();if(gDock.serveFotogramma())gDock.disegna(vetro::secondi(),false);}while(GetTickCount64()<until);};
     auto await=[&](auto condition){const ULONGLONG until=GetTickCount64()+6000;do{pump(20);if(condition())return true;}while(GetTickCount64()<until);return false;};
@@ -60,11 +64,16 @@ static int phase3DockContracts(std::ostream& report,const std::filesystem::path&
         if(!await([&]{return gDock.ciCollapse()>.999&&!gDock.serveFotogramma();}))return 159;
         const long frames=gDock.diagFotogrammi;pump(400);if(gDock.diagFotogrammi!=frames)return 160;
         if(!phase3Snapshot(gDock.icone,evidence/(L"phase3-dock-collapsed-edge-"+std::to_wstring(edge)+L".bmp")))return 161;
+        report<<"DOCK_NATIVE_EDGE="<<edge<<" HOVER_RETRACT_ANCHOR_AND_IDLE=PASS\n";report.flush();
     }
     gDock.schermoIntero(2);if(IsWindowVisible(gDock.icone)||gDock.serveFotogramma())return 162;
     gDock.schermoIntero(0);pump(600);if(!IsWindowVisible(gDock.icone))return 163;
     MONITORINFO unchanged{sizeof(unchanged)};GetMonitorInfoW(MonitorFromWindow(source,MONITOR_DEFAULTTONEAREST),&unchanged);
     if(!EqualRect(&monitor.rcWork,&unchanged.rcWork))return 164;
+    gDock.chiudi();const ULONGLONG restoredUntil=GetTickCount64()+3000;
+    do{ciPump(50);GetMonitorInfoW(MonitorFromWindow(source,MONITOR_DEFAULTTONEAREST),&unchanged);}while(!EqualRect(&originalWork,&unchanged.rcWork)&&GetTickCount64()<restoredUntil);
+    if(!EqualRect(&originalWork,&unchanged.rcWork))return 165;
+    report<<"DOCK_ORIGINAL_WORK_AREA_RESTORED_ON_EXIT=PASS\n";
     report<<"DOCK_COLLAPSED_STABLE_ANIMATION_ANCHOR=PASS\nDOCK_COLLAPSED_SETTLED_NO_RENDER_LOOP=PASS\nDOCK_FULLSCREEN_HIDE_RESUME=PASS\nDOCK_WORK_AREA_UNCHANGED=PASS\n";
     report<<"DOCK_COLLAPSED_FOUR_EDGE_NATIVE_INTERACTION=PASS\n";return 0;
 }
