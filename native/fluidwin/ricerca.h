@@ -926,6 +926,7 @@ private:
         // Mark idle only after COM teardown; UI can then enqueue exactly one new
         // worker. Pending jobs that arrived during teardown are started by timer 4.
         {std::lock_guard<std::mutex> lock(state->mutex);state->running=false;}
+        state->idle.notify_all();
         return 0;
     }
 
