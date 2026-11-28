@@ -247,7 +247,12 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
         for(size_t i=0;i<previousLength;++i)SendMessageW(search,WM_KEYDOWN,VK_BACK,0);
         if(!gRicerca.ciQuery().empty())return 179;
         for(const wchar_t ch:std::wstring(test.query))SendMessageW(search,WM_CHAR,ch,0);
-        if(!gRicerca.ciSetting(test.action,test.title))return 177;
+        if(!gRicerca.ciSetting(test.action,test.title)){
+            auto utf8=[](const std::wstring& value){int size=WideCharToMultiByte(CP_UTF8,0,value.data(),int(value.size()),nullptr,0,nullptr,nullptr);std::string result(size,'\0');WideCharToMultiByte(CP_UTF8,0,value.data(),int(value.size()),result.data(),size,nullptr,nullptr);return result;};
+            report<<"SPOTLIGHT_VI_QUERY requested="<<utf8(test.query)<<" actual="<<utf8(gRicerca.ciQuery())<<" language="<<testi::attuale()<<" expected="<<utf8(test.title)<<" action="<<utf8(test.action)<<" open="<<gRicerca.aperta()<<"\n";
+            for(const auto& item:gRicerca.ciResultItems())report<<"SPOTLIGHT_VI_RESULT type="<<int(item.tipo)<<" title="<<utf8(item.titolo)<<" action="<<utf8(item.azione)<<"\n";
+            report.flush();phase3Snapshot(search,evidence/L"phase3-spotlight-vietnamese-failure.bmp");return 177;
+        }
     }
     if(!phase3Snapshot(search,evidence/L"phase3-spotlight-vietnamese-settings.bmp"))return 178;
     report<<"SPOTLIGHT_ACTUAL_VIETNAMESE_SETTINGS_SYNONYMS_AND_ACCENT_FOLDING=PASS\n";

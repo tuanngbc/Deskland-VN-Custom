@@ -128,6 +128,7 @@ public:
 #ifdef TLAUNCHER_NATIVE_CI
     std::wstring ciQuery() const {return testo;}
     size_t ciResults() const {return risultati.size();}
+    const std::vector<Risultato>& ciResultItems()const{return risultati;}
     bool ciSetting(const std::wstring& action,const std::wstring& title)const{
         for(const auto& r:risultati)if(r.tipo==T_IMPOSTAZIONE&&r.azione==action&&r.titolo==title)return true;return false;
     }
