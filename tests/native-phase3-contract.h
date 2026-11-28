@@ -116,6 +116,17 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     report<<"ACTUAL_EXE_LNK_IDENTITY_AND_ARGUMENT_DISTINCTION=PASS\n";
     report<<"CANONICAL_METADATA_ALIAS_PROPAGATION=PASS\nCANONICAL_METADATA_RELOAD_AND_FOLDER_MIGRATION=PASS\n";
     report<<"PHASE3_CUSTOM_SETTINGS_PERSIST=PASS\nVIETNAMESE_ACCENT_SEARCH=PASS\nCATALOG_FOLDER_RENAME_DELETE_PRESERVE_APPS=PASS\n";
+    {
+        wallpaper::SettingsPage page;wallpaper::Config choiceConfig;choiceConfig.scene=wallpaper::sceneIndex("boxing-ring");
+        page.read=[&]{return choiceConfig;};page.changed=[&](wallpaper::Config value){choiceConfig=std::move(value);};
+        for(const auto& setting:std::vector<std::pair<const char*,int>>{{"autoSpar",2},{"gloveStyle",3},{"hudMode",4}}){
+            const auto labels=wallpaper::SettingsPage::options("boxing-ring",setting.first);if(labels.size()!=3)return 182;
+            for(int option=0;option<3;++option)if(!page.click(5600+setting.second*4+option)||wallpaper::parameter(choiceConfig,choiceConfig.scene,setting.first)!=option)return 183;
+            if(page.click(5600+setting.second*4+3))return 184;
+        }
+        if(wallpaper::SettingsPage::options("boxing-ring","autoSpar")[0]!=L"Đấu nhịp tự nhiên")return 185;
+        report<<"BOXING_NAMED_LOCALIZED_OPTIONS_AND_NATIVE_SETTINGS_ROUTE=PASS\n";
+    }
     HWND source=CreateWindowW(L"STATIC",L"Stage actual source window",WS_OVERLAPPEDWINDOW|WS_VISIBLE,280,160,640,420,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
     if(!source)return 65;ciPump(100);DWORD pid=0;DWORD tid=GetWindowThreadProcessId(source,&pid);
     stage::Manager manager;manager.inventory=[&]{return IsWindow(source)?std::vector<stage::Window>{{source,pid,tid,L"fixture",L"Cửa sổ thử nghiệm",L""}}:std::vector<stage::Window>{};};
@@ -192,6 +203,10 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     ciPump(260);if(manager.ciAnimating()||manager.ciThumbnail()!=stableThumbnail)return 169;
     const unsigned settledFrames=manager.ciAnimationFrames();ciPump(240);
     if(manager.ciAnimationFrames()!=settledFrames)return 170;
+    // A completed asynchronous source snapshot is a legitimate repaint. Drain
+    // that work before measuring the unchanged/settled inventory interval.
+    for(int i=0;i<60&&manager.ciCapturePending();++i){ciPump(20);manager.changed();}
+    if(manager.ciCapturePending())return 181;
     manager.changed();const unsigned idleRenderFrames=manager.ciRenderFrames();
     for(int i=0;i<4;++i){ciPump(100);manager.changed();}
     if(manager.ciRenderFrames()!=idleRenderFrames)return 180;

@@ -136,3 +136,6 @@ Run46092777372 actually stopped at native exit176, before the Vietnamese query f
 
 
 Stage inventory polling no longer redraws its entire native rail every500 ms when settled. Repaint only on changed inventory/layout, focus/language, snapshot/render-target generation, newly available shared icon, real hover/paint or active fade. DWM still supplies live thumbnail content without an app redraw; icon readiness is checked through the existing shared provider. Hosted coverage repeats unchanged real inventory refreshes and requires the native render counter to remain unchanged. CI pending; this removes redundant work rather than asserting owner hardware targets.
+
+
+Boxing customization now presents audited named choices for sparring, glove artwork and HUD visibility instead of unexplained0/1/2 values. Labels use the shared translation table; existing saved numeric values and parameter ranges remain compatible. Hosted coverage invokes the native SettingsPage choice route for every valid option, rejects the spare ID and requires the Vietnamese label. Idle Stage measurement drains asynchronous source snapshots first, since a newly completed image correctly requires a repaint. CI pending.

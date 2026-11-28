@@ -240,6 +240,7 @@ public:
     size_t railCount() const {return rails.size();}
 #ifdef TLAUNCHER_NATIVE_CI
     size_t ciThumbnailCount()const{size_t n=0;for(const auto&r:rails)for(const auto&c:r->cards)if(c.thumbnail)n++;return n;}
+    bool ciCapturePending()const{return capture!=nullptr;}
     bool ciAnimating()const{for(const auto&r:rails)if(r->animating)return true;return false;}
     size_t ciDeparting()const{size_t n=0;for(const auto&r:rails)n+=r->departing.size();return n;}
     HTHUMBNAIL ciThumbnail()const{return rails.empty()||rails[0]->cards.empty()?nullptr:rails[0]->cards[0].thumbnail;}

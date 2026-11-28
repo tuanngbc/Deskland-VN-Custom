@@ -8,6 +8,15 @@
 namespace traduzioni {
 
 inline constexpr const wchar_t* RIGHE[][7] = {
+    {L"Natural sparring", L"Natural sparring", L"Natural sparring", L"Natural sparring", L"Natural sparring", L"Natural sparring", L"Đấu nhịp tự nhiên"},
+    {L"Punch on click", L"Punch on click", L"Punch on click", L"Punch on click", L"Punch on click", L"Punch on click", L"Chỉ đấm khi nhấp"},
+    {L"Rapid sparring", L"Rapid sparring", L"Rapid sparring", L"Rapid sparring", L"Rapid sparring", L"Rapid sparring", L"Đôi công liên hoàn"},
+    {L"Classic red glove", L"Classic red glove", L"Classic red glove", L"Classic red glove", L"Classic red glove", L"Classic red glove", L"Găng đỏ cổ điển"},
+    {L"Cartoon glove", L"Cartoon glove", L"Cartoon glove", L"Cartoon glove", L"Cartoon glove", L"Cartoon glove", L"Găng hoạt hình"},
+    {L"Cat paw glove", L"Cat paw glove", L"Cat paw glove", L"Cat paw glove", L"Cat paw glove", L"Cat paw glove", L"Găng chân mèo"},
+    {L"Full display", L"Full display", L"Full display", L"Full display", L"Full display", L"Full display", L"Hiện đầy đủ"},
+    {L"Compact display", L"Compact display", L"Compact display", L"Compact display", L"Compact display", L"Compact display", L"Thu gọn"},
+    {L"Hidden", L"Hidden", L"Hidden", L"Hidden", L"Hidden", L"Hidden", L"Ẩn"},
     // ---- aggiornamenti ----
     {L"Open the page", L"Abrir la página", L"Ouvrir la page", L"Seite öffnen", L"Abrir a página", L"فتح الصفحة", L"Mở trang"},
     {L"Close", L"Cerrar", L"Fermer", L"Schließen", L"Fechar", L"إغلاق", L"Đóng"},

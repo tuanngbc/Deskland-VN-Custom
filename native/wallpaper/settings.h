@@ -20,6 +20,13 @@ class SettingsPage {
     void release(){for(auto&b:thumbs)if(b){b->Release();b=nullptr;}target=nullptr;}
     int scene(const Config&c)const{if(c.layout==Layout::Independent&&!monitors.empty()){auto i=c.displays.find(monitors[selectedMonitor].id);if(i!=c.displays.end())return i->second.scene;}return c.scene;}
 public:
+    static std::vector<std::wstring> options(const std::string& scene,const std::string& key){
+        if(scene!="boxing-ring")return {};
+        if(key=="autoSpar")return {testi::t(L"Natural sparring",L"Natural sparring"),testi::t(L"Punch on click",L"Punch on click"),testi::t(L"Rapid sparring",L"Rapid sparring")};
+        if(key=="gloveStyle")return {testi::t(L"Classic red glove",L"Classic red glove"),testi::t(L"Cartoon glove",L"Cartoon glove"),testi::t(L"Cat paw glove",L"Cat paw glove")};
+        if(key=="hudMode")return {testi::t(L"Full display",L"Full display"),testi::t(L"Compact display",L"Compact display"),testi::t(L"Hidden",L"Hidden")};
+        return {};
+    }
     std::function<Config()> read;
     std::function<void(Config)> changed;
     std::function<Metrics()> metrics;
@@ -39,6 +46,13 @@ public:
             if(c.layout==Layout::Independent&&!monitors.empty()){auto&overrides=c.displays[monitors[selectedMonitor].id].sceneParams[catalog()[id].id];for(const auto&[k,v]:overrides)effective.sceneParams[catalog()[id].id][k]=v;}
             double value=parameter(effective,id,p.key);value+=((action-5200)%2?1:-1)*p.step;
             if(c.layout==Layout::Independent&&!monitors.empty())c.displays[monitors[selectedMonitor].id].sceneParams[catalog()[id].id][p.key]=std::clamp(value,p.min,p.max);else c.sceneParams[catalog()[id].id][p.key]=std::clamp(value,p.min,p.max);}
+        else if(action>=5600&&action<5800){
+            const int id=scene(c),n=(action-5600)/4,choice=(action-5600)%4;const auto& selected=catalog()[id];
+            if(n>=int(selected.params.size()))return false;const auto& p=selected.params[n];
+            if(choice>=int(options(selected.id,p.key).size()))return false;
+            if(c.layout==Layout::Independent&&!monitors.empty())c.displays[monitors[selectedMonitor].id].sceneParams[selected.id][p.key]=choice;
+            else c.sceneParams[selected.id][p.key]=choice;
+        }
         else if(action>=5400&&action<=5405)c.weather=WeatherMode(action-5400);
         else if(action==5410)c.solar=!c.solar;else if(action==5411)c.clockLighting=!c.clockLighting;
         else if(action==5420)c.manualHour=std::max(0.f,c.manualHour-1);else if(action==5421)c.manualHour=std::min(24.f,c.manualHour+1);
@@ -68,7 +82,10 @@ public:
         for(size_t i=0;i<catalog().size();i++){int col=int(i%3);float x=left+col*(cardW+gap);D2D1_RECT_F card{x,y,x+cardW,y+cardH};button(card,5100+int(i),L"",int(i)==selected,catalog()[i].name);if(thumbs[i])v.rt->DrawBitmap(thumbs[i],{x+4*d,y+4*d,x+cardW-4*d,y+65*d},alpha,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);v.testo(catalog()[i].name,small,{x+5*d,y+66*d,x+cardW-5*d,y+cardH},ink);if(col==2||i+1==catalog().size())y+=cardH+gap;}
         if(!gallery->ready){v.testo(testi::t(L"Loading scene thumbnails…",L"Loading scene thumbnails…"),small,{left,y,right,y+26*d},muted);y+=30*d;}
         title(testi::t(L"Scene customization",L"Scene customization"));const auto&s=catalog()[selected];Config effective=c;if(c.layout==Layout::Independent&&!monitors.empty()){auto a=c.displays.find(monitors[selectedMonitor].id);if(a!=c.displays.end()){auto values=a->second.sceneParams.find(s.id);if(values!=a->second.sceneParams.end())for(const auto&[key,value]:values->second)effective.sceneParams[s.id][key]=value;}}
-        for(size_t i=0;i<s.params.size();i++){const auto&p=s.params[i];wchar_t value[48];swprintf(value,48,L"%.2g",parameter(effective,selected,p.key));adjust(p.name,value,5200+int(i)*2);}
+        for(size_t i=0;i<s.params.size();i++){const auto&p=s.params[i];const auto labels=options(s.id,p.key);
+            if(!labels.empty()){title(p.name);choices(labels,5600+int(i)*4,int(parameter(effective,selected,p.key)));}
+            else{wchar_t value[48];swprintf(value,48,L"%.2g",parameter(effective,selected,p.key));adjust(p.name,value,5200+int(i)*2);}}
+
         title(testi::t(L"Weather",L"Weather"));choices({testi::t(L"Clear",L"Clear"),testi::t(L"Rain",L"Rain"),testi::t(L"Snow",L"Snow")},5400,int(c.weather));choices({testi::t(L"Clouds",L"Clouds"),testi::t(L"Live",L"Live"),testi::t(L"Offline",L"Offline")},5403,int(c.weather)-3);
         v.testo(testi::t(L"Live uses the city selected in Control Center → Weather",L"Live uses the city selected in Control Center → Weather"),small,{left,y,right,y+28*d},muted);y+=32*d;
         adjust(testi::t(L"Wind",L"Wind"),std::to_wstring(int(c.wind*100))+L"%",5450);
