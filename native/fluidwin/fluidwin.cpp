@@ -3982,7 +3982,39 @@ static void stageEvent(DWORD ev,HWND h){
     switch(ev){case EVENT_SYSTEM_FOREGROUND:case EVENT_SYSTEM_MINIMIZESTART:case EVENT_SYSTEM_MINIMIZEEND:case EVENT_OBJECT_SHOW:case EVENT_OBJECT_HIDE:case EVENT_OBJECT_DESTROY:case EVENT_OBJECT_NAMECHANGE:
         SetTimer(gMessaggi,TIMER_STAGE_CHANGE,60,nullptr);break;}
 }
-static constexpr int TASTO_SPOTLIGHT=0x534c,TASTO_STAGE=0x534d;
+static constexpr int TASTO_SPOTLIGHT=0x534c,TASTO_STAGE=0x534d,TASTO_CAPTURE=0x534e,TASTO_RECORD=0x534f;
+static HANDLE captureProcess[2]{};
+static void closeCaptureWindows(HANDLE process) {
+    if(!process||WaitForSingleObject(process,0)!=WAIT_TIMEOUT)return;
+    EnumWindows([](HWND h,LPARAM pid)->BOOL{
+        DWORD actual=0;GetWindowThreadProcessId(h,&actual);
+        if(actual==DWORD(pid))PostMessageW(h,WM_CLOSE,0,0);
+        return TRUE;
+    },LPARAM(GetProcessId(process)));
+}
+static void openCaptureTool(bool record) {
+    auto& process=captureProcess[record?1:0];
+    if(process){
+        if(WaitForSingleObject(process,0)==WAIT_TIMEOUT){
+            if(record)closeCaptureWindows(process);
+            return;
+        }
+        CloseHandle(process);process=nullptr;
+    }
+    const auto& config=impostazioni::valori();
+    wchar_t image[32768]{};const auto n=GetModuleFileNameW(nullptr,image,DWORD(std::size(image)));
+    if(!n||n>=std::size(image))return;
+    const auto exe=std::filesystem::path(image).parent_path()/L"TLauncherCapture.exe";
+    std::wstring folder=config.captureFolder;
+    if(folder.find(L'"')!=std::wstring::npos)folder.clear();
+    if(!folder.empty()&&folder.back()==L'\\')folder+=L'\\'; // escape the closing quote
+    std::wstring args=L"\""+exe.wstring()+L"\" "+(record?L"record ":L"capture ")+std::to_wstring(config.captureFps)+
+        (config.captureAudio?L" audio \"":L" silent \"")+folder+L"\"";
+    STARTUPINFOW startup{};startup.cb=sizeof(startup);PROCESS_INFORMATION child{};
+    if(CreateProcessW(exe.c_str(),args.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&startup,&child)){
+        CloseHandle(child.hThread);process=child.hProcess;
+    }else logf("capture tool: launch failed (%lu)",GetLastError());
+}
 static shortcuts::Binding gSpotlightHotkey{TASTO_SPOTLIGHT,0x536c},gStageHotkey{TASTO_STAGE,0x536d};
 static void apriSpotlight() {
     const auto& s=impostazioni::valori();
@@ -4159,7 +4191,7 @@ static void applicaImpostazioni() {
         if (gDockOk) gDock.impostaAngoli();
         logf("angoli: %s", v.angoli == 0 ? "arrotondati" : v.angoli == 1 ? "poco arrotondati" : "squadrati");
     }
-    if (gDockOk) { gDock.impostaVisibility(v.dockVisibility,v.dockBarLength,v.dockBarThickness,v.dockBarOpacity,v.dockBarOpenDelay,v.dockBarCloseDelay,v.dockBarFullscreen,v.dockBarInset,v.dockBarAlignment,v.dockBarOffset,v.dockBarRadius,v.dockCornerRadius==49?v.dockCustomRadius:v.dockCornerRadius);gDock.impostaAutoNascondi(v.dockVisibility!=0); gDock.impostaOpacita(v.dockOpacita / 100.0f); gDock.impostaSpazio(v.dockSpazio); gDock.impostaAltriSchermi(v.dockSchermi); gDock.impostaAnteprime(v.dockAnteprime);
+    if (gDockOk) { gDock.startArtwork(v.startMode,v.startScale,v.startIcon);gDock.impostaVisibility(v.dockVisibility,v.dockBarLength,v.dockBarThickness,v.dockBarOpacity,v.dockBarOpenDelay,v.dockBarCloseDelay,v.dockBarFullscreen,v.dockBarInset,v.dockBarAlignment,v.dockBarOffset,v.dockBarRadius,v.dockCornerRadius==49?v.dockCustomRadius:v.dockCornerRadius);gDock.impostaAutoNascondi(v.dockVisibility!=0); gDock.impostaOpacita(v.dockOpacita / 100.0f); gDock.impostaSpazio(v.dockSpazio); gDock.configureDisplay(v.dockDisplayMode,v.dockDisplayName); gDock.impostaAnteprime(v.dockAnteprime);
                    gDock.impostaLatoIcone(v.dockIcone); gDock.impostaDistanzaIcone(v.dockDistanza); gDock.impostaColore(v.dockColore); }
     // Arabo acceso o spento: i formati di testo prendono la direzione (da destra a sinistra) quando nascono, e molti
     // vivono quanto FluidWin. Riavviare e' il modo sicuro di rifarli tutti
@@ -4282,6 +4314,7 @@ static LRESULT CALLBACK procMessaggi(HWND h, UINT m, WPARAM w, LPARAM l) {
         case WM_APRI_LAUNCHER: if (gDockOk) gDock.apriLauncher(); return 0;
         case WM_HOTKEY:
             if(w==TASTO_PRIMO_PIANO)primoPiano();
+            else if(w==TASTO_CAPTURE||w==TASTO_RECORD)openCaptureTool(w==TASTO_RECORD);
             else if(gSpotlightHotkey.matches(w))apriSpotlight();
             else if(gStageHotkey.matches(w)){auto& s=impostazioni::valori().stage;s.enabled=!s.enabled;impostazioni::salva();gStage.configure(s);}
             return 0;
@@ -4789,7 +4822,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     gRtlAvvio = testi::rtl();
     // testi senza traduzione nella lingua scelta: una riga per testo (solo con --log)
     if (gLog) testi::registro() = [](const wchar_t* en) { logf("testo senza traduzione: %ls", en); };
-    gDock.altriSchermi = impostazioni::valori().dockSchermi;   // (spento: il dock nasce sul principale)
+    gDock.configureDisplay(impostazioni::valori().dockDisplayMode,impostazioni::valori().dockDisplayName);
     gDock.impostaLato(impostazioni::valori().dockLato);   // (prima di inizializza: il dock nasce gia' sul suo lato)
     gDock.impostaNotchEnabled(impostazioni::valori().notchEnabled);
     gDockOk = gDock.inizializza(inst);
@@ -4813,6 +4846,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     // Ctrl+Win+T: sempre in primo piano (se un altro programma la usa gia', resta a lui)
     if (!RegisterHotKey(gMessaggi, TASTO_PRIMO_PIANO, MOD_CONTROL | MOD_WIN | MOD_NOREPEAT, 'T'))
         logf("Ctrl+Win+T usata da un altro programma (errore %lu): niente sempre in primo piano", GetLastError());
+    if(!RegisterHotKey(gMessaggi,TASTO_CAPTURE,MOD_CONTROL|MOD_SHIFT|MOD_NOREPEAT,'S'))logf("Capture hotkey unavailable");
+    if(!RegisterHotKey(gMessaggi,TASTO_RECORD,MOD_CONTROL|MOD_SHIFT|MOD_NOREPEAT,'R'))logf("Recorder hotkey unavailable");
     gBattito = GetTickCount64(); SetTimer(gMessaggi, 13, 250, nullptr);   // battito per l'hook della tastiera
     gDpiAvvio = dpiPrincipale();
     leggiMovimento();
@@ -4970,6 +5005,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     impostaPausa(true);
     condividi::ferma();   // annulla la preparazione dei file senza aspettare prima di ripristinare Windows
     cursori::togli();   // di nuovo i cursori di Windows
+    for(auto& child:captureProcess)if(child){closeCaptureWindows(child);CloseHandle(child);child=nullptr;}
     for(auto& clock:gDesktopClocks)clock.stop();
     gStage.stop();gRicerca.ferma();gSpotlightHotkey.stop();gStageHotkey.stop();
     if (gDockOk) gDock.chiudi();

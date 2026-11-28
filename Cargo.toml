@@ -9,6 +9,10 @@ description = "TLauncher native (Rust + OpenGL) - hình nền động tương t�
 name = "TLauncher"
 path = "src/main.rs"
 
+[[bin]]
+name = "TLauncherCapture"
+path = "src/native_capture.rs"
+
 [dependencies]
 glow = "0.14"
 serde = { version = "1", features = ["derive"] }

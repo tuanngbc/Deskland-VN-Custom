@@ -151,6 +151,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./tests/wallpaper-native-integration.ps1 -Exe (Resolve-Path native-build/TLauncher.exe).Path -Evidence (Resolve-Path native-evidence).Path -Mesa (Join-Path $env:RUNNER_TEMP 'wallpaper-mesa')
+      - name: Build and verify on-demand native capture tools
+        if: github.ref == 'refs/heads/codex/native-stage-spotlight-reengineering-v1.0.3'
+        shell: pwsh
+        run: |
+          cargo test --release --locked --bin TLauncherCapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --release --locked --bin TLauncherCapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item target/release/TLauncherCapture.exe native-build/
       - name: Package immutable Native Base TEST
         shell: pwsh
         run: |
@@ -159,6 +168,7 @@ jobs:
           $dir=Join-Path 'dist' $name
           New-Item -ItemType Directory -Path $dir -Force | Out-Null
           Copy-Item native-build/TLauncher.exe $dir
+          if (Test-Path native-build/TLauncherCapture.exe) { Copy-Item native-build/TLauncherCapture.exe $dir }
           New-Item -ItemType Directory -Path (Join-Path $dir assets) -Force | Out-Null
           Copy-Item assets/widget (Join-Path $dir assets) -Recurse
           Copy-Item native-build/runtime-licenses (Join-Path $dir 'runtime-licenses') -Recurse

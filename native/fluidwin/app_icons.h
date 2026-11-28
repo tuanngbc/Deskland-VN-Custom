@@ -9,6 +9,7 @@
 #include <memory>
 #include <algorithm>
 #include <cstdint>
+#include <cmath>
 #include <wincodec.h>
 
 namespace appicons {
@@ -34,7 +35,7 @@ inline std::wstring key(const std::wstring& source,int size) {
     WIN32_FILE_ATTRIBUTE_DATA a{};
     if(GetFileAttributesExW(source.c_str(),GetFileExInfoStandard,&a))
         s+=L"|"+std::to_wstring(a.ftLastWriteTime.dwHighDateTime)+L":"+std::to_wstring(a.ftLastWriteTime.dwLowDateTime)+L":"+std::to_wstring(a.nFileSizeLow);
-    return s+L"|v1|"+std::to_wstring(size);
+    return s+L"|v2|"+std::to_wstring(size);
 }
 inline uint64_t hash(const void* data,size_t n) {
     uint64_t h=14695981039346656037ull;auto b=(const unsigned char*)data;
@@ -74,6 +75,34 @@ inline bool decodeImage(const std::wstring& source,int size,int& w,int& h,std::v
         if(SUCCEEDED(hr)){pixels.assign(size_t(size)*size,0);const int left=(size-w)/2,top=(size-h)/2;for(int y=0;y<h;y++)std::copy_n(fitted.data()+size_t(y)*w,w,pixels.data()+size_t(y+top)*size+left);w=h=size;}}
     if(converter)converter->Release();if(scaler)scaler->Release();if(frame)frame->Release();if(decoder)decoder->Release();if(factory)factory->Release();return SUCCEEDED(hr);
 }
+inline void normalize(Pixels& image,int size){
+    int left=image.w,top=image.h,right=0,bottom=0;
+    for(int y=0;y<image.h;++y)for(int x=0;x<image.w;++x){
+        if(!(image.bgra[size_t(y)*image.w+x]>>24))continue;
+        left=std::min(left,x);top=std::min(top,y);right=std::max(right,x+1);bottom=std::max(bottom,y+1);
+    }
+    if(right<=left||bottom<=top)return;
+    const int width=right-left,height=bottom-top;
+    const double scale=std::min(1.5,double(size)/std::max(width,height));
+    const int w=std::max(1,int(std::lround(width*scale))),h=std::max(1,int(std::lround(height*scale)));
+    std::vector<UINT> result(size_t(size)*size,0);
+    const auto sample=[&](int x,int y){return image.bgra[size_t(y)*image.w+x];};
+    for(int y=0;y<h;++y)for(int x=0;x<w;++x){
+        const double px=std::clamp(left+(x+.5)*width/w-.5,double(left),double(right-1));
+        const double py=std::clamp(top+(y+.5)*height/h-.5,double(top),double(bottom-1));
+        const int a=int(px),b=int(py),c=std::min(a+1,right-1),d=std::min(b+1,bottom-1);
+        const double fx=px-a,fy=py-b;
+        const UINT p=sample(a,b),q=sample(c,b),r=sample(a,d),s=sample(c,d);
+        UINT value=0;
+        for(int shift=0;shift<32;shift+=8){
+            const double u=((p>>shift)&255)*(1-fx)+((q>>shift)&255)*fx;
+            const double v=((r>>shift)&255)*(1-fx)+((s>>shift)&255)*fx;
+            value|=UINT(std::lround(u*(1-fy)+v*fy))<<shift;
+        }
+        result[size_t(y+(size-h)/2)*size+x+(size-w)/2]=value;
+    }
+    image={size,size,std::move(result)};
+}
 struct Header {uint32_t magic=0x31494354,w=0,h=0,reserved=0;uint64_t checksum=0;};
 template<class Extract> bool load(const std::wstring& source,int size,int& w,int& h,std::vector<UINT>& pixels,Extract extract,std::shared_ptr<const Pixels>* shared=nullptr) {
     if(size<16||size>512||!canRequest(source,size))return false;
@@ -84,6 +113,7 @@ template<class Extract> bool load(const std::wstring& source,int size,int& w,int
     {std::ifstream in(path(k),std::ios::binary);if(in.read((char*)&head,sizeof(head))&&head.magic==0x31494354&&head.w>0&&head.h>0&&head.w<=512&&head.h<=512){p->w=head.w;p->h=head.h;p->bgra.resize(size_t(head.w)*head.h);valid=bool(in.read((char*)p->bgra.data(),p->bgra.size()*4))&&hash(p->bgra.data(),p->bgra.size()*4)==head.checksum;}}
     if(!valid) {
         p->bgra.clear();if(!(customImage(source)?decodeImage(source,size,p->w,p->h,p->bgra):extract(source,size,p->w,p->h,p->bgra))||p->w<=0||p->h<=0||p->w>512||p->h>512||p->bgra.size()!=size_t(p->w)*p->h){failed(source,size);return false;}
+        normalize(*p,size);
         std::error_code ec;const auto dest=path(k);std::filesystem::create_directories(dest.parent_path(),ec);
         // Bound persistent storage too; stale entries are expendable cache, not user assets.
         size_t total=0;std::vector<std::filesystem::directory_entry> files;

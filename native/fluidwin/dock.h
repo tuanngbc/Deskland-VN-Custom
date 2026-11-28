@@ -378,6 +378,44 @@ public:
     // il dock segue il mouse sul bordo in basso degli altri schermi (impostazione; spento resta sul principale). Si
     // imposta prima di inizializza
     bool altriSchermi = true;
+    int displayMode=3; // primary, selected, foreground, legacy edge follow
+    std::wstring displayName;
+    HMONITOR preferredDisplay() const {
+        const HMONITOR primary=MonitorFromPoint({0,0},MONITOR_DEFAULTTOPRIMARY);
+        if(displayMode==0)return primary;
+        if(displayMode==2){
+            HWND foreground=GetForegroundWindow();DWORD pid=0;GetWindowThreadProcessId(foreground,&pid);
+            return foreground&&pid!=GetCurrentProcessId()?MonitorFromWindow(foreground,MONITOR_DEFAULTTOPRIMARY):nullptr;
+        }
+        if(displayMode!=1)return nullptr;
+        struct Match {const std::wstring& name;HMONITOR handle;};
+        Match match{displayName,nullptr};
+        EnumDisplayMonitors(nullptr,nullptr,[](HMONITOR m,HDC,LPRECT,LPARAM arg)->BOOL{
+            auto& match=*reinterpret_cast<Match*>(arg);
+            MONITORINFOEXW info{};info.cbSize=sizeof(info);
+            if(GetMonitorInfoW(m,&info)&&match.name==info.szDevice){match.handle=m;return FALSE;}
+            return TRUE;
+        },reinterpret_cast<LPARAM>(&match));
+        return match.handle?match.handle:primary;
+    }
+    void configureDisplay(int mode,const std::wstring& name){
+        displayMode=mode;displayName=name;
+        altriSchermi=mode==3;
+        if(icone)if(auto target=preferredDisplay();target&&target!=monitor)cambiaSchermo(target);
+    }
+    void startArtwork(int mode,int scale,const std::wstring& path){
+        std::wstring source=mode==2?path:L"";
+        if(mode==1){wchar_t exe[32768]{};const DWORD n=GetModuleFileNameW(nullptr,exe,DWORD(std::size(exe)));
+            if(n&&n<std::size(exe))source.assign(exe,n);}
+        if(startSource==source&&startScale==scale)return;
+        startScale=scale;
+        if(startSource!=source){
+            startSource=std::move(source);
+            for(auto& v:voci)if(v.avvio==AVVIO_LAUNCHER){if(v.icona)v.icona->Release();v.icona=nullptr;v.iconSource.clear();}
+            if(!startSource.empty())chiediIcona(startSource,256);
+        }
+        dirty=true;
+    }
     void impostaAltriSchermi(bool si) {
         if (si == altriSchermi) return;
         altriSchermi = si; bordoAltro = nullptr;
@@ -412,7 +450,8 @@ public:
     bool inizializza(HINSTANCE inst) {
         gIstanza() = this;
         // lo schermo dove stava il dock l'ultima volta (se c'e' ancora), altrimenti il principale
-        HMONITOR mon = altriSchermi ? schermoRicordato() : nullptr;
+        HMONITOR mon=preferredDisplay();
+        if(!mon&&altriSchermi)mon=schermoRicordato();
         if (!mon) mon = MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
         monitor = mon;
         MONITORINFO mi{}; mi.cbSize = sizeof(mi); GetMonitorInfoW(mon, &mi);
@@ -498,7 +537,7 @@ public:
 
     // Main-thread snapshot of the existing shared weather owner; no second fetcher.
     widget::Istantanea wallpaperWeather(double& latitude, double& longitude, bool refresh) {
-        if (refresh) widD.aggiorna();
+        if (refresh) widD.aggiorna(false);
         latitude = widD.lat; longitude = widD.lon;
         return widD.copia();
     }
@@ -533,6 +572,7 @@ public:
     // tolto: resta su quello dov'era se c'e' ancora, altrimenti torna sul principale). Le misure restano quelle dello
     // schermo principale (anche su uno con un'altra scala: cambiarle vorrebbe dire ricreare tutto)
     void cambiaSchermo(HMONITOR verso = nullptr) {
+        if(!verso)verso=preferredDisplay();
         if (!verso) {
             const POINT c = {(schermo.left + schermo.right) / 2, (schermo.top + schermo.bottom) / 2};
             verso = MonitorFromPoint(c, MONITOR_DEFAULTTOPRIMARY);
@@ -1345,7 +1385,7 @@ private:
     ID2D1Bitmap1* caricaIcona(const std::wstring& percorso, int lato = 256) {
         Cronometro cr(this, "caricaIcona");
         int w = 0, h = 0; std::vector<UINT> px;
-        if (!pixelIcona(percorso, lato, w, h, px)) return nullptr;
+        if (!appicons::load(percorso,lato,w,h,px,pixelIcona)) return nullptr;
         ID2D1Bitmap1* out = nullptr;
         D2D1_BITMAP_PROPERTIES1 bp = D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_NONE,
                                                              D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
@@ -1895,6 +1935,9 @@ private:
 
     void controllaBordo() {
         controllaClicFuori();
+        if(displayMode==2&&!spostamento&&!lAperto&&nessunaScheda()&&!trascinando&&!menu::aperti){
+            if(auto target=preferredDisplay();target&&target!=monitor)spostaVerso(target);
+        }
         POINT pt; GetCursorPos(&pt);
         // un altro schermo: col mouse fermo sul suo bordo dal lato del dock (e nessun tasto premuto, per non spostarlo
         // trascinando una finestra) il dock va li'
@@ -2128,6 +2171,8 @@ private:
         aggiornaVetro(vetro, rettVetro, fondoL, fondoT, fondoR, fondoB, int(std::lround(radius)));
         zonaDockL = fondoL; zonaDockR = fondoR;
 
+        if(collapsed>0)dc->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(),nullptr,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            D2D1::IdentityMatrix(),1-collapsed),nullptr);
         // icone (la trascinata per ultima, sopra le altre)
         const bool conTrascinata = trascinando && trascinata >= 0 && trascinata < (int)voci.size();
         for (size_t k = 0; k < voci.size(); k++) {
@@ -2160,10 +2205,18 @@ private:
             D2D1_RECT_F r = {x + (d - dd) / 2, yb - dd - salto, x + (d - dd) / 2 + dd, yb - salto};
             v.rett = {x, yb - d, x + d, yb};
             if (d < 0.5f) continue;
-            const float alfa = (1-collapsed)*(premuto < 1 ? 0.8f : 1.0f) * std::min(1.0f, sc * 1.5f);
+            const float alfa = (premuto < 1 ? 0.8f : 1.0f) * std::min(1.0f, sc * 1.5f);
             dritto((r.left + r.right) / 2, (r.top + r.bottom) / 2);   // (icona e numero dritti anche ai lati e in alto)
-            if (v.icona) dc->DrawBitmap(v.icona, r, alfa, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
-            else if (v.avvio == AVVIO_LAUNCHER) disegnaIconaApp(r, alfa, scuro);
+            if(v.avvio==AVVIO_LAUNCHER){
+                if(!v.icona&&!startSource.empty()){
+                    if(auto pixels=appicons::peek(startSource,256)){v.icona=bitmapDaPixel(pixels->w,pixels->h,pixels->bgra);v.iconSource=startSource;}
+                }
+                const float inset=dd*(1-startScale/100.f)*.5f;
+                const D2D1_RECT_F artwork{r.left+inset,r.top+inset,r.right-inset,r.bottom-inset};
+                if(v.icona)dc->DrawBitmap(v.icona,artwork,alfa,D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
+                else disegnaIconaApp(artwork,alfa,scuro);
+            }
+            else if (v.icona) dc->DrawBitmap(v.icona, r, alfa, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
             else if (v.avvio == AVVIO_CONTROLLO) disegnaIconaControllo(r, alfa, scuro);
             else if (v.avvio == AVVIO_CESTINO) disegnaIconaCestino(r, alfa, scuro, dropSopra == (int)i);
             else {
@@ -2280,6 +2333,7 @@ private:
         if (et != etichettaAlfa) movimento = true;
         etichettaAlfa = et;
         if (etichettaAlfa > 0.01 && !etichettaTesto.empty()) disegnaEtichetta(scuro);
+        if(collapsed>0)dc->PopLayer();
         dc->SetTransform(D2D1::Matrix3x2F::Identity());   // (lo stesso contesto disegna launcher e pannelli: senza il giro del lato)
         controllaGpu(dc->EndDraw());
         inMovimento = movimento;
@@ -3005,7 +3059,7 @@ private:
     IDWriteTextFormat* fmtNotizia = nullptr;
     enum Azione { A_APP, A_TUTTE, A_RETE, A_BLUETOOTH, A_VOLUME, A_MUTO, A_AUDIO, A_SCHERMO, A_ENERGIA, A_IMPOSTAZIONI,
                   A_NOTIFICA, A_RIMUOVI, A_CANCELLA, A_IMPOST_NOTIFICHE, A_TEMA, A_FLUIDWIN, A_LUMINOSITA,
-                  A_WIDGET, A_SFONDO, A_NOTIZIA, A_NOTIFICHE, A_INDIETRO, A_SVEGLIO, A_SILENZIO, A_TIMER, A_MICROFONO,
+                  A_SFONDO, A_NOTIZIA, A_NOTIFICHE, A_INDIETRO, A_SVEGLIO, A_SILENZIO, A_TIMER, A_MICROFONO,
                   A_MIXER_VOL, A_MIXER_MUTO, A_MIXER_PRED, A_ALTRE_USCITE,
                   A_APPUNTI, A_APPUNTI_VOCE, A_APPUNTI_TOGLI, A_APPUNTI_SVUOTA,
                   A_W_CITTA, A_W_LUOGO, A_W_UNITA, A_W_ANNULLA, A_W_FONTE,
@@ -3584,6 +3638,9 @@ private:
     float lCellaH() const;
     D2D1_RECT_F lRettBarra() const;
     D2D1_RECT_F lCursoreBarra() const;
+    std::wstring startSource;
+    int startScale=100;
+    int lPinned=0,lPinDrag=-1;
     float lGrigliaTop() const;
     float lGrigliaBottom() const;
     double lScrollMax() const;

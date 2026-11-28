@@ -95,6 +95,11 @@ inline auto Motore::raccogliIcone() -> bool {
         ID2D1Bitmap1* b = ip.ok ? bitmapDaPixel(ip.w, ip.h, ip.px) : nullptr;
         bool presa = false;
         if (ip.lato == 256) {          // dock
+            if(b&&!startSource.empty()&&ip.percorso==startSource){
+                for(auto& v:voci)if(v.avvio==AVVIO_LAUNCHER&&!v.icona){
+                    v.icona=b;v.iconSource=startSource;b->AddRef();dirty=true;break;
+                }
+            }
             for (auto& v : voci) if (!v.icona && v.avvio != AVVIO_LAUNCHER && v.avvio != AVVIO_CONTROLLO && sorgenteIcona(v) == ip.percorso) { v.icona = b;v.iconSource=ip.percorso; presa = true; dirty = true; break; }
             // (si potra' richiedere: l'app puo' chiudersi e riaprirsi; se e' fallita si riprova al prossimo aggiornamento)
             iconeChieste.erase(chiaveIcona(ip.percorso, ip.lato));
@@ -262,6 +267,11 @@ inline auto Motore::filtra() -> void {
         else if (q.size() >= 3 && sottosequenza(n, q)) livelli[2].push_back(i);
     }
     for (auto& l : livelli) filtrate.insert(filtrate.end(), l.begin(), l.end());
+    lPinned=0;
+    if(q.empty()){
+        const auto boundary=std::stable_partition(filtrate.begin(),filtrate.end(),[&](int i){return appcatalog::get(tutteApp[i].avvio).favorite;});
+        lPinned=int(boundary-filtrate.begin());
+    }
     lSel = 0; lScrollObj = 0; lDirty = true; lSelTastiera = false;
     // file e cartelle: testo nuovo -> ricerca 0,2 s dopo l'ultimo tasto (una per parola, non per lettera); testo vuoto
     // -> via i risultati e scartata una ricerca in corso. (filtra si chiama anche quando arriva l'elenco nuovo delle
@@ -277,7 +287,7 @@ inline auto Motore::filtra() -> void {
 // sezione). L'indice LF_ESPLORA della riga "Cerca in Esplora file" e' questo stesso numero
 inline auto Motore::lFileRighe() const -> int {
     if (query.empty()) return -1;
-    const float spazio = LH - 14 * dpi - lGrigliaTop() - lCellaH() - (LF_TESTA + LF_ESPLORA) * dpi;
+    const float spazio = LH - 76 * dpi - lGrigliaTop() - lCellaH() - (LF_TESTA + LF_ESPLORA) * dpi;
     const int entrano = std::max(0, (int)std::floor(spazio / (LF_RIGA * dpi)));
     return std::min({(int)lFile.size(), LF_MAX, entrano});
 }
@@ -292,7 +302,7 @@ inline auto Motore::lFileAlto() const -> float {
 inline auto Motore::lFileIn(float x, float y) const -> int {
     const int r = lFileRighe();
     if (r < 0 || x < 16 * dpi || x > LW - 16 * dpi) return -1;
-    const float top = LH - 14 * dpi - (float)lFileH, fondo = LH - 14 * dpi;
+    const float top = LH - 76 * dpi - (float)lFileH, fondo = LH - 76 * dpi;
     if (y < top || y >= fondo) return -1;
     const float y0 = top + LF_TESTA * dpi;
     if (y < y0) return -1;
@@ -366,7 +376,7 @@ inline auto Motore::disegnaFileLauncher(bool scuro, D2D1_COLOR_F ink) -> bool {
     bool muove = false;
     const int r = lFileRighe();
     if (lFileH < 1) return false;
-    const float top = LH - 14 * dpi - (float)lFileH, fondo = LH - 14 * dpi;
+    const float top = LH - 76 * dpi - (float)lFileH, fondo = LH - 76 * dpi;
     const D2D1_COLOR_F tenue = {ink.r, ink.g, ink.b, ink.a * 0.6f};
     const D2D1_COLOR_F blu = scuro ? D2D1::ColorF(0.40f, 0.68f, 1.0f, 1) : D2D1::ColorF(0.0f, 0.42f, 0.95f, 1);
     dc->PushAxisAlignedClip({0, top, LW, fondo}, D2D1_ANTIALIAS_MODE_ALIASED);
@@ -441,18 +451,21 @@ inline auto Motore::lCursoreBarra() const -> D2D1_RECT_F {
     return {LW - 18 * dpi, y, LW, y + h};
 }
 
-inline auto Motore::lGrigliaTop() const -> float { return 84 * dpi; }
+inline auto Motore::lGrigliaTop() const -> float { return 14 * dpi; }
 
 // (la sezione dei file, quando c'e', sta sotto e la griglia si accorcia della sua altezza animata)
-inline auto Motore::lGrigliaBottom() const -> float { return LH - 14 * dpi - (float)lFileH; }
+inline auto Motore::lGrigliaBottom() const -> float { return LH - 76 * dpi - (float)lFileH; }
 
 inline auto Motore::lScrollMax() const -> double {
-    const int righe = ((int)filtrate.size() + 5) / 6;
-    return std::max(0.0, (double)(righe * lCellaH() - (lGrigliaBottom() - lGrigliaTop())));
+    const int righe=(int(filtrate.size())-lPinned+5)/6+(lPinned+5)/6;
+    return std::max(0.0, (double)(righe*lCellaH()+(query.empty()?(lPinned?60:92)*dpi:0)-(lGrigliaBottom()-lGrigliaTop())));
 }
 
 inline auto Motore::lCella(int i) const -> D2D1_RECT_F {
-    const float x = 24 * dpi + (i % 6) * lCellaW(), y = lGrigliaTop() + (i / 6) * lCellaH() - (float)lScroll;
+    const bool pinned=i<lPinned;
+    const int index=pinned?i:i-lPinned;
+    const float offset=query.empty()?(pinned?30*dpi:(lPinned?60:92)*dpi+((lPinned+5)/6)*lCellaH()):0;
+    const float x=24*dpi+(index%6)*lCellaW(),y=lGrigliaTop()+offset+(index/6)*lCellaH()-float(lScroll);
     return {x, y, x + lCellaW(), y + lCellaH()};
 }
 
@@ -583,7 +596,7 @@ inline auto Motore::avviaApp(int i) -> void {
     ShellExecuteW(nullptr, L"open", a.avvio.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
-inline auto Motore::rettEnergia() const -> D2D1_RECT_F { return {LW - 64 * dpi, 22 * dpi, LW - 24 * dpi, 62 * dpi}; }
+inline auto Motore::rettEnergia() const -> D2D1_RECT_F { return {LW-64*dpi,LH-62*dpi,LW-24*dpi,LH-22*dpi}; }
 
 // Menu di Windows per l'app (lo stesso dello Start), con in cima "Aggiungi al dock"
 inline auto Motore::menuApp(int i, POINT pt, HWND owner) -> void {
@@ -830,7 +843,7 @@ inline auto Motore::renderLauncher() -> bool {
         simboloEnergia(cx, cy);
     }
     // campo di ricerca
-    const D2D1_RECT_F rc = {24 * dpi, 22 * dpi, rettEnergia().left - 10 * dpi, 62 * dpi};
+    const D2D1_RECT_F rc={24*dpi,LH-62*dpi,rettEnergia().left-10*dpi,LH-22*dpi};
     pennello->SetColor(scuro ? D2D1::ColorF(1, 1, 1, 0.10f) : D2D1::ColorF(1, 1, 1, 0.6f));
     dc->FillRoundedRectangle({rc, 10 * dpi, 10 * dpi}, pennello);
     pennello->SetColor({ink.r, ink.g, ink.b, 0.55f});
@@ -850,6 +863,15 @@ inline auto Motore::renderLauncher() -> bool {
 
     // griglia delle app
     dc->PushAxisAlignedClip({0, lGrigliaTop() - 4 * dpi, LW, lGrigliaBottom()}, D2D1_ANTIALIAS_MODE_ALIASED);
+    if(query.empty()){
+        const float section=lGrigliaTop()-float(lScroll);
+        const float all=section+(lPinned?30:62)*dpi+((lPinned+5)/6)*lCellaH();
+        pennello->SetColor(ink);
+        scrivi(testi::t(L"Preferiti",L"Pinned apps"),fmtTitolo,{28*dpi,section,LW-24*dpi,section+28*dpi});
+        if(!lPinned)scrivi(testi::t(L"Aggiungi app dai loro menu",L"Use the app menu to pin an app"),
+            fmtSotto,{28*dpi,section+30*dpi,LW-24*dpi,section+58*dpi});
+        scrivi(testi::t(L"Tutte le app",L"All apps"),fmtTitolo,{28*dpi,all,LW-24*dpi,all+28*dpi});
+    }
     const float lato = 56 * dpi;
     for (int i = 0; i < (int)filtrate.size(); i++) {
         const auto r = lCella(i);
@@ -893,6 +915,8 @@ inline LRESULT CALLBACK Motore::procLauncher(HWND h, UINT m, WPARAM w, LPARAM l)
     const float x = (float)GET_X_LPARAM(l), y = (float)GET_Y_LPARAM(l);
     switch (m) {
         case WM_LBUTTONDOWN: {
+            const int selected=d->lCellaIn(x,y);
+            if(selected>=0&&selected<d->lPinned){d->lPinDrag=selected;SetCapture(h);return 0;}
             // barra di scorrimento: preso il cursore lo si trascina; un clic sul binario salta di una pagina
             const D2D1_RECT_F b = d->lRettBarra();
             if (d->lScrollMax() > 0 && x >= b.left && x < b.right && y >= b.top && y < b.bottom) {
@@ -936,7 +960,22 @@ inline LRESULT CALLBACK Motore::procLauncher(HWND h, UINT m, WPARAM w, LPARAM l)
         case WM_TIMER:
             if (w == TIMER_FILE_L) { KillTimer(h, TIMER_FILE_L); d->cercaFileLauncher(); return 0; }
             break;
+        case WM_CAPTURECHANGED:d->lPinDrag=-1;d->lTrascinoBarra=false;break;
         case WM_LBUTTONUP: {
+            if(d->lPinDrag>=0){
+                const int from=d->lPinDrag,to=d->lCellaIn(x,y);
+                d->lPinDrag=-1;ReleaseCapture();
+                if(from!=to){
+                    if(to>=0&&to<d->lPinned&&from<d->lPinned){
+                        std::vector<int> order(d->filtrate.begin(),d->filtrate.begin()+d->lPinned);
+                        int moved=order[from];order.erase(order.begin()+from);order.insert(order.begin()+to,moved);
+                        for(size_t i=0;i<order.size();++i){const auto& item=d->tutteApp[order[i]];
+                            auto meta=appcatalog::get(item.avvio);meta.order=int(i)+1;appcatalog::save(item.avvio,meta);}
+                        d->catalogChanged();
+                    }
+                    return 0;
+                }
+            }
             if (d->lTrascinoBarra) { d->lTrascinoBarra = false; ReleaseCapture(); d->lDirty = true; return 0; }
             { const D2D1_RECT_F b = d->lRettBarra(); if (d->lScrollMax() > 0 && x >= b.left && x < b.right && y >= b.top && y < b.bottom) return 0; }
             if (y > d->LH) { d->chiudiLauncher(); return 0; }   // clic sotto (durante l'animazione): chiude

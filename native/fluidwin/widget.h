@@ -140,8 +140,8 @@ public:
     // Chiede dati nuovi se gli ultimi hanno piu' di 10 minuti (o non ci sono), oppure subito se da allora sono
     // cambiati citta' o fonte (anche la lingua, con la fonte automatica). Un solo thread alla volta: se ne sta gia'
     // lavorando uno, prende la richiesta nuova appena finisce e scarta il risultato vecchio (generazione)
-    void aggiorna() {
-        const Richiesta r{lat, lon, fonteEffettiva()};
+    void aggiorna(bool includeNews=true) {
+        const Richiesta r{lat, lon, includeNews?fonteEffettiva():F_NESSUNA};
         const ULONGLONG ora = GetTickCount64(), u = ultimo.load();
         const bool cambiata = !(r == chiesta);
         if (!cambiata && u && ora - u < 10 * 60 * 1000) return;

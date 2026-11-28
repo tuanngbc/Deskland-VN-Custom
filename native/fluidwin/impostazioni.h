@@ -27,6 +27,11 @@ struct Valori {
     stage::Settings stage;
     std::array<desktopclock::Settings,2> clocks;
     int dockVisibility=1,dockBarLength=64,dockBarThickness=4,dockBarOpacity=80,dockBarOpenDelay=120,dockBarCloseDelay=650;
+    int captureFps=30;
+    bool captureAudio=true;
+    std::wstring captureFolder;
+    int startMode=0,startScale=100;
+    std::wstring startIcon;
     int dockBarInset=3,dockBarAlignment=1,dockBarOffset=50,dockBarRadius=4,dockCornerRadius=-1,dockCustomRadius=12;
     bool dockBarFullscreen=false;
     bool spotlightEnabled=true,spotlightAltSpace=true;
@@ -58,6 +63,8 @@ struct Valori {
     int dockDistanza = 6;         // distanza fra le icone del dock, px a 100% (DISTANZA_MIN..DISTANZA_MAX)
     DWORD dockColore = 0;         // colore del fondo del dock: 0 automatico (tema), altrimenti 0x01RRGGBB
     bool dockSpazio = false;      // le finestre ingrandite si fermano sopra il dock (spazio riservato, come la barra di Windows)
+    int dockDisplayMode=3;
+    std::wstring dockDisplayName;
     bool dockSchermi = true;      // il dock segue il mouse sul bordo in basso degli altri schermi (spento: resta sul principale)
     bool dockAnteprime = true;    // anteprime delle finestre col mouse fermo su un'icona del dock (issue #24)
     bool affianca = true;         // affiancamento di FluidWin al posto dello Snap di Windows (affianca.h)
@@ -189,6 +196,11 @@ inline void carica() {
     v.dockBarAlignment=std::clamp(int(leggiDword(L"DockBarAlignment",1)),0,3);
     v.dockBarOffset=std::clamp(int(leggiDword(L"DockBarOffset",50)),0,100);
     v.dockBarRadius=std::clamp(int(leggiDword(L"DockBarRadius",4)),0,16);
+    v.captureFps=leggiDword(L"CaptureFps",30)==60?60:30;
+    v.captureAudio=leggiDword(L"CaptureAudio",1)!=0;v.captureFolder=leggiTesto(L"CaptureFolder");
+    v.startMode=std::clamp(int(leggiDword(L"StartArtworkMode",0)),0,2);
+    v.startScale=std::clamp(int(leggiDword(L"StartArtworkScale",100)),50,100);
+    v.startIcon=leggiTesto(L"StartArtworkPath");
     v.dockCustomRadius=std::clamp(int(leggiDword(L"DockCustomRadius",12)),0,48);
     v.dockCornerRadius=std::clamp(int(leggiDword(L"DockCornerRadius",DWORD(-1))),-1,49);
     v.dockBarFullscreen=leggiDword(L"DockBarFullscreen",0);
@@ -228,6 +240,8 @@ inline void carica() {
     v.dockColore = leggiDword(L"DockColore", 0) & (COLORE_SCELTO | 0xFFFFFF);
     v.dockSpazio = leggiDword(L"DockSpazio", 0);
     v.dockSchermi = leggiDword(L"DockAltriSchermi", 1);
+    v.dockDisplayMode=std::clamp(int(leggiDword(L"DockDisplayMode",v.dockSchermi?3:0)),0,3);
+    v.dockDisplayName=leggiTesto(L"DockDisplayName");
     v.dockAnteprime = leggiDword(L"DockAnteprime", 1);
     v.affianca = leggiDword(L"Affiancamento", 1);
     { const DWORD l = leggiDword(L"Lingua", (DWORD)testi::predefinita()); v.lingua = l < (DWORD)testi::N_LINGUE ? (int)l : testi::INGLESE; }
@@ -244,6 +258,8 @@ inline void salva() {
     scriviDword(L"DockVisibility",v.dockVisibility);scriviDword(L"DockBarLength",v.dockBarLength);scriviDword(L"DockBarThickness",v.dockBarThickness);
     scriviDword(L"DockBarInset",v.dockBarInset);scriviDword(L"DockBarAlignment",v.dockBarAlignment);scriviDword(L"DockBarOffset",v.dockBarOffset);
     scriviDword(L"DockCustomRadius",v.dockCustomRadius);
+    scriviDword(L"CaptureFps",v.captureFps);scriviDword(L"CaptureAudio",v.captureAudio);scriviTesto(L"CaptureFolder",v.captureFolder);
+    scriviDword(L"StartArtworkMode",v.startMode);scriviDword(L"StartArtworkScale",v.startScale);scriviTesto(L"StartArtworkPath",v.startIcon);
     scriviDword(L"DockBarRadius",v.dockBarRadius);scriviDword(L"DockCornerRadius",DWORD(v.dockCornerRadius));
     scriviDword(L"DockBarOpacity",v.dockBarOpacity);scriviDword(L"DockBarOpenDelay",v.dockBarOpenDelay);scriviDword(L"DockBarCloseDelay",v.dockBarCloseDelay);scriviDword(L"DockBarFullscreen",v.dockBarFullscreen);
     scriviDword(L"SpotlightHotkeyMods",v.spotlightShortcut.mods);scriviDword(L"SpotlightHotkeyKey",v.spotlightShortcut.key);
@@ -271,6 +287,7 @@ inline void salva() {
     scriviDword(L"DockAutoNascosto", v.dockAuto); scriviDword(L"DockLato", (DWORD)v.dockLato); scriviDword(L"DockOpacita", (DWORD)v.dockOpacita);
     scriviDword(L"DockIcone", (DWORD)v.dockIcone); scriviDword(L"DockColore", v.dockColore);
     scriviDword(L"DockDistanza", (DWORD)v.dockDistanza);
+    scriviDword(L"DockDisplayMode",v.dockDisplayMode);scriviTesto(L"DockDisplayName",v.dockDisplayName);
     scriviDword(L"DockSpazio", v.dockSpazio); scriviDword(L"DockAltriSchermi", v.dockSchermi); scriviDword(L"DockAnteprime", v.dockAnteprime); scriviDword(L"Affiancamento", v.affianca);
     scriviTesto(L"Cursore", v.cursore);
 }
@@ -656,9 +673,6 @@ private:
          L"Spento: resta su anche sopra le finestre ingrandite", L"Off: it stays up over maximized windows too", &Valori::dockAuto, S_DOCK},
         {L"Finestre ingrandite sopra il dock", L"Maximized windows above the dock",
          L"Come la barra di Windows: si fermano sopra. Spento: fino in fondo", L"Like the Windows taskbar: they stop above. Off: full screen", &Valori::dockSpazio, S_DOCK},
-        {L"Segue il mouse sugli altri schermi", L"Follows the mouse to other screens",
-         L"Mouse in basso su un altro schermo. Spento: solo sul principale",
-         L"Mouse on the bottom edge of another screen. Off: main only", &Valori::dockSchermi, S_DOCK},
         {L"Anteprime delle finestre", L"Window previews",
          L"Mouse fermo su un'icona: le sue finestre dal vivo", L"Hover an icon: its windows, live", &Valori::dockAnteprime, S_DOCK},
         {L"Finestre di gelatina", L"Jelly windows",
@@ -1008,6 +1022,53 @@ private:
             if(cambiato)cambiato();
             disegna();
             return;
+        }
+        if(id>=6260&&id<=6262){
+            auto& opts=valori();
+            if(id==6260)opts.captureFps=opts.captureFps==30?60:30;
+            if(id==6261)opts.captureAudio=!opts.captureAudio;
+            if(id==6262){
+                auto name=opts.captureFolder;
+                if(!appcatalog::prompt(v.fin,clockText(L"Thư mục lưu ảnh và video (trống: dùng thư mục TEST)",
+                    L"Capture folder (blank uses the TEST folder)"),name))return;
+                std::error_code ec;const std::filesystem::path folder(name);
+                if(!name.empty()&&(!folder.is_absolute()||!std::filesystem::is_directory(folder,ec)||name.find(L'"')!=std::wstring::npos))return;
+                opts.captureFolder=std::move(name);
+            }
+            salva();disegna();return;
+        }
+        if(id>=6250&&id<=6254){
+            auto& opts=valori();
+            if(id<6254)opts.dockDisplayMode=id-6250;
+            else {
+                std::vector<std::wstring> displays;
+                EnumDisplayMonitors(nullptr,nullptr,[](HMONITOR m,HDC,LPRECT,LPARAM out)->BOOL{
+                    MONITORINFOEXW info{};info.cbSize=sizeof(info);
+                    if(GetMonitorInfoW(m,&info))reinterpret_cast<std::vector<std::wstring>*>(out)->push_back(info.szDevice);
+                    return TRUE;
+                },reinterpret_cast<LPARAM>(&displays));
+                if(displays.empty())return;
+                auto i=std::find(displays.begin(),displays.end(),opts.dockDisplayName);
+                opts.dockDisplayName=i==displays.end()||++i==displays.end()?displays.front():*i;
+                opts.dockDisplayMode=1;
+            }
+            opts.dockSchermi=opts.dockDisplayMode==3;
+            salva();if(cambiato)cambiato();disegna();return;
+        }
+        if(id>=6240&&id<=6245){
+            auto& opts=valori();
+            if(id==6240||id==6241)opts.startMode=id-6240;
+            else if(id==6242){
+                const auto file=appcatalog::choose(v.fin,true);
+                if(file.empty()||!appicons::customImage(file))return;
+                std::error_code ec;auto dir=std::filesystem::path(tlauncher::profile())/L"assets"/L"start-button";
+                std::filesystem::create_directories(dir,ec);if(ec)return;
+                auto path=dir/(std::to_wstring(GetTickCount64())+std::filesystem::path(file).extension().wstring());
+                if(!std::filesystem::copy_file(file,path,ec)||ec)return;
+                opts.startIcon=path.wstring();opts.startMode=2;
+            }else if(id==6243){opts.startMode=0;opts.startScale=100;opts.startIcon.clear();}
+            else opts.startScale=std::clamp(opts.startScale+(id==6244?-5:5),50,100);
+            salva();if(cambiato)cambiato();disegna();return;
         }
         if(id>=6200&&id<=6202){valori().dockVisibility=id-6200;valori().dockAuto=id!=6200;salva();if(cambiato)cambiato();disegna();return;}
         if(id>=6204&&id<=6207){valori().dockBarAlignment=id-6204;salva();if(cambiato)cambiato();disegna();return;}
@@ -1538,6 +1599,18 @@ private:
                 }
                 y+=44*d;
             };
+            const std::array display{clockText(L"Chính",L"Primary"),clockText(L"Đã chọn",L"Selected"),
+                clockText(L"Đang dùng",L"Active"),clockText(L"Theo mép",L"Edge follow")};
+            choices(6250,clockText(L"Màn hình Dock",L"Dock display"),display,valori().dockDisplayMode);
+            if(valori().dockDisplayMode==1){
+                const auto name=valori().dockDisplayName.empty()?std::wstring(clockText(L"Chọn màn hình",L"Choose display")):valori().dockDisplayName;
+                choices(6254,clockText(L"Màn hình đã chọn",L"Selected display"),std::array{name.c_str()},-1);
+            }
+            const std::array start{L"Windows",L"TLauncher",clockText(L"Chọn ảnh",L"Choose image"),clockText(L"Đặt lại",L"Reset")};
+            choices(6240,clockText(L"Biểu tượng nút Start",L"Start button artwork"),start,valori().startMode);
+            const std::array size{L"−",L"+"};
+            const auto scale=std::wstring(clockText(L"Kích thước nút Start: ",L"Start button size: "))+std::to_wstring(valori().startScale)+L"%";
+            choices(6244,scale.c_str(),size,-1);
             const std::array position{clockText(L"Đầu",L"Start"),clockText(L"Giữa",L"Center"),clockText(L"Cuối",L"End"),clockText(L"Tùy chỉnh",L"Custom")};
             choices(6204,clockText(L"Vị trí thanh thu nhỏ",L"Collapsed bar alignment"),position,valori().dockBarAlignment);
             const std::array corners{clockText(L"Hệ thống",L"System"),clockText(L"Vuông",L"Square"),clockText(L"Bo ít",L"Small"),clockText(L"Bo vừa",L"Medium"),clockText(L"Bo nhiều",L"Large"),clockText(L"Tùy chỉnh",L"Custom")};
@@ -1658,6 +1731,18 @@ private:
         if (sezione == S_TASTIERA) {
             riga(testi::t(L"Ctrl+Win+T", L"Ctrl+Win+T"), testi::t(L"Tiene la finestra attiva sempre in primo piano (di nuovo per toglierlo)", L"Keeps the active window always on top (again to undo)"));
             riga(testi::t(L"Maiusc+clic destro", L"Shift+right-click"), testi::t(L"Il menu di Windows, anche con il menu di TLauncher acceso", L"The Windows menu, even with the TLauncher menu on"));
+        }
+        if(sezione==S_TASTIERA){
+            const auto& opts=valori();
+            auto captureOption=[&](int id,const std::wstring& text){
+                const D2D1_RECT_F r{L,y,R,y+44*d};riquadro(r,sopra==id);aggiungiZona(r,id);
+                v.testo(text,fVoce,{L+16*d,y,R-16*d,y+44*d},inkS);y+=50*d;
+            };
+            riga(L"Ctrl+Shift+S",clockText(L"Chụp và sửa ảnh",L"Capture and edit screenshot"));
+            riga(L"Ctrl+Shift+R / P",clockText(L"Quay/dừng và tạm dừng/tiếp tục",L"Record/stop and pause/resume"));
+            captureOption(6260,std::wstring(clockText(L"Tốc độ quay: ",L"Recording rate: "))+std::to_wstring(opts.captureFps)+L" FPS");
+            captureOption(6261,opts.captureAudio?clockText(L"Âm thanh hệ thống: bật",L"System audio: on"):clockText(L"Âm thanh hệ thống: tắt",L"System audio: off"));
+            captureOption(6262,opts.captureFolder.empty()?clockText(L"Đổi thư mục lưu ảnh và video",L"Set screenshot and recording folder"):opts.captureFolder.c_str());
         }
         if (sezione == S_CURSORE) disegnaCursori(L, R, y, e, ink, tenue, blu, rr, H);
         if (sezione == S_WALLPAPER) wallpaperPage.draw(v, L, R, y, fVoce, fSotto, fCentro, inkS, tenueS, blu, (float)e, aggiungiZona, sopra);

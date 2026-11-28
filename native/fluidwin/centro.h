@@ -1367,10 +1367,10 @@ inline auto Motore::disegnaControllo(bool scuro, D2D1_COLOR_F ink) -> void {
 
     // scorciatoie tonde
     y += 36 * dpi + (cp ? 8 : 16) * dpi;
-    const wchar_t* nomi[4] = {testi::t(L"Widget", L"Widget"), testi::t(L"In background", L"In background"), testi::t(L"Notifiche", L"Notifications"), testi::t(L"Appunti", L"Clipboard")};
-    const Azione az[4] = {A_WIDGET, A_SFONDO, A_NOTIFICHE, A_APPUNTI};
-    for (int i = 0; i < 4; i++) {
-        const float rc = (cp ? 22 : 26) * dpi, cx = 16 * dpi + larg * (i + 0.5f) / 4, cy = y + rc;
+    const wchar_t* nomi[3] = {testi::t(L"In background", L"In background"), testi::t(L"Notifiche", L"Notifications"), testi::t(L"Appunti", L"Clipboard")};
+    const Azione az[3] = {A_SFONDO, A_NOTIFICHE, A_APPUNTI};
+    for (int i = 0; i < 3; i++) {
+        const float rc = (cp ? 22 : 26) * dpi, cx = 16 * dpi + larg * (i + 0.5f) / 3, cy = y + rc;
         const D2D1_RECT_F r = {cx - 36 * dpi, y - 4 * dpi, cx + 36 * dpi, y + 76 * dpi};
         const int e = aggiungi(r, az[i], 0);
         const double h = evidenzia(e, {0, 0, 0, 0}, scuro, 0);   // solo il valore: l'evidenziazione e' il cerchio
@@ -1378,7 +1378,7 @@ inline auto Motore::disegnaControllo(bool scuro, D2D1_COLOR_F ink) -> void {
         pennello->SetColor(scuro ? D2D1::ColorF(1, 1, 1, 0.12f + 0.06f * (float)h) : D2D1::ColorF(0, 0, 0, 0.06f + 0.05f * (float)h));
         dc->FillEllipse({{cx, cy}, rc * s, rc * s}, pennello);
         pennello->SetColor(ink);
-        if (i == 0) simboloWidget(cx, cy); else if (i == 1) simboloFreccia(cx, cy); else if (i == 2) simboloCampana(cx, cy); else simboloAppunti(cx, cy);
+        if (i == 0) simboloFreccia(cx, cy); else if (i == 1) simboloCampana(cx, cy); else simboloAppunti(cx, cy);
         pennello->SetColor({ink.r, ink.g, ink.b, ink.a * 0.75f});
         scrivi(nomi[i], fmtNome, {cx - 40 * dpi, cy + rc + 4 * dpi, cx + 40 * dpi, cy + rc + 22 * dpi});
     }
@@ -2262,7 +2262,7 @@ inline auto Motore::eseguiPannello(const Elemento& e) -> void {
             break;
         }
         // le viste interne si aprono dentro la stessa finestra, dal pulsante toccato
-        case A_WIDGET:       cambiaVista(P_WIDGET, {(e.r.left + e.r.right) / 2, e.r.top + 30 * dpi}); break;
+
         case A_SFONDO:       cambiaVista(P_SFONDO, {(e.r.left + e.r.right) / 2, e.r.top + 30 * dpi}); break;
         case A_NOTIFICHE:    cambiaVista(P_NOTIFICHE, {(e.r.left + e.r.right) / 2, e.r.top + 30 * dpi}); break;
         case A_INDIETRO:     tornaIndietro(); break;
