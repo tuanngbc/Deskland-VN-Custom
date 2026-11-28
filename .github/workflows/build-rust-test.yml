@@ -207,12 +207,25 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Reuse exact hosted wallpaper verification
+        id: wallpaper-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            wallpaper-evidence/wallpaper
+            wallpaper-evidence/*.txt
+            wallpaper-evidence/*.log
+            wallpaper-evidence/*.png
+            wallpaper-evidence/verification-origin.json
+          key: native-wallpaper-verified-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/wallpaper/**','native/fluidwin/pool.h','native/fluidwin/tlauncher_identity.h','tests/wallpaper-contract.cpp','tests/wallpaper-renderer.cpp','tools/stage-wallpaper-assets.ps1','assets/shaders/**','prototype/*.frag','prototype/assets/*.png','.github/workflows/build-rust-test.yml') }}
       - uses: msys2/setup-msys2@v2
+        if: steps.wallpaper-cache.outputs.cache-hit != 'true'
         with:
           msystem: UCRT64
           update: false
           install: mingw-w64-ucrt-x86_64-gcc
       - name: Compile native wallpaper ownership and topology contracts
+        if: steps.wallpaper-cache.outputs.cache-hit != 'true'
         shell: msys2 {0}
         run: |
           set -euo pipefail
@@ -220,11 +233,13 @@ jobs:
           g++ -O2 -std=gnu++20 -Wall -DUNICODE -D_UNICODE -DNOMINMAX tests/wallpaper-contract.cpp -o wallpaper-evidence/wallpaper-contract.exe -lopengl32 -lgdi32 -luser32 -lole32 -loleaut32 -luuid -static
           g++ -O2 -std=gnu++20 -Wall -DUNICODE -D_UNICODE -DNOMINMAX tests/wallpaper-renderer.cpp -o wallpaper-evidence/wallpaper-renderer.exe -lopengl32 -lgdi32 -luser32 -lole32 -loleaut32 -luuid -lwindowscodecs -ldwmapi -ld3d11 -ldxgi -ldcomp -static
       - name: Verify native configuration, physical topology and solar contracts
+        if: steps.wallpaper-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           & ./wallpaper-evidence/wallpaper-contract.exe 2>&1 | Tee-Object wallpaper-evidence/contracts.txt
           if ($LASTEXITCODE -ne 0) { throw 'Wallpaper contracts failed' }
       - name: Stage only audited graphics assets for hosted visual verification
+        if: steps.wallpaper-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: ./tools/stage-wallpaper-assets.ps1 -Destination wallpaper-evidence
       - name: Cache pinned software GL solely for hosted verification
@@ -244,6 +259,8 @@ jobs:
           & 7z x -y $archive ('-o'+(Join-Path $env:RUNNER_TEMP 'wallpaper-mesa'))
           if ($LASTEXITCODE -ne 0) {throw 'Hosted Mesa extraction failed'}
       - name: Render all native scenes and verify panorama pixels
+        if: steps.wallpaper-cache.outputs.cache-hit != 'true'
+        id: wallpaper-render
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
@@ -253,6 +270,30 @@ jobs:
           & ./wallpaper-evidence/wallpaper-renderer.exe wallpaper-evidence 2>&1 | Tee-Object wallpaper-evidence/renderer.log
           if ($LASTEXITCODE -ne 0) {throw 'Native scene/panorama verification failed'}
           ./tools/stage-wallpaper-assets.ps1 -Destination wallpaper-evidence
+      - name: Record exact renderer verification origin
+        if: steps.wallpaper-cache.outputs.cache-hit != 'true' && steps.wallpaper-render.outcome == 'success'
+        shell: pwsh
+        run: |
+          @{passed=$true;commit='${{ github.sha }}';run='${{ github.run_id }}';key='${{ steps.wallpaper-cache.outputs.cache-primary-key }}';mesaSha256='64e84cf13d67dd354640bf443ed0445e6a83afd06a5729f0750b3744d633b3f1'} | ConvertTo-Json | Set-Content wallpaper-evidence/verification-origin.json -Encoding utf8
+      - name: Retain exact successful renderer evidence
+        if: steps.wallpaper-cache.outputs.cache-hit != 'true' && steps.wallpaper-render.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            wallpaper-evidence/wallpaper
+            wallpaper-evidence/*.txt
+            wallpaper-evidence/*.log
+            wallpaper-evidence/*.png
+            wallpaper-evidence/verification-origin.json
+          key: ${{ steps.wallpaper-cache.outputs.cache-primary-key }}
+      - name: Identify reused renderer evidence
+        if: steps.wallpaper-cache.outputs.cache-hit == 'true'
+        shell: pwsh
+        run: |
+          $origin=Get-Content wallpaper-evidence/verification-origin.json -Raw | ConvertFrom-Json
+          if(!$origin.passed -or $origin.key -cne '${{ steps.wallpaper-cache.outputs.cache-primary-key }}'){throw 'Renderer verification cache identity mismatch'}
+          @{currentCommit='${{ github.sha }}';currentRun='${{ github.run_id }}';origin=$origin} | ConvertTo-Json -Depth 4 | Set-Content wallpaper-evidence/verification-reused.json -Encoding utf8
+          Write-Host "Reusing unchanged renderer inputs verified by run $($origin.run), commit $($origin.commit). Exact candidate native integration still runs."
       - uses: actions/upload-artifact@v4
         with:
           name: native-wallpaper-assets
@@ -266,6 +307,7 @@ jobs:
             wallpaper-evidence/*.txt
             wallpaper-evidence/*.log
             wallpaper-evidence/*.png
+            wallpaper-evidence/verification-*.json
           retention-days: 30
   build-rust:
     if: github.ref != 'refs/heads/codex/fluidwin-native-base-v1.0.3' && github.ref != 'refs/heads/codex/native-wallpaper-reengineering-v1.0.3' && github.ref != 'refs/heads/codex/native-stage-spotlight-reengineering-v1.0.3'

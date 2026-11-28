@@ -20,7 +20,7 @@ Profile TEST bền vững được giữ riêng tại `E:\TLauncher-UAT\profiles
 
 ## Đo tài nguyên khi owner muốn
 
-Sau khi tự mở TEST, mở **NATIVE-RESOURCE.cmd** cạnh EXE. Công cụ hỏi tên tình huống, lấy mẫu60 giây sử dụng bình thường và lưu JSON vào `diagnostics`. Công cụ không tự đổi tính năng, đổi chất lượng/FPS hoặc tải dữ liệu lên mạng.
+Sau khi tự mở TEST, mở **NATIVE-RESOURCE.cmd** cạnh EXE. Công cụ hỏi tên tình huống, lấy mẫu 60 giây sử dụng bình thường và lưu JSON vào `diagnostics`. Công cụ không tự đổi tính năng, đổi chất lượng/FPS hoặc tải dữ liệu lên mạng.
 
 So sánh từng tình huống với cùng workload, màn hình, theme, FPS và resolution:
 
@@ -35,6 +35,6 @@ So sánh từng tình huống với cùng workload, màn hình, theme, FPS và r
 | G | Wallpaper + Stage + Spotlight. |
 | H | Tắt Wallpaper, Stage và Spotlight. |
 
-Báo cáo gồm RAM/private working set/private bytes, CPU, GPU theo adapter, dedicated/shared GPU memory, thread và handle của main, Guardian và helper được nhận diện. Bộ lấy mẫu không tính vào tổng app. Working set và GPU shared memory có thể đếm trùng phần dùng chung giữa tiến trình; counter không có dữ liệu giữ unavailable. Số đo software GL trên CI không chứng minh mục tiêu GTX1070/RAM100–150MiB/GPU3%/CPU1% trên máy owner.
+Báo cáo gồm RAM/private working set/private bytes, CPU, GPU theo adapter, dedicated/shared GPU memory, thread và handle của main, Guardian và helper được nhận diện. Bộ lấy mẫu không tính vào tổng app. Working set và GPU shared memory có thể đếm trùng phần dùng chung giữa tiến trình; counter không có dữ liệu giữ unavailable. Số đo software GL trên CI không chứng minh mục tiêu GTX 1070/RAM 100–150 MiB/GPU 3%/CPU 1% trên máy owner.
 
-Để đối chiếu lỗi, ghi commit và ứng dụng/màn hình/thao tác gây lỗi. Giữ animation speed0.70x theo thiết lập owner; không tự reset profile để làm phép đo đẹp hơn. Thử Genie/Drop/Jelly, menu Desktop/Explorer, Control Center, Notch, Snap, fullscreen, đổi màn hình và thu nhỏ/phục hồi cửa sổ. Chỉ owner quyết định PASS/FAIL và nghiệm thu Phase3.
+Để đối chiếu lỗi, ghi commit và ứng dụng/màn hình/thao tác gây lỗi. Giữ animation speed 0.70x theo thiết lập owner; không tự reset profile để làm phép đo đẹp hơn. Thử Genie/Drop/Jelly, menu Desktop/Explorer, Control Center, Notch, Snap, fullscreen, đổi màn hình và thu nhỏ/phục hồi cửa sổ. Chỉ owner quyết định PASS/FAIL và nghiệm thu Phase 3.

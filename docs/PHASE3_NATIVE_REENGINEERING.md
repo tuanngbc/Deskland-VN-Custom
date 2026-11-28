@@ -145,3 +145,6 @@ The opt-in sampler now summarizes total threads/handles and dedicated/shared GPU
 
 
 Runs46093644388 / b5d8571 and46093766318 / 57c77a3 passed the new Stage lifecycle/removal/disable assertions (and the latter passed settled redraw), then stopped at query assertion177. Add exact UTF-8 requested/actual query, language, native result title/action and a screenshot on failure before changing search behavior or weakening the assertion. The remaining cause is not established yet; CI pending.
+
+
+CI efficiency: renderer proof may be reused only for an exact key covering every wallpaper source/test, shared identity/pool dependency, staged shader/artwork, staging script and workflow. Save only after both hosted contract/render execution succeeds; keep origin commit/run/key and emit explicit reuse provenance. No EXE or software driver DLL is retained in this evidence cache. Exact candidate native lifecycle/profile/full-product wallpaper integration still run, and final handoff still requires all required jobs PASS. This applies the existing baseline exact-evidence strategy to unchanged renderer inputs; it does not claim a fresh render or owner hardware measurements.
