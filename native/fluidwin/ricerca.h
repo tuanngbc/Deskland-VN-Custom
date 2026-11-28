@@ -20,6 +20,7 @@
 #include <vector>
 #include <deque>
 #include <condition_variable>
+#include <chrono>
 #include <unordered_map>
 #include <functional>
 #include <cwctype>
@@ -402,7 +403,7 @@ private:
     std::shared_ptr<Work> work=std::make_shared<Work>();
     void attendiLavoro(){
         std::unique_lock<std::mutex> lock(work->mutex);
-        work->idle.wait(lock,[&]{return !work->running;});
+        work->idle.wait_for(lock,std::chrono::milliseconds(1500),[&]{return !work->running;});
     }
     void annullaLavoro(){
         InterlockedIncrement(&generazione);std::lock_guard<std::mutex> lock(work->mutex);
