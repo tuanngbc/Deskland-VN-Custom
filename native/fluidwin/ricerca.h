@@ -19,6 +19,7 @@
 #include <propsys.h>
 #include <vector>
 #include <deque>
+#include <condition_variable>
 #include <unordered_map>
 #include <functional>
 #include <cwctype>
@@ -116,7 +117,7 @@ public:
     // Providers own only Work, never Ricerca or its HWND/D2D objects. Cancelling
     // is immediate even if a Shell provider takes time to return.
     void ferma() {
-        apertaOra=chiudendo=false;annullaLavoro();onda.chiudi();
+        apertaOra=chiudendo=false;annullaLavoro();attendiLavoro();onda.chiudi();
         if(v.fin){for(UINT id=1;id<=5;++id)KillTimer(v.fin,id);vetro::fermaBattito(v.fin,1);if(GetCapture()==v.fin)ReleaseCapture();}
         clearBitmaps();verifiedIcons.clear();
         for(auto f:{fTesto,fTitolo,fSotto,fSezione})if(f)f->Release();
@@ -395,10 +396,14 @@ private:
         ULONGLONG used=0;
     };
     struct Work {
-        std::mutex mutex;bool running=false;LONG generation=0,queryGeneration=-1,fileGeneration=-1;
+        std::mutex mutex;std::condition_variable idle;bool running=false;LONG generation=0,queryGeneration=-1,fileGeneration=-1;
         std::wstring query;std::deque<IconJob> icons;std::vector<Pixel> ready;std::vector<Risultato> files;
     };
     std::shared_ptr<Work> work=std::make_shared<Work>();
+    void attendiLavoro(){
+        std::unique_lock<std::mutex> lock(work->mutex);
+        work->idle.wait(lock,[&]{return !work->running;});
+    }
     void annullaLavoro(){
         InterlockedIncrement(&generazione);std::lock_guard<std::mutex> lock(work->mutex);
         work->generation=generazione;work->queryGeneration=work->fileGeneration=-1;
