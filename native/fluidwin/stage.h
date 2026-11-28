@@ -13,6 +13,8 @@ namespace stage {
 struct Settings {
     bool enabled = false, perspective = false, autoHide = false, peek = true;
     bool peekLive = true, peekAnimation = true, clickActivate = true;
+    int background = 0, railOpacity = 0, cardOpacity = 12;
+    uint32_t backgroundColor = 0x18202B;
     int monitor = 0, right = 0, height = 126, spacing = 12, opacity = 95;
     int peekDelay = 450, peekSize = 640, edgeGap = 12;
     std::wstring display;
@@ -337,7 +339,7 @@ private:
         for(auto m:monitors) {
             if(settings.monitor!=2&&m!=chosen) continue;
             auto r=std::make_unique<Rail>(this);r->monitor=m;
-            if(!r->glass.crea(L"TLauncher.Native.Stage",vetro::procedura<Rail>,r.get(),false)) continue;
+            if(!r->glass.crea(L"TLauncher.Native.Stage",vetro::procedura<Rail>,r.get(),false,2,settings.background==1)) continue;
             r->glass.dpi=vetro::dpiMonitor(m);r->text=r->glass.formato(11*r->glass.dpi);
             rebuild(*r);rails.push_back(std::move(r));
         }
@@ -574,7 +576,8 @@ private:
             if(!outgoing&&!c.icon&&icon)c.icon=icon(v.rt,w.icon,96);
             if(settings.perspective){drawProjection(v,c,active,hovered,alpha);return;}
             auto r=c.rect;D2D1_RECT_F f{float(r.left),float(r.top),float(r.right),float(r.bottom)};
-            v.pen->SetColor(v.inchiostro((hovered?.20f:.07f)*alpha));v.rt->FillRoundedRectangle({f,8*d,8*d},v.pen);
+            const float cardAlpha=std::clamp(settings.cardOpacity,0,100)/100.0f;
+            v.pen->SetColor(v.inchiostro((hovered?.20f:.07f)*alpha*cardAlpha));v.rt->FillRoundedRectangle({f,8*d,8*d},v.pen);
             if(active){v.pen->SetColor(D2D1::ColorF(.1f,.55f,1,alpha));v.rt->DrawRoundedRectangle({f,8*d,8*d},v.pen,2*d);}
             if(c.bitmap){auto size=c.bitmap->GetPixelSize();RECT dest=r;dest.bottom-=int(25*d);dest=aspectFit(size.width,size.height,dest,false);v.rt->DrawBitmap(c.bitmap,{float(dest.left),float(dest.top),float(dest.right),float(dest.bottom)},alpha);}
             if(c.icon)v.rt->DrawBitmap(c.icon,{f.left+4*d,f.bottom-23*d,f.left+24*d,f.bottom-3*d},alpha);

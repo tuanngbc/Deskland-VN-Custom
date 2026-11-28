@@ -200,6 +200,10 @@ inline void carica() {
     v.stageShortcutEnabled=leggiDword(L"StageHotkeyEnabled",1)!=0;
     v.spotlightMode=std::clamp(int(leggiDword(L"SpotlightMode",1)),0,3);
     v.stage.enabled = leggiDword(L"StageEnabled", 0);
+    v.stage.background = std::clamp(int(leggiDword(L"StageBackground", 0)),0,2);
+    v.stage.railOpacity = std::clamp(int(leggiDword(L"StageRailOpacity", 0)),0,100);
+    v.stage.cardOpacity = std::clamp(int(leggiDword(L"StageCardOpacity", 12)),0,100);
+    v.stage.backgroundColor = leggiDword(L"StageBackgroundColor", 0x18202B) & 0xFFFFFFu;
     v.stage.perspective = leggiDword(L"StagePerspective", 0);
     v.stage.autoHide = leggiDword(L"StageAutoHide", 0);
     v.stage.peek = leggiDword(L"StagePeek", 1);
@@ -244,7 +248,10 @@ inline void salva() {
     scriviDword(L"StageHotkeyMods",v.stageShortcut.mods);scriviDword(L"StageHotkeyKey",v.stageShortcut.key);scriviDword(L"StageHotkeyEnabled",v.stageShortcutEnabled);
     scriviDword(L"SpotlightEnabled",v.spotlightEnabled);scriviDword(L"SpotlightAltSpace",v.spotlightAltSpace);scriviDword(L"SpotlightMode",v.spotlightMode);
     for(size_t i=0;i<v.clocks.size();++i)saveClock(i,v.clocks[i]);
-    scriviDword(L"StageEnabled",v.stage.enabled); scriviDword(L"StagePerspective",v.stage.perspective);
+    scriviDword(L"StageEnabled",v.stage.enabled);
+    scriviDword(L"StageBackground",v.stage.background); scriviDword(L"StageRailOpacity",v.stage.railOpacity);
+    scriviDword(L"StageCardOpacity",v.stage.cardOpacity); scriviDword(L"StageBackgroundColor",v.stage.backgroundColor);
+    scriviDword(L"StagePerspective",v.stage.perspective);
     scriviDword(L"StageAutoHide",v.stage.autoHide); scriviDword(L"StagePeek",v.stage.peek);
     scriviDword(L"StagePeekLive",v.stage.peekLive); scriviDword(L"StagePeekAnimation",v.stage.peekAnimation);
     scriviDword(L"StageClickActivate",v.stage.clickActivate); scriviDword(L"StageMonitor",v.stage.monitor);

@@ -2125,7 +2125,7 @@ private:
         fondoT=blend(fondoT,bar.top);fondoB=blend(fondoB,bar.bottom);
         const float radius=std::clamp(blend(dockRadius<0?RAGGIO:dockRadius*dpi,barRadius*dpi),0.f,std::max(0.f,std::min(fondoB-fondoT,fondoR-fondoL)/2));
         disegnaFondo({fondoL, fondoT, fondoR, fondoB}, scuro, blend(opacita,barOpacity/100.f), coloreAuto ? nullptr : &coloreFondo, radius);
-        aggiornaVetro(vetro, rettVetro, fondoL, fondoT, fondoR, fondoB, dockRadius>=0||collapsed>0?int(std::lround(radius)):-1);
+        aggiornaVetro(vetro, rettVetro, fondoL, fondoT, fondoR, fondoB, int(std::lround(radius)));
         zonaDockL = fondoL; zonaDockR = fondoR;
 
         // icone (la trascinata per ultima, sopra le altre)
@@ -4359,3 +4359,4 @@ private:
 // i metodi del centro di controllo e del launcher, in file a parte
 #include "centro.h"
 #include "launcher.h"
+
