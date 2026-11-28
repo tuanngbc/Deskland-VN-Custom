@@ -305,6 +305,12 @@ int main(int argc,char**argv){try{
         auto target=ringScene.boxingState()->foot(1);ringScene.click(target.x+20,target.y-115);
         for(int i=0;i<5;++i){noiseTexture.bind(gl,0);ringScene.render(cfg,v,{},weather,1+(i+1)*.04f,.04f,stop,384.f/1080,216.f/700);}
         check(ringScene.boxingState()->impacts==1,"Native scene did not consume Boxing model");png(evidence/"boxing-native-cheek-impact.png",384,216,capture(384,216));
+        auto original=capture(384,216);SceneRuntime fork(gl,sceneIndex("boxing-ring"));
+        check(fork.inheritSimulation(ringScene,v,ringScene.spatial()),"Compatible simulation state fork rejected");
+        check(fork.boxingState()&&fork.boxingState()->impacts==ringScene.boxingState()->impacts&&fork.boxingState()->fighters[1].hp==ringScene.boxingState()->fighters[1].hp,"Synchronized split reset game state");
+        noiseTexture.bind(gl,0);fork.render(cfg,v,{},weather,1.2,0,stop,384.f/1080,216.f/700);check(capture(384,216)==original,"Simulation fork changed same-time rendered state");
+        View incompatible=v;incompatible.worldW+=100;check(!fork.inheritSimulation(ringScene,incompatible,ringScene.spatial()),"Simulation inherited into unequal physical dimensions");
+        report<<"SYNCHRONIZED_STATE_FORK_NO_GAME_RESET=PASS\n";
         report<<"BOXING_DELAYED_FOUR_ZONE_SPRING_FACE_TORSO_IMPACTS=PASS\nBOXING_FOUR_GLOVE_COMBO_AND_DIZZY=PASS\nBOXING_BAG_TIRE_ROUND_AND_AUTOSPARRING=PASS\nBOXING_ACTUAL_RENDERER_INTEGRATION=PASS\n";
     }
     for(auto shape:std::array<std::pair<int,int>,2>{{{2560,1080},{1080,1920}}}){
@@ -328,6 +334,16 @@ int main(int argc,char**argv){try{
         auto active=session.metrics();report<<"SESSION_FRAMES="<<active.frames<<"\nSESSION_MISSED_DEADLINES="<<active.missed<<"\nSESSION_LAST_RENDER_MS="<<active.lastFrameMs<<"\nSESSION_OCCLUSION_STATE_RETENTION=PASS\n";
         session.stop();await([&]{return session.finished();},"Wallpaper shutdown failed");auto m=session.metrics();check(m.surfaces==0&&m.scenes==0&&!m.running,"Disabled wallpaper resources remain");
         report<<"SESSION_NATIVE_PRESENT="<<m.presentation<<"\nSESSION_LOCK_DISPLAY_OFF_RESUME=PASS\nSESSION_SCENE_SWAP_TOPOLOGY=PASS\nSESSION_STOP_RESOURCE_RELEASE=PASS\n";
+    }
+    {
+        Snapshot synchronized;synchronized.config.enabled=true;synchronized.config.layout=Layout::Synchronized;synchronized.config.scene=sceneIndex("boxing-ring");synchronized.config.fps=15;
+        synchronized.monitors={{L"sync-primary",{0,0,640,360},96,true},{L"sync-secondary",{-640,0,0,360},144,false}};
+        Session shared(synchronized,std::vector<RECT>{});await([&]{auto m=shared.metrics();if(!m.error.empty())throw std::runtime_error(m.error);return m.frames>=3;},"Compatible synchronized session never presented");
+        auto metrics=shared.metrics();check(metrics.scenes==1&&metrics.surfaces==2&&metrics.contexts==1,"Compatible synchronized outputs duplicated simulation/contexts");
+        synchronized.monitors[1].rect={-360,-280,0,360};shared.publish(synchronized);auto frames=metrics.frames;
+        await([&]{auto m=shared.metrics();if(!m.error.empty())throw std::runtime_error(m.error);return m.frames>frames+2&&m.scenes==2;},"Unequal synchronized geometry was reused unsafely");
+        shared.stop();await([&]{return shared.finished();},"Shared synchronized scene failed to release");
+        report<<"SYNCHRONIZED_COMPATIBLE_OUTPUTS_ONE_SIMULATION=PASS\nSYNCHRONIZED_UNEQUAL_GEOMETRY_PRESERVED=PASS\nSYNCHRONIZED_UNEQUAL_SHARED_SIMULATION=STILL_REQUIRED\n";
     }
     context.current();report<<"OWNER_PERFORMANCE=NOT_MEASURED\nOWNER_VISUAL_UAT=PENDING\n";return 0;
 }catch(const std::exception&e){std::cerr<<"WALLPAPER_RENDERER_FAILURE="<<e.what()<<'\n';return 1;}}

@@ -39,6 +39,9 @@ inline std::wstring diagnostics(const Metrics&m){
 struct SessionState {
     std::mutex mutex;Snapshot latest;Metrics metrics;uint64_t revision=0;
     std::atomic<bool> stop{false},finished{false};HANDLE event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+#ifdef WALLPAPER_HOSTED_PROBE
+    bool fixedIcons=false;std::vector<RECT> testIcons;
+#endif
     ~SessionState(){if(event)CloseHandle(event);}
 };
 inline LRESULT CALLBACK windowProcedure(HWND h,UINT m,WPARAM w,LPARAM l){
@@ -117,6 +120,20 @@ public:
         timing.end();measured.gpuMs=timing.milliseconds();measured.readbackBytes=presentation->readbackBytes;measured.copyBytes=presentation->copyBytes;measured.readbackMs=presentation->readbackMs;measured.presentationMs=presentation->presentationMs;
     }
 };
+// Share a world only when every physical simulation input is identical.
+// Different portrait/ultrawide geometry remains separate until presentation
+// coordinates are separated from simulation; never alternate its dimensions.
+inline std::vector<std::wstring> simulationKeys(const Snapshot& s){
+    std::vector<std::wstring> result;result.reserve(s.monitors.size());std::map<std::wstring,std::wstring> leaders;
+    for(const auto& m:s.monitors){
+        if(s.config.layout==Layout::Panorama){result.push_back(L"panorama");continue;}
+        if(s.config.layout==Layout::Independent){result.push_back(m.id);continue;}
+        std::wostringstream key;key<<L"synchronized:"<<m.rect.right-m.rect.left<<L'x'<<m.rect.bottom-m.rect.top;
+        for(const auto& icon:s.icons)key<<L';'<<icon.left-m.rect.left<<L','<<icon.top-m.rect.top<<L','<<icon.right-m.rect.left<<L','<<icon.bottom-m.rect.top;
+        auto [leader,inserted]=leaders.emplace(key.str(),L"synchronized:"+m.id);result.push_back(leader->second);
+    }
+    return result;
+}
 class Session {
     std::shared_ptr<SessionState> state=std::make_shared<SessionState>();std::thread thread;
     static void run(const std::shared_ptr<SessionState>&state){
@@ -131,17 +148,26 @@ class Session {
             std::unique_ptr<Bridge> bridge;try{bridge=std::make_unique<Bridge>();}catch(const std::exception&){}
             {std::lock_guard<std::mutex> lock(state->mutex);state->metrics.presentation=bridge?"GPU DirectComposition":"Asynchronous bounded DIB fallback";}
             std::vector<std::unique_ptr<Output>> outputs;std::vector<Monitor> topologyBefore;std::map<std::wstring,std::unique_ptr<SceneRuntime>> worlds;IconGeometry icons;
+            std::vector<std::wstring> worldKeys,previousWorldKeys;std::vector<RECT> priorIcons;Layout priorLayout=Layout::Independent;
             auto deadline=std::chrono::steady_clock::now(),last=deadline;double elapsed=0;
             while(!state->stop){
                 MSG message;while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}
                 Snapshot s;{std::lock_guard<std::mutex> lock(state->mutex);s=state->latest;state->latest.input.clear();state->latest.click=false;}
-                if(!s.config.enabled)break;s.icons=icons.poll(state->stop);
+                if(!s.config.enabled)break;
+#ifdef WALLPAPER_HOSTED_PROBE
+                if(state->fixedIcons)s.icons=state->testIcons;else
+#endif
+                s.icons=icons.poll(state->stop);
                 // Worst presentation path: scene + fallback + 3 PBOs + CPU readback,
                 // 24 bytes per rendered pixel. Respect explicit quality settings.
                 uint64_t surfaceBytes=0;for(const auto&m:s.monitors){auto a=s.config.displays.find(m.id);if(a!=s.config.displays.end()&&!a->second.enabled)continue;surfaceBytes+=uint64_t(std::max(1,int((m.rect.right-m.rect.left)*s.config.resolution)))*std::max(1,int((m.rect.bottom-m.rect.top)*s.config.resolution))*24;}
                 if(surfaceBytes>192ull*1024*1024)throw std::runtime_error("Wallpaper surfaces exceed 192 MiB budget; select lower resolution or fewer displays");
                 bool topologyChanged=s.monitors!=topologyBefore;bool hostLost=false;for(const auto&o:outputs)if(o&&!o->intact())hostLost=true;
                 if(topologyChanged||hostLost){context.current();worlds.clear();outputs.clear();topologyBefore=s.monitors;outputs.resize(s.monitors.size());
+                }
+                bool fieldChanged=s.icons.size()!=priorIcons.size();if(!fieldChanged)for(size_t i=0;i<s.icons.size();++i)if(!EqualRect(&s.icons[i],&priorIcons[i])){fieldChanged=true;break;}
+                if(topologyChanged||fieldChanged||s.config.layout!=priorLayout||worldKeys.size()!=s.monitors.size()){
+                    previousWorldKeys=worldKeys;worldKeys=simulationKeys(s);priorIcons=s.icons;priorLayout=s.config.layout;
                 }
                 auto now=std::chrono::steady_clock::now();float dt=std::clamp(std::chrono::duration<float>(now-last).count(),0.f,.1f);last=now;
                 bool paused=s.config.paused||s.locked||s.displayOff;
@@ -154,20 +180,35 @@ class Session {
                     if(!outputs[i])outputs[i]=std::make_unique<Output>(gl,context,bridge.get(),m,shellHost());
                     auto&o=*outputs[i];
                     int scene=s.config.layout==Layout::Independent&&assignment!=s.config.displays.end()?assignment->second.scene:s.config.scene;
-                    auto view=viewport(m,all,s.config.layout);std::wstring key=s.config.layout==Layout::Panorama?L"panorama":m.id;used.push_back(key);
+                    auto view=viewport(m,all,s.config.layout);const std::wstring& key=worldKeys[i];used.push_back(key);
                     if(paused||(s.config.pauseCovered&&covered(m.rect,s.opaqueWindows)))continue;
-                    auto&world=worlds[key];if(!world||world->scene()!=scene){context.current();world.reset();world=std::make_unique<SceneRuntime>(gl,scene);}
+                    bool inheritedAdvanced=false;auto&world=worlds[key];if(!world||world->scene()!=scene){context.current();world.reset();world=std::make_unique<SceneRuntime>(gl,scene);
+                        if(s.config.layout==Layout::Synchronized&&i<previousWorldKeys.size())if(auto old=worlds.find(previousWorldKeys[i]);old!=worlds.end()&&old->second&&old->second.get()!=world.get()){
+                            if(world->inheritSimulation(*old->second,view,sceneGeometry(s.monitors,m,s.config.layout)))inheritedAdvanced=std::find(advanced.begin(),advanced.end(),previousWorldKeys[i])!=advanced.end();
+                        }
+                    }
                     bool first=std::find(advanced.begin(),advanced.end(),key)==advanced.end();
                     world->setGeometry(sceneGeometry(s.monitors,m,s.config.layout));
-                    for(auto event:s.input)if(s.config.layout==Layout::Panorama?first:bool(PtInRect(&m.rect,event.point))){
-                        bool blocked=!event.desktop||!icons.ready();for(auto r:s.icons)if(PtInRect(&r,event.point)){blocked=true;break;}
-                        V2 point{float(event.point.x-(s.config.layout==Layout::Panorama?all.left:m.rect.left)),float(event.point.y-(s.config.layout==Layout::Panorama?all.top:m.rect.top))};
-                        world->pointer(blocked?PointerAction::Cancel:event.action,point);
+                    // Dispatch once, before advancing the shared world. Input from
+                    // any compatible synchronized output maps into its local field.
+                    if(first){
+                        auto inputOrigin=[&](POINT point)->const Monitor*{
+                            if(s.config.layout==Layout::Panorama)return &m;
+                            for(size_t j=0;j<s.monitors.size();++j)if(auto a=s.config.displays.find(s.monitors[j].id);(a==s.config.displays.end()||a->second.enabled)&&worldKeys[j]==key&&PtInRect(&s.monitors[j].rect,point))return &s.monitors[j];
+                            return nullptr;
+                        };
+                        for(auto event:s.input){const auto* source=inputOrigin(event.point);
+                            if(source){bool blocked=!event.desktop||!icons.ready();for(auto r:s.icons)if(PtInRect(&r,event.point)){blocked=true;break;}
+                                const auto origin=s.config.layout==Layout::Panorama?all:source->rect;
+                                world->pointer(blocked?PointerAction::Cancel:event.action,{float(event.point.x-origin.left),float(event.point.y-origin.top)});
+                            }else if(event.action==PointerAction::Up||event.action==PointerAction::Cancel)world->pointer(PointerAction::Cancel,{});
+                        }
+                        bool iconHit=false;for(auto r:s.icons)if(PtInRect(&r,s.pointer)){iconHit=true;break;}
+                        if(s.click&&s.desktopPointer&&!iconHit)if(const auto* source=inputOrigin(s.pointer)){
+                            const auto origin=s.config.layout==Layout::Panorama?all:source->rect;world->click(float(s.pointer.x-origin.left),float(s.pointer.y-origin.top));
+                        }
                     }
-                    else if(event.action==PointerAction::Up||event.action==PointerAction::Cancel)world->pointer(PointerAction::Cancel,{});
-                    bool iconHit=false;for(auto r:s.icons)if(PtInRect(&r,s.pointer)){iconHit=true;break;}
-                    if(s.click&&s.desktopPointer&&!iconHit&&(s.config.layout==Layout::Panorama?first:bool(PtInRect(&m.rect,s.pointer)))){float x=float(s.pointer.x-(s.config.layout==Layout::Panorama?all.left:m.rect.left)),y=float(s.pointer.y-(s.config.layout==Layout::Panorama?all.top:m.rect.top));world->click(x,y);}
-                    o.draw(context,s,view,*world,noise,post,elapsed,first?dt:0.f,state->stop);measured[i]=o.metrics(true);advanced.push_back(key);active=true;
+                    o.draw(context,s,view,*world,noise,post,elapsed,first&&!inheritedAdvanced?dt:0.f,state->stop);measured[i]=o.metrics(true);advanced.push_back(key);active=true;
                 }
                 // Hidden/disabled scenes release after they cease to be assigned;
                 // paused assigned scenes keep only the resources needed to resume.
@@ -199,6 +240,9 @@ class Session {
 public:
     explicit Session(const Snapshot&s){if(!state->event)throw std::runtime_error("Wallpaper cancellation event unavailable");state->latest=s;thread=std::thread(run,state);}
     ~Session(){stop();if(thread.joinable())thread.join();}Session(const Session&)=delete;
+#ifdef WALLPAPER_HOSTED_PROBE
+    Session(const Snapshot&s,std::vector<RECT> fixedIcons){if(!state->event)throw std::runtime_error("Wallpaper cancellation event unavailable");state->latest=s;state->fixedIcons=true;state->testIcons=std::move(fixedIcons);thread=std::thread(run,state);}
+#endif
     void publish(Snapshot s){std::lock_guard<std::mutex> lock(state->mutex);s.click=s.click||state->latest.click;
         auto pending=std::move(state->latest.input);pending.insert(pending.end(),s.input.begin(),s.input.end());
         if(pending.size()>32)pending={{POINT{},PointerAction::Cancel,false}};s.input=std::move(pending);

@@ -104,3 +104,9 @@ Hosted actual-Dock regression is added for collapsed mode on four edges: real po
 
 
 Summer Porch insects now use the audited scene-specific acceleration/wing phase, gentle velocity limits, garden-edge turns, sunbeam-dependent permanent population and a nine-second temporary insect from a garden click. They share the existing shader uniforms and remain capped at ten; the generic bird steering path is removed for this scene. Hosted tests cover continuous flight, exact click origin, lifetime and population bounds; CI pending.
+
+
+Synchronized optimization now shares a SceneRuntime only across outputs with identical physical dimensions and navigation/icon inputs; DPI and desktop origin do not duplicate compatible worlds. A cached plan avoids building keys every frame. Input from every group member is dispatched once before its first simulation advance, and secondary renders do not advance fishing transitions. Unequal geometry deliberately remains separate: full shared simulation with per-output geometry separation is STILL REQUIRED and is not claimed complete. Hosted tests cover compatible one-world/two-surface ownership and safe split after portrait topology change; CI pending.
+
+
+Compatible-world keys use stable monitor representatives, so dragging icons does not reset actors. If a compatible group splits, CPU state (including games, routes, reactions and cloud puffs) forks only after exact dimensions and Geometry equality checks; graphics remain separately owned. A world already advanced this frame is not stepped twice after a fork. Hosted shader assertions compare inherited game state and same-time pixels, and reject unequal dimensions. Full shared simulation for unequal outputs remains open.

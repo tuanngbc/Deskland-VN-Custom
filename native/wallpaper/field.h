@@ -56,6 +56,7 @@ class Clouds {
     struct Puff {float x=0,y=0;double born=-100;};std::array<Puff,4> puffs{};size_t nextPuff=0;
 public:
     explicit Clouds(GL&gl):g(gl){}
+    void inheritSimulation(const Clouds& other){puffs=other.puffs;nextPuff=other.nextPuff;last=-100;}
     void burst(float x,float y,double time){puffs[nextPuff++%puffs.size()]={x,y,time};last=-100;}
     void update(float w,float h,float cover,float flow,double time){if(time-last<.10)return;last=time;
         columns=int(ceil(w/48))+8;rows=int(ceil(h/48))+8;

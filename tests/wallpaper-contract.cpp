@@ -38,6 +38,10 @@ int main(){try{
         auto isolated=[](V2 p,float r){return p.x>r&&p.x<800-r&&p.y>r&&p.y<600-r&&!(p.x>310-r&&p.x<490+r);};
         require(waterRoute(start,goal,800,600,18,isolated).empty(),"Disconnected water unexpectedly navigable");std::cout<<"WATER_ROUTE_DETOUR_AND_DISCONNECTED_ISLANDS=PASS\n";
     }
+    Snapshot synchronized;synchronized.config.layout=Layout::Synchronized;synchronized.monitors={{L"wide-a",{0,0,2560,1080},96,true},{L"wide-b",{-2560,40,0,1120},144,false},{L"portrait",{2560,-800,3640,1120},120,false}};
+    auto shared=simulationKeys(synchronized);require(shared[0]==shared[1]&&shared[0]!=shared[2],"Synchronized geometry compatibility is incorrect");
+    synchronized.icons={{20,30,60,70}};shared=simulationKeys(synchronized);require(shared[0]!=shared[1],"Different navigation fields incorrectly share a world");
+    synchronized.icons={{22,32,62,72}};auto movedKeys=simulationKeys(synchronized);require(shared==movedKeys,"Moving an icon discarded a stable simulation owner");
     std::cout<<"PHYSICAL_UNION_SCALE_DPI_ANCHORS=PASS\nTEMPORAL_CONTINUITY_ACCELERATION_TURN_REPEATED_INPUT_FPS=PASS\n";
     require(covered({0,0,100,100},{{0,0,50,100},{50,0,100,100}}),"Multiwindow occlusion");
     require(!covered({0,0,100,100},{{0,0,49,100},{50,0,100,100}}),"Visible gap must render");

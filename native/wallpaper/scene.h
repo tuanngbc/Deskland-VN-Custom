@@ -198,6 +198,34 @@ class SceneRuntime {
 public:
     SceneRuntime(GL&gl,int id):g(gl),index(id),program(gl,source(id)),field(gl),clouds(gl){rng^=uint32_t(id*19001);}
     int scene()const{return index;}
+    // Fork CPU state only when a previously compatible synchronized group splits.
+    // Graphics resources stay uniquely owned on the render thread; physical
+    // geometry must match, so this never rescales or reinterprets actor bodies.
+    bool inheritSimulation(const SceneRuntime& other,const View& view,const Geometry& expected){
+        if(index!=other.index||other.previousW!=view.worldW||other.previousH!=view.worldH||other.geometry!=expected)return false;
+        cats=other.cats;effects=other.effects;effectNext=other.effectNext;age=other.age;toy=other.toy;
+        fishing=other.fishing;fishingAge=other.fishingAge;fishingPoint=other.fishingPoint;fishActors=other.fishActors;hookedFish=other.hookedFish;
+        castY=other.castY;rodAnchor=other.rodAnchor;lineHook=other.lineHook;caughtFish=other.caughtFish;melonBites=other.melonBites;
+        fanMultiplier=other.fanMultiplier;ballX=other.ballX;ballY=other.ballY;targetX=other.targetX;targetY=other.targetY;
+        passes=other.passes;passAge=other.passAge;lastTime=other.lastTime;lastCorgis=other.lastCorgis;goalSide=other.goalSide;
+        goalAge=other.goalAge;userChase=other.userChase;corgiPose=other.corgiPose;corgiNext=other.corgiNext;corgiHappy=other.corgiHappy;
+        corgiRoll=other.corgiRoll;corgiWait=other.corgiWait;corgiBreath=other.corgiBreath;chime=other.chime;birdHop=other.birdHop;
+        melonRefill=other.melonRefill;fanPhase=other.fanPhase;fanOscillation=other.fanOscillation;porchBugs=other.porchBugs;football=other.football;
+        players=other.players;formation=other.formation;formationCount=other.formationCount;ballOwner=other.ballOwner;ballReceiver=other.ballReceiver;
+        lastKicker=other.lastKicker;footballScore=other.footballScore;ballHold=other.ballHold;ballPickup=other.ballPickup;ballDrag=other.ballDrag;
+        ballZ=other.ballZ;ballVZ=other.ballVZ;footballTempo=other.footballTempo;busX=other.busX;busVelocity=other.busVelocity;
+        busDoors=other.busDoors;busWheel=other.busWheel;busWait=other.busWait;busHonk=other.busHonk;busState=other.busState;
+        busStop=other.busStop;rng=other.rng;geometry=other.geometry;geometryExplicit=other.geometryExplicit;lastPalmCount=other.lastPalmCount;
+        palmLayout=other.palmLayout;boyBody=other.boyBody;meadowCat=other.meadowCat;meadowTail=other.meadowTail;catPlaced=other.catPlaced;
+        boyGait=other.boyGait;boyTug=other.boyTug;boyNext=other.boyNext;lanternLayout=other.lanternLayout;lanternSwing=other.lanternSwing;
+        lanternCount=other.lanternCount;lanternWant=other.lanternWant;schoolState=other.schoolState;turtleState=other.turtleState;feedPoint=other.feedPoint;
+        feedAge=other.feedAge;groups=other.groups;remainder=other.remainder;simulationTime=other.simulationTime;routes=other.routes;
+        pressedAt=other.pressedAt;pressed=other.pressed;dragged=other.dragged;capturedGroup=other.capturedGroup;capturedIndex=other.capturedIndex;
+        previousW=other.previousW;previousH=other.previousH;previousIcons=other.previousIcons;
+        boxing=other.boxing?std::make_unique<BoxingModel>(*other.boxing):nullptr;clouds.inheritSimulation(other.clouds);
+        previousSigma=previousWarp=-1;placementDirty=lanternDirty=true;simulationSteps=0;return true;
+    }
+
     void setGeometry(Geometry next){if(next!=geometry){geometry=std::move(next);placementDirty=true;}geometryExplicit=true;}
     const Geometry& spatial()const{return geometry;}
     const PalmLayout& palms()const{return palmLayout;}
@@ -470,7 +498,7 @@ private:
     }
     void renderFishing(const Config&c,const std::string&id,float w,float h,float t,float dt){
         const bool aquarium=id=="aquarium";int n=aquarium?std::clamp(int(p(c,"fish",4)),1,8):4;
-        if(fishing){fishingAge+=dt;
+        if(fishing&&dt>0){fishingAge+=dt;
             if(fishing==1&&fishingAge>.6f){fishing=2;fishingAge=0;}
             else if(fishing==2&&fishingAge>(aquarium?1.4f/std::max(.4f,p(c,"eager",1)):3.f)&&hookedFish<0){
                 float nearest=1e9;for(int i=0;i<n;i++){float d=hypot(fishActors[i].x-fishingPoint.x,fishActors[i].y-fishingPoint.y);if(d<nearest&&fishActors[i].mode==FishMode::Swim){nearest=d;hookedFish=i;}}
