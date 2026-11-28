@@ -122,9 +122,9 @@ class SceneRuntime {
             const float closing=delta.x*relative.x+delta.y*relative.y;
             const float ahead=std::clamp(-closing/std::max(.01f,relative.x*relative.x+relative.y*relative.y),0.f,7.f);
             const float closest=(delta+relative*ahead).length();
-            const float near=std::clamp((clearance+44-distance)/46,0.f,1.f);
+            const float nearRisk=std::clamp((clearance+44-distance)/46,0.f,1.f);
             const float future=closing<0?std::max(0.f,1-closest/(clearance+25))*(1-ahead/8):0;
-            const float risk=std::max(near,future);
+            const float risk=std::max(nearRisk,future);
             avoidance=avoidance+(unit(delta)*-2+V2{-forward.y,forward.x}*1.6f)*risk;
             if(closing<0&&delta.x*forward.x+delta.y*forward.y>0)
                 spec.speed*=std::clamp(.25f+.75f*(distance-clearance)/50,.25f,1.f);
