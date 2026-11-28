@@ -130,3 +130,6 @@ Meadow audit found the generic steering path accelerated the boy away again afte
 
 
 The new Vietnamese query fixture must send Backspace through WM_KEYDOWN (the real input handler), not WM_CHAR. Use a bounded prior-length loop and explicit failure if clearing fails, preventing an endless runner wait. This is a fixture correction; product key routing remains intact.
+
+
+Run46092777372 actually stopped at native exit176, before the Vietnamese query fixture: the final destroyed HWND deliberately remained in the fixture inventory, and Stage compared records without validating liveness. Prune invalid generation/PID/TID/HWND records before change detection, so a delayed shared inventory refresh cannot leave a dead card in place. Earlier entrance/exit, stable DWM identity and animation idle assertions were reached and passed. The Backspace change separately prevents a latent unbounded fixture loop; no actual Backspace timeout was established. Hosted re-verification pending.

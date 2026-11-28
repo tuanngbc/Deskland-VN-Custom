@@ -198,6 +198,9 @@ public:
         if(peek.glass.fin&&!peek.source.valid()) closePeek();
         if(topologyChanged) { rebuildAll(); return; }
         auto next=inventory?inventory():std::vector<Window>{};
+        // Dock may still retain a destroyed/reused HWND until its queued
+        // inventory refresh. A stale record must not suppress the exit fade.
+        std::erase_if(next,[](const Window& w){return !w.valid();});
         bool same=next.size()==windows.size();
         if(same) for(size_t i=0;i<next.size();++i) if(next[i].hwnd!=windows[i].hwnd||next[i].pid!=windows[i].pid||next[i].tid!=windows[i].tid||next[i].generation!=windows[i].generation||next[i].identity!=windows[i].identity||next[i].name!=windows[i].name||next[i].icon!=windows[i].icon) {same=false;break;}
         windows=std::move(next);
