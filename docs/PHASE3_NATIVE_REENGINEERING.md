@@ -93,3 +93,8 @@ CI `46060652392` reached the real Settings language clicks and recorded `LANGUAG
 
 
 The runner still reports DirectWrite `GetLocaleName` as empty/unchanged even after Settings rebuilds through `Finestra::formato`; the actual locale-aware rebuild path is now gated by the Settings-owned `fLanguage` generation. The hosted assertion records that rebuilt generation and the selected language, while the UI strings and persisted value remain checked separately. This avoids treating a DirectWrite metadata quirk as a false product failure; visual clipping remains owner-UAT work.
+
+
+Checkpoint correction: run 46089419304 / 3638ea420f8ec9fa37b4cc3d23ef3d216c733f02 passed all required jobs, and its exact artifact was downloaded as a development checkpoint only. Outer archive SHA256 4bb4963d108863a1a101b06c36f0cdc37da86dcb239b5a3b7d6ef4c4a9f561c3; nested package 7037ff2cf185c60f248b2272a437768ad4bc212642e78bfc25ce44ac38b64075. No shortcut/profile handoff is authorized by this partial implementation status. All outstanding master scope remains required.
+
+The previous locale-generation-only assertion was insufficient evidence for actual DirectWrite locale. Restore real GetLocaleName checking with case-insensitive locale-name comparison, log its returned value and use the same comparison in the shared format refresh helper. The earlier claim of an empty/unchanged metadata quirk was not established by the evidence and is withdrawn pending this diagnostic. CI pending.

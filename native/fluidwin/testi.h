@@ -94,7 +94,7 @@ inline const wchar_t* locale() {
 inline bool aggiornaFormato(IDWriteFactory* factory, IDWriteTextFormat*& format) {
     if(!factory||!format)return false;
     wchar_t current[LOCALE_NAME_MAX_LENGTH]{};
-    if(SUCCEEDED(format->GetLocaleName(current,LOCALE_NAME_MAX_LENGTH))&&!wcscmp(current,locale()))return true;
+    if(SUCCEEDED(format->GetLocaleName(current,LOCALE_NAME_MAX_LENGTH))&&!_wcsicmp(current,locale()))return true;
     std::wstring family(format->GetFontFamilyNameLength()+1,L'\0');
     if(FAILED(format->GetFontFamilyName(family.data(),UINT32(family.size()))))return false;
     IDWriteFontCollection* collection=nullptr;format->GetFontCollection(&collection);

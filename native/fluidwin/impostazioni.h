@@ -237,7 +237,8 @@ public:
 #ifdef TLAUNCHER_NATIVE_CI
     bool ciReady()const{return aperta&&morph==0;}
     bool ciPoint(int id,POINT& p)const{for(const auto&z:zone)if(z.id==id){p={LONG((z.r.left+z.r.right)/2),LONG((z.r.top+z.r.bottom)/2)};return true;}return false;}
-    bool ciLocale()const{return fLanguage==testi::attuale()&&fVoce!=nullptr;}
+    std::wstring ciFontLocale()const{wchar_t name[LOCALE_NAME_MAX_LENGTH]{};return fVoce&&SUCCEEDED(fVoce->GetLocaleName(name,LOCALE_NAME_MAX_LENGTH))?name:L"";}
+    bool ciLocale()const{return fLanguage==testi::attuale()&&!ciFontLocale().empty()&&!_wcsicmp(ciFontLocale().c_str(),testi::locale());}
 #endif
     // da: rettangolo sullo schermo del vetro del centro di controllo. Le impostazioni non compaiono a parte: il vetro
     // del centro sale e si allarga fino a diventare la loro finestra, al centro dello schermo (dove sono sempre state),

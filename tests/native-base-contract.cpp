@@ -63,6 +63,7 @@ int main(int argc,char** argv) {
         POINT point{};if(!gImpostazioni.ciPoint(100+language,point))return 141;
         SendMessageW(settings,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM(point.x,point.y));
         SendMessageW(settings,WM_LBUTTONUP,0,MAKELPARAM(point.x,point.y));ciPump(90);
+        const auto fontLocale=gImpostazioni.ciFontLocale();report<<"DIRECTWRITE_LOCALE="<<std::string(fontLocale.begin(),fontLocale.end())<<"\n";
         report<<"LANGUAGE_CLICK requested="<<language<<" actual="<<testi::attuale()<<" formats_rebuilt="<<gImpostazioni.ciLocale()<<" ready="<<gImpostazioni.ciReady()<<" point="<<point.x<<","<<point.y<<"\n";report.flush();
         if(testi::attuale()!=language||!gImpostazioni.ciLocale()){phase3Snapshot(settings,std::filesystem::path(argv[1])/L"phase3-language-failure.bmp");return 142;}
     }
