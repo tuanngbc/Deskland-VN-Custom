@@ -206,6 +206,8 @@ inline void carica() {
     v.stage.backgroundColor = leggiDword(L"StageBackgroundColor", 0x18202B) & 0xFFFFFFu;
     v.stage.perspective = leggiDword(L"StagePerspective", 0);
     v.stage.autoHide = leggiDword(L"StageAutoHide", 0);
+    v.stage.reserve=leggiDword(L"StageReserve",0)!=0;
+    v.stage.reserveWidth=std::clamp(int(leggiDword(L"StageReserveWidth",240)),160,600);
     v.stage.peek = leggiDword(L"StagePeek", 1);
     v.stage.peekLive = leggiDword(L"StagePeekLive", 1);
     v.stage.peekAnimation = leggiDword(L"StagePeekAnimation", 1);
@@ -252,6 +254,7 @@ inline void salva() {
     scriviDword(L"StageBackground",v.stage.background); scriviDword(L"StageRailOpacity",v.stage.railOpacity);
     scriviDword(L"StageCardOpacity",v.stage.cardOpacity); scriviDword(L"StageBackgroundColor",v.stage.backgroundColor);
     scriviDword(L"StagePerspective",v.stage.perspective);
+    scriviDword(L"StageReserve",v.stage.reserve);scriviDword(L"StageReserveWidth",v.stage.reserveWidth);
     scriviDword(L"StageAutoHide",v.stage.autoHide); scriviDword(L"StagePeek",v.stage.peek);
     scriviDword(L"StagePeekLive",v.stage.peekLive); scriviDword(L"StagePeekAnimation",v.stage.peekAnimation);
     scriviDword(L"StageClickActivate",v.stage.clickActivate); scriviDword(L"StageMonitor",v.stage.monitor);
@@ -304,7 +307,11 @@ public:
     // Prima crescevano solo dal centro di controllo: dagli altri menu comparivano e basta (segnalato da chi li apriva dal
     // menu dell'icona, la via spiegata nel README)
     void apri(const RECT* da = nullptr, bool dalMouse = false) {
-        if (!v.fin && !v.crea(L"TLauncher.Native.Impostazioni", vetro::procedura<Finestra>, this, true, 2, true, false)) return;
+        if (!v.fin) {
+            if(!v.crea(L"TLauncher.Native.Impostazioni",vetro::procedura<Finestra>,this,true,2,true,false))return;
+            SetWindowLongPtrW(v.fin,GWL_STYLE,GetWindowLongPtrW(v.fin,GWL_STYLE)|WS_THICKFRAME|WS_MAXIMIZEBOX|WS_SYSMENU);
+            SetWindowPos(v.fin,nullptr,0,0,0,0,SWP_FRAMECHANGED|SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);
+        }
         if (aperta) {   // gia' aperta: viene davanti (se stava rientrando nel centro, torna a crescere)
             if (morph < 0) { if (daPunto) fuori = false; giraMorph(1); vetro::battito(v.fin, 1); }
             SetForegroundWindow(v.fin); return;
@@ -320,11 +327,20 @@ public:
         v.dpi = vetro::dpiMonitor(MonitorFromPoint({a.left, a.top}, MONITOR_DEFAULTTOPRIMARY));
         const float d = v.dpi;
         // misura fissa; su schermi piccoli quanto ci sta (le sezioni sono corte, entrano comunque)
-        const int w = (int)std::lround(std::min(LARGO * d, (float)(a.right - a.left) - 40 * d));
-        const int h = (int)std::lround(std::min(ALTO * d, (float)(a.bottom - a.top) - 40 * d));
+        const int w=std::max(1,std::min(int(a.right-a.left),int(std::lround(std::clamp(float(leggiDword(L"SettingsWidth",1100)),640.f,4096.f)*d))));
+        const int h=std::max(1,std::min(int(a.bottom-a.top),int(std::lround(std::clamp(float(leggiDword(L"SettingsHeight",780)),350.f,4096.f)*d))));
         daCentro = da != nullptr; daPunto = !daCentro; morph = 0; mx = 1; rientra = false; fuori = false; fuoriDopo = false;
         const int x = (a.left + a.right - w) / 2, y = (a.top + a.bottom - h) / 2;   // al centro, come sempre
         rA = {x, y, x + w, y + h};
+        if(!dalMouse&&!da&&leggiDword(L"SettingsPlacement",0)){
+            const LONG px=LONG(leggiDword(L"SettingsX",DWORD(x))),py=LONG(leggiDword(L"SettingsY",DWORD(y)));
+            RECT desired{px,py,px+w,py+h};
+            RECT overlap{};
+            if(IntersectRect(&overlap,&desired,&a)){
+                rA.left=std::clamp(px,a.left,a.right-w);rA.top=std::clamp(py,a.top,a.bottom-h);
+                rA.right=rA.left+w;rA.bottom=rA.top+h;
+            }
+        }
         if (daCentro) rDa = *da;
         else {   // un vetro piccolo (un decimo) attorno al mouse o al centro dello schermo, dentro lo schermo
             const int pw = std::max(1, w / 10), ph = std::max(1, h / 10);
@@ -437,6 +453,28 @@ public:
                     if (!ancora) vetro::fermaBattito(v.fin, 1);
                 }
                 return true;
+            case WM_NCCALCSIZE:if(w)return true;return false;
+            case WM_GETMINMAXINFO:{
+                MONITORINFO mi{sizeof(mi)};
+                if(!GetMonitorInfoW(MonitorFromWindow(hw,MONITOR_DEFAULTTONEAREST),&mi))return false;
+                auto& sizes=*reinterpret_cast<MINMAXINFO*>(l);
+                const LONG width=mi.rcWork.right-mi.rcWork.left,height=mi.rcWork.bottom-mi.rcWork.top;
+                sizes.ptMinTrackSize={std::min(width,LONG(640*v.dpi)),std::min(height,LONG(350*v.dpi))};
+                sizes.ptMaxPosition={mi.rcWork.left-mi.rcMonitor.left,mi.rcWork.top-mi.rcMonitor.top};
+                sizes.ptMaxSize=sizes.ptMaxTrackSize={width,height};
+                return true;
+            }
+            case WM_SIZE:
+                if(aperta&&!morph&&w!=SIZE_MINIMIZED&&LOWORD(l)&&HIWORD(l)){
+                    v.W=LOWORD(l);v.H=HIWORD(l);
+                    if(v.rt)v.rt->Resize(D2D1::SizeU(v.W,v.H));
+                    InvalidateRect(hw,nullptr,FALSE);
+                }
+                return false;
+            case WM_EXITSIZEMOVE:savePlacement();return false;
+            case WM_NCLBUTTONDBLCLK:
+                if(w==HTCAPTION&&!morph){ShowWindow(hw,IsZoomed(hw)?SW_RESTORE:SW_MAXIMIZE);return true;}
+                return false;
             case WM_PAINT: disegna(); return true;
             // un'altra app prende il primo piano (clic altrove): aperte dal centro di controllo, si chiudono da sole.
             // (le finestre di FluidWin, come quella dei colori, non contano: l'app resta FluidWin)
@@ -453,6 +491,7 @@ public:
             }
             case WM_MOUSEMOVE: {
                 if (morph) return true;   // mentre cresce o rientra non si tocca niente
+                if(scrollDrag){moveScroll(GET_Y_LPARAM(l));return true;}
                 if (trascina >= 0) { valoreDa(trascina, (float)GET_X_LPARAM(l)); return true; }
                 if (!dentro) { TRACKMOUSEEVENT tm{sizeof(tm), TME_LEAVE, v.fin, 0}; TrackMouseEvent(&tm); dentro = true; }
                 const int s = zonaIn((float)GET_X_LPARAM(l), (float)GET_Y_LPARAM(l));
@@ -462,19 +501,27 @@ public:
             case WM_MOUSELEAVE: dentro = false; if (trascina < 0) sopra = -1; disegna(); return true;
             case WM_LBUTTONDOWN: {   // su un cursore: si trascina (anche fuori dal binario, finche' non si lascia)
                 if (morph) return true;
-                const int z = zonaIn((float)GET_X_LPARAM(l), (float)GET_Y_LPARAM(l));
+                const float x=GET_X_LPARAM(l),y=GET_Y_LPARAM(l);
+                if(beginScroll(x,y))return true;
+                const int z = zonaIn(x,y);
                 if (z >= Z_CURSORE && z < Z_CURSORE + (int)cursori.size()) {
                     trascina = z - Z_CURSORE; SetCapture(v.fin); valoreDa(trascina, (float)GET_X_LPARAM(l));
                 }
                 return true;
             }
             case WM_LBUTTONUP:
+                if(scrollDrag){scrollDrag=0;ReleaseCapture();return true;}
                 if (trascina >= 0) { trascina = -1; ReleaseCapture(); salva(); disegna(); return true; }
                 if (morph) return true;
                 clic(zonaIn((float)GET_X_LPARAM(l), (float)GET_Y_LPARAM(l)));
                 return true;
-            case WM_CAPTURECHANGED: if (trascina >= 0) { trascina = -1; salva(); disegna(); } return true;
+            case WM_CAPTURECHANGED: scrollDrag=0; if (trascina >= 0) { trascina = -1; salva(); disegna(); } return true;
             case WM_KEYDOWN:
+                if(!morph&&(w==VK_PRIOR||w==VK_NEXT||w==VK_HOME||w==VK_END)&&
+                    (sezione!=S_WALLPAPER||GetKeyState(VK_CONTROL)<0)){
+                    setScroll(false,w==VK_HOME?0.f:w==VK_END?massimoSez:scorriSez+(w==VK_PRIOR?-1:1)*std::max(32.f,v.H-100*v.dpi));
+                    return true;
+                }
                 if (sezione == S_WALLPAPER && wallpaperPage.key(w)) { wallpaperFocus(); disegna(); return true; }
                 if (w == VK_ESCAPE) chiudi();
                 else if (w == VK_DOWN || w == VK_UP) vaiASezione((sezione + (w == VK_DOWN ? 1 : SEZIONI - 1)) % SEZIONI);   // frecce: sezioni
@@ -488,6 +535,8 @@ public:
             case wallpaper::ACCESS_ACTION+1:
                 if (sezione == S_WALLPAPER) { wallpaperPage.focusAction((int)w); wallpaperFocus(); disegna(); } return true;
             case WM_MOUSEWHEEL:   // sezione Cursore: l'elenco dei pacchetti scorre (non ci stanno tutti: R20261114-141207-S7)
+                {POINT pt{GET_X_LPARAM(l),GET_Y_LPARAM(l)};ScreenToClient(hw,&pt);
+                if(!morph&&pt.x<BARRA*v.dpi){setScroll(true,sidebarScroll-GET_WHEEL_DELTA_WPARAM(w)*54.f*v.dpi/WHEEL_DELTA);return true;}}
                 if (sezione != S_CURSORE && !morph) {   // le altre: tutta la sezione, una riga (60 px) per scatto
                     const float prima = scorriSez;
                     scorriSez = std::min(std::max(scorriSez - GET_WHEEL_DELTA_WPARAM(w) * 60.0f * v.dpi / WHEEL_DELTA, 0.0f), massimoSez);
@@ -543,6 +592,14 @@ public:
                 if (morph) return false;
                 POINT p{GET_X_LPARAM(l), GET_Y_LPARAM(l)}; ScreenToClient(v.fin, &p);
                 const float d = v.dpi;
+                if(!IsZoomed(hw)){
+                    const float edge=6*d;
+                    const bool left=p.x<edge,right=p.x>=v.W-edge,top=p.y<edge,bottom=p.y>=v.H-edge;
+                    if(top||bottom||left||right){
+                        r=top?(left?HTTOPLEFT:right?HTTOPRIGHT:HTTOP):bottom?(left?HTBOTTOMLEFT:right?HTBOTTOMRIGHT:HTBOTTOM):left?HTLEFT:HTRIGHT;
+                        return true;
+                    }
+                }
                 if ((p.y < 60 * d && p.x < v.W - 56 * d && zonaIn((float)p.x, (float)p.y) < 0)) { r = HTCAPTION; return true; }
                 return false;
             }
@@ -551,7 +608,46 @@ public:
     }
 
 private:
-    static constexpr float LARGO = 780, ALTO = 500, BARRA = 240;
+        static constexpr float BARRA = 240;
+    struct Scroll {D2D1_RECT_F track{}, thumb{};};
+    Scroll scrollbars[2]{};
+    float sidebarScroll=0,sidebarMax=0,scrollGrab=0;
+    int scrollDrag=0;
+    void savePlacement(){
+        if(!aperta||morph||IsZoomed(v.fin)||IsIconic(v.fin))return;
+        RECT r{};if(!GetWindowRect(v.fin,&r))return;
+        scriviDword(L"SettingsX",DWORD(r.left));scriviDword(L"SettingsY",DWORD(r.top));
+        scriviDword(L"SettingsWidth",DWORD(std::lround((r.right-r.left)/v.dpi)));
+        scriviDword(L"SettingsHeight",DWORD(std::lround((r.bottom-r.top)/v.dpi)));
+        scriviDword(L"SettingsPlacement",1);
+    }
+    void setScroll(bool sidebar,float value){
+        auto& offset=sidebar?sidebarScroll:scorriSez;
+        value=std::clamp(value,0.f,sidebar?sidebarMax:massimoSez);
+        if(value!=offset){offset=value;sopra=-1;disegna();}
+    }
+    void moveScroll(float y){
+        const bool sidebar=scrollDrag==1;const auto& s=scrollbars[sidebar?0:1];
+        const float room=(s.track.bottom-s.track.top)-(s.thumb.bottom-s.thumb.top);
+        if(room>0)setScroll(sidebar,(sidebar?sidebarMax:massimoSez)*(y-scrollGrab-s.track.top)/room);
+    }
+    bool beginScroll(float x,float y){
+        for(int i=0;i<2;++i){const auto& s=scrollbars[i];
+            if(x<s.track.left||x>=s.track.right||y<s.track.top||y>=s.track.bottom)continue;
+            scrollGrab=y>=s.thumb.top&&y<s.thumb.bottom?y-s.thumb.top:(s.thumb.bottom-s.thumb.top)/2;
+            scrollDrag=i+1;SetCapture(v.fin);moveScroll(y);return true;
+        }
+        return false;
+    }
+    void drawScroll(int index,float x,float top,float height,float range,float value){
+        const float d=v.dpi;
+        if(range<=0||height<24*d)return;
+        const float size=std::clamp(height*height/(range+height),20*d,height);
+        const float y=top+(height-size)*value/range;
+        auto& s=scrollbars[index];
+        s.track={x-12*d,top,x,top+height};s.thumb={x-8*d,y,x-3*d,y+size};
+        v.pen->SetColor(v.inchiostro(.30f));v.rt->FillRoundedRectangle({s.thumb,2*d,2*d},v.pen);
+    }
     enum { S_GENERALE, S_DOCK, S_ANIMAZIONI, S_NOTCH, S_TASTIERA, S_CURSORE, S_WALLPAPER, S_STAGE, S_SPOTLIGHT, S_CLOCKS, SEZIONI };
     // nome e spiegazione in italiano e in inglese, sezione
     struct Voce { const wchar_t *nome, *name, *spiega, *explain; bool Valori::*campo; int sezione; };
@@ -931,7 +1027,8 @@ private:
             switch(id) {
                 case 6000:s.enabled=!s.enabled;break;
                 case 6001:s.perspective=!s.perspective;break;
-                case 6002:s.autoHide=!s.autoHide;break;
+                case 6002:if(s.reserve){s.reserve=false;s.autoHide=false;}else if(s.autoHide){s.autoHide=false;s.reserve=true;}else s.autoHide=true;break;
+                case 6030:case 6031:s.reserveWidth=std::clamp(s.reserveWidth+(id==6030?-20:20),160,600);break;
                 case 6003:s.peek=!s.peek;break;
                 case 6004:s.peekLive=!s.peekLive;break;
                 case 6005:s.peekAnimation=!s.peekAnimation;break;
@@ -953,6 +1050,16 @@ private:
                 case 6019:s.peekSize=std::min(1200,s.peekSize+80);break;
                 case 6020:s.edgeGap=std::max(0,s.edgeGap-4);break;
                 case 6021:s.edgeGap=std::min(100,s.edgeGap+4);break;
+                case 6024:s.background=(s.background+1)%3;if(s.background&&s.railOpacity==0)s.railOpacity=45;break;
+                case 6025:case 6026:s.railOpacity=std::clamp(s.railOpacity+(id==6025?-5:5),0,100);break;
+                case 6027:case 6028:s.cardOpacity=std::clamp(s.cardOpacity+(id==6027?-5:5),0,100);break;
+                case 6029:{
+                    static COLORREF custom[16]{};
+                    CHOOSECOLORW dialog{};dialog.lStructSize=sizeof(dialog);dialog.hwndOwner=v.fin;
+                    dialog.rgbResult=s.backgroundColor;dialog.lpCustColors=custom;dialog.Flags=CC_FULLOPEN|CC_RGBINIT;
+                    if(!ChooseColorW(&dialog))return;
+                    s.backgroundColor=dialog.rgbResult;s.background=2;if(s.railOpacity==0)s.railOpacity=45;break;
+                }
             }
             salva();if(cambiato)cambiato();disegna();return;
         }
@@ -1145,7 +1252,7 @@ private:
         const float d = v.dpi, B = BARRA * d;
         const D2D1_COLOR_F ink = v.inchiostro(), tenue = v.inchiostro(0.6f);
         const D2D1_COLOR_F blu = v.scuro ? D2D1::ColorF(0.40f, 0.68f, 1.0f, 1) : D2D1::ColorF(0.0f, 0.42f, 0.95f, 1);
-        zone.clear();
+        zone.clear();scrollbars[0]={};scrollbars[1]={};
         if (anim.size() != voci.size()) { anim.clear(); for (const auto& x : voci) anim.push_back(stato(x) ? 1 : 0); }
         const float rr = std::max(8.0f, raggio::vetro() - 12.0f) * d;
 
@@ -1156,9 +1263,13 @@ private:
         const std::wstring ver = versione();
         v.testo(ver.empty() ? std::wstring(testi::t(L"Impostazioni", L"Settings")) : testi::t(L"Impostazioni · ", L"Settings · ") + ver,
                 fSotto, {24 * d, 44 * d, B - 12 * d, 62 * d}, tenue);
+        const float sideTop=78*d;
+        sidebarMax=std::max(0.f,(84+SEZIONI*44)*d-H);
+        sidebarScroll=std::min(sidebarScroll,sidebarMax);
+        v.rt->PushAxisAlignedClip({0,sideTop,B,H},D2D1_ANTIALIAS_MODE_ALIASED);
         for (int s = 0; s < SEZIONI; s++) {
-            const D2D1_RECT_F r = {12 * d, (84 + s * 44) * d, B - 12 * d, (84 + s * 44 + 38) * d};
-            zone.push_back({r, 300 + s});
+            const D2D1_RECT_F r = {12*d,(84+s*44)*d-sidebarScroll,B-12*d,(84+s*44+38)*d-sidebarScroll};
+            if(r.bottom>sideTop&&r.top<H)zone.push_back({{r.left,std::max(r.top,sideTop),r.right,std::min(r.bottom,H)},300+s});
             const bool scelta = s == sezione;
             if (scelta || sopra == 300 + s) {
                 v.pen->SetColor(v.scuro ? D2D1::ColorF(1, 1, 1, scelta ? 0.10f : 0.05f) : D2D1::ColorF(0, 0, 0, scelta ? 0.06f : 0.035f));
@@ -1171,6 +1282,9 @@ private:
             iconaSezione(s, r.left + 26 * d, (r.top + r.bottom) / 2, scelta ? blu : ink);
             v.testo(nomeSezione(s), fSezione, {r.left + 48 * d, r.top, r.right - 6 * d, r.bottom}, ink);
         }
+
+        v.rt->PopAxisAlignedClip();
+        drawScroll(0,B,sideTop,H-sideTop-4*d,sidebarMax,sidebarScroll);
 
         // ---- chiudi ----
         {
@@ -1568,7 +1682,7 @@ private:
             };
             toggle(testi::t(L"Stage Manager",L"Stage Manager"),6000,s.enabled);
             toggle(testi::t(L"Carte prospettiche",L"Perspective cards"),6001,s.perspective);
-            toggle(testi::t(L"Nascondi automaticamente",L"Auto-hide"),6002,s.autoHide);
+
             toggle(testi::t(L"Stage a destra",L"Stage on the right"),6007,s.right);
             {D2D1_RECT_F r{L,y,R,y+48*d};riquadro(r,sopra==6008);aggiungiZona(r,6008);
              const wchar_t* names[]={testi::t(L"Schermo del dock",L"Dock display"),testi::t(L"Schermo principale",L"Primary display"),testi::t(L"Tutti gli schermi",L"All displays"),testi::t(L"Schermo selezionato",L"Selected display")};
@@ -1579,6 +1693,19 @@ private:
             adjust(testi::t(L"Spaziatura",L"Spacing"),6012,s.spacing,L" px");
             adjust(testi::t(L"Opacità",L"Opacity"),6014,s.opacity,L"%");
             adjust(testi::t(L"Distanza dal bordo",L"Edge gap"),6020,s.edgeGap,L" px");
+            auto surfaceRow=[&](int id,const wchar_t* label){
+                D2D1_RECT_F r{L,y,R,y+48*d};riquadro(r,sopra==id);aggiungiZona(r,id);
+                v.testo(label,fVoce,{L+16*d,y,R-16*d,y+48*d},inkS);y+=54*d;
+            };
+            surfaceRow(6002,s.reserve?clockText(L"Stage: luôn hiện, dành chỗ",L"Stage: always visible, reserve workspace"):
+                s.autoHide?clockText(L"Stage: tự ẩn",L"Stage: auto-hide"):clockText(L"Stage: hiển thị nổi",L"Stage: overlay"));
+            if(s.reserve)adjust(clockText(L"Chiều rộng vùng Stage",L"Reserved width"),6030,s.reserveWidth,L" DIP");
+            surfaceRow(6024,s.background==0?clockText(L"Nền Stage: trong suốt",L"Stage background: transparent"):
+                s.background==1?clockText(L"Nền Stage: kính",L"Stage background: glass"):
+                clockText(L"Nền Stage: màu tùy chỉnh",L"Stage background: custom color"));
+            if(s.background!=0)adjust(clockText(L"Độ đậm nền thanh Stage",L"Rail background opacity"),6025,s.railOpacity,L"%");
+            adjust(clockText(L"Độ đậm nền thẻ",L"Card background opacity"),6027,s.cardOpacity,L"%");
+            if(s.background==2)surfaceRow(6029,clockText(L"Chọn màu nền Stage",L"Choose Stage background color"));
             toggle(L"Stage Peek",6003,s.peek);
             toggle(testi::t(L"Anteprima dal vivo",L"Live preview"),6004,s.peekLive);
             toggle(testi::t(L"Animazione anteprima",L"Preview animation"),6005,s.peekAnimation);
@@ -1639,11 +1766,7 @@ private:
                 z.top = std::max(z.top, cimaSez); z.bottom = std::min(z.bottom, H);
                 if (z.bottom <= z.top) zone.erase(zone.begin() + (std::ptrdiff_t)k); else k++;
             }
-            if (massimoSez > 0) {   // barretta a destra: dove si e' e quanto c'e'
-                const float hb = visibile * visibile / alto, yb = y0 + (visibile - hb) * std::min(scorriSez / massimoSez, 1.0f);
-                v.pen->SetColor(v.scuro ? D2D1::ColorF(1, 1, 1, 0.22f * (float)e) : D2D1::ColorF(0, 0, 0, 0.18f * (float)e));
-                v.rt->FillRoundedRectangle({{W - 10 * d, yb, W - 6 * d, yb + hb}, 2 * d, 2 * d}, v.pen);
-            }
+            drawScroll(1,W,y0,visibile,massimoSez,scorriSez);
         }
         if (strato) { v.rt->PopLayer(); v.rt->SetTransform(D2D1::Matrix3x2F::Identity()); }
         v.finisci();

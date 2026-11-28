@@ -2694,8 +2694,6 @@ private:
         dc->FillRoundedRectangle({f, radius, radius}, pennello);
         pennello->SetColor(scuro ? D2D1::ColorF(1, 1, 1, 0.14f * a) : D2D1::ColorF(1, 1, 1, 0.75f * a));
         dc->DrawRoundedRectangle({{f.left + 0.5f, f.top + 0.5f, f.right - 0.5f, f.bottom - 0.5f}, std::max(0.0f, radius - 0.5f), std::max(0.0f, radius - 0.5f)}, pennello, 1.0f);
-        pennello->SetColor(D2D1::ColorF(0, 0, 0, (scuro ? 0.45f : 0.10f) * a));
-        dc->DrawRoundedRectangle({{f.left - 0.5f, f.top - 0.5f, f.right + 0.5f, f.bottom + 0.5f}, radius + 0.5f, radius + 0.5f}, pennello, 1.0f);
     }
 
     void disegnaEtichetta(bool scuro) {
@@ -4359,4 +4357,3 @@ private:
 // i metodi del centro di controllo e del launcher, in file a parte
 #include "centro.h"
 #include "launcher.h"
-

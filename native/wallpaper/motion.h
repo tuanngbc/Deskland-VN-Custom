@@ -7,6 +7,7 @@ struct MotionSpec {float speed,accel,brake,turn,angularAccel,radius;bool airborn
 struct Body {
     V2 position,velocity,target;float heading=0,angularVelocity=0,phase=0,idle=0;
     bool initialized=false,command=false;
+    double retryAt=0;
     void aim(V2 p){target=p;command=true;idle=0;} // never resets physical state
     float speed()const{return velocity.length();}
 };

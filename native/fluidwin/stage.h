@@ -5,6 +5,7 @@
 #include "menu.h"
 #include "stampa.h"
 #include <windowsx.h>
+#include <shellapi.h>
 #include <memory>
 #include <unordered_map>
 #include <utility>
@@ -13,7 +14,8 @@ namespace stage {
 struct Settings {
     bool enabled = false, perspective = false, autoHide = false, peek = true;
     bool peekLive = true, peekAnimation = true, clickActivate = true;
-    int background = 0, railOpacity = 0, cardOpacity = 12;
+    int background = 0, railOpacity = 0, cardOpacity = 12, reserveWidth = 240;
+    bool reserve = false;
     uint32_t backgroundColor = 0x18202B;
     int monitor = 0, right = 0, height = 126, spacing = 12, opacity = 95;
     int peekDelay = 450, peekSize = 640, edgeGap = 12;
@@ -136,12 +138,51 @@ class Manager {
         IDWriteTextFormat* text = nullptr;
         std::vector<Card> cards, departing;
         bool animating=false;unsigned animationFrames=0,renderFrames=0;
-        HWND foreground=nullptr;int language=-1;
+        HWND foreground=nullptr,appbar=nullptr;int language=-1;
+        RECT reservation{};bool registered=false;
+        static constexpr UINT AppBarNotice=WM_APP+40;
+        static LRESULT CALLBACK barProc(HWND h,UINT m,WPARAM w,LPARAM l) {
+            if(m==WM_NCCREATE)SetWindowLongPtrW(h,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(reinterpret_cast<CREATESTRUCTW*>(l)->lpCreateParams));
+            auto* rail=reinterpret_cast<Rail*>(GetWindowLongPtrW(h,GWLP_USERDATA));
+            if(rail&&m==AppBarNotice&&w==ABN_POSCHANGED){SetTimer(rail->glass.fin,6,40,nullptr);return 0;}
+            static const UINT explorer=RegisterWindowMessageW(L"TaskbarCreated");
+            if(rail&&m==explorer){rail->removeReservation();SetTimer(rail->glass.fin,6,40,nullptr);return 0;}
+            return DefWindowProcW(h,m,w,l);
+        }
+        void removeReservation(){
+            if(registered){registered=false;APPBARDATA data{sizeof(data)};data.hWnd=appbar;SHAppBarMessage(ABM_REMOVE,&data);}
+            reservation={};
+        }
+        void reserveSpace(){
+            if(!owner->settings.reserve)return;
+            MONITORINFO mi{sizeof(mi)};
+            if(!GetMonitorInfoW(monitor,&mi))return;
+            if(!appbar){
+                WNDCLASSW wc{};wc.hInstance=GetModuleHandleW(nullptr);wc.lpfnWndProc=barProc;wc.lpszClassName=L"TLauncher.Native.StageAppBar";
+                RegisterClassW(&wc);
+                appbar=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,wc.lpszClassName,L"",WS_POPUP,
+                    mi.rcMonitor.left,mi.rcMonitor.top,1,1,nullptr,nullptr,wc.hInstance,this);
+                if(!appbar)return;
+            }
+            APPBARDATA data{sizeof(data)};data.hWnd=appbar;data.uCallbackMessage=AppBarNotice;
+            if(!registered){registered=SHAppBarMessage(ABM_NEW,&data)!=0;if(!registered)return;}
+            const auto& cfg=owner->settings;
+            const int desired=std::max(cfg.reserveWidth,int(std::ceil(cfg.height*1.55+20+2*cfg.edgeGap)));
+            const LONG width=std::clamp(LONG(std::ceil(desired*glass.dpi)),1L,std::max(1L,(mi.rcMonitor.right-mi.rcMonitor.left)/2));
+            data.uEdge=cfg.right?ABE_RIGHT:ABE_LEFT;data.rc=mi.rcMonitor;
+            SHAppBarMessage(ABM_QUERYPOS,&data);
+            if(cfg.right)data.rc.left=data.rc.right-width;else data.rc.right=data.rc.left+width;
+            if(EqualRect(&data.rc,&reservation))return;
+            if(!SHAppBarMessage(ABM_SETPOS,&data))return;
+            reservation=data.rc;
+            SetWindowPos(appbar,nullptr,data.rc.left,data.rc.top,data.rc.right-data.rc.left,data.rc.bottom-data.rc.top,
+                SWP_NOZORDER|SWP_NOACTIVATE);
+        }
         int hover = -1, page = 0, capacity = 1;
         bool hidden = false,blocked=false,suppressed=false;RECT available{};
         ULONGLONG hoverAt = 0;
         explicit Rail(Manager* m): owner(m) {}
-        ~Rail() { clear(); if (text) text->Release(); glass.chiudi(); }
+        ~Rail() { removeReservation(); if(appbar)DestroyWindow(appbar); clear(); if (text) text->Release(); glass.chiudi(); }
         void clear() {
             vetro::fermaBattito(glass.fin,4);animating=false;
             cards.clear();departing.clear();
@@ -169,10 +210,11 @@ class Manager {
                 }
                 case WM_MOUSELEAVE:
                     KillTimer(h,2); hover=-1; owner->scheduleClosePeek(); owner->draw(*this);
-                    if(owner->settings.autoHide) SetTimer(h,3,650,nullptr);
+                    if(owner->settings.autoHide&&!owner->settings.reserve) SetTimer(h,3,650,nullptr);
                     return true;
                 case WM_TIMER:
                     if(w==4){owner->animate(*this);return true;}
+                    if(w==6){KillTimer(h,6);reserveSpace();owner->layout(*this);return true;}
                     KillTimer(h,(UINT_PTR)w);
                     if(w==2&&hover>=0&&hover<int(cards.size())) owner->openPeek(*this,cards[hover].source());
                     if(w==3&&hover<0){if(menu::aperti||owner->pointerInside())SetTimer(h,3,350,nullptr);else{hidden=true;owner->closePeek();owner->layout(*this);}}
@@ -339,12 +381,12 @@ private:
         for(auto m:monitors) {
             if(settings.monitor!=2&&m!=chosen) continue;
             auto r=std::make_unique<Rail>(this);r->monitor=m;
-            if(!r->glass.crea(L"TLauncher.Native.Stage",vetro::procedura<Rail>,r.get(),false,2,settings.background==1)) continue;
-            r->glass.dpi=vetro::dpiMonitor(m);r->text=r->glass.formato(11*r->glass.dpi);
+            if(!r->glass.crea(L"TLauncher.Native.Stage",vetro::procedura<Rail>,r.get(),false,2,settings.background==1&&settings.railOpacity>0)) continue;
+            r->glass.dpi=vetro::dpiMonitor(m);r->text=r->glass.formato(11*r->glass.dpi);r->reserveSpace();
             rebuild(*r);rails.push_back(std::move(r));
         }
     }
-    RECT work(Rail& rail) const {
+    RECT work(Rail& rail, bool useReservation=true) const {
         MONITORINFO mi{};mi.cbSize=sizeof(mi);GetMonitorInfoW(rail.monitor,&mi);
         RECT area=menu::areaLibera(rail.monitor,mi.rcWork);
         // Reserve the actual Notch/Dock footprint without altering Windows work areas.
@@ -352,7 +394,11 @@ private:
             if(r.right-r.left>=r.bottom-r.top){if(r.bottom>=mi.rcMonitor.bottom-1)area.bottom=std::min(area.bottom,r.top);else if(r.top<=mi.rcMonitor.top+1)area.top=std::max(area.top,r.bottom);}
             else{if(r.left<=mi.rcMonitor.left+1)area.left=std::max(area.left,r.right);else if(r.right>=mi.rcMonitor.right-1)area.right=std::min(area.right,r.left);}
         }}
-        if(exclusions){
+        if(useReservation&&!IsRectEmpty(&rail.reservation)){
+            area.left=rail.reservation.left;area.right=rail.reservation.right;
+            area.top=std::max(area.top,rail.reservation.top);area.bottom=std::min(area.bottom,rail.reservation.bottom);
+        }
+        if(exclusions&&useReservation){
             const int width=int((settings.height*1.55+20)*rail.glass.dpi),gap=int(settings.edgeGap*rail.glass.dpi);
             RECT side{settings.right?area.right-width-gap:area.left+gap,area.top,settings.right?area.right-gap:area.left+width+gap,area.bottom};
             // Subtract all intersecting intervals before choosing the largest
@@ -412,7 +458,7 @@ private:
         if(!rail.suppressed&&!(fullscreen&&fullscreen(rail.monitor)))ShowWindow(rail.glass.fin,SW_SHOWNOACTIVATE);
         rail.animating=!rail.departing.empty();
         for(auto& c:rail.cards){c.sample(now);rail.animating|=c.moving(now);preview(rail,c);}
-        if(rail.cards.empty()&&rail.departing.empty())ShowWindow(rail.glass.fin,SW_HIDE);
+        if(!settings.reserve&&rail.cards.empty()&&rail.departing.empty())ShowWindow(rail.glass.fin,SW_HIDE);
         if(rail.animating)vetro::battito(rail.glass.fin,4);else vetro::fermaBattito(rail.glass.fin,4);
         draw(rail);
     }
@@ -526,7 +572,7 @@ private:
             auto back=project;
             OffsetRect(&back.bounds,LONG((settings.right?-1:1)*layer*4*d),LONG(-layer*2*d));
             if(auto path=back.shape(glass.f2d)){
-                glass.pen->SetColor(D2D1::ColorF(.14f,.17f,.22f,.87f*alpha));
+                glass.pen->SetColor(stageFill(glass,.8f*alpha*settings.cardOpacity/100.f));
                 glass.rt->FillGeometry(path,glass.pen);
                 glass.pen->SetColor(D2D1::ColorF(.69f,.75f,.84f,.30f*alpha));
                 glass.rt->DrawGeometry(path,glass.pen,d);
@@ -535,7 +581,7 @@ private:
         }
         auto path=project.shape(glass.f2d);
         if(!path)return;
-        glass.pen->SetColor(D2D1::ColorF(.10f,.12f,.16f,(hovered?.96f:.87f)*alpha));
+        glass.pen->SetColor(stageFill(glass,(hovered?1.f:.88f)*alpha*settings.cardOpacity/100.f));
         glass.rt->FillGeometry(path,glass.pen);
         if(card.bitmap) {
             const auto source=card.bitmap->GetPixelSize();
@@ -562,11 +608,22 @@ private:
         const RECT icon=projectedIcon(card.rect,d);
         if(card.icon)glass.rt->DrawBitmap(card.icon,{float(icon.left),float(icon.top),float(icon.right),float(icon.bottom)},alpha);
     }
+    D2D1_COLOR_F stageFill(const vetro::Finestra& glass,float opacity) const {
+        if(settings.background==2) {
+            const auto c=settings.backgroundColor;
+            return D2D1::ColorF(float(c&255)/255,float((c>>8)&255)/255,float((c>>16)&255)/255,opacity);
+        }
+        return glass.scuro?D2D1::ColorF(.10f,.12f,.16f,opacity):D2D1::ColorF(.93f,.95f,.98f,opacity);
+    }
     void draw(Rail& rail) {
-        auto& v=rail.glass;if(!v.inizia())return;
+        auto& v=rail.glass;if(!v.inizia(0))return;
         rail.renderFrames++;rail.foreground=GetAncestor(GetForegroundWindow(),GA_ROOT);rail.language=testi::attuale();
         testi::aggiornaFormato(v.fdw,rail.text);
         if(rail.hidden){v.finisci();return;}
+        if(settings.background!=0&&settings.railOpacity>0){
+            v.pen->SetColor(stageFill(v,settings.railOpacity/100.f));
+            v.rt->FillRectangle({0,0,float(v.W),float(v.H)},v.pen);
+        }
         const float d=v.dpi;
         auto drawCard=[&](Card& c,bool outgoing,bool hovered){
             if(c.generation!=v.giroRt){if(outgoing)c.release();else preview(rail,c);}
@@ -577,7 +634,7 @@ private:
             if(settings.perspective){drawProjection(v,c,active,hovered,alpha);return;}
             auto r=c.rect;D2D1_RECT_F f{float(r.left),float(r.top),float(r.right),float(r.bottom)};
             const float cardAlpha=std::clamp(settings.cardOpacity,0,100)/100.0f;
-            v.pen->SetColor(v.inchiostro((hovered?.20f:.07f)*alpha*cardAlpha));v.rt->FillRoundedRectangle({f,8*d,8*d},v.pen);
+            v.pen->SetColor(stageFill(v,(hovered?1.f:.88f)*alpha*cardAlpha));v.rt->FillRoundedRectangle({f,8*d,8*d},v.pen);
             if(active){v.pen->SetColor(D2D1::ColorF(.1f,.55f,1,alpha));v.rt->DrawRoundedRectangle({f,8*d,8*d},v.pen,2*d);}
             if(c.bitmap){auto size=c.bitmap->GetPixelSize();RECT dest=r;dest.bottom-=int(25*d);dest=aspectFit(size.width,size.height,dest,false);v.rt->DrawBitmap(c.bitmap,{float(dest.left),float(dest.top),float(dest.right),float(dest.bottom)},alpha);}
             if(c.icon)v.rt->DrawBitmap(c.icon,{f.left+4*d,f.bottom-23*d,f.left+24*d,f.bottom-3*d},alpha);
@@ -591,11 +648,11 @@ private:
     void openPeek(Rail& rail,const Window& w) {
         closePeek();if(!settings.peek||!w.valid()||rail.blocked||rail.suppressed)return;
         if(!peek.glass.crea(L"TLauncher.Native.StagePeek",vetro::procedura<Peek>,&peek,false))return;
-        peek.source=w;const float d=rail.glass.dpi;RECT a=work(rail),rr{};GetWindowRect(rail.glass.fin,&rr);
+        peek.source=w;const float d=rail.glass.dpi;RECT a=work(rail,false),rr{};GetWindowRect(rail.glass.fin,&rr);
         RECT wr{};GetWindowRect(w.hwnd,&wr);int sw=wr.right-wr.left,sh=wr.bottom-wr.top;
         bool cached=IsIconic(w.hwnd)||!settings.peekLive;
         if(cached){peek.bitmap=snapshot(w,peek.glass);if(!peek.bitmap){closePeek();return;}auto s=peek.bitmap->GetPixelSize();sw=s.width;sh=s.height;}
-        const int available=int(a.right-a.left-(rr.right-rr.left)-32*d);
+        const int available=int(a.right-a.left-((IsRectEmpty(&rail.reservation)?rr.right-rr.left:0))-32*d);
         if(available<80*d||a.bottom-a.top<96*d||sw<=0||sh<=0){closePeek();return;}
         peek.glass.dpi=d;
         RECT r=aspectFit(sw,sh,{0,0,std::min(int(settings.peekSize*d),available),int((a.bottom-a.top)*.8)},!cached);

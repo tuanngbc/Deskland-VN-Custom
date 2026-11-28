@@ -42,7 +42,7 @@ inline void registerFonts() {
     const DWORD length=GetModuleFileNameW(nullptr,executable,DWORD(std::size(executable)));
     if(!length||length>=std::size(executable))return;
     const auto base=std::filesystem::path(executable).parent_path()/L"assets"/L"widget";
-    for(const auto* file:{L"steelfish rg.ttf",L"la Compagnie des Ombres.ttf"})
+    for(const auto* file:{L"steelfish rg.ttf",L"steelfish rg it.ttf",L"la Compagnie des Ombres.ttf",L"Gravity-Light.ttf"})
         AddFontResourceExW((base/file).c_str(),FR_PRIVATE,nullptr);
 }
 inline HWND desktopHost() {
@@ -171,8 +171,8 @@ private:
         UINT dpi=96,yDpi=96;
         if(FAILED(GetDpiForMonitor(screen.handle,MDT_EFFECTIVE_DPI,&dpi,&yDpi)))dpi=96;
         const float scale=config.scale*dpi/9600.f;
-        const int width=std::max(1,std::min(int(screen.area.right-screen.area.left),int(std::ceil(480*scale))));
-        const int height=std::max(1,std::min(int(screen.area.bottom-screen.area.top),int(std::ceil((config.date?(config.style==0?210:135):105)*scale))));
+        const int width=std::max(1,std::min(int(screen.area.right-screen.area.left),int(std::ceil((config.style==0?500:320)*scale))));
+        const int height=std::max(1,std::min(int(screen.area.bottom-screen.area.top),int(std::ceil((config.date?(config.style==0?230:135):105)*scale))));
         HDC screenDC=GetDC(nullptr);
         if(!screenDC)return;
         HDC dc=CreateCompatibleDC(screenDC);
@@ -193,20 +193,26 @@ private:
         wchar_t hour[40]{},weekday[128]{},date[128]{};
         GetTimeFormatEx(testi::locale(),0,&time,config.seconds?L"HH:mm:ss":L"HH:mm",hour,40);
         GetDateFormatEx(testi::locale(),0,&time,L"dddd",weekday,128,nullptr);
-        GetDateFormatEx(testi::locale(),DATE_LONGDATE,&time,nullptr,date,128,nullptr);
+        if(config.style==0&&testi::attuale()==testi::INGLESE){
+            wchar_t month[48]{};GetDateFormatEx(L"en-US",0,&time,L"MMMM",month,48,nullptr);
+            const auto day=time.wDay;
+            const wchar_t* suffix=day>=11&&day<=13?L"th":day%10==1?L"st":day%10==2?L"nd":day%10==3?L"rd":L"th";
+            swprintf(date,128,L"%u%ls %ls %u",unsigned(day),suffix,month,unsigned(time.wYear));
+        }else GetDateFormatEx(testi::locale(),0,&time,L"d MMMM yyyy",date,128,nullptr);
+        if(config.style==0)CharUpperBuffW(date,DWORD(wcslen(date)));
         const wchar_t* straight=config.font.empty()?(config.style==0?L"Steelfish Rg":L"Segoe UI Variable Text"):config.font.c_str();
-        const wchar_t* script=config.font.empty()&&config.style==0&&language!=7?L"la Compagnie des Ombres":straight;
+        const wchar_t* script=config.font.empty()&&config.style==0?L"la Compagnie des Ombres":straight;
         const auto draw=[&](const wchar_t* value,const wchar_t* face,int size,int top,int bottom){
             RECT rect{0,LONG(top*scale),LONG(width),std::min(LONG(height),LONG(bottom*scale))};
-            HFONT font=CreateFontW(-std::max(1,int(size*scale)),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,
+            HFONT font=CreateFontW((config.style==0?1:-1)*std::max(1,int(size*scale)),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,
                 OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,ANTIALIASED_QUALITY,DEFAULT_PITCH,face);
             auto previous=font?SelectObject(dc,font):nullptr;
-            DrawTextW(dc,value,-1,&rect,DT_CENTER|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_END_ELLIPSIS);
+            DrawTextW(dc,value,-1,&rect,DT_CENTER|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_NOCLIP);
             if(font){SelectObject(dc,previous);DeleteObject(font);}
         };
-        draw(hour,straight,config.style==0?100:70,0,100);
+        draw(hour,straight,config.style==0?100:70,0,config.style==0?108:100);
         if(config.date){
-            if(config.style==0){draw(date,straight,29,147,197);draw(weekday,script,64,71,153);}
+            if(config.style==0){draw(date,straight,35,150,193);draw(weekday,script,85,70,163);}
             else draw(date,straight,27,86,128);
         }
         GdiFlush();

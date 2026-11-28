@@ -100,6 +100,26 @@ class SceneRuntime {
         for(float ring:{24.f,48.f,80.f,128.f,192.f})for(int j=0;j<16;j++){float a=j*.392699f;V2 q=wanted+V2{cos(a),sin(a)}*ring;if(navigable(q,radius,water))return q;}
         return fallback;
     }
+    template<class Valid>
+    bool waterRecovery(Body& body,float radius,const Valid& valid) {
+        if(body.initialized&&!valid(body.position,radius)) {
+            body.initialized=false;body.command=false;body.velocity={};body.angularVelocity=0;
+            body.retryAt=lastTime+.35;
+        }
+        if(body.initialized)return true;
+        if(lastTime<body.retryAt)return false;
+        if(body.retryAt>0) {
+            const V2 previous=body.position;
+            for(float ring:{16.f,32.f,56.f,88.f,136.f,200.f,300.f})for(int j=0;j<24;j++) {
+                const float angle=j*.2617994f;
+                const V2 site=previous+V2{cos(angle),sin(angle)}*ring;
+                if(!valid(site,radius))continue;
+                body.position=body.target=site;body.heading=angle;body.idle=0;
+                body.retryAt=0;body.initialized=true;return true;
+            }
+        }
+        return true; // let the existing scene-wide spawn search try next
+    }
     void stepCraft(const std::string& group,size_t index,Body& craft,const std::vector<Body>& previous,
                    MotionSpec spec,float time) {
         const auto key=std::make_pair(group,index);
@@ -184,10 +204,18 @@ class SceneRuntime {
         MotionSpec spec{speed,craft?12.f:bird?40.f:16.f,craft?10.f:bird?45.f:18.f,craft?1.4f:bird?1.8f:2.4f,craft?2.f:5.f,craft?30.f:swimmer?20.f:bird?19.f:8.f,!water};
         int salt=0;for(auto ch:std::string(uniform))salt=(salt*33+ch)%10000;
         const std::string group=uniform;auto&list=groups[group];n=std::clamp(n,0,int(N));list.resize(n);std::array<Vec4,N> values{},motion{};
-        for(int i=0;i<n;i++){auto&b=list[i];if(!b.initialized){
+        for(int i=0;i<n;i++){auto&b=list[i];
+            if(water){
+                const bool was=b.initialized;
+                const auto valid=[&](V2 q,float r){return navigable(q,r,true);};
+                const bool ready=waterRecovery(b,spec.radius,valid);
+                if(was&&!b.initialized)routes.erase({group,size_t(i)});
+                if(!ready)continue;
+            }
+            if(!b.initialized){
                 for(int trial=0;trial<768;trial++){V2 q{w*(.04f+.92f*hash(i*773+trial,index,210+salt)),h*(y0+(y1-y0)*hash(i*773+trial,index,211+salt))};
                     if(!navigable(q,spec.radius,water))continue;bool clear=true;for(int j=0;j<i;j++)if(list[j].initialized&&(list[j].position-q).length()<spec.radius*3)clear=false;if(!clear)continue;
-                    b.position=b.target=q;b.heading=hash(i,index,201+salt)*6.283185f;b.phase=float(i);b.initialized=true;b.idle=10;routes.erase({group,size_t(i)});break;}
+                    b.position=b.target=q;b.heading=hash(i,index,201+salt)*6.283185f;b.phase=float(i);b.initialized=true;b.idle=10;b.retryAt=0;routes.erase({group,size_t(i)});break;}
             }
         }
         {CpuMeasure simulation{graphicsStats.simulationMs};
@@ -223,14 +251,24 @@ class SceneRuntime {
         auto& list=groups[uniform];n=std::clamp(n,0,int(N));list.resize(n);std::array<Vec4,N> values{};
         const float radius=turtle?20.f:38.f;
         for(int i=0;i<n;i++){auto& b=list[i];auto& state=turtle?turtleState[i]:schoolState[i];
+            const bool was=b.initialized;
+            const auto valid=[&](V2 q,float r){return navigable(q,r,true);};
+            const bool ready=waterRecovery(b,radius,valid);
+            if(was&&!b.initialized){routes.erase({uniform,size_t(i)});state.wander=0;state.remaining=0;}
+            if(!ready)continue;
             if(!b.initialized){for(int trial=0;trial<768;trial++){V2 q{w*(.05f+.9f*hash(i*773+trial,index,turtle?703:701)),h*(.25f+.6f*hash(i*773+trial,index,turtle?704:702))};
                 if(!navigable(q,radius,true))continue;bool clear=true;for(int j=0;j<i;j++)if(list[j].initialized&&(list[j].position-q).length()<radius*3)clear=false;if(!clear)continue;
-                b.position=b.target=q;b.heading=hash(i,index,705)*6.283185f;b.initialized=true;state.phase=hash(i,index,706)*6.283185f;state.wander=0;state.remaining=12+hash(i,index,707)*10;break;}}
+                b.position=b.target=q;b.heading=hash(i,index,705)*6.283185f;b.initialized=true;b.retryAt=0;state.phase=hash(i,index,706)*6.283185f;state.wander=0;state.remaining=12+hash(i,index,707)*10;break;}}
         }
         for(int step=0;step<simulationSteps;step++){
             // Read one coherent flock state so update order cannot favor a leader.
             const auto before=list;
-            for(int i=0;i<n;i++){auto& b=list[i];auto& state=turtle?turtleState[i]:schoolState[i];if(!b.initialized)continue;
+            for(int i=0;i<n;i++){auto& b=list[i];auto& state=turtle?turtleState[i]:schoolState[i];
+            const bool was=b.initialized;
+            const auto valid=[&](V2 q,float r){return navigable(q,r,true);};
+            const bool ready=waterRecovery(b,radius,valid);
+            if(was&&!b.initialized){routes.erase({uniform,size_t(i)});state.wander=0;state.remaining=0;}
+            if(!ready)continue;if(!b.initialized)continue;
                 state.remaining-=fixedStep;state.wander-=fixedStep;
                 if(state.remaining<=0){
                     if(turtle&&state.mood==WaterMood::Cruise){state.mood=WaterMood::Rest;state.remaining=2+hash(i,int(simulationTime),708)*4;}
@@ -617,7 +655,15 @@ private:
         std::array<Vec4,8> fish{},body{};
         for(int i=0;i<n;i++){auto&b=fishActors[i].body;
             auto valid=[&](V2 q,float radius){return fishWater(q,radius,aquarium);};
-            if(!b.initialized){for(int trial=0;trial<768;trial++){V2 q{w*(.08f+.84f*hash(i*773+trial,index,71)),h*(.26f+.60f*hash(i*773+trial,index,72))};if(valid(q,aquarium?44.f:12.f)){b.position=b.target=q;b.heading=hash(i,3,4)*6.28f;b.initialized=true;b.idle=10;fishActors[i].x=q.x;fishActors[i].y=q.y;fishActors[i].heading=b.heading;break;}}}
+            if(fishActors[i].mode==FishMode::Swim){
+                const bool was=b.initialized;
+                if(!waterRecovery(b,aquarium?44.f:12.f,valid)){
+                    if(was){routes.erase({"bait",size_t(i)});if(hookedFish==i){hookedFish=-1;fishing=5;fishingAge=0;}}
+                    continue;
+                }
+                if(!was&&b.initialized){fishActors[i].x=b.position.x;fishActors[i].y=b.position.y;}
+            }
+            if(!b.initialized){for(int trial=0;trial<768;trial++){V2 q{w*(.08f+.84f*hash(i*773+trial,index,71)),h*(.26f+.60f*hash(i*773+trial,index,72))};if(valid(q,aquarium?44.f:12.f)){b.position=b.target=q;b.heading=hash(i,3,4)*6.28f;b.initialized=true;b.idle=10;b.retryAt=0;fishActors[i].x=q.x;fishActors[i].y=q.y;fishActors[i].heading=b.heading;break;}}}
         }
         {CpuMeasure simulation{graphicsStats.simulationMs};
         for(int step=0;step<simulationSteps;step++)for(int i=0;i<n;i++){
