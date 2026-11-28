@@ -267,6 +267,14 @@ int main(int argc,char**argv){try{
         for(int i=0;i<5;++i)draw(.04f);check(porch.probePorch().poses[0]==before.poses[0],"Corgi pose changed before roll midpoint");
         for(int i=0;i<4;++i)draw(.04f);check(porch.probePorch().poses[0]!=(before.poses[0]),"Corgi did not transition through roll midpoint");
         for(int i=0;i<8;++i)draw(.04f);check(porch.probePorch().rolls[0]<0,"Corgi roll failed to settle");
+        cfg.sceneParams["summer-porch"]["sunbeams"]=.2;draw(0);check(porch.probePorchBugs().size()==1,"Porch insect population ignores scene setting");
+        porch.click(1080*.2f,700*.70f);check(porch.probePorchBugs().size()==2,"Garden click does not release an insect");
+        const auto release=porch.probePorchBugs().back().position;check((release-V2{1080*.2f,700*.70f}).length()<.01f,"Released insect jumps from click position");
+        for(int i=0;i<100;++i){auto before=porch.probePorchBugs().back().position;draw(.04f);check((porch.probePorchBugs().back().position-before).length()<3,"Porch insect moved discontinuously");}
+        check(porch.probePorchBugs().size()==2,"Temporary insect expires early");
+        for(int i=0;i<130;++i)draw(.04f);check(porch.probePorchBugs().size()==1,"Temporary insect did not expire");
+        for(int i=0;i<20;++i)porch.click(1080*.2f,700*.70f);check(porch.probePorchBugs().size()==10,"Porch insect population is unbounded");
+        report<<"PORCH_SPECIFIC_INSECT_FLIGHT_CLICK_TTL_AND_BOUND=PASS\n";
         png(evidence/"porch-native-interactions.png",96,54,capture(96,54));
         report<<"PORCH_FAN_STOP_RESTART_AND_WIND_SPRING=PASS\nPORCH_CHIME_BIRD_MELON_CORGI_LIFECYCLE=PASS\n";
     }

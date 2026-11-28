@@ -101,3 +101,6 @@ The previous locale-generation-only assertion was insufficient evidence for actu
 
 
 Hosted actual-Dock regression is added for collapsed mode on four edges: real pointer hover/retraction, thin-bar orientation/containment, stable existing icon destinations across expanded/collapsed geometry, idle render settling, game fullscreen hide/resume and unchanged work area. The fixture uses the accepted Dock window/renderer and existing border polling; cleanup restores taskbar state. It never runs on the owner machine. CI pending; physical mixed-DPI, popup/drag retention and owner naturalness remain required.
+
+
+Summer Porch insects now use the audited scene-specific acceleration/wing phase, gentle velocity limits, garden-edge turns, sunbeam-dependent permanent population and a nine-second temporary insect from a garden click. They share the existing shader uniforms and remain capped at ten; the generic bird steering path is removed for this scene. Hosted tests cover continuous flight, exact click origin, lifetime and population bounds; CI pending.

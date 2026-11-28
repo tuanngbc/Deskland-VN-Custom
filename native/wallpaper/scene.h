@@ -33,6 +33,8 @@ class SceneRuntime {
     static constexpr std::array<Vec4,4> corgiSlots{{{.415f,.508f,1,0},{.580f,.556f,1.06f,0},{.496f,.522f,.58f,1},{.462f,.592f,.88f,2}}};
     std::array<int,4> corgiPose{0,1,0,2},corgiNext{0,1,0,2};std::array<float,4> corgiHappy{},corgiRoll{-1,-1,-1,-1},corgiWait{18,26,22,30},corgiBreath{};Spring chime;
     float birdHop=0,melonRefill=0,fanPhase=0,fanOscillation=.4f;
+    struct PorchBug{V2 position,velocity;float phase=0,ttl=-1;};std::vector<PorchBug> porchBugs;
+
     Body football;std::array<Body,22> players{};
     std::array<V2,22> formation{};int formationCount=0,ballOwner=-1,ballReceiver=-1,lastKicker=-1;
     std::array<int,2> footballScore{};float ballHold=.85f,ballPickup=0,ballDrag=2.05f,ballZ=0,ballVZ=0,footballTempo=1;
@@ -214,6 +216,7 @@ public:
     // Product builds have no runtime override or owner-facing probe controls.
     V2 probeMeadowKitten()const{return meadowCat;}
     float probeMeadowTail()const{return meadowTail.x;}
+    const auto& probePorchBugs()const{return porchBugs;}
     struct PorchStatus {float fanYaw,fanBlade,chimeAngle,chimeVelocity,bird;int bites;std::array<int,4> poses;std::array<float,4> rolls,happy;};
     PorchStatus probePorch()const{return {sin(fanOscillation)*.85f,fanPhase,chime.x,chime.v,birdHop,melonBites,corgiPose,corgiRoll,corgiHappy};}
     void probeCloud(V2 p,float radius){probeCloudCenter=p;probeCloudRadius=radius;}
@@ -421,7 +424,8 @@ private:
         if(hypot(x-w*.704f,y-(h*.518f-58*s))<68*s){fanMultiplier=fanMultiplier==1?1.8f:fanMultiplier>1.4f?.4f:fanMultiplier>.1f?0:1;fx.value[3]=1;return;}
         if(hypot(x-w*.346f,y-(h*.095f+58*s))<52*s){chime.v=chime.x>=0?-4.2f:4.2f;birdHop=.01f;fx.value[3]=2;return;}
         if(hypot(x-(w*.702f+32*s),y-(h*.592f-6*s))<52*s){melonBites=(melonBites+1)%4;melonRefill=6.5f;fx.value[3]=3;return;}
-        if(hypot(x-w*.848f,y-h*.676f)<36*s){birdHop=.01f;fx.value[3]=0;}
+        if(hypot(x-w*.848f,y-h*.676f)<36*s){birdHop=.01f;fx.value[3]=0;return;}
+        if(porchBugs.size()<10){float angle=random()*6.283185f;porchBugs.push_back({{x,y},{cos(angle)*34,-18+sin(angle)*14},random()*6.283185f,9});}
     }
     std::array<Vec4,8> effectsAsFx(){std::array<Vec4,8> values{};for(size_t i=0;i<values.size();i++){values[i]=effects[(effectNext+effects.size()-1-i)%effects.size()].value;if(values[i][2]>5)values[i]={0,0,-1,0};else if(std::string(catalog()[index].id)!="summer-porch")values[i][3]=fishing==4?1.f:0.f;}return values;}
     static void catPose(Cat&cat,int pose){if(cat.pose==pose)return;cat.previousPose=cat.pose;cat.pose=pose;cat.poseBlend=0;}
@@ -537,6 +541,13 @@ private:
     void renderPorch(const Config&c,float w,float h,float t,float dt){
         const float fanSpeed=std::clamp(p(c,"fanSpeed",1)*fanMultiplier,0.f,2.4f);
         int n=std::clamp(int(p(c,"corgis",3)),1,4);std::array<Vec4,4> a{},b{};
+        const int permanentWanted=std::clamp(int(std::lround(p(c,"sunbeams",1)*5)),1,6);
+        auto permanent=[&]{return std::count_if(porchBugs.begin(),porchBugs.end(),[](const PorchBug& bug){return bug.ttl<0;});};
+        while(permanent()>permanentWanted){auto i=std::find_if(porchBugs.begin(),porchBugs.end(),[](const PorchBug& bug){return bug.ttl<0;});porchBugs.erase(i);}
+        while(permanent()<permanentWanted){
+            if(porchBugs.size()>=10){auto i=std::find_if(porchBugs.begin(),porchBugs.end(),[](const PorchBug& bug){return bug.ttl>=0;});if(i==porchBugs.end())break;porchBugs.erase(i);}
+            float angle=random()*6.283185f;porchBugs.push_back({{random()*w*.65f,h*(.2f+random()*.68f)},{cos(angle)*24,sin(angle)*14},random()*6.283185f,-1});
+        }
         // Audited fan yaw/blade phases stop together; the chime follows a
         // wind target through its own damped spring, including click inertia.
         for(int step=0;step<simulationSteps;step++){
@@ -545,13 +556,23 @@ private:
             chime.v+=((windTarget-chime.x)*14-chime.v*2.6f)*fixedStep;chime.x=std::clamp(chime.x+chime.v*fixedStep,-.65f,.65f);
             if(birdHop>0){birdHop+=fixedStep*2.4f;if(birdHop>=1)birdHop=0;}
             if(melonBites>0){melonRefill-=fixedStep;if(melonRefill<=0)melonBites=0;}
+            for(auto& bug:porchBugs){bug.phase=wrap(bug.phase+fixedStep*11.5f,6.283185f);
+                bug.velocity.x=std::clamp(bug.velocity.x+(random()-.5f)*90*fixedStep,-52.f,52.f);bug.velocity.y=std::clamp(bug.velocity.y+(random()-.5f)*70*fixedStep,-36.f,36.f);
+                bug.position=bug.position+bug.velocity*fixedStep;
+                if(bug.position.x<16)bug.velocity.x=abs(bug.velocity.x);else if(bug.position.x>w*.72f)bug.velocity.x=-abs(bug.velocity.x);
+                if(bug.position.y<h*.14f)bug.velocity.y=abs(bug.velocity.y);else if(bug.position.y>h-72)bug.velocity.y=-abs(bug.velocity.y);
+                if(bug.ttl>=0)bug.ttl=std::max(0.f,bug.ttl-fixedStep);
+            }
+            std::erase_if(porchBugs,[](const PorchBug& bug){return bug.ttl==0;});
             for(int i=0;i<n;i++){corgiHappy[i]=std::max(0.f,corgiHappy[i]-fixedStep*.75f);corgiBreath[i]+=fixedStep*1.85f;
             if(corgiRoll[i]>=0){float previous=corgiRoll[i];corgiRoll[i]+=fixedStep*1.85f;if(previous<.5f&&corgiRoll[i]>=.5f)corgiPose[i]=corgiNext[i];if(corgiRoll[i]>=1)corgiRoll[i]=-1;}
             else {corgiWait[i]-=fixedStep;if(corgiWait[i]<=0){corgiNext[i]=(corgiPose[i]+1+int(random()>.55f))%3;corgiRoll[i]=0;corgiWait[i]=16+random()*18;}}}}
         for(int i=0;i<n;i++){auto slot=corgiSlots[i];a[i]={w*slot[0],h*slot[1],float(corgiPose[i]),std::max(0.f,corgiRoll[i])};b[i]={slot[2],slot[3],corgiBreath[i]+i,corgiHappy[i]};}
         for(int i=0;i<n;i++)for(int j=i+1;j<n;j++)if(a[j][1]<a[i][1]){std::swap(a[i],a[j]);std::swap(b[i],b[j]);}program.f("uCorgiN",float(n));array("uCorgiA",a);array("uCorgiB",b);
         float day=p(c,"timeOfDay",0);if(day==3){SYSTEMTIME st{};GetLocalTime(&st);int minutes=st.wHour*60+st.wMinute;day=minutes>=360&&minutes<990?0:minutes>=990&&minutes<1140?1:2;}
-        program.f("uDayMode",day);program.f("uSunbeams",p(c,"sunbeams",1));program.f("uFanSpeed",fanSpeed);program.v4("uFanState",{w*.704f,h*.518f,sin(fanOscillation)*.85f,fanPhase});program.v4("uProps",{chime.x,-1.f,float(melonBites),birdHop});flyers<10>("uBugs","uBugN",8,w,h,t,6);
+        program.f("uDayMode",day);program.f("uSunbeams",p(c,"sunbeams",1));program.f("uFanSpeed",fanSpeed);program.v4("uFanState",{w*.704f,h*.518f,sin(fanOscillation)*.85f,fanPhase});program.v4("uProps",{chime.x,-1.f,float(melonBites),birdHop});
+        std::array<Vec4,10> bugs{};for(size_t i=0;i<porchBugs.size();++i){const auto& bug=porchBugs[i];bugs[i]={bug.position.x,bug.position.y,bug.velocity.x>=0?1.f:-1.f,bug.phase};}
+        array("uBugs",bugs);program.f("uBugN",float(porchBugs.size()));
     }
     void renderCommute(const Config&c,float w,float h,float t,float hour,const std::array<Vec4,6>&fx){
         // Audited Drive -> braking -> Stop/doors -> depart -> Off lifecycle.
