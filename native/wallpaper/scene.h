@@ -42,7 +42,7 @@ class SceneRuntime {
     std::unique_ptr<BoxingModel> boxing;
     uint32_t rng=0x731f91u;
     Geometry geometry;bool geometryExplicit=false,placementDirty=true;int lastPalmCount=-1;
-    PalmLayout palmLayout;Body boyBody;V2 meadowCat{};Spring meadowTail;bool catPlaced=false;float boyGait=0,boyTug=0,boyNext=7;
+    PalmLayout palmLayout;Body boyBody;V2 meadowCat{};Spring meadowTail;bool catPlaced=false;float boyGait=0,boyTug=0,boyNext=7,boyPullNext=2.2f;MeadowKite meadowKite;
     std::array<Vec4,8> lanternLayout{};std::array<float,8> lanternSwing{};int lanternCount=0,lanternWant=-1;bool lanternDirty=true;
     enum class WaterMood {Cruise,Forage,Startle,Rest,Curious};
     struct SwimState {WaterMood mood=WaterMood::Cruise;float remaining=0,phase=0,wander=0;};
@@ -217,7 +217,7 @@ public:
         busDoors=other.busDoors;busWheel=other.busWheel;busWait=other.busWait;busHonk=other.busHonk;busState=other.busState;
         busStop=other.busStop;rng=other.rng;geometry=other.geometry;geometryExplicit=other.geometryExplicit;lastPalmCount=other.lastPalmCount;
         palmLayout=other.palmLayout;boyBody=other.boyBody;meadowCat=other.meadowCat;meadowTail=other.meadowTail;catPlaced=other.catPlaced;
-        boyGait=other.boyGait;boyTug=other.boyTug;boyNext=other.boyNext;lanternLayout=other.lanternLayout;lanternSwing=other.lanternSwing;
+        boyGait=other.boyGait;boyTug=other.boyTug;boyNext=other.boyNext;boyPullNext=other.boyPullNext;meadowKite=other.meadowKite;lanternLayout=other.lanternLayout;lanternSwing=other.lanternSwing;
         lanternCount=other.lanternCount;lanternWant=other.lanternWant;schoolState=other.schoolState;turtleState=other.turtleState;feedPoint=other.feedPoint;
         feedAge=other.feedAge;groups=other.groups;remainder=other.remainder;simulationTime=other.simulationTime;routes=other.routes;
         pressedAt=other.pressedAt;pressed=other.pressed;dragged=other.dragged;capturedGroup=other.capturedGroup;capturedIndex=other.capturedIndex;
@@ -244,6 +244,8 @@ public:
     // Product builds have no runtime override or owner-facing probe controls.
     V2 probeMeadowKitten()const{return meadowCat;}
     float probeMeadowTail()const{return meadowTail.x;}
+    const MeadowKite& probeMeadowKite()const{return meadowKite;}
+    float probeMeadowGait()const{return boyGait;}
     const auto& probePorchBugs()const{return porchBugs;}
     struct PorchStatus {float fanYaw,fanBlade,chimeAngle,chimeVelocity,bird;int bites;std::array<int,4> poses;std::array<float,4> rolls,happy;};
     PorchStatus probePorch()const{return {sin(fanOscillation)*.85f,fanPhase,chime.x,chime.v,birdHop,melonBites,corgiPose,corgiRoll,corgiHappy};}
@@ -283,7 +285,7 @@ public:
                 aimActor(name,i,target,r,water);
             }}
         const std::string id=catalog()[index].id;
-        if(id=="meadow"){float radius=geometry.meadowCatSize()*.5f;if(catPlaced&&Box{meadowCat.x-radius,meadowCat.y-radius,2*radius,2*radius}.contains({x,y}))meadowTail.v+=.9f;else if(boyBounds().contains({x,y}))boyTug=1;else if(navigable({x,y},70,false)){boyBody.aim({x,y});boyNext=age+18;}}
+        if(id=="meadow"){float radius=geometry.meadowCatSize()*.5f;if(catPlaced&&Box{meadowCat.x-radius,meadowCat.y-radius,2*radius,2*radius}.contains({x,y}))meadowTail.v+=.9f;else if(boyBounds().contains({x,y})){boyTug=1.12f;boyPullNext=age+7.8f;}else if(navigable({x,y},70,false)){boyBody.aim({x,y});boyNext=age+18;}}
         if(id=="sky"||id=="meadow"||id=="ocean"||id=="lake")clouds.burst(x,y,lastTime);
         if(id=="cat-hill"||id=="cats"){bool pet=false;for(auto&cat:cats)if(cat.body.initialized&&Box{cat.x-42*geometry.catScale(),cat.y-65*geometry.catScale(),84*geometry.catScale(),85*geometry.catScale()}.contains({x,y})){cat.happy=2.5f;cat.wait=3;catPose(cat,4);cat.chasing=false;cat.body.aim(cat.body.position);pet=true;}if(!pet)toy={x,y,0,10};}
         if(id=="lake"||id=="aquarium")clickFishing(x,y,fx);
@@ -403,12 +405,29 @@ private:
                 V2 a=boyBody.position,b=a+V2{-165,-254};V2 d=b-a;float k=std::clamp(((p-a).x*d.x+(p-a).y*d.y)/(d.x*d.x+d.y*d.y),0.f,1.f);
                 if(geometry.covers(bounds)&&iconClear(bounds,previousIcons,18)&&(p-(a+d*k)).length()>catSize*.58f+96*s+14){meadowCat=p;catPlaced=true;break;}}
         }
-        for(int i=0;i<simulationSteps;i++){meadowTail.step(fixedStep,18,3.8f);boyTug=std::max(0.f,boyTug-fixedStep);
+        for(int i=0;i<simulationSteps;i++){meadowTail.step(fixedStep,18,3.8f);
+            const float stepTime=t-(simulationSteps-i-1)*fixedStep;
+            const float waveTime=fmod(stepTime,9.f);
+            if(boyGait<.05f&&age>=boyPullNext&&boyNext-age>3.6f&&(waveTime<2.8f||waveTime>5.f)){
+                boyTug=1.12f;boyPullNext=age+7.8f;
+            }
+            boyTug=std::max(0.f,boyTug-fixedStep);
             if(boyBody.initialized){if(age>boyNext&&!boyBody.command){V2 q=boyBody.position+V2{-165,-254};if(!safeBoy(q,0))q=geometry.home(boyBody.position);if(safeBoy(q,0))boyBody.aim(q);boyNext=age+18;}
-                steer(boyBody,{105,150,170,2.5f,7,30,false},boyBody.target,fixedStep,safeBoy);
+                if(boyBody.command)steer(boyBody,{105,150,170,2.5f,7,30,false},boyBody.target,fixedStep,safeBoy);
+                else{ // A land character rests after arrival; generic cruising
+                    // steering would accelerate away from its reached target.
+                    const float speed=boyBody.speed();
+                    if(speed>0)boyBody.velocity=boyBody.velocity*(std::max(0.f,speed-170*fixedStep)/speed);
+                    const V2 next=boyBody.position+boyBody.velocity*fixedStep;
+                    if(safeBoy(next,0))boyBody.position=next;
+                }
                 boyGait+=std::clamp(boyBody.speed()/105-boyGait,-fixedStep*8,fixedStep*8);
+                const auto pose=meadowPose(stepTime,boyTug>0?1.12f-boyTug:100.f);
+                meadowKite.step(stepTime,fixedStep,boyBody.position,s,boyGait,boyGait>.05f?0:pose.linePull);
             }}
-        if(p(c,"showBoy",1)>0&&boyBody.initialized&&safeBoy(boyBody.position,0))sprites->boy(view,boyBody.position,s,boyBody.phase,boyGait,t,boyTug,shade,sx,sy);
+        const auto pose=meadowPose(t,boyTug>0?1.12f-boyTug:100.f);
+        meadowKite.step(t,0,boyBody.position,s,boyGait,0);
+        if(p(c,"showBoy",1)>0&&boyBody.initialized&&safeBoy(boyBody.position,0))sprites->boy(view,boyBody.position,s,boyBody.phase,boyGait,t,pose,meadowKite.pose(t,boyBody.position,s,boyGait,boyGait>.05f?0:pose.linePull),shade,sx,sy);
         if(p(c,"showCat",1)>0&&catPlaced){SpriteTransform cat{meadowCat,catSize,catSize,.5f,.5f,false};if(geometry.covers(cat.bounds())&&iconClear(cat.bounds(),previousIcons)){
             const float tail=std::clamp(meadowKittenTailAngle(t)+meadowTail.x,-.45f,.45f);
             sprites->anchored(L"wallpaper/assets/meadow-black-kitten.png",view,cat,t,sx,sy,true,shade,shear,tail);sprites->anchored(L"wallpaper/assets/meadow-black-kitten.png",view,cat,t,sx,sy,false,1,.3f,tail);

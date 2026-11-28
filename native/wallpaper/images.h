@@ -1,6 +1,7 @@
 #pragma once
 #include "gl.h"
 #include "spatial.h"
+#include "meadow.h"
 #include <wincodec.h>
 #include <memory>
 #include <string_view>
@@ -45,7 +46,7 @@ class Sprites {
     GL&g;Program program;std::unique_ptr<Program> kiteProgram,boyProgram;std::shared_ptr<ImageCache> imageCache;std::map<std::wstring,std::shared_ptr<Texture>> textures;
     Texture&image(const wchar_t*path){auto& texture=textures[path];if(!texture)texture=imageCache->image(path);return *texture;}
 public:
-    void boy(const View&view,V2 position,float s,float phase,float gait,float time,float tug,float shade,float scaleX,float scaleY){
+    void boy(const View&view,V2 position,float s,float phase,float gait,float time,const MeadowPose& pose,const MeadowKitePose& kite,float shade,float scaleX,float scaleY){
         if(!boyProgram)boyProgram=std::make_unique<Program>(g,desktopShader(assetText(assetsRoot()/L"wallpaper/shaders/meadow-boy-native.frag")));
         auto&p=*boyProgram;p.use();auto&front=image(L"wallpaper/assets/meadow-kite-boy-level-face.png");auto&run=image(L"wallpaper/assets/meadow-kite-boy-diagonal-run.png");front.bind(g,5);run.bind(g,6);p.i("uCharacter",5);p.i("uRunSprite",6);
         p.v2("uRes",view.worldW,view.worldH);p.v2("wpOrigin",view.x,view.worldH-view.y-view.h);p.v2("wpPixelScale",scaleX,scaleY);p.v2("uOffset",0,0);p.f("uScale",1);p.f("uTime",time);p.v4("uPlace",{position.x,position.y,s,0});
@@ -64,10 +65,10 @@ public:
         };
         auto left=solve({-12,37},{-14,47},{-15,57},0,{-7.5f,8.5f},{1.4f,19},19,9),right=solve({14,35},{18,44},{21,51},.5f,{.5f,7.2f},{7,15.8f},16,5);
         p.v4("uLeftHipKnee",{left.hip.x,left.hip.y,left.knee.x,left.knee.y});p.v4("uRightHipKnee",{right.hip.x,right.hip.y,right.knee.x,right.knee.y});p.v2("uLeftAnkle",left.ankle.x,left.ankle.y);p.v2("uRightAnkle",right.ankle.x,right.ankle.y);p.v2("uFootAngles",left.angle,right.angle);
-        p.v2("uBody",sin(time*.85f)*1.7f,sin(time*1.7f)*.65f);p.v2("uLegs",std::max(0.f,sin(time*1.05f))*3.8f,std::max(0.f,-sin(time*1.05f))*3.2f);
-        float arm=(sin(phase)*.26f+sin(phase*2)*.035f)*gait;V2 hand=running?V2{22+cos(arm)*15+sin(arm)*16,-7+sin(arm)*15-cos(arm)*16-10+bob}:V2{-49-tug*12,-45.5f-tug*8};
-        p.v2("uHand",hand.x,hand.y);p.v2("uReelHand",hand.x,hand.y);p.v2("uTug",-tug*12,-tug*8);p.v4("uPose",{0,sin(time*.9f)*1.5f,-.18f-tug*.22f,0});
-        p.v2("uKite",215+sin(time*.72f)*21+sin(time*1.23f)*5,205+sin(time*.49f+.6f)*10);p.f("uRunWind",gait);p.f("uTension",tug);p.f("uKiteRock",tug*.1f);
+        p.v2("uBody",pose.body.x,pose.body.y);p.v2("uLegs",pose.legs.x,pose.legs.y);
+        float arm=(sin(phase)*.26f+sin(phase*2)*.035f)*gait;V2 hand=running?V2{22+cos(arm)*15+sin(arm)*16,-7+sin(arm)*15-cos(arm)*16-10+bob}:pose.hand;
+        p.v2("uHand",hand.x,hand.y);p.v2("uReelHand",hand.x,hand.y);p.v2("uTug",pose.tugOffset.x,pose.tugOffset.y);p.v4("uPose",{0,pose.nod,pose.reel,0});
+        p.v2("uKite",kite.offset.x,kite.offset.y);p.f("uRunWind",kite.wind);p.f("uTension",kite.tension);p.f("uKiteRock",kite.rock);
         V2 soleL=running?left.ankle+V2{-sin(left.angle)*15.94f-.52f*cos(left.angle),-.52f*sin(left.angle)+15.94f*cos(left.angle)+bob-10}:V2{-22.5f,72};
         V2 soleR=running?right.ankle+V2{-sin(right.angle)*15.63f-3.42f*cos(right.angle),-3.42f*sin(right.angle)+15.63f*cos(right.angle)+bob-10}:V2{37.8f,63.3f};
         float slope=running?-.19f:(soleR.y-soleL.y)/(soleR.x-soleL.x),intercept=running?(left.contact?soleL.y-slope*soleL.x:soleR.y-slope*soleR.x):(soleL.y+soleR.y-slope*(soleL.x+soleR.x))*.5f;

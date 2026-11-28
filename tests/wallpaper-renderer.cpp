@@ -74,6 +74,43 @@ int main(int argc,char**argv){try{
         report<<"MEADOW_CONTROLLED_CLOUD_OVER_GROUND_ACTOR=PASS\n";
     }
     {
+        // The actual scene must rest until its first trip and after a clicked
+        // destination. Clicks affect tension first, never body/kite position.
+        SceneRuntime meadow(gl,sceneIndex("meadow"));View v{0,0,960,540,960,540};allocate(96,54);float elapsed=0;
+        auto draw=[&](float dt){elapsed+=dt;noiseTexture.bind(gl,0);meadow.render(config,v,{},weather,elapsed,dt,stop,.1f,.1f);};
+        draw(0);const V2 home=meadow.meadowBoy().position;
+        for(int i=0;i<25;++i)draw(.04f);
+        check((meadow.meadowBoy().position-home).length()<.001f&&meadow.probeMeadowGait()==0,"Idle meadow boy drifts or runs in place");
+        const V2 before=meadow.probeMeadowKite().reaction;meadow.click(home.x,home.y);
+        check((meadow.probeMeadowKite().reaction-before).length()==0,"Tug click teleports kite reaction");
+        for(int i=0;i<12;++i)draw(.04f);
+        check(meadow.probeMeadowKite().reaction.length()>.1f,"Actual boy tug has no elastic kite reaction");
+        const auto frozen=meadow.probeMeadowKite();draw(0);
+        check((meadow.probeMeadowKite().reaction-frozen.reaction).length()==0&&(meadow.probeMeadowKite().followed-frozen.followed).length()==0,"Second viewport advances kite simulation");
+        meadow.click(home.x-60,home.y-92);bool moved=false,arrived=false;
+        for(int i=0;i<375;++i){const auto prior=meadow.meadowBoy().position;draw(.04f);const auto& boy=meadow.meadowBoy();
+            check((boy.position-prior).length()<5,"Meadow destination teleports boy");moved|=(boy.position-home).length()>10;
+            if(moved&&!boy.command&&boy.speed()<2){arrived=true;break;}}
+        check(arrived,"Meadow boy never reaches safe clicked destination");const V2 resting=meadow.meadowBoy().position;
+        for(int i=0;i<25;++i)draw(.04f);
+        check((meadow.meadowBoy().position-resting).length()<.03f&&meadow.probeMeadowGait()<.001f,"Arrived meadow boy resumes generic cruising");
+        // The computed string grip must invert the actual shader arm warp,
+        // across idle/reach/pull/release, rather than a fixed offset.
+        for(float age:{100.f,0.f,.08f,.25f,.55f,1.10f}){
+            const auto pose=meadowPose(1.3f,age);const V2 p=pose.hand;
+            const V2 body=p-pose.body*std::clamp((78-p.y)/170,0.f,1.f);
+            const V2 q=body+pose.tugOffset*.35f-V2{-21,-9};const float a=-(pose.reel+.18f);
+            const V2 source{-21+cos(a)*q.x-sin(a)*q.y,-9+sin(a)*q.x+cos(a)*q.y};
+            check((source-V2{-49,-45.5f}).length()<.001f,"Kite string detaches from posed hand artwork");
+        }
+        MeadowKite spring;const V2 position{400,180};spring.step(0,0,position,.3f,0,0);spring.step(0,1.f/120,position,.3f,0,1);
+        check(spring.reaction.length()>0,"Tug impulse does not enter kite spring");
+        for(int i=0;i<1200;++i)spring.step((i+1)/120.f,1.f/120,position,.3f,0,0);
+        check(spring.reaction.length()<.001f&&abs(spring.angle)<.001f,"Released kite spring never settles");
+        allocate(960,540);noiseTexture.bind(gl,0);meadow.render(config,v,{},weather,elapsed,0,stop);png(evidence/"meadow-boy-rested-kite.png",960,540,capture(960,540));
+        report<<"MEADOW_IDLE_AND_ARRIVAL_NO_SLIDING=PASS\nMEADOW_TUG_CONTINUOUS_ELASTIC_KITE_AND_SETTLING=PASS\nMEADOW_STRING_MATCHES_ACTUAL_ARTWORK_GRIP=PASS\nMEADOW_SECOND_VIEWPORT_NO_KITE_STEP=PASS\n";
+    }
+    {
         allocate(384,384);View v{0,0,384,384,384,384};Sprites sprites(gl);SpriteTransform cat{{192,192},360,360,.5f,.5f,false};
         auto draw=[&](float angle,float time){glClearColor(1,1,1,1);glClear(GL_COLOR_BUFFER_BIT);sprites.anchored(L"wallpaper/assets/meadow-black-kitten.png",v,cat,time,1,1,false,1,.3f,angle);return capture(384,384);};
         const auto resting=draw(0,0),laterRest=draw(0,8);check(resting==laterRest,"Resting kitten artwork still sways as a rigid sprite");
