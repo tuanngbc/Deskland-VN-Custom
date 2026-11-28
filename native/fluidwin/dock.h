@@ -365,6 +365,12 @@ public:
     bool attivo = false;
     long diagMosse = 0, diagFotogrammi = 0;   // diagnostica: movimenti del mouse ricevuti, fotogrammi disegnati
     double diagLente() const { return lente; }
+#ifdef TLAUNCHER_NATIVE_CI
+    double ciCollapse()const{return yNascosto/(altezzaDock+MARGINE+6*dpi);}
+    RECT ciCollapsedBounds()const{return aSchermo({zonaDockL,float(H)-3*dpi-barThickness*dpi,zonaDockR,float(H)-3*dpi});}
+    bool ciAnchor(RECT& r){return rettIcona(0,r);}
+    void ciBorder(){controllaBordo();}
+#endif
     // riduzione a icona col genio di FluidWin (clic sull'icona dell'app gia' in primo piano); false = non possibile
     bool (*riduci)(HWND) = nullptr;
     // foto per l'animazione di chiusura, prima di chiudere una finestra dal menu del dock (false: niente animazione)

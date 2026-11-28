@@ -70,6 +70,8 @@ int main(int argc,char** argv) {
     impostazioni::carica();if(testi::attuale()!=testi::VIETNAMITA)return 123;
     if(!phase3Snapshot(settings,std::filesystem::path(argv[1])/L"phase3-live-vietnamese-settings.bmp"))return 124;
     report<<"NATIVE_SETTINGS_WINDOW=PASS\nLIVE_LANGUAGE_CHANGE_FORMAT_LOCALE_AND_PERSISTENCE=PASS\nOWNER_VISUAL_ACCEPTANCE=PENDING\n";
+    SendMessageW(settings,WM_CLOSE,0,0);ciPump(500);
+    if(int result=phase3DockContracts(report,std::filesystem::path(argv[1])))return result;
     report.close();
     // Upstream exits without static teardown after workers; retain that policy.
     ExitProcess(0);

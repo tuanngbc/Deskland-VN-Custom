@@ -36,6 +36,38 @@ static int phase3ShortcutContracts(std::ostream& report){
     binding.stop();if(binding.active())return 116;
     report<<"SHORTCUT_CUSTOM_PARSER=PASS\nSHORTCUT_ACTUAL_WINDOWS_CONFLICT_PRESERVES_OLD=PASS\nSHORTCUT_GAP_FREE_REPLACEMENT_AND_RELEASE=PASS\n";return 0;
 }
+static int phase3DockContracts(std::ostream& report,const std::filesystem::path& evidence){
+    HWND source=CreateWindowW(L"STATIC",L"Dock hosted interaction fixture",WS_OVERLAPPEDWINDOW|WS_VISIBLE,310,180,300,180,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    if(!source)return 150;
+    POINT original{};GetCursorPos(&original);MONITORINFO monitor{sizeof(monitor)};GetMonitorInfoW(MonitorFromWindow(source,MONITOR_DEFAULTTONEAREST),&monitor);
+    struct Cleanup{HWND source;POINT cursor;~Cleanup(){gDock.chiudi();gDock.fermaWidget(3000);SetCursorPos(cursor.x,cursor.y);DestroyWindow(source);}}cleanup{source,original};
+    gDock.impostaSpazio(false);gDock.impostaNotchEnabled(false);gDock.altriSchermi=false;
+    if(!gDock.inizializza(GetModuleHandleW(nullptr)))return 151;
+    SetForegroundWindow(source);const POINT away{(monitor.rcMonitor.left+monitor.rcMonitor.right)/2,(monitor.rcMonitor.top+monitor.rcMonitor.bottom)/2};SetCursorPos(away.x,away.y);
+    auto pump=[&](int milliseconds){ULONGLONG until=GetTickCount64()+milliseconds;do{ciPump(8);gDock.ciBorder();if(gDock.serveFotogramma())gDock.disegna(vetro::secondi(),false);}while(GetTickCount64()<until);};
+    auto await=[&](auto condition){const ULONGLONG until=GetTickCount64()+6000;do{pump(20);if(condition())return true;}while(GetTickCount64()<until);return false;};
+    for(int edge=0;edge<4;++edge){
+        gDock.impostaLato(edge);gDock.impostaVisibility(2,104,16,80,120,180,false);gDock.controllaFinestre(true);
+        if(!await([&]{return gDock.ciCollapse()>.999&&!gDock.serveFotogramma();}))return 152;
+        RECT bar=gDock.ciCollapsedBounds(),overlap{};if(!IntersectRect(&overlap,&bar,&monitor.rcMonitor)||!EqualRect(&bar,&overlap))return 153;
+        if(edge<2?bar.right-bar.left<=bar.bottom-bar.top:bar.bottom-bar.top<=bar.right-bar.left)return 154;
+        const POINT hover{(bar.left+bar.right)/2,(bar.top+bar.bottom)/2};SetCursorPos(hover.x,hover.y);
+        if(!await([&]{return gDock.ciCollapse()<.001;}))return 155;
+        RECT expandedAnchor{};if(!gDock.ciAnchor(expandedAnchor)||gDock.latoPer(expandedAnchor)!=edge)return 156;
+        SetCursorPos(away.x,away.y);
+        if(!await([&]{return gDock.ciCollapse()>.999&&!gDock.serveFotogramma();}))return 157;
+        RECT collapsedAnchor{};if(!gDock.ciAnchor(collapsedAnchor)||!EqualRect(&expandedAnchor,&collapsedAnchor))return 158;
+        if(!await([&]{return gDock.ciCollapse()>.999&&!gDock.serveFotogramma();}))return 159;
+        const long frames=gDock.diagFotogrammi;pump(400);if(gDock.diagFotogrammi!=frames)return 160;
+        if(!phase3Snapshot(gDock.icone,evidence/(L"phase3-dock-collapsed-edge-"+std::to_wstring(edge)+L".bmp")))return 161;
+    }
+    gDock.schermoIntero(2);if(IsWindowVisible(gDock.icone)||gDock.serveFotogramma())return 162;
+    gDock.schermoIntero(0);pump(600);if(!IsWindowVisible(gDock.icone))return 163;
+    MONITORINFO unchanged{sizeof(unchanged)};GetMonitorInfoW(MonitorFromWindow(source,MONITOR_DEFAULTTONEAREST),&unchanged);
+    if(!EqualRect(&monitor.rcWork,&unchanged.rcWork))return 164;
+    report<<"DOCK_COLLAPSED_STABLE_ANIMATION_ANCHOR=PASS\nDOCK_COLLAPSED_SETTLED_NO_RENDER_LOOP=PASS\nDOCK_FULLSCREEN_HIDE_RESUME=PASS\nDOCK_WORK_AREA_UNCHANGED=PASS\n";
+    report<<"DOCK_COLLAPSED_FOUR_EDGE_NATIVE_INTERACTION=PASS\n";return 0;
+}
 static int phase3Contracts(std::ostream& report,const std::filesystem::path& evidence) {
     if(int result=phase3ShortcutContracts(report))return result;
     if(appcatalog::fold(L"Tiếng Việt Đặng")!=L"tieng viet dang")return 60;
