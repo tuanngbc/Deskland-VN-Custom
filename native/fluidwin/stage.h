@@ -80,7 +80,8 @@ class Manager {
         vetro::Finestra glass;
         IDWriteTextFormat* text = nullptr;
         std::vector<Card> cards, departing;
-        bool animating=false;unsigned animationFrames=0;
+        bool animating=false;unsigned animationFrames=0,renderFrames=0;
+        HWND foreground=nullptr;int language=-1;
         int hover = -1, page = 0, capacity = 1;
         bool hidden = false,blocked=false,suppressed=false;RECT available{};
         ULONGLONG hoverAt = 0;
@@ -209,8 +210,24 @@ public:
             const bool resumed=r->suppressed&&!hide;r->suppressed=hide;
             const RECT area=work(*r);
             if(hide) { settle(*r);closePeek();for(auto& c:r->cards)preview(*r,c);ShowWindow(r->glass.fin,SW_HIDE); }
-            else {if(!same||resumed||!EqualRect(&area,&r->available))rebuild(*r);else for(auto& c:r->cards)preview(*r,c);
-                if(!r->blocked){if(!r->cards.empty()||!r->departing.empty())ShowWindow(r->glass.fin,SW_SHOWNOACTIVATE);draw(*r);}}
+            else {
+                if(!same||resumed||!EqualRect(&area,&r->available))rebuild(*r);
+                else if(!r->blocked){
+                    bool repaint=r->foreground!=GetAncestor(GetForegroundWindow(),GA_ROOT)||r->language!=testi::attuale();
+                    for(auto& c:r->cards){
+                        const auto priorSnapshot=c.snapshotAt;const auto priorGeneration=c.generation;
+                        const auto priorWindow=c.registered;const bool priorMinimized=c.minimized;
+                        const bool priorImage=c.bitmap||c.thumbnail;
+                        preview(*r,c);
+                        repaint|=priorSnapshot!=c.snapshotAt||priorGeneration!=c.generation||priorWindow!=c.registered||priorMinimized!=c.minimized||priorImage!=bool(c.bitmap||c.thumbnail);
+                        if(!r->hidden&&!c.icon&&icon){c.icon=icon(r->glass.rt,c.source().icon,96);repaint|=c.icon!=nullptr;}
+                    }
+                    if(!r->cards.empty()||!r->departing.empty()){
+                        if(!IsWindowVisible(r->glass.fin))ShowWindow(r->glass.fin,SW_SHOWNOACTIVATE);
+                        if(repaint&&!r->hidden)draw(*r);
+                    }
+                }
+            }
 
         }
         pollCapture();
@@ -227,6 +244,7 @@ public:
     size_t ciDeparting()const{size_t n=0;for(const auto&r:rails)n+=r->departing.size();return n;}
     HTHUMBNAIL ciThumbnail()const{return rails.empty()||rails[0]->cards.empty()?nullptr:rails[0]->cards[0].thumbnail;}
     double ciOpacity()const{return rails.empty()||rails[0]->cards.empty()?0:rails[0]->cards[0].opacity;}
+    unsigned ciRenderFrames()const{unsigned n=0;for(const auto&r:rails)n+=r->renderFrames;return n;}
     unsigned ciAnimationFrames()const{unsigned n=0;for(const auto&r:rails)n+=r->animationFrames;return n;}
     HWND ciSelected()const{return rails.empty()||rails[0]->cards.empty()?nullptr:rails[0]->cards[0].source().hwnd;}
 #endif
@@ -447,6 +465,7 @@ private:
     }
     void draw(Rail& rail) {
         auto& v=rail.glass;if(!v.inizia())return;
+        rail.renderFrames++;rail.foreground=GetAncestor(GetForegroundWindow(),GA_ROOT);rail.language=testi::attuale();
         testi::aggiornaFormato(v.fdw,rail.text);
         if(rail.hidden){v.finisci();return;}
         const float d=v.dpi;

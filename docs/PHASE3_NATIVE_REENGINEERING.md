@@ -133,3 +133,6 @@ The new Vietnamese query fixture must send Backspace through WM_KEYDOWN (the rea
 
 
 Run46092777372 actually stopped at native exit176, before the Vietnamese query fixture: the final destroyed HWND deliberately remained in the fixture inventory, and Stage compared records without validating liveness. Prune invalid generation/PID/TID/HWND records before change detection, so a delayed shared inventory refresh cannot leave a dead card in place. Earlier entrance/exit, stable DWM identity and animation idle assertions were reached and passed. The Backspace change separately prevents a latent unbounded fixture loop; no actual Backspace timeout was established. Hosted re-verification pending.
+
+
+Stage inventory polling no longer redraws its entire native rail every500 ms when settled. Repaint only on changed inventory/layout, focus/language, snapshot/render-target generation, newly available shared icon, real hover/paint or active fade. DWM still supplies live thumbnail content without an app redraw; icon readiness is checked through the existing shared provider. Hosted coverage repeats unchanged real inventory refreshes and requires the native render counter to remain unchanged. CI pending; this removes redundant work rather than asserting owner hardware targets.

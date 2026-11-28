@@ -192,6 +192,9 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     ciPump(260);if(manager.ciAnimating()||manager.ciThumbnail()!=stableThumbnail)return 169;
     const unsigned settledFrames=manager.ciAnimationFrames();ciPump(240);
     if(manager.ciAnimationFrames()!=settledFrames)return 170;
+    manager.changed();const unsigned idleRenderFrames=manager.ciRenderFrames();
+    for(int i=0;i<4;++i){ciPump(100);manager.changed();}
+    if(manager.ciRenderFrames()!=idleRenderFrames)return 180;
     if(!phase3Snapshot(rail,evidence/L"phase3-stage-animation-settled.bmp"))return 171;
     DestroyWindow(extra);manager.changed();
     if(manager.ciDeparting()!=1||!manager.ciAnimating()||manager.ciThumbnailCount()!=1)return 172;
@@ -199,7 +202,7 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     ciPump(260);if(manager.ciDeparting()||manager.ciAnimating())return 174;
     GetWindowPlacement(source,&after); // No animation route may mutate foreign placement.
     if(IsIconic(source))return 175;
-    report<<"STAGE_CARD_ENTRANCE_EXIT_AND_IDLE_SETTLING=PASS\nSTAGE_UNCHANGED_LIVE_THUMBNAIL_RETAINED=PASS\nSTAGE_REMOVED_SOURCE_THUMBNAIL_RELEASED=PASS\n";
+    report<<"STAGE_CARD_ENTRANCE_EXIT_AND_IDLE_SETTLING=PASS\nSTAGE_UNCHANGED_INVENTORY_NO_REDRAW=PASS\nSTAGE_UNCHANGED_LIVE_THUMBNAIL_RETAINED=PASS\nSTAGE_REMOVED_SOURCE_THUMBNAIL_RELEASED=PASS\n";
     SetCursorPos(previousPointer.x,previousPointer.y);
     DestroyWindow(source);manager.changed();
     if(!manager.ciDeparting()||!manager.ciAnimating())return 176;
