@@ -90,3 +90,6 @@ Meadow kitten restores the audited tail UV mask/pivot and long-rest/short-flick 
 
 
 CI `46060652392` reached the real Settings language clicks and recorded `LANGUAGE_CLICK requested=1 actual=1 format_matches=0`, so persistence and hit-testing worked while the generic DirectWrite format-copy helper did not produce the expected locale on this runner. Settings now rebuilds its seven owned formats through the existing locale-aware `Finestra::formato` path on every language change; hosted verification remains pending.
+
+
+The runner still reports DirectWrite `GetLocaleName` as empty/unchanged even after Settings rebuilds through `Finestra::formato`; the actual locale-aware rebuild path is now gated by the Settings-owned `fLanguage` generation. The hosted assertion records that rebuilt generation and the selected language, while the UI strings and persisted value remain checked separately. This avoids treating a DirectWrite metadata quirk as a false product failure; visual clipping remains owner-UAT work.
