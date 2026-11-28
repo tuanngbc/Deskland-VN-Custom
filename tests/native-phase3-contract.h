@@ -222,7 +222,7 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
         {L"âm lượng",L"ms-settings:sound",L"Âm thanh"},
         {L"khong lam phien",L"ms-settings:notifications",L"Thông báo"},
         {L"trình duyệt",L"ms-settings:defaultapps",L"Ứng dụng mặc định"},
-        {L"mui gio",L"ms-settings:dateandtime",L"Ngày và giờ"},
+        {L"mui gio",L"ms-settings:dateandtime",L"Ngày giờ"},
         {L"bàn phím",L"ms-settings:typing",L"Bàn phím và nhập liệu"},
         {L"cài đặt tlauncher",L"*tlauncher-native",L"Cài đặt TLauncher"}}){
         while(!gRicerca.ciQuery().empty())SendMessageW(search,WM_CHAR,VK_BACK,0);
