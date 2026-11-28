@@ -225,7 +225,9 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
         {L"mui gio",L"ms-settings:dateandtime",L"Ngày giờ"},
         {L"bàn phím",L"ms-settings:typing",L"Bàn phím và nhập liệu"},
         {L"cài đặt tlauncher",L"*tlauncher-native",L"Cài đặt TLauncher"}}){
-        while(!gRicerca.ciQuery().empty())SendMessageW(search,WM_CHAR,VK_BACK,0);
+        const size_t previousLength=gRicerca.ciQuery().size();
+        for(size_t i=0;i<previousLength;++i)SendMessageW(search,WM_KEYDOWN,VK_BACK,0);
+        if(!gRicerca.ciQuery().empty())return 179;
         for(const wchar_t ch:std::wstring(test.query))SendMessageW(search,WM_CHAR,ch,0);
         if(!gRicerca.ciSetting(test.action,test.title))return 177;
     }
