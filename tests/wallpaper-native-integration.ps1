@@ -50,7 +50,7 @@ foreach($mode in 'accepted-baseline','wallpaper-disabled','wallpaper-enabled'){
  if($mode -eq 'accepted-baseline'){Copy-Item (Join-Path $baseExe[0].DirectoryName '*') $runtime -Recurse}
  else {Copy-Item $Exe (Join-Path $runtime 'TLauncher.exe');Copy-Item (Join-Path (Split-Path $Exe) 'wallpaper') $runtime -Recurse;if($mode -eq 'wallpaper-enabled'){Copy-Item (Join-Path $Mesa 'x64/*.dll') $runtime}}
  $runtimeExe=Join-Path $runtime 'TLauncher.exe'
- Copy-Item tools/native-resource-diagnostics.ps1 $runtime
+ Copy-Item tools/native-resource-diagnostics.ps1,tools/native-resource-summary.ps1 $runtime
  $(if($mode -eq 'accepted-baseline'){$baselineCommit}else{$env:GITHUB_SHA})|Set-Content (Join-Path $runtime 'BUILD-COMMIT.txt')
  $profile=Join-Path $env:RUNNER_TEMP ('tlauncher-native-trial-'+$mode);New-Item -ItemType Directory -Path $profile|Out-Null
  [IO.File]::WriteAllText((Join-Path $profile '.tlauncher-native-trial'),"tlauncher-native isolated profile v1`n")

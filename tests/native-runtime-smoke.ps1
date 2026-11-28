@@ -56,7 +56,7 @@ try {
     Wait-Until {[NativeSmoke]::IsWindowVisible([NativeSmoke]::Window('TLauncher.Native.Impostazioni'))}
     Start-Sleep -Milliseconds 1000
     Snapshot 'native-settings.png'
-    Copy-Item tools/native-resource-diagnostics.ps1 (Join-Path (Split-Path -Parent $Exe) 'native-resource-diagnostics.ps1')
+    Copy-Item tools/native-resource-diagnostics.ps1,tools/native-resource-summary.ps1 (Split-Path -Parent $Exe)
     git rev-parse HEAD | Set-Content (Join-Path (Split-Path -Parent $Exe) 'BUILD-COMMIT.txt')
     & (Join-Path (Split-Path -Parent $Exe) 'native-resource-diagnostics.ps1') -Scenario ci_smoke -Seconds 10
     if($LASTEXITCODE  -ne  0){throw 'Resource sampler failed'}

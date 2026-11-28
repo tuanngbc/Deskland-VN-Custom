@@ -97,48 +97,14 @@ while ($clock.Elapsed.TotalSeconds -lt $Seconds) {
     $previous=$next; $previousAt=$at
     Start-Sleep -Seconds 2
 }
-function Stats($values) {
-    $ordered=@($values | Where-Object { $null -ne $_ })
-    if (!$ordered.Count) { return $null }
-    $v=@($ordered | Sort-Object)
-    [pscustomobject]@{ peak=$v[-1]; average=($v | Measure-Object -Average).Average; p95=$v[[Math]::Max(0,[Math]::Ceiling($v.Count*0.95)-1)]; steadyState=($ordered | Select-Object -Last 5 | Measure-Object -Average).Average; samples=$v.Count }
-}
-$totals = @(foreach($row in $rows) {
-    if (!$row.processes.Count) { continue }
-    $cpu = @($row.processes | Where-Object { $null -ne $_.cpuPercent })
-    $pws = @($row.processes | Where-Object { $null -ne $_.privateWorkingSetBytes })
-    [pscustomobject]@{
-        workingSetMiB=($row.processes | Measure-Object workingSetBytes -Sum).Sum/1MB
-        privateMiB=($row.processes | Measure-Object privateBytes -Sum).Sum/1MB
-        privateWorkingSetMiB=$(if($pws.Count -eq $row.processes.Count){($pws | Measure-Object privateWorkingSetBytes -Sum).Sum/1MB}else{$null})
-        cpuPercent=$(if($cpu.Count -eq $row.processes.Count){($cpu | Measure-Object cpuPercent -Sum).Sum}else{$null})
-    }
-})
-# Combine all owned PIDs on each physical GPU engine, then take the busiest
-# engine on that adapter. Unlike adding 3D+Copy+Video, this stays within 100%.
-$gpuRows = @(foreach ($row in $rows) {
-    if ($null -eq $row.gpuEngines -or @($row.gpuEngines).Count -eq 0) { continue }
-    $engines = @($row.gpuEngines | ForEach-Object {
-        if ($_.engine -match '^pid_\d+_(luid_.+?_phys_\d+)_eng_(\d+)_') {
-            [pscustomobject]@{adapter=$Matches[1];engine=$Matches[1]+'/eng_'+$Matches[2];value=$_.utilizationPercent}
-        }
-    })
-    foreach ($adapter in @($engines | Group-Object adapter)) {
-        $loads = @($adapter.Group | Group-Object engine | ForEach-Object {
-            [Math]::Min(100,($_.Group | Measure-Object value -Sum).Sum)
-        })
-        [pscustomobject]@{seconds=$row.seconds;adapter=$adapter.Name;utilizationPercent=($loads|Measure-Object -Maximum).Maximum}
-    }
-})
-$gpuStats = @($gpuRows | Group-Object adapter | ForEach-Object {
-    [pscustomobject]@{adapter=$_.Name;busiestEnginePercent=(Stats $_.Group.utilizationPercent)}
-})
+. (Join-Path $PSScriptRoot 'native-resource-summary.ps1')
+$summary=Get-NativeResourceSummary -Rows $rows.ToArray()
 $report = [pscustomobject]@{
     scenario=$Scenario; commit=(Get-Content -LiteralPath (Join-Path $candidateDir 'BUILD-COMMIT.txt') -Raw).Trim()
-    scope='Exact TEST main, detached Guardian matched to live owner PID/path/session, and observed packaged/cursor archive helpers. User apps launched from Dock, DWM and sampler excluded. Working-set sum can double-count shared pages. GPU is busiest combined physical engine per adapter, not summed across unlike engines/adapters. Null means unavailable. Owner measurements remain opt-in.'
-    sampleCount=$rows.Count; workingSetMiB=(Stats $totals.workingSetMiB); privateBytesMiB=(Stats $totals.privateMiB)
-    privateWorkingSetMiB=(Stats $totals.privateWorkingSetMiB); cpuPercent=(Stats $totals.cpuPercent); gpuPerAdapter=$gpuStats; gpuCombinedEngineSamples=$gpuRows; samples=$rows
+    scope='Exact TEST main, detached Guardian matched to live owner PID/path/session, and observed packaged/cursor archive helpers. User apps launched from Dock, DWM and sampler excluded. Working-set sum can double-count shared pages. GPU is busiest combined physical engine per adapter, not summed across unlike engines/adapters. GPU memory sums process counters per adapter; shared allocations may be counted by multiple processes. Null means unavailable. Owner measurements remain opt-in.'
+    samples=$rows
 }
+foreach($property in $summary.PSObject.Properties){$report | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value}
 $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $out -Encoding UTF8
 Write-Host "Saved: $out"
-$report | Select-Object scenario,sampleCount,workingSetMiB,privateBytesMiB,privateWorkingSetMiB,cpuPercent,gpuPerAdapter | Format-List
+$report | Select-Object scenario,sampleCount,workingSetMiB,privateBytesMiB,privateWorkingSetMiB,cpuPercent,threads,handles,gpuPerAdapter,gpuMemoryPerAdapter | Format-List

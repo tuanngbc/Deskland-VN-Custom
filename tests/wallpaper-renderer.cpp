@@ -77,7 +77,8 @@ int main(int argc,char**argv){try{
         // The actual scene must rest until its first trip and after a clicked
         // destination. Clicks affect tension first, never body/kite position.
         SceneRuntime meadow(gl,sceneIndex("meadow"));View v{0,0,960,540,960,540};allocate(96,54);float elapsed=0;
-        auto draw=[&](float dt){elapsed+=dt;noiseTexture.bind(gl,0);meadow.render(config,v,{},weather,elapsed,dt,stop,.1f,.1f);};
+        Config cfg=config;cfg.sceneParams["meadow"]["cover"]=0; // Controlled evidence must expose the ground actor.
+        auto draw=[&](float dt){elapsed+=dt;noiseTexture.bind(gl,0);meadow.render(cfg,v,{},weather,elapsed,dt,stop,.1f,.1f);};
         draw(0);const V2 home=meadow.meadowBoy().position;
         for(int i=0;i<25;++i)draw(.04f);
         check((meadow.meadowBoy().position-home).length()<.001f&&meadow.probeMeadowGait()==0,"Idle meadow boy drifts or runs in place");
@@ -107,7 +108,7 @@ int main(int argc,char**argv){try{
         check(spring.reaction.length()>0,"Tug impulse does not enter kite spring");
         for(int i=0;i<1200;++i)spring.step((i+1)/120.f,1.f/120,position,.3f,0,0);
         check(spring.reaction.length()<.001f&&abs(spring.angle)<.001f,"Released kite spring never settles");
-        allocate(960,540);noiseTexture.bind(gl,0);meadow.render(config,v,{},weather,elapsed,0,stop);png(evidence/"meadow-boy-rested-kite.png",960,540,capture(960,540));
+        allocate(960,540);noiseTexture.bind(gl,0);meadow.render(cfg,v,{},weather,elapsed,0,stop);png(evidence/"meadow-boy-rested-kite.png",960,540,capture(960,540));
         report<<"MEADOW_IDLE_AND_ARRIVAL_NO_SLIDING=PASS\nMEADOW_TUG_CONTINUOUS_ELASTIC_KITE_AND_SETTLING=PASS\nMEADOW_STRING_MATCHES_ACTUAL_ARTWORK_GRIP=PASS\nMEADOW_SECOND_VIEWPORT_NO_KITE_STEP=PASS\n";
     }
     {

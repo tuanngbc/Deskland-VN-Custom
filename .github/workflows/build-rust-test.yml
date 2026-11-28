@@ -93,6 +93,7 @@ jobs:
         run: |
           ./tests/native-source-audit.ps1
           ./tests/native-localization-contract.ps1
+          ./tests/native-resource-summary.ps1
       - name: Compile complete upstream-based application and lifecycle contract
         id: native-compile
         if: steps.native-cache.outputs.cache-hit != 'true'
@@ -174,9 +175,9 @@ jobs:
           }
           Copy-Item tools/native-owner-uat.ps1 $dir
           Copy-Item tools/native-profile-library.ps1 $dir
-          if ('${{ github.ref }}' -eq 'refs/heads/codex/native-stage-spotlight-reengineering-v1.0.3') {'PHASE_3_STAGE_SPOTLIGHT' | Set-Content (Join-Path $dir 'PACKAGE-KIND.txt') -Encoding ascii}
+          if ('${{ github.ref }}' -eq 'refs/heads/codex/native-stage-spotlight-reengineering-v1.0.3') {'PHASE_3_STAGE_SPOTLIGHT' | Set-Content (Join-Path $dir 'PACKAGE-KIND.txt') -Encoding ascii; Copy-Item docs/PHASE3_UAT.md (Join-Path $dir 'STAGE-SPOTLIGHT-UAT.md')}
           Copy-Item tools/legacy-uat-library.ps1 $dir
-          Copy-Item tools/native-resource-diagnostics.ps1 $dir
+          Copy-Item tools/native-resource-diagnostics.ps1,tools/native-resource-summary.ps1 $dir
           Copy-Item tools/NATIVE-RESOURCE.cmd $dir
           '1.0.3' | Set-Content (Join-Path $dir 'VERSION.txt') -Encoding ascii
           '${{ github.sha }}' | Set-Content (Join-Path $dir 'BUILD-COMMIT.txt') -Encoding ascii
