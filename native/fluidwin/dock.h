@@ -401,7 +401,10 @@ public:
     void configureDisplay(int mode,const std::wstring& name){
         displayMode=mode;displayName=name;
         altriSchermi=mode==3;
-        if(icone)if(auto target=preferredDisplay();target&&target!=monitor)cambiaSchermo(target);
+        if(icone){
+            if(auto target=preferredDisplay();target&&target!=monitor)cambiaSchermo(target);
+            if(displayMode!=4)extraDocks.clear();else syncExtraDocks();
+        }
     }
     void startArtwork(int mode,int scale,const std::wstring& path){
         std::wstring source=mode==2?path:L"";
@@ -547,6 +550,7 @@ public:
         fermaNotifiche();
         if (!attivo) return;
         attivo = false;
+        extraDocks.clear();
         aggiornaAppbar();   // lo spazio riservato si libera (le finestre ingrandite tornano fino in fondo)
         // (solo se il dock l'aveva cambiata: senza, si annullerebbe una scelta fatta intanto dall'utente, R20261121-115814-S2)
         if (barraSalvata) { APPBARDATA tb{}; tb.cbSize = sizeof(tb); tb.lParam = statoBarraPrima; SHAppBarMessage(ABM_SETSTATE, &tb); }
@@ -587,6 +591,7 @@ public:
         if (w != W && w > 0) ridimensiona(w, H);
         posizionaFinestra();
         if (appbarOk) aggiornaAppbar();   // lo spazio riservato passa al nuovo schermo
+        if(displayMode==4)syncExtraDocks();
         rettVetro = rettVetroStato = rettVetroOra = RECT{};          // i vetri si rimettono al prossimo fotogramma
         regioneDock = regioneIsola = regioneEtichetta = RECT{};
         if (registro) { char b[96]; snprintf(b, 96, "ora su %ld,%ld-%ld,%ld", schermo.left, schermo.top, schermo.right, schermo.bottom); scrivi(b); }
@@ -736,13 +741,13 @@ public:
     }
 
     bool iconaPer(HWND h, RECT& out) {
-        if (!attivo || nascostoSchermoIntero) return false;
+        if (!attivo || (nascostoSchermoIntero&&displayMode!=4)) return false;
         // l'elenco si rifa' solo se la finestra non c'e' ancora: si chiama mentre una finestra si sta riducendo,
         // e rifarlo tutto adesso ritarderebbe la partenza dell'animazione
         Voce* v = voceDi(h);
         if (!v) { aggiornaApp(); v = voceDi(h); }
         if (!v) return false;
-        for (size_t i = 0; i < voci.size(); i++) if (&voci[i] == v) return rettIcona(i, out);
+        for (size_t i = 0; i < voci.size(); i++) if (&voci[i] == v) return rettIcona(i, out,h);
         return false;
     }
 
@@ -751,21 +756,25 @@ public:
     bool aperturaDaDock(HWND h, RECT& out) {
         const double t = adesso();
         lanci.erase(std::remove_if(lanci.begin(), lanci.end(), [&](const Lancio& l) { return t - l.t > 20; }), lanci.end());
-        if (lanci.empty() || !attivo || nascostoSchermoIntero) return false;
+        if (lanci.empty() || !attivo || (nascostoSchermoIntero&&displayMode!=4)) return false;
         const std::wstring exe = exeProcesso(h), id = aumidFinestra(h);
         for (size_t k = 0; k < lanci.size(); k++) {
             const Lancio& l = lanci[k];
             if (!(stessoExe(l.exe, l.sqPrima, l.sqDopo, exe) || (!l.aumid.empty() && l.aumid == id))) continue;
             const std::wstring c = l.chiave;
             lanci.erase(lanci.begin() + k);
-            for (size_t i = 0; i < voci.size(); i++) if (!voci[i].uscente && chiave(voci[i]) == c) return rettIcona(i, out);
+            for (size_t i = 0; i < voci.size(); i++) if (!voci[i].uscente && chiave(voci[i]) == c) return rettIcona(i, out,h);
             return false;
         }
         return false;
     }
 
     // La piu' bassa delle finestre del dock (uno dei due vetri): il genio va subito sotto, cosi' gli passa dietro
-    HWND finestraPiuBassa() const {
+    HWND finestraPiuBassa(HWND source=nullptr) const {
+        if(source&&displayMode==4){
+            const auto m=MonitorFromWindow(source,MONITOR_DEFAULTTONEAREST);
+            for(const auto& view:extraDocks)if(view->display==m&&IsWindowVisible(view->surface.fin))return view->surface.fin;
+        }
         HWND ultima = icone;
         int trovati = 0;
         for (HWND x = GetWindow(icone, GW_HWNDNEXT); x && trovati < 3; x = GetWindow(x, GW_HWNDNEXT))
@@ -1024,12 +1033,205 @@ private:
 
     // icona i del dock a riposo (senza ingrandimento), in coordinate schermo: cosi' il bersaglio del genio non si
     // muove durante l'animazione. Dock nascosto: risale per qualche istante, il tempo che la finestra entri o esca
-    bool rettIcona(size_t i, RECT& out) {
+    bool rettIcona(size_t i, RECT& out,HWND source=nullptr) {
+        if(source&&displayMode==4&&extraAnchor(MonitorFromWindow(source,MONITOR_DEFAULTTONEAREST),i,out))return true;
         if (vuoleNascondersi) { rivelaFino = adesso() + 1.4; dirty = true; posizionaVetri(); }
         const auto pos = posizioniRiposo();
         if (i >= pos.size()) return false;
         out = aSchermo({pos[i], yBaseRiposo() - S, pos[i] + S, yBaseRiposo()});   // (sul lato del dock)
         return true;
+    }
+
+    // Secondary presentations share every app record and pixel cache, while
+    // their geometry, mouse state and paint resources belong to each display.
+    struct ExtraDock {
+        Motore* owner;
+        HMONITOR display;
+        ::vetro::Finestra surface;
+        RECT monitorRect{},bounds{},bar{},screenRect{};
+        D2D1_ROUNDED_RECT shape{};
+        std::vector<std::pair<size_t,RECT>> slots;
+        std::vector<std::wstring> identities;
+        std::unordered_map<std::wstring,ID2D1Bitmap*> bitmaps;
+        int hovered=-1,radius=-1,lastAlpha=-1;
+        bool dark=false,active=false,full=false;
+        ULONGLONG hoverAt=0,leftAt=0,revealUntil=0,last=0;
+        double collapsed=0;
+        explicit ExtraDock(Motore* o,HMONITOR m):owner(o),display(m){}
+        ~ExtraDock(){for(auto& [key,b]:bitmaps)b->Release();surface.chiudi();}
+        static RECT side(RECT r,int edge,int along,int offset,int width,int height){
+            if(edge==1)return {r.left+along,r.top+offset,r.left+along+width,r.top+offset+height};
+            if(edge==2)return {r.left+offset,r.top+along,r.left+offset+height,r.top+along+width};
+            if(edge==3)return {r.right-offset-height,r.top+along,r.right-offset,r.top+along+width};
+            return {r.left+along,r.bottom-offset-height,r.left+along+width,r.bottom-offset};
+        }
+        int hit(POINT p) const {
+            if(collapsed>.38)return -1;
+            for(const auto& [i,r]:slots)if(PtInRect(&r,p))return int(i);
+            return -1;
+        }
+        bool messaggio(HWND h,UINT m,WPARAM,LPARAM l,LRESULT& result){
+            result=0;
+            if(m==WM_PAINT){draw();return true;}
+            if(m==WM_MOUSEACTIVATE){result=MA_NOACTIVATE;return true;}
+            if(m==WM_MOUSEMOVE||m==WM_LBUTTONUP||m==WM_RBUTTONUP){
+                POINT pt{GET_X_LPARAM(l),GET_Y_LPARAM(l)};ClientToScreen(h,&pt);
+                const int i=hit(pt);
+                if(m==WM_MOUSEMOVE){if(i!=hovered){hovered=i;InvalidateRect(h,nullptr,FALSE);}return true;}
+                if(i<0||i>=int(owner->voci.size()))return true;
+                if(m==WM_RBUTTONUP)owner->menu(i,pt);
+                else if(owner->voci[i].avvio==AVVIO_LAUNCHER||owner->voci[i].avvio==AVVIO_CONTROLLO)
+                    PostMessageW(owner->icone,WM_APP+66,WPARAM(i),reinterpret_cast<LPARAM>(display));
+                else owner->clic(i);
+                return true;
+            }
+            return false;
+        }
+        void update(POINT cursor,HWND foreground,ULONGLONG now) {
+            MONITORINFO mi{sizeof(mi)};
+            if(!GetMonitorInfoW(display,&mi))return;
+            monitorRect=mi.rcMonitor;
+            auto& d=*owner;
+            const int edge=d.lato;
+            const bool vertical=edge>=2;
+            const float dp=surface.dpi;
+            const int length=vertical?monitorRect.bottom-monitorRect.top:monitorRect.right-monitorRect.left;
+            const int pad=std::max(2,int(8*dp)),gap=std::max(2,int(d.distanzaIcone*dp)),margin=int(8*dp);
+            RECT oldBounds=bounds,oldBar=bar;
+            std::vector<std::wstring> keys;
+            std::unordered_set<std::wstring> sources;
+            size_t count=0;for(const auto& v:d.voci)if(!v.uscente)++count;
+            const int step=std::min(int(d.latoIcone*dp)+gap,std::max(1,(length-2*pad)/std::max(1,int(count))));
+            const int icon=std::max(1,step-std::min(gap,step/3)),thick=icon+2*pad;
+            const int span=std::max(1,std::min(length,int(count)*step+2*pad));
+            bounds=side(monitorRect,edge,(length-span)/2,margin,span,thick);
+            const int barWidth=std::min(length,std::max(1,int(d.barLength*dp)));
+            const int room=length-barWidth,inset=std::min(int(12*dp),room/2);
+            const int align=d.barAlignment==0?inset:d.barAlignment==2?room-inset:d.barAlignment==3?room*d.barOffset/100:room/2;
+            bar=side(monitorRect,edge,align,int(d.barInset*dp),barWidth,std::max(1,int(d.barThickness*dp)));
+            slots.clear();
+            int j=0;
+            for(size_t i=0;i<d.voci.size();++i){const auto& v=d.voci[i];if(v.uscente)continue;
+                slots.push_back({i,side(monitorRect,edge,(length-span)/2+pad+j++*step,margin+pad,icon,icon)});
+                auto source=v.avvio==AVVIO_LAUNCHER?d.startSource:d.sorgenteIcona(v);
+                keys.push_back(source+L"|"+std::to_wstring(v.finestre.size()));
+                if(!source.empty())sources.insert(source);
+                if(!source.empty()&&!bitmaps.count(source)){
+                    if(surface.rt)if(auto pixels=appicons::peek(source,256)){
+                        ID2D1Bitmap* image=nullptr;
+                        surface.rt->CreateBitmap(D2D1::SizeU(pixels->w,pixels->h),pixels->bgra.data(),pixels->w*4,
+                            D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED)),&image);
+                        if(image){bitmaps.emplace(source,image);dirtyBitmaps=true;}
+                    }
+                }
+            }
+            std::erase_if(bitmaps,[&](const auto& item){if(sources.count(item.first))return false;item.second->Release();return true;});
+            RECT window{},overlap{};
+            bool covered=false,fullscreen=false;
+            if(foreground&&d.finestraDaDock(foreground)&&!IsIconic(foreground)&&MonitorFromWindow(foreground,MONITOR_DEFAULTTONULL)==display&&GetWindowRect(foreground,&window)){
+                fullscreen=window.left<=mi.rcMonitor.left&&window.top<=mi.rcMonitor.top&&
+                    window.right>=mi.rcMonitor.right&&window.bottom>=mi.rcMonitor.bottom&&!IsZoomed(foreground);
+                covered=IsZoomed(foreground)||IntersectRect(&overlap,&bounds,&window);
+            }
+            const bool atEdge=PtInRect(&monitorRect,cursor)&&d.sulBordo(cursor,monitorRect);
+            const bool inside=PtInRect(&screenRect,cursor)||atEdge;
+            if(inside){if(!hoverAt)hoverAt=now;leftAt=0;}else{hoverAt=0;if(!leftAt)leftAt=now;}
+            if((hoverAt&&now-hoverAt>=ULONGLONG(d.barOpenDelay))||now<revealUntil)active=true;
+            if(leftAt&&now-leftAt>=ULONGLONG(d.barCloseDelay)&&now>=revealUntil)active=false;
+            full=fullscreen;
+            const bool invisible=fullscreen&&!(d.visibilityMode==2&&d.barFullscreen);
+            if(invisible||(covered&&d.visibilityMode==1&&!active)){
+                if(IsWindowVisible(surface.fin))ShowWindow(surface.fin,SW_HIDE);
+                return;
+            }
+            const double target=((fullscreen&&d.barFullscreen)||(d.visibilityMode==2&&covered&&!active))?1.:0.;
+            const double before=collapsed;
+            collapsed+=std::clamp(target-collapsed,-.25,.25)*std::clamp((now-last)/70.,.15,1.);
+            if(std::abs(target-collapsed)<.003)collapsed=target;
+            last=now;full=fullscreen;
+            RECT next{};
+            const auto blend=[&](LONG a,LONG b){return LONG(std::lround(a+(b-a)*collapsed));};
+            next={blend(bounds.left,bar.left),blend(bounds.top,bar.top),blend(bounds.right,bar.right),blend(bounds.bottom,bar.bottom)};
+            // The surface covers the expanded area during motion so its icons fade instead of getting clipped early.
+            if(collapsed<1)UnionRect(&next,&next,&bounds);
+            const float corner=(d.dockRadius<0?raggio::vetro():d.dockRadius)*dp;
+            const int newRadius=std::max(0,int(std::lround(corner+(d.barRadius*dp-corner)*collapsed)));
+            bool repaint=before!=collapsed||keys!=identities||!EqualRect(&oldBounds,&bounds)||!EqualRect(&oldBar,&bar)||dark!=d.temaScuro();
+            identities=std::move(keys);
+            if(dark!=d.temaScuro()){surface.aggiornaTema();dark=surface.scuro;}
+            if(!inside&&hovered!=-1){hovered=-1;repaint=true;}
+            if(!EqualRect(&next,&screenRect)||newRadius!=radius||!IsWindowVisible(surface.fin)){
+                screenRect=next;radius=newRadius;
+                const int w=next.right-next.left,h=next.bottom-next.top;
+                surface.posiziona(next.left,next.top,w,h);
+                const int diameter=std::min(newRadius*2,std::min(w,h));
+                HRGN clip=diameter?CreateRoundRectRgn(0,0,w,h,diameter,diameter):CreateRectRgn(0,0,w,h);
+                if(clip&&!SetWindowRgn(surface.fin,clip,FALSE))DeleteObject(clip);
+                repaint=true;
+            }
+            shape={{float(blend(bounds.left,bar.left)-next.left),float(blend(bounds.top,bar.top)-next.top),
+                    float(blend(bounds.right,bar.right)-next.left),float(blend(bounds.bottom,bar.bottom)-next.top)},float(radius),float(radius)};
+            const int alpha=int(std::lround(255*(d.opacita+(d.barOpacity/100.f-d.opacita)*collapsed)));
+            if(alpha!=lastAlpha){lastAlpha=alpha;surface.alfa(alpha/255.0);}
+            if(!IsWindowVisible(surface.fin))ShowWindow(surface.fin,SW_SHOWNOACTIVATE);
+            if(repaint||dirtyBitmaps){dirtyBitmaps=false;InvalidateRect(surface.fin,nullptr,FALSE);}
+        }
+        bool dirtyBitmaps=false;
+        void draw(){
+            if(!surface.inizia(0.f))return;
+            auto* rt=surface.rt;auto* brush=surface.pen;const float opacity=float(1-collapsed);
+            const auto color=owner->coloreAuto?(surface.scuro?D2D1::ColorF(.12f,.12f,.14f,.35f):D2D1::ColorF(1,1,1,.38f)):
+                D2D1::ColorF(owner->coloreFondo.r,owner->coloreFondo.g,owner->coloreFondo.b,.62f);
+            brush->SetColor(color);rt->FillRoundedRectangle(shape,brush);
+            brush->SetColor(surface.inchiostro(.22f));rt->DrawRoundedRectangle(shape,brush,1);
+            for(const auto& [i,r]:slots){
+                if(i>=owner->voci.size()||opacity<=0)continue;
+                const auto& v=owner->voci[i];
+                const auto key=v.avvio==AVVIO_LAUNCHER?owner->startSource:owner->sorgenteIcona(v);
+                const D2D1_RECT_F local{float(r.left-screenRect.left),float(r.top-screenRect.top),float(r.right-screenRect.left),float(r.bottom-screenRect.top)};
+                const float cx=(local.left+local.right)/2,cy=(local.top+local.bottom)/2;
+                if(int(i)==hovered){brush->SetColor(surface.inchiostro(.18f*opacity));rt->FillRoundedRectangle({local,5,5},brush);}
+                if(const auto f=bitmaps.find(key);f!=bitmaps.end())rt->DrawBitmap(f->second,local,opacity);
+                else if(v.avvio==AVVIO_LAUNCHER){
+                    brush->SetColor(D2D1::ColorF(.1f,.58f,.95f,opacity));
+                    const float q=(local.right-local.left)*.22f;
+                    for(float x:{cx-q-1,cx+1})for(float y:{cy-q-1,cy+1})rt->FillRectangle({x,y,x+q,y+q},brush);
+                }else{
+                    brush->SetColor(surface.inchiostro(.32f*opacity));rt->FillRoundedRectangle({local,5,5},brush);
+                }
+                if(!v.finestre.empty()){brush->SetColor(surface.inchiostro(opacity));rt->FillEllipse({{cx,local.bottom+2},2,2},brush);}
+            }
+            const auto revision=surface.giroRt;
+            surface.finisci();
+            if(revision!=surface.giroRt){for(auto& [key,b]:bitmaps)b->Release();bitmaps.clear();dirtyBitmaps=true;}
+        }
+    };
+    std::vector<std::unique_ptr<ExtraDock>> extraDocks;
+    void syncExtraDocks(){
+        if(!attivo||displayMode!=4)return;
+        std::vector<HMONITOR> displays;
+        EnumDisplayMonitors(nullptr,nullptr,[](HMONITOR m,HDC,LPRECT,LPARAM out)->BOOL{
+            reinterpret_cast<std::vector<HMONITOR>*>(out)->push_back(m);return TRUE;
+        },reinterpret_cast<LPARAM>(&displays));
+        std::erase_if(extraDocks,[&](const auto& view){return view->display==monitor||std::find(displays.begin(),displays.end(),view->display)==displays.end();});
+        for(auto m:displays){
+            if(m==monitor||std::any_of(extraDocks.begin(),extraDocks.end(),[&](const auto& view){return view->display==m;}))continue;
+            auto view=std::make_unique<ExtraDock>(this,m);
+            if(view->surface.crea(L"TLauncher.Native.DockSecondary",::vetro::procedura<ExtraDock>,view.get(),false,1,false)){
+                view->surface.dpi=vetro::dpiMonitor(m);extraDocks.push_back(std::move(view));
+            }
+        }
+        updateExtraDocks();
+    }
+    void updateExtraDocks(){
+        POINT point{};GetCursorPos(&point);
+        const auto foreground=GetForegroundWindow();const auto now=GetTickCount64();
+        for(auto& view:extraDocks)view->update(point,foreground,now);
+    }
+    bool extraAnchor(HMONITOR m,size_t i,RECT& out){
+        for(auto& view:extraDocks)if(view->display==m&&!view->full)
+            for(const auto& [index,r]:view->slots)if(i==index){out=r;view->revealUntil=GetTickCount64()+1400;return true;}
+        return false;
     }
 
     // ---- misure (pixel) ----
@@ -1935,6 +2137,7 @@ private:
 
     void controllaBordo() {
         controllaClicFuori();
+        if(displayMode==4)updateExtraDocks();
         if(displayMode==2&&!spostamento&&!lAperto&&nessunaScheda()&&!trascinando&&!menu::aperti){
             if(auto target=preferredDisplay();target&&target!=monitor)spostaVerso(target);
         }
@@ -4403,6 +4606,11 @@ private:
             case WM_NOTIFICHE_LETTE: d->notificheLette(); return 0;
             case WM_APPBAR: if (w == ABN_POSCHANGED && d->appbarOk) d->aggiornaAppbar(); return 0;   // un'altra appbar si e' spostata
             case WM_LAVORO_FATTO: { if (!consegna::riprendi(h, m, (const void*)l)) return 0; Sottofondo* s = (Sottofondo*)l; s->applica(); delete s; return 0; }
+            case WM_APP+66: {
+                auto m=reinterpret_cast<HMONITOR>(l);MONITORINFO mi{sizeof(mi)};
+                if(d->displayMode==4&&GetMonitorInfoW(m,&mi)){d->cambiaSchermo(m);d->clic(int(w));}
+                return 0;
+            }
             case WM_DISPLAYCHANGE: d->cambiaSchermo(); return 0;
         }
         return DefWindowProcW(h, m, w, l);

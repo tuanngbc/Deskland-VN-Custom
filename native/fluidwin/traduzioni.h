@@ -423,6 +423,8 @@ inline constexpr const wchar_t* RIGHE[][7] = {
     {L"New folder…", L"New folder…", L"New folder…", L"New folder…", L"New folder…", L"New folder…", L"Tạo thư mục…"},
     {L"Rename folder…", L"Rename folder…", L"Rename folder…", L"Rename folder…", L"Rename folder…", L"Rename folder…", L"Đổi tên thư mục…"},
     {L"Delete folder", L"Delete folder", L"Delete folder", L"Delete folder", L"Delete folder", L"Delete folder", L"Xóa thư mục"},
+    {L"Pinned apps", L"Aplicaciones ancladas", L"Applications épinglées", L"Angeheftete Apps", L"Aplicativos fixados", L"التطبيقات المثبتة", L"Ứng dụng đã ghim"},
+    {L"Use the app menu to pin an app", L"Fija una aplicación desde su menú", L"Épinglez une application depuis son menu", L"Apps über ihr Menü anheften", L"Fixe um aplicativo pelo seu menu", L"ثبّت تطبيقًا من قائمته", L"Mở menu của ứng dụng để ghim"},
     {L"All apps", L"All apps", L"All apps", L"All apps", L"All apps", L"All apps", L"Tất cả ứng dụng"},
     {L"Restore: ", L"Restore: ", L"Restore: ", L"Restore: ", L"Restore: ", L"Restore: ", L"Hiện lại: "},
     {L"Bar edge inset", L"Bar edge inset", L"Bar edge inset", L"Bar edge inset", L"Bar edge inset", L"Bar edge inset", L"Khoảng cách thanh với mép"},

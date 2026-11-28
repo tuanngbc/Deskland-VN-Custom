@@ -240,7 +240,7 @@ inline void carica() {
     v.dockColore = leggiDword(L"DockColore", 0) & (COLORE_SCELTO | 0xFFFFFF);
     v.dockSpazio = leggiDword(L"DockSpazio", 0);
     v.dockSchermi = leggiDword(L"DockAltriSchermi", 1);
-    v.dockDisplayMode=std::clamp(int(leggiDword(L"DockDisplayMode",v.dockSchermi?3:0)),0,3);
+    v.dockDisplayMode=std::clamp(int(leggiDword(L"DockDisplayMode",v.dockSchermi?3:0)),0,4);
     v.dockDisplayName=leggiTesto(L"DockDisplayName");
     v.dockAnteprime = leggiDword(L"DockAnteprime", 1);
     v.affianca = leggiDword(L"Affiancamento", 1);
@@ -1037,9 +1037,10 @@ private:
             }
             salva();disegna();return;
         }
-        if(id>=6250&&id<=6254){
+        if((id>=6250&&id<=6254)||id==6257){
             auto& opts=valori();
-            if(id<6254)opts.dockDisplayMode=id-6250;
+            if(id==6257)opts.dockDisplayMode=4;
+            else if(id<6254)opts.dockDisplayMode=id-6250;
             else {
                 std::vector<std::wstring> displays;
                 EnumDisplayMonitors(nullptr,nullptr,[](HMONITOR m,HDC,LPRECT,LPARAM out)->BOOL{
@@ -1602,6 +1603,8 @@ private:
             const std::array display{clockText(L"Chính",L"Primary"),clockText(L"Đã chọn",L"Selected"),
                 clockText(L"Đang dùng",L"Active"),clockText(L"Theo mép",L"Edge follow")};
             choices(6250,clockText(L"Màn hình Dock",L"Dock display"),display,valori().dockDisplayMode);
+            choices(6257,clockText(L"Chế độ đa màn hình",L"Simultaneous displays"),
+                std::array{clockText(L"Tất cả màn hình",L"All displays")},valori().dockDisplayMode==4?0:-1);
             if(valori().dockDisplayMode==1){
                 const auto name=valori().dockDisplayName.empty()?std::wstring(clockText(L"Chọn màn hình",L"Choose display")):valori().dockDisplayName;
                 choices(6254,clockText(L"Màn hình đã chọn",L"Selected display"),std::array{name.c_str()},-1);
