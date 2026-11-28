@@ -38,11 +38,48 @@ inline RECT aspectFit(int width, int height, RECT box, bool enlarge = true) {
     return {x,y,x+w,y+h};
 }
 
+struct Projection {
+    RECT bounds;
+    bool right;
+    // Legacy Stage: 28-degree yaw, camera distance 1.75 card widths.
+    static constexpr float depth=.30984f;
+    D2D1_POINT_2F project(float u,float v) const {
+        const float across=right?1-u:u;
+        const float scale=1/(1+depth*across);
+        const float x=across*(1+depth)*scale;
+        return {bounds.left+(right?1-x:x)*(bounds.right-bounds.left),
+                bounds.top+(.5f+(v-.5f)*scale)*(bounds.bottom-bounds.top)};
+    }
+    bool hit(POINT point) const {
+        if(!PtInRect(&bounds,point))return false;
+        const float x=float(point.x-bounds.left)/(bounds.right-bounds.left);
+        const float across=right?1-x:x;
+        const float u=across/(1+depth-depth*across);
+        const float y=float(point.y-bounds.top)/(bounds.bottom-bounds.top);
+        return std::abs(y-.5f)*(1+depth*u)<=.5f;
+    }
+    ID2D1PathGeometry* shape(ID2D1Factory* factory) const {
+        ID2D1PathGeometry* path=nullptr;
+        ID2D1GeometrySink* sink=nullptr;
+        if(FAILED(factory->CreatePathGeometry(&path)))return nullptr;
+        if(FAILED(path->Open(&sink))){path->Release();return nullptr;}
+        sink->BeginFigure(project(0,0),D2D1_FIGURE_BEGIN_FILLED);
+        const D2D1_POINT_2F outline[]{project(1,0),project(1,1),project(0,1)};
+        sink->AddLines(outline,3);
+        sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+        const HRESULT result=sink->Close();
+        sink->Release();
+        if(FAILED(result)){path->Release();return nullptr;}
+        return path;
+    }
+};
+
 class Manager {
     struct Card {
         std::vector<Window> windows;
         size_t current = 0;
-        RECT rect{};
+        RECT rect{},fromRect{},targetRect{};
+        double reflowAt=0;
         HTHUMBNAIL thumbnail = nullptr;
         ID2D1Bitmap* bitmap = nullptr;
         ID2D1Bitmap* icon = nullptr;
@@ -63,15 +100,31 @@ class Manager {
         }
         void swap(Card& o) noexcept {
             windows.swap(o.windows);std::swap(current,o.current);std::swap(rect,o.rect);
+            std::swap(fromRect,o.fromRect);std::swap(targetRect,o.targetRect);std::swap(reflowAt,o.reflowAt);
             std::swap(thumbnail,o.thumbnail);std::swap(bitmap,o.bitmap);std::swap(icon,o.icon);
             std::swap(registered,o.registered);std::swap(minimized,o.minimized);
             std::swap(generation,o.generation);std::swap(snapshotAt,o.snapshotAt);
             std::swap(opacity,o.opacity);std::swap(fromOpacity,o.fromOpacity);
             std::swap(targetOpacity,o.targetOpacity);std::swap(transitionAt,o.transitionAt);
         }
-        void sample(double now){opacity=fromOpacity+(targetOpacity-fromOpacity)*vetro::uscita((now-transitionAt)/.18);}
+        void sample(double now) {
+            opacity=fromOpacity+(targetOpacity-fromOpacity)*vetro::uscita((now-transitionAt)/.18);
+            if(!reflowAt)return;
+            const double time=std::clamp((now-reflowAt)/.18,0.,1.);
+            const auto interpolate=[&](LONG from,LONG to){return LONG(std::lround(from+(to-from)*vetro::uscita(time)));};
+            rect={interpolate(fromRect.left,targetRect.left),interpolate(fromRect.top,targetRect.top),
+                  interpolate(fromRect.right,targetRect.right),interpolate(fromRect.bottom,targetRect.bottom)};
+            if(time>=1)reflowAt=0;
+        }
+        void place(RECT position,LONG dx,LONG dy,double now,bool animate) {
+            if(IsRectEmpty(&rect)||!animate){rect=position;reflowAt=0;return;}
+            sample(now);
+            OffsetRect(&rect,dx,dy);
+            if(EqualRect(&rect,&position)){reflowAt=0;return;}
+            fromRect=rect;targetRect=position;reflowAt=now;
+        }
         void fade(double to,double now){sample(now);fromOpacity=opacity;targetOpacity=to;transitionAt=now;}
-        bool moving(double now)const{return fromOpacity!=targetOpacity&&now-transitionAt<.18;}
+        bool moving(double now)const{return reflowAt||(fromOpacity!=targetOpacity&&now-transitionAt<.18);}
         Window& source() { return windows[current % windows.size()]; }
     };
     struct Rail {
@@ -92,7 +145,12 @@ class Manager {
             cards.clear();departing.clear();
         }
         int hit(POINT p) const {
-            for (size_t i=0; i<cards.size(); ++i) if (PtInRect(&cards[i].rect,p)) return int(i);
+            for(size_t i=0;i<cards.size();++i){
+                const auto box=cards[i].rect;
+                const RECT iconBox=owner->projectedIcon(box,glass.dpi);
+                if(!owner->settings.perspective?PtInRect(&box,p):
+                   Projection{box,bool(owner->settings.right)}.hit(p)||PtInRect(&iconBox,p))return int(i);
+            }
             return -1;
         }
         bool messaggio(HWND h, UINT m, WPARAM w, LPARAM l, LRESULT& r) {
@@ -311,7 +369,7 @@ private:
     }
     void settle(Rail& rail){
         vetro::fermaBattito(rail.glass.fin,4);rail.animating=false;rail.departing.clear();
-        for(auto& c:rail.cards)c.opacity=c.fromOpacity=c.targetOpacity=1;
+        for(auto& c:rail.cards){c.opacity=c.fromOpacity=c.targetOpacity=1;if(c.reflowAt)c.rect=c.targetRect;c.reflowAt=0;}
     }
     void animate(Rail& rail){
         if(!rail.animating)return;
@@ -337,19 +395,20 @@ private:
         int top=y,bottom=y+h;
         // Keep the old viewport until outgoing cards finish fading. Both old
         // and new rectangles remain in the allowed work region.
-        if(!rail.departing.empty()&&!rail.hidden){top=std::max(int(area.top),std::min(y,int(previous.top)));bottom=std::min(int(area.bottom),std::max(y+h,int(previous.bottom)));}
-        for(auto& c:rail.departing)OffsetRect(&c.rect,previous.left-x,previous.top-top);
+        if(!rail.hidden&&(!rail.departing.empty()||std::any_of(rail.cards.begin(),rail.cards.end(),[](const Card& c){return !IsRectEmpty(&c.rect);}))) {top=std::max(int(area.top),std::min(y,int(previous.top)));bottom=std::min(int(area.bottom),std::max(y+h,int(previous.bottom)));}
+        for(auto& c:rail.departing){c.reflowAt=0;OffsetRect(&c.rect,previous.left-x,previous.top-top);}
         if(rail.hidden||rail.suppressed)settle(rail);
         rail.glass.posiziona(rail.hidden?(settings.right?area.right-int(5*d):area.left):x,top,rail.hidden?int(5*d):width,std::max(1,bottom-top));
         rail.glass.alfa(settings.opacity/100.0);
+        const double now=vetro::secondi();
         for(size_t i=0;i<rail.cards.size();++i) {
-            auto& c=rail.cards[i];int inset=0;
+            auto& c=rail.cards[i];int inset=settings.perspective?int(8*d):0;
             const int cardTop=y-top+pad+int(i)*(ch+gap);
-            c.rect={pad+inset,cardTop,width-pad-inset,cardTop+ch};
+            c.place({pad+inset,cardTop,width-pad-inset,cardTop+ch},previous.left-x,previous.top-top,now,!rail.hidden&&!rail.suppressed);
             preview(rail,c);
         }
         if(!rail.suppressed&&!(fullscreen&&fullscreen(rail.monitor)))ShowWindow(rail.glass.fin,SW_SHOWNOACTIVATE);
-        const double now=vetro::secondi();rail.animating=!rail.departing.empty();
+        rail.animating=!rail.departing.empty();
         for(auto& c:rail.cards){c.sample(now);rail.animating|=c.moving(now);preview(rail,c);}
         if(rail.cards.empty()&&rail.departing.empty())ShowWindow(rail.glass.fin,SW_HIDE);
         if(rail.animating)vetro::battito(rail.glass.fin,4);else vetro::fermaBattito(rail.glass.fin,4);
@@ -450,19 +509,56 @@ private:
             requestCapture(w);
         }
     }
-    void perspectiveBitmap(vetro::Finestra&v,ID2D1Bitmap*bitmap,RECT dest,float opacity)const{
-        const auto size=bitmap->GetPixelSize();const float width=float(dest.right-dest.left),height=float(dest.bottom-dest.top);
-        if(width<=0||height<=0)return;
-        const float cx=(dest.left+dest.right)*.5f,cy=(dest.top+dest.bottom)*.5f;
-        // Perspective divide of a plane rotated about Y, sampled in narrow
-        // texture strips. HwndRenderTarget has no projective bitmap transform;
-        // this retains the accepted native target/device and correct aspect.
-        const float angle=settings.right?-.30f:.30f,distance=width*2.8f;
-        auto project=[&](float u){float x=(u-.5f)*width,k=distance/(distance+sin(angle)*x);return std::pair<float,float>{cx+cos(angle)*x*k,k};};
-        for(int strip=0;strip<64;strip++){const float u0=strip/64.f,u1=(strip+1)/64.f;auto a=project(u0),b=project(u1);float k=project((u0+u1)*.5f).second;
-            D2D1_RECT_F source{u0*size.width,0,u1*size.width,float(size.height)};
-            v.rt->DrawBitmap(bitmap,{a.first,cy-height*.5f*k,b.first+.12f,cy+height*.5f*k},opacity,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,&source);
+    RECT projectedIcon(RECT card,float dpi) const {
+        const LONG side=std::min(LONG(38*dpi),(card.bottom-card.top)/3);
+        const LONG x=settings.right?card.left+LONG(4*dpi):card.right-side-LONG(4*dpi);
+        const LONG y=card.bottom-side-LONG(3*dpi);
+        return {x,y,x+side,y+side};
+    }
+
+    void drawProjection(vetro::Finestra& glass,Card& card,bool active,bool hovered,float alpha) const {
+        auto project=Projection{card.rect,bool(settings.right)};
+        const float d=glass.dpi;
+        const int layers=std::min(3,int(card.windows.size())-1);
+        for(int layer=layers;layer>0;--layer) {
+            auto back=project;
+            OffsetRect(&back.bounds,LONG((settings.right?-1:1)*layer*4*d),LONG(-layer*2*d));
+            if(auto path=back.shape(glass.f2d)){
+                glass.pen->SetColor(D2D1::ColorF(.14f,.17f,.22f,.87f*alpha));
+                glass.rt->FillGeometry(path,glass.pen);
+                glass.pen->SetColor(D2D1::ColorF(.69f,.75f,.84f,.30f*alpha));
+                glass.rt->DrawGeometry(path,glass.pen,d);
+                path->Release();
+            }
         }
+        auto path=project.shape(glass.f2d);
+        if(!path)return;
+        glass.pen->SetColor(D2D1::ColorF(.10f,.12f,.16f,(hovered?.96f:.87f)*alpha));
+        glass.rt->FillGeometry(path,glass.pen);
+        if(card.bitmap) {
+            const auto source=card.bitmap->GetPixelSize();
+            RECT face=card.rect;
+            InflateRect(&face,-LONG(4*d),-LONG(4*d));
+            const RECT fit=aspectFit(source.width,source.height,face);
+            const float width=float(card.rect.right-card.rect.left),height=float(card.rect.bottom-card.rect.top);
+            if(!IsRectEmpty(&fit)&&width>0&&height>0) {
+                const float u0=(fit.left-card.rect.left)/width,u1=(fit.right-card.rect.left)/width;
+                const float v0=(fit.top-card.rect.top)/height,v1=(fit.bottom-card.rect.top)/height;
+                const int strips=std::clamp(int((fit.right-fit.left)/2),24,120);
+                for(int index=0;index<strips;++index) {
+                    const float a=float(index)/strips,b=float(index+1)/strips;
+                    const float left=u0+(u1-u0)*a,right=u0+(u1-u0)*b,mid=(left+right)*.5f;
+                    const D2D1_RECT_F sample{a*source.width,0,b*source.width,float(source.height)};
+                    glass.rt->DrawBitmap(card.bitmap,{project.project(left,v0).x,project.project(mid,v0).y,
+                        project.project(right,v1).x+.15f,project.project(mid,v1).y},alpha,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,&sample);
+                }
+            }
+        }
+        glass.pen->SetColor(active?D2D1::ColorF(.31f,.66f,1,alpha):D2D1::ColorF(.72f,.77f,.85f,(hovered?.55f:.24f)*alpha));
+        glass.rt->DrawGeometry(path,glass.pen,(active?2.f:1.f)*d);
+        path->Release();
+        const RECT icon=projectedIcon(card.rect,d);
+        if(card.icon)glass.rt->DrawBitmap(card.icon,{float(icon.left),float(icon.top),float(icon.right),float(icon.bottom)},alpha);
     }
     void draw(Rail& rail) {
         auto& v=rail.glass;if(!v.inizia())return;
@@ -474,11 +570,13 @@ private:
             if(c.generation!=v.giroRt){if(outgoing)c.release();else preview(rail,c);}
             const auto& w=c.source();if((!outgoing&&!w.valid())||c.opacity<=0)return;
             const float alpha=float(c.opacity);
+            const bool active=!outgoing&&rail.foreground==w.hwnd;
+            if(!outgoing&&!c.icon&&icon)c.icon=icon(v.rt,w.icon,96);
+            if(settings.perspective){drawProjection(v,c,active,hovered,alpha);return;}
             auto r=c.rect;D2D1_RECT_F f{float(r.left),float(r.top),float(r.right),float(r.bottom)};
             v.pen->SetColor(v.inchiostro((hovered?.20f:.07f)*alpha));v.rt->FillRoundedRectangle({f,8*d,8*d},v.pen);
-            if(!outgoing&&GetAncestor(GetForegroundWindow(),GA_ROOT)==w.hwnd){v.pen->SetColor(D2D1::ColorF(.1f,.55f,1,alpha));v.rt->DrawRoundedRectangle({f,8*d,8*d},v.pen,2*d);}
-            if(c.bitmap){auto size=c.bitmap->GetPixelSize();RECT dest=r;dest.bottom-=int(25*d);dest=aspectFit(size.width,size.height,dest,false);if(settings.perspective)perspectiveBitmap(v,c.bitmap,dest,alpha);else v.rt->DrawBitmap(c.bitmap,{float(dest.left),float(dest.top),float(dest.right),float(dest.bottom)},alpha);}
-            if(!outgoing&&!c.icon&&icon)c.icon=icon(v.rt,w.icon,96);
+            if(active){v.pen->SetColor(D2D1::ColorF(.1f,.55f,1,alpha));v.rt->DrawRoundedRectangle({f,8*d,8*d},v.pen,2*d);}
+            if(c.bitmap){auto size=c.bitmap->GetPixelSize();RECT dest=r;dest.bottom-=int(25*d);dest=aspectFit(size.width,size.height,dest,false);v.rt->DrawBitmap(c.bitmap,{float(dest.left),float(dest.top),float(dest.right),float(dest.bottom)},alpha);}
             if(c.icon)v.rt->DrawBitmap(c.icon,{f.left+4*d,f.bottom-23*d,f.left+24*d,f.bottom-3*d},alpha);
             std::wstring label=w.name;if(c.windows.size()>1)label+=L" ("+std::to_wstring(c.current+1)+L"/"+std::to_wstring(c.windows.size())+L")";
             v.testo(label,rail.text,{f.left+28*d,f.bottom-25*d,f.right-4*d,f.bottom},v.inchiostro(alpha));

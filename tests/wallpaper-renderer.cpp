@@ -191,7 +191,7 @@ int main(int argc,char**argv){try{
             SceneRuntime scene(gl,sceneIndex(id));View v{0,0,960,540,960,540};allocate(480,270);Config cfg=config;std::vector<unsigned char> sequence(size_t(480*3)*270*3*4,255);
             std::map<std::string,std::vector<Body>> before;float elapsed=0;
             for(size_t frame=0;frame<times.size();frame++){
-                if(frame==1){before=scene.actors();V2 target{670,330};if(std::string(id)=="meadow"&&scene.meadowBoy().initialized)target=scene.meadowBoy().position+V2{-90,-90};scene.click(target.x,target.y);}
+                if(frame==1){before=scene.actors();V2 target{670,330};if(std::string(id)=="meadow"&&scene.meadowBoy().initialized)target=scene.meadowBoy().position+V2{-90,-90};scene.pointer(PointerAction::Down,target);scene.pointer(PointerAction::Up,target);}
                 while(elapsed+.0001f<times[frame]){float step=std::min(1.f/25,times[frame]-elapsed);elapsed+=step;noiseTexture.bind(gl,0);scene.render(cfg,v,{},weather,20+elapsed,step,stop,.5f,.5f);}
                 noiseTexture.bind(gl,0);scene.render(cfg,v,{},weather,20+elapsed,0,stop,.5f,.5f);auto pixels=capture(480,270);
                 if(frame==1)for(auto&[name,list]:before)for(size_t j=0;j<list.size();j++)check((list[j].position-scene.actors().at(name)[j].position).length()==0,"dt=0 rendered input changed position");

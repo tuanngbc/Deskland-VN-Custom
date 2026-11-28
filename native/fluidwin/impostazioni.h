@@ -9,6 +9,7 @@
 #include "pool.h"
 #include "sfondi.h"
 #include "stage.h"
+#include "desktop_clock.h"
 #include "shortcuts.h"
 #include "app_organization.h"
 #include "../wallpaper/settings.h"
@@ -24,8 +25,9 @@ namespace impostazioni {
 
 struct Valori {
     stage::Settings stage;
+    std::array<desktopclock::Settings,2> clocks;
     int dockVisibility=1,dockBarLength=64,dockBarThickness=4,dockBarOpacity=80,dockBarOpenDelay=120,dockBarCloseDelay=650;
-    int dockBarInset=3,dockBarAlignment=1,dockBarOffset=50,dockBarRadius=4,dockCornerRadius=-1;
+    int dockBarInset=3,dockBarAlignment=1,dockBarOffset=50,dockBarRadius=4,dockCornerRadius=-1,dockCustomRadius=12;
     bool dockBarFullscreen=false;
     bool spotlightEnabled=true,spotlightAltSpace=true;
     int spotlightMode=1;
@@ -89,6 +91,40 @@ inline void scriviTesto(const wchar_t* nome, const std::wstring& v) {
     RegSetKeyValueW(HKEY_CURRENT_USER, CHIAVE, nome, REG_SZ, v.c_str(), (DWORD)((v.size() + 1) * sizeof(wchar_t)));
 }
 
+inline std::wstring clockKey(size_t clock,const wchar_t* field) {
+    return L"DesktopClock"+std::to_wstring(clock+1)+field;
+}
+inline desktopclock::Settings readClock(size_t index) {
+    desktopclock::Settings c;
+    const auto number=[&](const wchar_t* key,DWORD fallback){return leggiDword(clockKey(index,key).c_str(),fallback);};
+    c.enabled=number(L"Enabled",0);
+    c.locked=number(L"Locked",1);
+    c.clickThrough=number(L"ClickThrough",1);
+    c.date=number(L"Date",1);
+    c.seconds=number(L"Seconds",0);
+    c.style=std::clamp(int(number(L"Style",0)),0,1);
+    c.scale=std::clamp(int(number(L"Scale",100)),50,200);
+    c.opacity=std::clamp(int(number(L"Opacity",72)),5,100);
+    c.color=number(L"Color",RGB(185,231,245))&0xffffff;
+    c.x=static_cast<int>(number(L"X",DWORD(-1)));
+    c.y=static_cast<int>(number(L"Y",DWORD(-1)));
+    c.font=leggiTesto(clockKey(index,L"Font").c_str());
+    c.display=leggiTesto(clockKey(index,L"Display").c_str());
+    return c;
+}
+inline void saveClock(size_t index,const desktopclock::Settings& c) {
+    const auto number=[&](const wchar_t* key,DWORD value){scriviDword(clockKey(index,key).c_str(),value);};
+    number(L"Enabled",c.enabled);number(L"Locked",c.locked);number(L"ClickThrough",c.clickThrough);
+    number(L"Date",c.date);number(L"Seconds",c.seconds);number(L"Style",c.style);
+    number(L"Scale",c.scale);number(L"Opacity",c.opacity);number(L"Color",c.color);
+    number(L"X",DWORD(c.x));number(L"Y",DWORD(c.y));
+    scriviTesto(clockKey(index,L"Font").c_str(),c.font);
+    scriviTesto(clockKey(index,L"Display").c_str(),c.display);
+}
+inline const wchar_t* clockText(const wchar_t* vi,const wchar_t* en) {
+    return testi::attuale()==testi::VIETNAMITA?vi:en;
+}
+
 // Avvio con Windows: il valore "FluidWin" nella chiave Run dell'utente (come le altre app che si aprono all'accesso;
 // niente amministratore). Lo stato vero e' quello di Windows, non una nostra impostazione: l'avvio si puo' spegnere
 // anche da Gestione attivita' > App di avvio, che lo segna in StartupApproved (primo byte dispari = spento)
@@ -133,6 +169,7 @@ inline void carica() {
     v.avvio = avvioAttivo();
     // cartella di FluidWin spostata: l'avvio punta al FluidWin di adesso
     if (v.avvio && comandoRegistrato() != comandoAvvio()) impostaAvvio(true);
+    for(size_t i=0;i<v.clocks.size();++i)v.clocks[i]=readClock(i);
     v.gelatina = leggiDword(L"Gelatina", 1); v.genio = leggiDword(L"Genio", 1); v.chiusura = leggiDword(L"Chiusura", 1);
     v.apertura = leggiDword(L"Apertura", 1); v.onda = leggiDword(L"OndaRicerca", 1);
     v.riduzione = leggiDword(L"Riduzione", 0) == 1 ? 1 : 0;
@@ -152,7 +189,8 @@ inline void carica() {
     v.dockBarAlignment=std::clamp(int(leggiDword(L"DockBarAlignment",1)),0,3);
     v.dockBarOffset=std::clamp(int(leggiDword(L"DockBarOffset",50)),0,100);
     v.dockBarRadius=std::clamp(int(leggiDword(L"DockBarRadius",4)),0,16);
-    v.dockCornerRadius=std::clamp(int(leggiDword(L"DockCornerRadius",DWORD(-1))),-1,48);
+    v.dockCustomRadius=std::clamp(int(leggiDword(L"DockCustomRadius",12)),0,48);
+    v.dockCornerRadius=std::clamp(int(leggiDword(L"DockCornerRadius",DWORD(-1))),-1,49);
     v.dockBarFullscreen=leggiDword(L"DockBarFullscreen",0);
     v.spotlightEnabled=leggiDword(L"SpotlightEnabled",1);v.spotlightAltSpace=leggiDword(L"SpotlightAltSpace",1);
     v.spotlightShortcut={leggiDword(L"SpotlightHotkeyMods",MOD_ALT),leggiDword(L"SpotlightHotkeyKey",VK_SPACE)};
@@ -199,11 +237,13 @@ inline void salva() {
     const Valori& v = valori();
     scriviDword(L"DockVisibility",v.dockVisibility);scriviDword(L"DockBarLength",v.dockBarLength);scriviDword(L"DockBarThickness",v.dockBarThickness);
     scriviDword(L"DockBarInset",v.dockBarInset);scriviDword(L"DockBarAlignment",v.dockBarAlignment);scriviDword(L"DockBarOffset",v.dockBarOffset);
+    scriviDword(L"DockCustomRadius",v.dockCustomRadius);
     scriviDword(L"DockBarRadius",v.dockBarRadius);scriviDword(L"DockCornerRadius",DWORD(v.dockCornerRadius));
     scriviDword(L"DockBarOpacity",v.dockBarOpacity);scriviDword(L"DockBarOpenDelay",v.dockBarOpenDelay);scriviDword(L"DockBarCloseDelay",v.dockBarCloseDelay);scriviDword(L"DockBarFullscreen",v.dockBarFullscreen);
     scriviDword(L"SpotlightHotkeyMods",v.spotlightShortcut.mods);scriviDword(L"SpotlightHotkeyKey",v.spotlightShortcut.key);
     scriviDword(L"StageHotkeyMods",v.stageShortcut.mods);scriviDword(L"StageHotkeyKey",v.stageShortcut.key);scriviDword(L"StageHotkeyEnabled",v.stageShortcutEnabled);
     scriviDword(L"SpotlightEnabled",v.spotlightEnabled);scriviDword(L"SpotlightAltSpace",v.spotlightAltSpace);scriviDword(L"SpotlightMode",v.spotlightMode);
+    for(size_t i=0;i<v.clocks.size();++i)saveClock(i,v.clocks[i]);
     scriviDword(L"StageEnabled",v.stage.enabled); scriviDword(L"StagePerspective",v.stage.perspective);
     scriviDword(L"StageAutoHide",v.stage.autoHide); scriviDword(L"StagePeek",v.stage.peek);
     scriviDword(L"StagePeekLive",v.stage.peekLive); scriviDword(L"StagePeekAnimation",v.stage.peekAnimation);
@@ -505,7 +545,7 @@ public:
 
 private:
     static constexpr float LARGO = 780, ALTO = 500, BARRA = 240;
-    enum { S_GENERALE, S_DOCK, S_ANIMAZIONI, S_NOTCH, S_TASTIERA, S_CURSORE, S_WALLPAPER, S_STAGE, S_SPOTLIGHT, SEZIONI };
+    enum { S_GENERALE, S_DOCK, S_ANIMAZIONI, S_NOTCH, S_TASTIERA, S_CURSORE, S_WALLPAPER, S_STAGE, S_SPOTLIGHT, S_CLOCKS, SEZIONI };
     // nome e spiegazione in italiano e in inglese, sezione
     struct Voce { const wchar_t *nome, *name, *spiega, *explain; bool Valori::*campo; int sezione; };
     const std::vector<Voce> voci = {
@@ -582,10 +622,9 @@ private:
         {L"Spessore barra",L"Collapsed bar thickness",L"",L"",L" px",&Valori::dockBarThickness,2,32,1,S_DOCK},
         {L"Opacità barra",L"Collapsed bar opacity",L"",L"",L"%",&Valori::dockBarOpacity,20,100,5,S_DOCK},
         {L"Distanza barra dal bordo",L"Bar edge inset",L"",L"",L" DIP",&Valori::dockBarInset,0,48,1,S_DOCK},
-        {L"Posizione barra",L"Bar alignment (0 start, 1 center, 2 end, 3 custom)",L"",L"",L"",&Valori::dockBarAlignment,0,3,1,S_DOCK},
         {L"Offset barra",L"Custom bar offset",L"",L"",L"%",&Valori::dockBarOffset,0,100,1,S_DOCK},
         {L"Raggio barra",L"Bar corner radius",L"",L"",L" DIP",&Valori::dockBarRadius,0,16,1,S_DOCK},
-        {L"Raggio Dock",L"Dock corner radius (-1 system, 0 square)",L"",L"",L" DIP",&Valori::dockCornerRadius,-1,48,1,S_DOCK},
+        {L"Raggio Dock",L"Custom Dock radius",L"",L"",L" DIP",&Valori::dockCustomRadius,0,48,1,S_DOCK},
         {L"Attesa apertura",L"Expand delay",L"",L"",L" ms",&Valori::dockBarOpenDelay,0,1500,50,S_DOCK},
         {L"Attesa chiusura",L"Collapse delay",L"",L"",L" ms",&Valori::dockBarCloseDelay,100,3000,100,S_DOCK},
         {L"Dimensione delle icone", L"Icon size", L"Anche l'altezza del dock segue", L"The dock's height follows",
@@ -824,7 +863,55 @@ private:
             if(stage){settings.stageShortcut=next;settings.stageShortcutEnabled=enabled;}else settings.spotlightShortcut=next;
             salva();if(cambiato)cambiato();disegna();return;
         }
+        if(id>=6400&&id<6440) {
+            const int index=(id-6400)/20,action=(id-6400)%20;
+            auto& clock=valori().clocks[index];
+            switch(action) {
+                case 0:clock.enabled=!clock.enabled;break;
+                case 1:clock.locked=!clock.locked;break;
+                case 2:clock.clickThrough=!clock.clickThrough;break;
+                case 3:clock.date=!clock.date;break;
+                case 4:clock.seconds=!clock.seconds;break;
+                case 5:clock.style=1-clock.style;break;
+                case 6:{
+                    const auto list=desktopclock::monitors();
+                    auto current=std::find_if(list.begin(),list.end(),[&](const auto& m){return m.name==clock.display;});
+                    if(current==list.end())clock.display=list.empty()?L"":list.front().name;
+                    else if(++current==list.end())clock.display.clear();
+                    else clock.display=current->name;
+                    clock.x=clock.y=-1;
+                    break;
+                }
+                case 7:clock.x=clock.y=-1;break;
+                case 8:{
+                    auto name=clock.font;
+                    if(!appcatalog::prompt(v.fin,clockText(L"Tên font (để trống để dùng font gốc)",L"Font family (blank uses the default)"),name))return;
+                    clock.font=name.substr(0,LF_FACESIZE-1);
+                    break;
+                }
+                case 9:{
+                    static COLORREF custom[16]{};
+                    CHOOSECOLORW dialog{};dialog.lStructSize=sizeof(dialog);dialog.hwndOwner=v.fin;
+                    dialog.rgbResult=clock.color;dialog.lpCustColors=custom;dialog.Flags=CC_FULLOPEN|CC_RGBINIT;
+                    if(!ChooseColorW(&dialog))return;
+                    clock.color=dialog.rgbResult;
+                    break;
+                }
+                case 10:case 11:clock.scale=std::clamp(clock.scale+(action==10?-5:5),50,200);break;
+                case 12:case 13:clock.opacity=std::clamp(clock.opacity+(action==12?-5:5),5,100);break;
+                default:return;
+            }
+            saveClock(index,clock);
+            if(cambiato)cambiato();
+            disegna();
+            return;
+        }
         if(id>=6200&&id<=6202){valori().dockVisibility=id-6200;valori().dockAuto=id!=6200;salva();if(cambiato)cambiato();disegna();return;}
+        if(id>=6204&&id<=6207){valori().dockBarAlignment=id-6204;salva();if(cambiato)cambiato();disegna();return;}
+        if(id>=6210&&id<=6215){
+            constexpr int radii[]{-1,0,5,10,18,49};
+            valori().dockCornerRadius=radii[id-6210];salva();if(cambiato)cambiato();disegna();return;
+        }
         if(id==6203){valori().dockBarFullscreen=!valori().dockBarFullscreen;salva();if(cambiato)cambiato();disegna();return;}
         if(id>=6300&&id<=6305){
             if(id==6300)valori().spotlightEnabled=!valori().spotlightEnabled;
@@ -956,6 +1043,7 @@ private:
             case S_WALLPAPER: return testi::t(L"Live Wallpaper",L"Live Wallpaper");
             case S_STAGE: return L"Stage Manager";
             case S_SPOTLIGHT: return L"Spotlight";
+            case S_CLOCKS: return clockText(L"Đồng hồ desktop",L"Desktop clocks");
         }
         return L"";
     }
@@ -1318,6 +1406,23 @@ private:
             y += 60 * d;
         }
         if (sezione == S_DOCK) {
+            auto choices=[&](int id,const wchar_t* title,const auto& labels,int selected) {
+                v.testo(title,fVoce,{L+16*d,y,R-16*d,y+28*d},inkS);
+                y+=30*d;
+                const float step=(R-L)/labels.size();
+                for(size_t j=0;j<labels.size();++j){
+                    D2D1_RECT_F button{L+step*j,y,L+step*(j+1)-4*d,y+36*d};
+                    riquadro(button,int(j)==selected||sopra==id+int(j));
+                    aggiungiZona(button,id+int(j));v.testo(labels[j],fCentro,button,inkS);
+                }
+                y+=44*d;
+            };
+            const std::array position{clockText(L"Đầu",L"Start"),clockText(L"Giữa",L"Center"),clockText(L"Cuối",L"End"),clockText(L"Tùy chỉnh",L"Custom")};
+            choices(6204,clockText(L"Vị trí thanh thu nhỏ",L"Collapsed bar alignment"),position,valori().dockBarAlignment);
+            const std::array corners{clockText(L"Hệ thống",L"System"),clockText(L"Vuông",L"Square"),clockText(L"Bo ít",L"Small"),clockText(L"Bo vừa",L"Medium"),clockText(L"Bo nhiều",L"Large"),clockText(L"Tùy chỉnh",L"Custom")};
+            const int radius=valori().dockCornerRadius;
+            const int preset=radius<0?0:radius==0?1:radius==5?2:radius==10?3:radius==18?4:5;
+            choices(6210,clockText(L"Độ bo góc Dock",L"Dock corner radius"),corners,preset);
             const wchar_t* modes[]={testi::t(L"Sempre visibile",L"Always visible"),testi::t(L"Nascondi automaticamente",L"Auto-hide"),testi::t(L"Barra compatta",L"Collapsed bar")};
             for(int i=0;i<3;++i){D2D1_RECT_F r{L,y,R,y+44*d};riquadro(r,sopra==6200+i);aggiungiZona(r,6200+i);v.testo(modes[i],fVoce,{L+16*d,y,R-74*d,y+44*d},inkS);levetta(R-58*d,y+22*d,valori().dockVisibility==i?1.f:0.f,(float)e);y+=50*d;}
             {D2D1_RECT_F r{L,y,R,y+48*d};riquadro(r,sopra==6203);aggiungiZona(r,6203);
@@ -1475,6 +1580,43 @@ private:
             adjust(testi::t(L"Misura anteprima",L"Peek size"),6018,s.peekSize,L" px");
             toggle(testi::t(L"Scorciatoia Stage",L"Stage shortcut"),6023,valori().stageShortcutEnabled);
             {D2D1_RECT_F r{L,y,R,y+48*d};riquadro(r,sopra==6022);aggiungiZona(r,6022);v.testo(shortcuts::label(valori().stageShortcut),fVoce,{L+16*d,y,R-16*d,y+48*d},inkS);y+=54*d;}
+        }
+        if(sezione==S_CLOCKS) {
+            for(size_t i=0;i<valori().clocks.size();++i) {
+                const auto& clock=valori().clocks[i];
+                const int base=6400+int(i)*20;
+                auto row=[&](int id,const wchar_t* label,const std::wstring& value,const bool* toggle=nullptr) {
+                    const D2D1_RECT_F rect{L,y,R,y+42*d};
+                    riquadro(rect,sopra==base+id);aggiungiZona(rect,base+id);
+                    v.testo(label,fVoce,{L+16*d,y,R-140*d,y+42*d},inkS);
+                    if(toggle)levetta(R-58*d,y+21*d,*toggle?1.f:0.f,float(e));
+                    else v.testo(value,fSotto,{R-155*d,y,R-12*d,y+42*d},tenueS);
+                    y+=48*d;
+                };
+                auto adjust=[&](int id,const wchar_t* name,int number) {
+                    riquadro({L,y,R,y+42*d},false);
+                    v.testo(name,fVoce,{L+16*d,y,R-150*d,y+42*d},inkS);
+                    for(int part=0;part<2;++part){
+                        const float x=R-(part?45.f:148.f)*d;
+                        const D2D1_RECT_F button{x,y+4*d,x+34*d,y+38*d};
+                        aggiungiZona(button,base+id+part);v.testo(part?L"+":L"−",fCentro,button,inkS);
+                    }
+                    v.testo(std::to_wstring(number)+L"%",fCentro,{R-110*d,y,R-48*d,y+42*d},inkS);y+=48*d;
+                };
+                row(0,i?clockText(L"Đồng hồ 2",L"Clock 2"):clockText(L"Đồng hồ 1",L"Clock 1"),L"",&clock.enabled);
+                row(1,clockText(L"Khóa vị trí",L"Lock position"),L"",&clock.locked);
+                row(2,clockText(L"Cho chuột bấm xuyên",L"Click through"),L"",&clock.clickThrough);
+                row(3,clockText(L"Hiện ngày",L"Show date"),L"",&clock.date);
+                row(4,clockText(L"Hiện giây",L"Show seconds"),L"",&clock.seconds);
+                row(5,clockText(L"Kiểu hiển thị",L"Style"),clock.style?clockText(L"Gọn",L"Compact"):clockText(L"Cổ điển",L"Classic"));
+                row(6,clockText(L"Màn hình",L"Display"),clock.display.empty()?clockText(L"Tự động",L"Automatic"):clock.display);
+                row(7,clockText(L"Đặt lại vị trí",L"Reset position"),L"");
+                row(8,clockText(L"Font chữ",L"Font family"),clock.font.empty()?clockText(L"Mặc định",L"Default"):clock.font);
+                row(9,clockText(L"Màu chữ",L"Text color"),L"…");
+                adjust(10,clockText(L"Kích thước",L"Scale"),clock.scale);
+                adjust(12,clockText(L"Độ trong suốt",L"Opacity"),clock.opacity);
+                y+=8*d;
+            }
         }
         if (scorre) {
             v.rt->PopAxisAlignedClip();

@@ -159,6 +159,8 @@ jobs:
           $dir=Join-Path 'dist' $name
           New-Item -ItemType Directory -Path $dir -Force | Out-Null
           Copy-Item native-build/TLauncher.exe $dir
+          New-Item -ItemType Directory -Path (Join-Path $dir assets) -Force | Out-Null
+          Copy-Item assets/widget (Join-Path $dir assets) -Recurse
           Copy-Item native-build/runtime-licenses (Join-Path $dir 'runtime-licenses') -Recurse
           if (Test-Path native-build/wallpaper) {
             Copy-Item native-build/wallpaper (Join-Path $dir 'wallpaper') -Recurse

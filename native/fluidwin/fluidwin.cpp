@@ -3965,6 +3965,16 @@ static void altTabVeloce() {
 }
 static ricerca::Ricerca gRicerca;
 static stage::Manager gStage;
+static std::array<desktopclock::Clock,2> gDesktopClocks;
+static void configureDesktopClocks(bool refresh=false) {
+    auto& clocks=impostazioni::valori().clocks;
+    for(size_t i=0;i<clocks.size();++i){
+        gDesktopClocks[i].moved=[i](const desktopclock::Settings& position){
+            impostazioni::valori().clocks[i]=position;impostazioni::saveClock(i,position);
+        };
+        gDesktopClocks[i].configure(clocks[i],i==1,refresh);
+    }
+}
 static constexpr UINT_PTR TIMER_STAGE_CHANGE=0x5354;
 static constexpr UINT_PTR TIMER_SPOTLIGHT_PREFETCH=0x5310;
 static void stageEvent(DWORD ev,HWND h){
@@ -4129,6 +4139,7 @@ static bool gRtlAvvio = false;   // lingua da destra a sinistra all'avvio (vedi 
 static void applicaImpostazioni() {
     const impostazioni::Valori& v = impostazioni::valori();
     gStage.configure(v.stage);
+    configureDesktopClocks();
     if(!v.spotlightEnabled||v.spotlightMode==0||v.spotlightMode==3)gRicerca.ferma();
     if(gMessaggi){
         if(!gSpotlightHotkey.apply(gMessaggi,v.spotlightShortcut,v.spotlightEnabled&&v.spotlightAltSpace))logf("Spotlight shortcut unavailable; previous binding preserved");
@@ -4148,7 +4159,7 @@ static void applicaImpostazioni() {
         if (gDockOk) gDock.impostaAngoli();
         logf("angoli: %s", v.angoli == 0 ? "arrotondati" : v.angoli == 1 ? "poco arrotondati" : "squadrati");
     }
-    if (gDockOk) { gDock.impostaVisibility(v.dockVisibility,v.dockBarLength,v.dockBarThickness,v.dockBarOpacity,v.dockBarOpenDelay,v.dockBarCloseDelay,v.dockBarFullscreen,v.dockBarInset,v.dockBarAlignment,v.dockBarOffset,v.dockBarRadius,v.dockCornerRadius);gDock.impostaAutoNascondi(v.dockVisibility!=0); gDock.impostaOpacita(v.dockOpacita / 100.0f); gDock.impostaSpazio(v.dockSpazio); gDock.impostaAltriSchermi(v.dockSchermi); gDock.impostaAnteprime(v.dockAnteprime);
+    if (gDockOk) { gDock.impostaVisibility(v.dockVisibility,v.dockBarLength,v.dockBarThickness,v.dockBarOpacity,v.dockBarOpenDelay,v.dockBarCloseDelay,v.dockBarFullscreen,v.dockBarInset,v.dockBarAlignment,v.dockBarOffset,v.dockBarRadius,v.dockCornerRadius==49?v.dockCustomRadius:v.dockCornerRadius);gDock.impostaAutoNascondi(v.dockVisibility!=0); gDock.impostaOpacita(v.dockOpacita / 100.0f); gDock.impostaSpazio(v.dockSpazio); gDock.impostaAltriSchermi(v.dockSchermi); gDock.impostaAnteprime(v.dockAnteprime);
                    gDock.impostaLatoIcone(v.dockIcone); gDock.impostaDistanzaIcone(v.dockDistanza); gDock.impostaColore(v.dockColore); }
     // Arabo acceso o spento: i formati di testo prendono la direzione (da destra a sinistra) quando nascono, e molti
     // vivono quanto FluidWin. Riavviare e' il modo sicuro di rifarli tutti
@@ -4252,6 +4263,7 @@ static LRESULT CALLBACK procMessaggi(HWND h, UINT m, WPARAM w, LPARAM l) {
             return 0;
         case WM_DISPLAYCHANGE:
             gStage.topologyChanged=true;
+            configureDesktopClocks(true);
             wallpaperTick();
             aggiornaOrigine(); if (gGenioOk) gGenio.aggiornaSchermo();
             SetTimer(h, 12, 800, nullptr);   // la scala nuova si legge quando Windows ha finito di cambiarla
@@ -4958,6 +4970,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     impostaPausa(true);
     condividi::ferma();   // annulla la preparazione dei file senza aspettare prima di ripristinare Windows
     cursori::togli();   // di nuovo i cursori di Windows
+    for(auto& clock:gDesktopClocks)clock.stop();
     gStage.stop();gRicerca.ferma();gSpotlightHotkey.stop();gStageHotkey.stop();
     if (gDockOk) gDock.chiudi();
     gBanner.chiudiLettore();

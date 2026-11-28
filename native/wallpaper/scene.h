@@ -100,23 +100,104 @@ class SceneRuntime {
         for(float ring:{24.f,48.f,80.f,128.f,192.f})for(int j=0;j<16;j++){float a=j*.392699f;V2 q=wanted+V2{cos(a),sin(a)}*ring;if(navigable(q,radius,water))return q;}
         return fallback;
     }
+    void stepCraft(const std::string& group,size_t index,Body& craft,const std::vector<Body>& previous,
+                   MotionSpec spec,float time) {
+        const auto key=std::make_pair(group,index);
+        const auto valid=[&](V2 point,float radius){return navigable(point,radius,true);};
+        const bool kayak=group=="uKay", yacht=group=="uYacht";
+        const float variation=hash(int(index),this->index,137);
+        spec.speed=(kayak?7.f:yacht?14.f:6.5f)+variation*(kayak?4.f:yacht?6.f:3.5f);
+        spec.turn=craft.command?1.4f:.7f;
+        V2 desired{};
+        const auto& body=previous[index];
+        const V2 forward{cos(body.heading),sin(body.heading)};
+        const float clearance=kayak?64.f:yacht?105.f:76.f;
+        V2 avoidance{};
+        for(size_t i=0;i<previous.size();++i) {
+            if(i==index||!previous[i].initialized)continue;
+            const V2 delta=previous[i].position-body.position;
+            const float distance=delta.length();
+            if(distance>clearance+150||distance<.001f)continue;
+            const V2 relative=previous[i].velocity-body.velocity;
+            const float closing=delta.x*relative.x+delta.y*relative.y;
+            const float ahead=std::clamp(-closing/std::max(.01f,relative.x*relative.x+relative.y*relative.y),0.f,7.f);
+            const float closest=(delta+relative*ahead).length();
+            const float near=std::clamp((clearance+44-distance)/46,0.f,1.f);
+            const float future=closing<0?std::max(0.f,1-closest/(clearance+25))*(1-ahead/8):0;
+            const float risk=std::max(near,future);
+            avoidance=avoidance+(unit(delta)*-2+V2{-forward.y,forward.x}*1.6f)*risk;
+            if(closing<0&&delta.x*forward.x+delta.y*forward.y>0)
+                spec.speed*=std::clamp(.25f+.75f*(distance-clearance)/50,.25f,1.f);
+        }
+        if(craft.command) {
+            desired=craft.target;
+            const auto found=routes.find(key);
+            if(found!=routes.end()) {
+                auto& route=found->second;
+                while(route.next+1<route.points.size()&&(route.points[route.next]-body.position).length()<12)
+                    ++route.next;
+                if(route.next+1<route.points.size()){
+                    desired=route.points[route.next];
+                    craft.command=false; // preserve cruise speed through intermediate waypoints
+                    steer(craft,spec,desired,fixedStep,valid,avoidance);
+                    craft.command=true;
+                    return;
+                }
+            }
+            spec.speed*=1.45f;
+        } else {
+            routes.erase(key);
+            if(craft.idle<0) {
+                craft.idle+=fixedStep;
+                craft.velocity={};
+                craft.angularVelocity=0;
+                return;
+            }
+            const float gentle=(noise(time*.3f,float(index)*10,this->index)-.5f)*.25f;
+            float heading=body.heading+gentle;
+            // Look ahead for navigable water and choose the nearest usable heading.
+            // The stable side preference prevents an island from flipping the turn every frame.
+            const float turnSign=variation<.5f?-1.f:1.f;
+            auto open=[&](float angle) {
+                const V2 direction{cos(angle),sin(angle)};
+                for(float distance:{20.f,45.f,70.f})
+                    if(!valid(body.position+direction*distance,spec.radius))return false;
+                return true;
+            };
+            if(!open(heading)){
+                for(int step=1;step<=16;++step){
+                    const float angle=step*.19634954f*turnSign;
+                    if(open(body.heading+angle)){heading=body.heading+angle;break;}
+                    if(open(body.heading-angle)){heading=body.heading-angle;break;}
+                }
+            }
+            desired=body.position+V2{cos(heading),sin(heading)}*70;
+            if(kayak)spec.speed*=.75f+.25f*std::abs(sin(time*2.4f+float(index)));
+        }
+        steer(craft,spec,desired,fixedStep,valid,avoidance);
+        if(!craft.command)routes.erase(key);
+    }
     template<size_t N>void flyers(const char*uniform,const char*count,int n,float w,float h,float t,float speed,float y0=.1f,float y1=.85f){
         if(program.loc(uniform)<0)return;
         bool craft=!strcmp(uniform,"uKay")||!strcmp(uniform,"uBoat")||!strcmp(uniform,"uYacht"),swimmer=!strcmp(uniform,"uFish")||!strcmp(uniform,"uTurt"),water=craft||swimmer;
         bool bird=!strcmp(uniform,"uBird")||!strcmp(uniform,"uSwallow");
         MotionSpec spec{speed,craft?12.f:bird?40.f:16.f,craft?10.f:bird?45.f:18.f,craft?1.4f:bird?1.8f:2.4f,craft?2.f:5.f,craft?30.f:swimmer?20.f:bird?19.f:8.f,!water};
         int salt=0;for(auto ch:std::string(uniform))salt=(salt*33+ch)%10000;
-        auto&list=groups[uniform];n=std::clamp(n,0,int(N));list.resize(n);std::array<Vec4,N> values{},motion{};
+        const std::string group=uniform;auto&list=groups[group];n=std::clamp(n,0,int(N));list.resize(n);std::array<Vec4,N> values{},motion{};
         for(int i=0;i<n;i++){auto&b=list[i];if(!b.initialized){
                 for(int trial=0;trial<768;trial++){V2 q{w*(.04f+.92f*hash(i*773+trial,index,210+salt)),h*(y0+(y1-y0)*hash(i*773+trial,index,211+salt))};
                     if(!navigable(q,spec.radius,water))continue;bool clear=true;for(int j=0;j<i;j++)if(list[j].initialized&&(list[j].position-q).length()<spec.radius*3)clear=false;if(!clear)continue;
-                    b.position=b.target=q;b.heading=hash(i,index,201+salt)*6.283185f;b.phase=float(i);b.initialized=true;b.idle=10;break;}
+                    b.position=b.target=q;b.heading=hash(i,index,201+salt)*6.283185f;b.phase=float(i);b.initialized=true;b.idle=10;routes.erase({group,size_t(i)});break;}
             }
         }
         {CpuMeasure simulation{graphicsStats.simulationMs};
-        for(int step=0;step<simulationSteps;step++)for(int i=0;i<n;i++){auto&b=list[i];if(!b.initialized)continue;
+        for(int step=0;step<simulationSteps;step++){
+          const auto previous=craft?list:std::vector<Body>{};
+          for(int i=0;i<n;i++){auto&b=list[i];if(!b.initialized)continue;
+            const float stepTime=float(simulationTime-(simulationSteps-1-step)*fixedStep);
+            if(craft){stepCraft(group,i,b,previous,spec,stepTime);continue;}
             if((!b.command&&(b.idle>6||((b.target-b.position).length()<40&&b.idle>=0)))||(b.command&&spec.airborne&&b.idle>3)){
-                float tick=float(simulationTime-(simulationSteps-1-step)*fixedStep);
+                const float tick=stepTime;
                 V2 wanted=b.position+V2{cos(b.heading+.6f+hash(i,int(tick/6),80+salt)*1.1f),sin(b.heading+.6f+hash(i,int(tick/6),80+salt)*1.1f)}*std::max(120.f,speed*8);
                 b.target=destination(wanted,spec.radius,water,geometry.home(b.position));b.command=false;b.idle=0;
             }
@@ -125,6 +206,7 @@ class SceneRuntime {
                 if(path.next<path.points.size()){waypoint=path.points[path.next];if(path.next+1<path.points.size())b.command=false;}}
             steer(b,spec,waypoint,fixedStep,[&](V2 p,float r){return navigable(p,r,water);},separate(b,list.data(),list.size(),spec.radius*3));
             if(arriving&&(waypoint-b.target).length()>.001f)b.command=true;
+          }
         }
         }
         int visible=0;for(int i=0;i<n;i++){auto&b=list[i];if(!b.initialized)continue;
