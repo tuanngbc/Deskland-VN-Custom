@@ -220,7 +220,7 @@ private:
                   area.top+(config.y==-1?int((secondClock&&screen.primary?300:70)*scale):config.y)};
         pos.x=std::clamp(pos.x,area.left,area.right-width);
         pos.y=std::clamp(pos.y,area.top,area.bottom-height);
-        const SIZE size{width,height};const POINT source{};
+        SIZE size{width,height};POINT source{};
         BLENDFUNCTION blend{AC_SRC_OVER,0,BYTE(config.opacity*255/100),AC_SRC_ALPHA};
         UpdateLayeredWindow(hwnd,screenDC,&pos,&size,dc,&source,0,&blend,ULW_ALPHA);
         SelectObject(dc,old);DeleteObject(bitmap);DeleteDC(dc);ReleaseDC(nullptr,screenDC);
