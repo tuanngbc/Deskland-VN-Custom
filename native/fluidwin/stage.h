@@ -7,6 +7,7 @@
 #include <windowsx.h>
 #include <memory>
 #include <unordered_map>
+#include <utility>
 
 namespace stage {
 struct Settings {
@@ -48,6 +49,29 @@ class Manager {
         HWND registered = nullptr;
         bool minimized = false;
         unsigned generation = 0;ULONGLONG snapshotAt=0;
+        double opacity=0, fromOpacity=0, targetOpacity=0, transitionAt=0;
+        Card()=default;
+        Card(const Card&)=delete;
+        Card& operator=(const Card&)=delete;
+        Card(Card&& other) noexcept { swap(other); }
+        Card& operator=(Card&& other) noexcept { if(this!=&other){release();swap(other);}return *this; }
+        ~Card(){release();}
+        void release(){
+            if(thumbnail)DwmUnregisterThumbnail(thumbnail);thumbnail=nullptr;
+            if(bitmap)bitmap->Release();bitmap=nullptr;
+            if(icon)icon->Release();icon=nullptr;
+        }
+        void swap(Card& o) noexcept {
+            windows.swap(o.windows);std::swap(current,o.current);std::swap(rect,o.rect);
+            std::swap(thumbnail,o.thumbnail);std::swap(bitmap,o.bitmap);std::swap(icon,o.icon);
+            std::swap(registered,o.registered);std::swap(minimized,o.minimized);
+            std::swap(generation,o.generation);std::swap(snapshotAt,o.snapshotAt);
+            std::swap(opacity,o.opacity);std::swap(fromOpacity,o.fromOpacity);
+            std::swap(targetOpacity,o.targetOpacity);std::swap(transitionAt,o.transitionAt);
+        }
+        void sample(double now){opacity=fromOpacity+(targetOpacity-fromOpacity)*vetro::uscita((now-transitionAt)/.18);}
+        void fade(double to,double now){sample(now);fromOpacity=opacity;targetOpacity=to;transitionAt=now;}
+        bool moving(double now)const{return fromOpacity!=targetOpacity&&now-transitionAt<.18;}
         Window& source() { return windows[current % windows.size()]; }
     };
     struct Rail {
@@ -55,15 +79,16 @@ class Manager {
         HMONITOR monitor = nullptr;
         vetro::Finestra glass;
         IDWriteTextFormat* text = nullptr;
-        std::vector<Card> cards;
+        std::vector<Card> cards, departing;
+        bool animating=false;unsigned animationFrames=0;
         int hover = -1, page = 0, capacity = 1;
         bool hidden = false,blocked=false,suppressed=false;RECT available{};
         ULONGLONG hoverAt = 0;
         explicit Rail(Manager* m): owner(m) {}
         ~Rail() { clear(); if (text) text->Release(); glass.chiudi(); }
         void clear() {
-            for (auto& c : cards) { if (c.thumbnail) DwmUnregisterThumbnail(c.thumbnail); if(c.bitmap) c.bitmap->Release(); if(c.icon)c.icon->Release(); }
-            cards.clear();
+            vetro::fermaBattito(glass.fin,4);animating=false;
+            cards.clear();departing.clear();
         }
         int hit(POINT p) const {
             for (size_t i=0; i<cards.size(); ++i) if (PtInRect(&cards[i].rect,p)) return int(i);
@@ -86,6 +111,7 @@ class Manager {
                     if(owner->settings.autoHide) SetTimer(h,3,650,nullptr);
                     return true;
                 case WM_TIMER:
+                    if(w==4){owner->animate(*this);return true;}
                     KillTimer(h,(UINT_PTR)w);
                     if(w==2&&hover>=0&&hover<int(cards.size())) owner->openPeek(*this,cards[hover].source());
                     if(w==3&&hover<0){if(menu::aperti||owner->pointerInside())SetTimer(h,3,350,nullptr);else{hidden=true;owner->closePeek();owner->layout(*this);}}
@@ -179,9 +205,9 @@ public:
             const bool hide=fullscreen&&fullscreen(r->monitor);
             const bool resumed=r->suppressed&&!hide;r->suppressed=hide;
             const RECT area=work(*r);
-            if(hide) { closePeek();for(auto& c:r->cards)preview(*r,c);ShowWindow(r->glass.fin,SW_HIDE); }
+            if(hide) { settle(*r);closePeek();for(auto& c:r->cards)preview(*r,c);ShowWindow(r->glass.fin,SW_HIDE); }
             else {if(!same||resumed||!EqualRect(&area,&r->available))rebuild(*r);else for(auto& c:r->cards)preview(*r,c);
-                if(!r->blocked){ShowWindow(r->glass.fin,SW_SHOWNOACTIVATE);draw(*r);}}
+                if(!r->blocked){if(!r->cards.empty()||!r->departing.empty())ShowWindow(r->glass.fin,SW_SHOWNOACTIVATE);draw(*r);}}
 
         }
         pollCapture();
@@ -194,6 +220,11 @@ public:
     size_t railCount() const {return rails.size();}
 #ifdef TLAUNCHER_NATIVE_CI
     size_t ciThumbnailCount()const{size_t n=0;for(const auto&r:rails)for(const auto&c:r->cards)if(c.thumbnail)n++;return n;}
+    bool ciAnimating()const{for(const auto&r:rails)if(r->animating)return true;return false;}
+    size_t ciDeparting()const{size_t n=0;for(const auto&r:rails)n+=r->departing.size();return n;}
+    HTHUMBNAIL ciThumbnail()const{return rails.empty()||rails[0]->cards.empty()?nullptr:rails[0]->cards[0].thumbnail;}
+    double ciOpacity()const{return rails.empty()||rails[0]->cards.empty()?0:rails[0]->cards[0].opacity;}
+    unsigned ciAnimationFrames()const{unsigned n=0;for(const auto&r:rails)n+=r->animationFrames;return n;}
     HWND ciSelected()const{return rails.empty()||rails[0]->cards.empty()?nullptr:rails[0]->cards[0].source().hwnd;}
 #endif
     size_t cachedPreviewCount()const{size_t n=0;for(const auto&r:rails)for(const auto&c:r->cards)if(c.minimized&&c.bitmap)n++;return n;}
@@ -256,23 +287,50 @@ private:
         }
         return area;
     }
+    void settle(Rail& rail){
+        vetro::fermaBattito(rail.glass.fin,4);rail.animating=false;rail.departing.clear();
+        for(auto& c:rail.cards)c.opacity=c.fromOpacity=c.targetOpacity=1;
+    }
+    void animate(Rail& rail){
+        if(!rail.animating)return;
+        if(rail.hidden||rail.blocked||rail.suppressed){settle(rail);return;}
+        const double now=vetro::secondi();bool moving=false;
+        for(auto& c:rail.cards){c.sample(now);moving|=c.moving(now);preview(rail,c);}
+        for(auto& c:rail.departing){c.sample(now);moving|=c.moving(now);}
+        rail.animationFrames++;
+        const bool removed=std::erase_if(rail.departing,[&](const Card& c){return !c.moving(now);})!=0;
+        if(!moving){vetro::fermaBattito(rail.glass.fin,4);rail.animating=false;}
+        if(removed)layout(rail);else draw(rail);
+    }
     void layout(Rail& rail) {
         const RECT area=work(rail);const float d=rail.glass.dpi;
         const int pad=int(10*d),ch=int(settings.height*d),gap=int(settings.spacing*d),edge=int(settings.edgeGap*d);
         const int width=int(settings.height*1.55*d)+2*pad;rail.available=area;
         rail.blocked=area.right-area.left<width+2*edge||area.bottom-area.top<(rail.cards.empty()?2*pad:ch+2*pad)+2*edge;
-        if(rail.blocked){closePeek();for(auto& c:rail.cards)preview(rail,c);ShowWindow(rail.glass.fin,SW_HIDE);return;}
+        if(rail.blocked){settle(rail);closePeek();for(auto& c:rail.cards)preview(rail,c);ShowWindow(rail.glass.fin,SW_HIDE);return;}
         const int h=std::max(1,std::min(int(area.bottom-area.top-2*edge),int(rail.cards.size())*(ch+gap)+2*pad));
         const int x=settings.right?area.right-width-edge:area.left+edge;
-        rail.glass.posiziona(rail.hidden?(settings.right?area.right-int(5*d):area.left):x,area.top+std::max(edge,int((area.bottom-area.top-h)/2)),rail.hidden?int(5*d):width,std::max(1,h));
+        const int y=area.top+std::max(edge,int((area.bottom-area.top-h)/2));
+        RECT previous{};GetWindowRect(rail.glass.fin,&previous);
+        int top=y,bottom=y+h;
+        // Keep the old viewport until outgoing cards finish fading. Both old
+        // and new rectangles remain in the allowed work region.
+        if(!rail.departing.empty()&&!rail.hidden){top=std::max(int(area.top),std::min(y,int(previous.top)));bottom=std::min(int(area.bottom),std::max(y+h,int(previous.bottom)));}
+        for(auto& c:rail.departing)OffsetRect(&c.rect,previous.left-x,previous.top-top);
+        if(rail.hidden||rail.suppressed)settle(rail);
+        rail.glass.posiziona(rail.hidden?(settings.right?area.right-int(5*d):area.left):x,top,rail.hidden?int(5*d):width,std::max(1,bottom-top));
         rail.glass.alfa(settings.opacity/100.0);
         for(size_t i=0;i<rail.cards.size();++i) {
             auto& c=rail.cards[i];int inset=0;
-            const int top=pad+int(i)*(ch+gap);
-            c.rect={pad+inset,top,width-pad-inset,top+ch};
+            const int cardTop=y-top+pad+int(i)*(ch+gap);
+            c.rect={pad+inset,cardTop,width-pad-inset,cardTop+ch};
             preview(rail,c);
         }
         if(!rail.suppressed&&!(fullscreen&&fullscreen(rail.monitor)))ShowWindow(rail.glass.fin,SW_SHOWNOACTIVATE);
+        const double now=vetro::secondi();rail.animating=!rail.departing.empty();
+        for(auto& c:rail.cards){c.sample(now);rail.animating|=c.moving(now);preview(rail,c);}
+        if(rail.cards.empty()&&rail.departing.empty())ShowWindow(rail.glass.fin,SW_HIDE);
+        if(rail.animating)vetro::battito(rail.glass.fin,4);else vetro::fermaBattito(rail.glass.fin,4);
         draw(rail);
     }
     void groupMenu(Rail&rail,int index,POINT at){
@@ -295,7 +353,8 @@ private:
     }
     void rebuild(Rail& rail) {
         std::unordered_map<std::wstring,HWND> selection;for(auto&c:rail.cards)selection[c.source().identity]=c.source().hwnd;
-        closePeek();rail.clear();rail.hover=-1;
+        closePeek();rail.hover=-1;
+        std::vector<Card> previous=std::move(rail.cards);
         std::vector<Card> groups;
         for(const auto& w:windows) {
             if(!w.valid()||(settings.monitor==2&&MonitorFromWindow(w.hwnd,MONITOR_DEFAULTTONEAREST)!=rail.monitor))continue;
@@ -307,7 +366,26 @@ private:
         rail.capacity=std::max(1,int((a.bottom-a.top-2*(settings.edgeGap+10)*d)/((settings.height+settings.spacing)*d)));
         rail.page=std::clamp(rail.page,0,std::max(0,(int(groups.size())-1)/rail.capacity));
         int from=rail.page*rail.capacity,to=std::min(int(groups.size()),from+rail.capacity);
-        for(int i=from;i<to;++i)rail.cards.push_back(std::move(groups[i]));
+        const double now=vetro::secondi();
+        for(int i=from;i<to;++i){
+            auto& next=groups[i];
+            auto found=std::find_if(previous.begin(),previous.end(),[&](Card& c){return !c.windows.empty()&&c.source().identity==next.source().identity;});
+            if(found!=previous.end()){
+                if(found->source().hwnd!=next.source().hwnd||found->source().pid!=next.source().pid||found->source().tid!=next.source().tid||found->source().generation!=next.source().generation)found->release();
+                else if(found->source().icon!=next.source().icon&&found->icon){found->icon->Release();found->icon=nullptr;}
+                found->windows=std::move(next.windows);found->current=next.current;
+                rail.cards.push_back(std::move(*found));
+            }else{next.fade(1,now);rail.cards.push_back(std::move(next));}
+        }
+        for(auto& old:previous)if(!old.windows.empty()){
+            // Never keep a live DWM registration or capture request for a
+            // removed source. Only the existing validated snapshot/icon fades.
+            if(!old.bitmap&&old.source().valid())old.bitmap=snapshot(old.source(),rail.glass);
+            if(old.thumbnail)DwmUnregisterThumbnail(old.thumbnail);old.thumbnail=nullptr;
+            old.fade(0,now);rail.departing.push_back(std::move(old));
+        }
+        // Rapid topology/inventory changes cannot accumulate outgoing surfaces.
+        while(rail.departing.size()>size_t(rail.capacity)*2)rail.departing.erase(rail.departing.begin());
         layout(rail);
     }
     void requestCapture(const Window& w,bool refresh=false) {
@@ -336,7 +414,7 @@ private:
     void preview(Rail& rail,Card& c) {
         const Window& w=c.source();auto cached=stampa::lastImage(w.hwnd);const ULONGLONG at=cached?cached->at:0;
         if(c.registered==w.hwnd&&c.minimized==bool(IsIconic(w.hwnd))&&c.generation==rail.glass.giroRt&&c.snapshotAt==at&&!rail.hidden&&!rail.blocked&&!rail.suppressed&&(c.thumbnail||c.bitmap)) {
-            if(c.thumbnail){SIZE sz{};DwmQueryThumbnailSourceSize(c.thumbnail,&sz);RECT r=c.rect;r.bottom-=int(25*rail.glass.dpi);r=aspectFit(sz.cx,sz.cy,r);DWM_THUMBNAIL_PROPERTIES p{};p.dwFlags=DWM_TNP_RECTDESTINATION;p.rcDestination=r;DwmUpdateThumbnailProperties(c.thumbnail,&p);}return;
+            if(c.thumbnail){SIZE sz{};DwmQueryThumbnailSourceSize(c.thumbnail,&sz);RECT r=c.rect;r.bottom-=int(25*rail.glass.dpi);r=aspectFit(sz.cx,sz.cy,r);DWM_THUMBNAIL_PROPERTIES p{};p.dwFlags=DWM_TNP_RECTDESTINATION|DWM_TNP_OPACITY;p.rcDestination=r;p.opacity=BYTE(std::lround(c.opacity*255));DwmUpdateThumbnailProperties(c.thumbnail,&p);}return;
         }
         if(c.generation!=rail.glass.giroRt&&c.icon){c.icon->Release();c.icon=nullptr;}
         if(c.thumbnail)DwmUnregisterThumbnail(c.thumbnail);c.thumbnail=nullptr;
@@ -346,11 +424,11 @@ private:
         if(IsIconic(w.hwnd)||settings.perspective){c.bitmap=snapshot(w,rail.glass);if(!IsIconic(w.hwnd))requestCapture(w);}
         else if(SUCCEEDED(DwmRegisterThumbnail(rail.glass.fin,w.hwnd,&c.thumbnail))) {
             SIZE sz{};DwmQueryThumbnailSourceSize(c.thumbnail,&sz);RECT r=c.rect;r.bottom-=int(25*rail.glass.dpi);r=aspectFit(sz.cx,sz.cy,r);
-            DWM_THUMBNAIL_PROPERTIES p{};p.dwFlags=DWM_TNP_RECTDESTINATION|DWM_TNP_VISIBLE|DWM_TNP_OPACITY|DWM_TNP_SOURCECLIENTAREAONLY;p.rcDestination=r;p.fVisible=TRUE;p.opacity=255;p.fSourceClientAreaOnly=FALSE;DwmUpdateThumbnailProperties(c.thumbnail,&p);
+            DWM_THUMBNAIL_PROPERTIES p{};p.dwFlags=DWM_TNP_RECTDESTINATION|DWM_TNP_VISIBLE|DWM_TNP_OPACITY|DWM_TNP_SOURCECLIENTAREAONLY;p.rcDestination=r;p.fVisible=TRUE;p.opacity=BYTE(std::lround(c.opacity*255));p.fSourceClientAreaOnly=FALSE;DwmUpdateThumbnailProperties(c.thumbnail,&p);
             requestCapture(w);
         }
     }
-    void perspectiveBitmap(vetro::Finestra&v,ID2D1Bitmap*bitmap,RECT dest)const{
+    void perspectiveBitmap(vetro::Finestra&v,ID2D1Bitmap*bitmap,RECT dest,float opacity)const{
         const auto size=bitmap->GetPixelSize();const float width=float(dest.right-dest.left),height=float(dest.bottom-dest.top);
         if(width<=0||height<=0)return;
         const float cx=(dest.left+dest.right)*.5f,cy=(dest.top+dest.bottom)*.5f;
@@ -361,7 +439,7 @@ private:
         auto project=[&](float u){float x=(u-.5f)*width,k=distance/(distance+sin(angle)*x);return std::pair<float,float>{cx+cos(angle)*x*k,k};};
         for(int strip=0;strip<64;strip++){const float u0=strip/64.f,u1=(strip+1)/64.f;auto a=project(u0),b=project(u1);float k=project((u0+u1)*.5f).second;
             D2D1_RECT_F source{u0*size.width,0,u1*size.width,float(size.height)};
-            v.rt->DrawBitmap(bitmap,{a.first,cy-height*.5f*k,b.first+.12f,cy+height*.5f*k},1,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,&source);
+            v.rt->DrawBitmap(bitmap,{a.first,cy-height*.5f*k,b.first+.12f,cy+height*.5f*k},opacity,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,&source);
         }
     }
     void draw(Rail& rail) {
@@ -369,17 +447,21 @@ private:
         testi::aggiornaFormato(v.fdw,rail.text);
         if(rail.hidden){v.finisci();return;}
         const float d=v.dpi;
-        for(size_t i=0;i<rail.cards.size();++i) {
-            auto& c=rail.cards[i];if(c.generation!=v.giroRt)preview(rail,c);const auto& w=c.source();if(!w.valid())continue;
+        auto drawCard=[&](Card& c,bool outgoing,bool hovered){
+            if(c.generation!=v.giroRt){if(outgoing)c.release();else preview(rail,c);}
+            const auto& w=c.source();if((!outgoing&&!w.valid())||c.opacity<=0)return;
+            const float alpha=float(c.opacity);
             auto r=c.rect;D2D1_RECT_F f{float(r.left),float(r.top),float(r.right),float(r.bottom)};
-            v.pen->SetColor(v.inchiostro(i==size_t(rail.hover)?.20f:.07f));v.rt->FillRoundedRectangle({f,8*d,8*d},v.pen);
-            if(GetAncestor(GetForegroundWindow(),GA_ROOT)==w.hwnd){v.pen->SetColor(D2D1::ColorF(.1f,.55f,1));v.rt->DrawRoundedRectangle({f,8*d,8*d},v.pen,2*d);}
-            if(c.bitmap){auto size=c.bitmap->GetPixelSize();RECT dest=r;dest.bottom-=int(25*d);dest=aspectFit(size.width,size.height,dest,false);if(settings.perspective)perspectiveBitmap(v,c.bitmap,dest);else v.rt->DrawBitmap(c.bitmap,{float(dest.left),float(dest.top),float(dest.right),float(dest.bottom)});}
-            if(!c.icon&&icon)c.icon=icon(v.rt,w.icon,96);
-            if(c.icon)v.rt->DrawBitmap(c.icon,{f.left+4*d,f.bottom-23*d,f.left+24*d,f.bottom-3*d});
+            v.pen->SetColor(v.inchiostro((hovered?.20f:.07f)*alpha));v.rt->FillRoundedRectangle({f,8*d,8*d},v.pen);
+            if(!outgoing&&GetAncestor(GetForegroundWindow(),GA_ROOT)==w.hwnd){v.pen->SetColor(D2D1::ColorF(.1f,.55f,1,alpha));v.rt->DrawRoundedRectangle({f,8*d,8*d},v.pen,2*d);}
+            if(c.bitmap){auto size=c.bitmap->GetPixelSize();RECT dest=r;dest.bottom-=int(25*d);dest=aspectFit(size.width,size.height,dest,false);if(settings.perspective)perspectiveBitmap(v,c.bitmap,dest,alpha);else v.rt->DrawBitmap(c.bitmap,{float(dest.left),float(dest.top),float(dest.right),float(dest.bottom)},alpha);}
+            if(!outgoing&&!c.icon&&icon)c.icon=icon(v.rt,w.icon,96);
+            if(c.icon)v.rt->DrawBitmap(c.icon,{f.left+4*d,f.bottom-23*d,f.left+24*d,f.bottom-3*d},alpha);
             std::wstring label=w.name;if(c.windows.size()>1)label+=L" ("+std::to_wstring(c.current+1)+L"/"+std::to_wstring(c.windows.size())+L")";
-            v.testo(label,rail.text,{f.left+28*d,f.bottom-25*d,f.right-4*d,f.bottom},v.inchiostro());
-        }
+            v.testo(label,rail.text,{f.left+28*d,f.bottom-25*d,f.right-4*d,f.bottom},v.inchiostro(alpha));
+        };
+        for(auto& c:rail.departing)drawCard(c,true,false);
+        for(size_t i=0;i<rail.cards.size();++i)drawCard(rail.cards[i],false,i==size_t(rail.hover));
         v.finisci();
     }
     void openPeek(Rail& rail,const Window& w) {

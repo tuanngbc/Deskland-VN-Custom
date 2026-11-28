@@ -180,8 +180,30 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     DestroyWindow(second);manager.inventory=[&]{return std::vector<stage::Window>{{source,pid,tid,L"fixture",L"Cửa sổ thứ nhất",L""}};};manager.changed();
     if(manager.ciSelected()!=source)return 132;
     report<<"STAGE_ACTUAL_GROUP_MENU_ACTIVATION_AND_PERSISTENCE=PASS\nSTAGE_DESTROYED_GROUP_MEMBER_FALLBACK=PASS\n";
+    // Exercise actual DWM ownership across unrelated inventory changes. The
+    // first live card must survive; only the new card gets an entrance fade.
+    ciPump(240);manager.changed();const HTHUMBNAIL stableThumbnail=manager.ciThumbnail();
+    if(!stableThumbnail||manager.ciAnimating()||manager.ciOpacity()!=1)return 166;
+    HWND extra=CreateWindowW(L"STATIC",L"Stage animated independent card",WS_OVERLAPPEDWINDOW|WS_VISIBLE,460,250,500,320,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    if(!extra)return 167;DWORD extraPid=0;DWORD extraTid=GetWindowThreadProcessId(extra,&extraPid);
+    manager.inventory=[&]{std::vector<stage::Window> result{{source,pid,tid,L"fixture",L"Cửa sổ thứ nhất",L""}};
+        if(IsWindow(extra))result.push_back({extra,extraPid,extraTid,L"other-fixture",L"Thẻ xuất hiện và biến mất",L""});return result;};
+    manager.changed();if(!manager.ciAnimating()||manager.ciThumbnail()!=stableThumbnail)return 168;
+    ciPump(260);if(manager.ciAnimating()||manager.ciThumbnail()!=stableThumbnail)return 169;
+    const unsigned settledFrames=manager.ciAnimationFrames();ciPump(240);
+    if(manager.ciAnimationFrames()!=settledFrames)return 170;
+    if(!phase3Snapshot(rail,evidence/L"phase3-stage-animation-settled.bmp"))return 171;
+    DestroyWindow(extra);manager.changed();
+    if(manager.ciDeparting()!=1||!manager.ciAnimating()||manager.ciThumbnailCount()!=1)return 172;
+    if(!phase3Snapshot(rail,evidence/L"phase3-stage-card-departing.bmp"))return 173;
+    ciPump(260);if(manager.ciDeparting()||manager.ciAnimating())return 174;
+    GetWindowPlacement(source,&after); // No animation route may mutate foreign placement.
+    if(IsIconic(source))return 175;
+    report<<"STAGE_CARD_ENTRANCE_EXIT_AND_IDLE_SETTLING=PASS\nSTAGE_UNCHANGED_LIVE_THUMBNAIL_RETAINED=PASS\nSTAGE_REMOVED_SOURCE_THUMBNAIL_RELEASED=PASS\n";
     SetCursorPos(previousPointer.x,previousPointer.y);
-    DestroyWindow(source);manager.changed();st.enabled=false;manager.configure(st);
+    DestroyWindow(source);manager.changed();
+    if(!manager.ciDeparting()||!manager.ciAnimating())return 176;
+    st.enabled=false;manager.configure(st);ciPump(240);
     if(manager.railCount()||manager.snapshotBytes()||FindWindowW(L"TLauncher.Native.Stage",nullptr)||FindWindowW(L"TLauncher.Native.StagePeek",nullptr))return 72;
     report<<"STAGE_ACTUAL_NATIVE_WINDOW=PASS\nSTAGE_PEEK_FOCUS_PLACEMENT_UNCHANGED=PASS\nSTAGE_SHARED_ACTIVATION_CALLBACK=PASS\nSTAGE_DESTROY_AND_DISABLE_CLEANUP=PASS\n";
     gRicerca.elencoApp=[]{return std::vector<std::pair<std::wstring,std::wstring>>{{L"Notepad",L"notepad.exe"},{L"Ứng dụng",L"C:\\fixture\\tool.exe"}};};
