@@ -106,7 +106,7 @@ static int phase3Contracts(std::ostream& report,const std::filesystem::path& evi
     }
     {
         desktopclock::Clock clock;desktopclock::Settings appearance;appearance.enabled=true;
-        const auto locale=testi::lingua();
+        const int locale=testi::lingua().load();
         for(const auto lang:{testi::INGLESE,testi::VIETNAMITA}){
             testi::lingua()=lang;clock.configure(appearance,false,true);
             const auto window=clock.ciHandle();
