@@ -1004,8 +1004,18 @@ private:
     void disegna() {
         if (!aperta || !v.inizia()) return;
         if(fLanguage!=testi::attuale()){
-            bool ready=true;for(auto** f:{&fTitolo,&fVoce,&fSotto,&fSezione,&fCentro,&fMarchio,&fPiccolo})ready=testi::aggiornaFormato(v.fdw,*f)&&ready;
-            if(ready)fLanguage=testi::attuale();
+            // Settings owns a fixed family/size set; rebuild these seven formats
+            // through Finestra::formato so the new DirectWrite locale is certain.
+            for(auto** f:{&fTitolo,&fVoce,&fSotto,&fSezione,&fCentro,&fMarchio,&fPiccolo}){if(*f){(*f)->Release();*f=nullptr;}}
+            const float d=v.dpi;
+            fTitolo=v.formato(22*d,DWRITE_FONT_WEIGHT_SEMI_BOLD);
+            fVoce=v.formato(13.5f*d,DWRITE_FONT_WEIGHT_MEDIUM);
+            fSotto=v.formato(11.5f*d);
+            fSezione=v.formato(13*d,DWRITE_FONT_WEIGHT_MEDIUM);
+            fCentro=v.formato(12.5f*d,DWRITE_FONT_WEIGHT_MEDIUM,DWRITE_TEXT_ALIGNMENT_CENTER);
+            fMarchio=v.formato(16*d,DWRITE_FONT_WEIGHT_SEMI_BOLD);
+            fPiccolo=v.formato(10.5f*d,DWRITE_FONT_WEIGHT_NORMAL,DWRITE_TEXT_ALIGNMENT_CENTER);
+            if(fVoce&&fTitolo)fLanguage=testi::attuale();
         }
         float W = (float)v.W, H = (float)v.H;
         // mentre cresce o rientra: il contenuto con le misure finali, rimpicciolito per stare nel vetro, e compare

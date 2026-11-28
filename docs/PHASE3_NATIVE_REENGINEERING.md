@@ -87,3 +87,6 @@ CI 46059056737 passed Boxing renderer and native lifecycle contracts. The migrat
 
 
 Meadow kitten restores the audited tail UV mask/pivot and long-rest/short-flick envelope from prototype/meadow-cat.js and meadow.html. The existing texture/cache, physical bounds and layer order stay intact; the body no longer receives generic whole-sprite sway. Petting adds a continuous damped tail impulse and settles without changing position. Hosted shader evidence checks still resting pixels, local-tail deformation, pet continuity and settling; CI pending. The Wallpaper Settings section title now uses its existing Vietnamese translation. This does not close the remaining boy/kite or complete character-quality audit.
+
+
+CI `46060652392` reached the real Settings language clicks and recorded `LANGUAGE_CLICK requested=1 actual=1 format_matches=0`, so persistence and hit-testing worked while the generic DirectWrite format-copy helper did not produce the expected locale on this runner. Settings now rebuilds its seven owned formats through the existing locale-aware `Finestra::formato` path on every language change; hosted verification remains pending.
